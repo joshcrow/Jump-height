@@ -5,9 +5,11 @@ to the [Woo](https://www.woosports.com/). Stick a small waterproof sensor on the
 board, go send it, and find out **how high you jumped** and **how long you were in
 the air**.
 
-> Status: **early scaffold.** The core jump-detection algorithm already runs today
-> in the [simulator](sim/) — you can validate the whole idea on your laptop before
-> buying a single component.
+> Status: **v1 in progress.** The detection algorithm runs today in the
+> [simulator](sim/) (no hardware needed), and the ESP32 firmware for the first real
+> build is written. If you're building the hardware, start with **[BUILD.md](BUILD.md)**
+> (step-by-step, shopping list) and **[DECISIONS.md](DECISIONS.md)** (what was chosen
+> and why).
 
 ---
 
@@ -72,6 +74,8 @@ The same detection algorithm runs in two places, kept intentionally in sync:
 ```
 Jump-height/
 ├── README.md            ← you are here
+├── BUILD.md             ← step-by-step build guide + shopping list (start here to build)
+├── DECISIONS.md         ← the v1 design decisions and why
 ├── docs/
 │   ├── algorithm.md     ← the physics + detection state machine, in detail
 │   ├── hardware.md      ← bill of materials, wiring, power, waterproofing

@@ -4,6 +4,10 @@ Goal: a small, waterproof, battery-powered puck that mounts on the board, sample
 IMU, and runs the jump detector. Below is a phased BOM — start cheap on a breadboard,
 upgrade as you go.
 
+> **Building the actual v1?** This page is the general menu of options. The specific,
+> decided build (FireBeetle ESP32 + MPU-6050, bought capsule, GoPro mount) with a
+> step-by-step guide and shopping list is in **[../BUILD.md](../BUILD.md)**.
+
 ## Bill of materials
 
 ### Phase 1 — bench prototype (~US$15)
