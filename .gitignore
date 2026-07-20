@@ -16,6 +16,7 @@ firmware/.piolibdeps/
 *.log
 data/*.csv
 !data/example_session.csv
+data/sessions/
 
 # OS
 .DS_Store

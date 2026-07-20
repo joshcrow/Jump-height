@@ -1,0 +1,22 @@
+{
+  "_comment": "Single source of truth for ALL tunable settings. Edit here, then run ./tools/jump gen (flash does it automatically). The simulator reads this file directly; the firmware gets it via the generated firmware/include/params.gen.h.",
+  "detector": {
+    "g": 9.80665,
+    "freefall_enter_g": 0.35,
+    "freefall_confirm_s": 0.08,
+    "landing_threshold_g": 2.5,
+    "min_airtime_s": 0.25,
+    "max_airtime_s": 8.0,
+    "airtime_offset_s": 0.0,
+    "height_scale": 1.0
+  },
+  "firmware": {
+    "sample_hz": 200,
+    "log_hz": 50,
+    "motion_thresh_g": 0.12,
+    "idle_timeout_s": 20,
+    "trace_max_bytes": 1200000,
+    "i2c_sda": 21,
+    "i2c_scl": 22
+  }
+}

@@ -17,6 +17,17 @@ building this) knows what was chosen on purpose vs. what's just incidental.
 | 10 | **Mounting** | Adhesive **GoPro-style mount**, hard smooth patch of center deck. Alcohol-prep, 24 h cure, tethered. | Center = cleanest signal. Adhesive = no drilling. Tether + float because a lost puck is the classic ending. |
 | 11 | **Test plan** | **Desk → dry land (filmed) → water (filmed).** | Each step fails cheaply and catches its own class of bug *before* the ocean, where mistakes are expensive. |
 
+## Added for the "hardware is my only job" build-out
+
+| # | Decision | Choice | Why |
+|---|----------|--------|-----|
+| 12 | **One-command tooling** | Everything software-side runs through `./tools/jump` (flash, self-test, desk test, calibration, session sync). | The builder's job is hardware only; each step of the runbook is a single command with PASS/FAIL output and fix hints. |
+| 13 | **Raw MPU-6050 driver** | Minimal register-level driver instead of the Adafruit library. | Cheap Amazon clone chips often report an unexpected WHO_AM_I and the popular libraries refuse to start. Ours warns and continues — what matters is the accel actually reading ~1 g, which the self-test checks directly. |
+| 14 | **Power-on self-test** | Firmware checks I2C, chip ID, gravity, noise floor, and storage at every boot, with plain-English fix hints; a wiring failure never bricks the session (`selftest` re-probes without re-flashing). | "Did I wire it right?" gets answered in 5 seconds, by the device itself. |
+| 15 | **Single source of truth for settings** | `config/params.json` drives the firmware (via a generated header), the simulator, and the analysis. | Eliminates the "tuned Python but forgot the C++" failure mode entirely. |
+| 16 | **Bench calibration by measured drops** | `./tools/jump drop`: physics fixes the free-fall time of a measured drop exactly, so timing bias is measured and corrected as an additive `airtime_offset_s` — no video needed on the bench. | Detection latency is constant in *time*, so an additive correction generalizes across jump sizes better than a height multiplier. Video ground truth remains for the on-water check (`height_scale`). |
+| 17 | **Fake device for rehearsal + CI** | `tools/fake_device.py` emulates the firmware's serial protocol on a pty; every CLI flow runs against it (`--fake`) and the whole stack is integration-tested by `./tools/jump simtest`. | The entire test/calibration experience can be rehearsed before the hardware exists, and every software change is regression-tested without a board on the desk. |
+
 ## Deliberately deferred to later phases
 
 - **Real deep-sleep** power management (multi-session battery life). v1 charges after each outing.

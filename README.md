@@ -5,11 +5,18 @@ to the [Woo](https://www.woosports.com/). Stick a small waterproof sensor on the
 board, go send it, and find out **how high you jumped** and **how long you were in
 the air**.
 
-> Status: **v1 in progress.** The detection algorithm runs today in the
-> [simulator](sim/) (no hardware needed), and the ESP32 firmware for the first real
-> build is written. If you're building the hardware, start with **[BUILD.md](BUILD.md)**
-> (step-by-step, shopping list) and **[DECISIONS.md](DECISIONS.md)** (what was chosen
-> and why).
+> Status: **v1 ready to assemble.** Building it is wires-and-glue only — every
+> software step is one command via `./tools/jump` (flash, wiring self-test, guided
+> desk test, drop-test calibration, session download + report), and the whole flow
+> can be **rehearsed with zero hardware** against a simulated device. Start with
+> **[BUILD.md](BUILD.md)** (the runbook) and **[DECISIONS.md](DECISIONS.md)** (what
+> was chosen and why).
+>
+> ```bash
+> ./tools/jump setup            # one-time toolchain install
+> ./tools/jump simtest          # full software test suite — no hardware needed
+> ./tools/jump desktest --fake  # rehearse the hardware bring-up, today
+> ```
 
 ---
 
@@ -74,8 +81,13 @@ The same detection algorithm runs in two places, kept intentionally in sync:
 ```
 Jump-height/
 ├── README.md            ← you are here
-├── BUILD.md             ← step-by-step build guide + shopping list (start here to build)
+├── BUILD.md             ← the hardware-day runbook + shopping list (start here to build)
 ├── DECISIONS.md         ← the v1 design decisions and why
+├── config/params.json   ← ALL tunable settings — one file feeds firmware + sim + analysis
+├── tools/
+│   ├── jump             ← the one-command interface: setup/flash/selftest/desktest/drop/sync/simtest
+│   ├── fake_device.py   ← simulated device (rehearse + test everything with no hardware)
+│   └── gen_params.py    ← bakes config/params.json into a firmware header
 ├── docs/
 │   ├── algorithm.md     ← the physics + detection state machine, in detail
 │   ├── hardware.md      ← bill of materials, wiring, power, waterproofing

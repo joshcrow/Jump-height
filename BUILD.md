@@ -1,151 +1,176 @@
-# Build guide (v1)
+# Build guide — the hardware-day runbook
 
-The specific, step-by-step build for the design in [`DECISIONS.md`](DECISIONS.md).
-Written to be followed without an engineering background. Take it one section at a
-time — don't skip the desk test.
+Your job is **hardware**: wires, glue, sealing, water. Everything else —
+flashing, testing, calibrating, downloading data — is one command each, via
+`./tools/jump`. This guide is the script for the day your parts arrive
+(and for the day *before* they arrive: you can rehearse everything now).
+
+Design decisions behind all of this: [`DECISIONS.md`](DECISIONS.md).
 
 ---
 
 ## Shopping list
 
-**Already have:** FireBeetle ESP32, small single-cell LiPo battery, MPU-6050 ×4
-(ordered), a phone that shoots 120–240 fps slow-mo, a laptop with a USB port.
+**Have:** FireBeetle ESP32, small single-cell LiPo, MPU-6050 ×4 (ordered),
+phone with 120–240 fps slow-mo, laptop.
 
 **Still to get:**
 
 | Item | Notes |
 |------|-------|
-| Waterproof screw-top **capsule** | Must **float**, fit the FireBeetle **and** battery, and clamp into a GoPro cradle (or be zip-tie-able to one). Dive/camping "dry capsule" types work. |
-| **GoPro adhesive mount** + cradle/tray | Flat or curved sticky mount + a way to hold the capsule. Zip ties as backup. |
-| Short **leash / tether** | So a failed mount doesn't cost you the puck. |
-| **Jumper wires** (female-female) + a little solder | The MPU-6050 usually needs its header pins soldered on (4 pins). |
-| **Rubbing alcohol** (isopropyl) | Surface prep for the adhesive mount. |
-| Multimeter *(optional, ~$10)* | To confirm battery polarity before you plug it in. |
+| Waterproof screw-top **capsule** | Must **float**, fit the FireBeetle **and** battery, and clamp into a GoPro cradle (or zip-tie to a tray). Dive/camping "dry capsule" types work. |
+| **GoPro adhesive mount** + cradle/tray | Plus zip ties as backup. |
+| Short **leash / tether** | A failed mount must not cost you the puck. |
+| **Jumper wires** (female-female) + a little solder | The MPU-6050 usually ships with its 4 header pins unsoldered. |
+| **Rubbing alcohol** | Surface prep for the adhesive mount. |
+| Multimeter *(optional, ~$10)* | To confirm battery polarity. |
 
 ---
 
-## ⚠️ Safety first (read once)
+## ⚠️ Safety (read once)
 
-- **Battery polarity:** the plug on your LiPo may be wired **backwards** vs. the
-  FireBeetle's connector even though it fits. Reversed = dead board, instantly.
-  Match `+`/`–` to the markings by the board's connector; multimeter if unsure.
-- **LiPo care:** charge only via the FireBeetle's USB, never leave it charging
-  unattended, don't crush or puncture the cell inside the capsule.
-
----
-
-## Step 0 — Wire it up
-
-Four wires, MPU-6050 → FireBeetle (it's the I²C bus):
-
-| MPU-6050 pin | FireBeetle pin |
-|--------------|----------------|
-| VCC          | 3V3            |
-| GND          | GND            |
-| SDA          | pin labelled **SDA** (default in firmware: GPIO21) |
-| SCL          | pin labelled **SCL** (default in firmware: GPIO22) |
-
-If your FireBeetle's SDA/SCL land on different GPIO numbers, change `I2C_SDA` /
-`I2C_SCL` at the top of [`firmware/src/main.cpp`](firmware/src/main.cpp) to match.
-Leave the battery unplugged for now — run off USB while building.
+- **Battery polarity:** a LiPo plug can be wired **backwards** vs. the
+  FireBeetle's connector even though it fits. Reversed = dead board instantly.
+  Match `+`/`–` against the markings next to the board's battery connector;
+  multimeter if unsure.
+- **LiPo care:** charge only via the FireBeetle's USB, never unattended, don't
+  crush the cell in the capsule.
 
 ---
 
-## Step 1 — Flash the firmware and desk-test it
-
-Install [PlatformIO](https://platformio.org/install) (the VS Code extension is the
-friendly route), then from the `firmware/` folder:
+## Day 0 — today, before the hardware arrives (~10 minutes)
 
 ```bash
-pio run -t upload         # compile + flash the FireBeetle
-pio device monitor        # watch the serial output (115200 baud)
+./tools/jump setup      # one-time toolchain install
+./tools/jump simtest    # full software test suite — should end PASS ✅
+./tools/jump desktest --fake   # rehearse the desk test against a simulated device
+./tools/jump drop --fake       # rehearse the calibration flow too
 ```
 
-You should see `# Jump Height ready...`. Now test the detection with your hand:
+`--fake` runs the real tool against a simulated device, so you'll have seen
+every screen before touching hardware. When the real thing behaves differently,
+that difference *is* the diagnostic information.
 
-- Hold the board (or just the puck) still → nothing logged (it's "idle").
-- Give it a shake → `# ...motion — recording`.
-- **Toss it a few inches up off a cushion, or drop it a short measured distance.**
-  A real free-fall + catch should print a `JUMP #… height=…` line.
+## Day 1 — MPUs arrive: wire, flash, verify (~1 hour, mostly soldering)
 
-**Pass = it prints plausible jumps.** A 20 cm drop is ~0.13 s of free-fall → tiny
-height; a bigger toss reads bigger. You're just confirming the pipeline works.
+**1. Solder + wire (the only manual skill needed today).** Solder the 4-pin
+header onto an MPU-6050 breakout, then four jumper wires to the FireBeetle:
 
-> Tip: to desk-test without the flash logging, set `ENABLE_LOGGING 0` at the top of
-> `main.cpp`. Turn it back to `1` before the water.
+| MPU-6050 | FireBeetle |
+|----------|------------|
+| VCC | 3V3 |
+| GND | GND |
+| SDA | pin marked **SDA** (IO21) |
+| SCL | pin marked **SCL** (IO22) |
 
-Serial commands (type into the monitor): `stats`, `jumps`, `trace`, `dump`, `clear`.
+No battery yet — run from USB. (Sensor mounting orientation never matters.)
 
----
-
-## Step 2 — Dry-land accuracy check (this sets your correction factor)
-
-Goal: find out how the puck's number compares to reality, on land, where a mistake
-costs nothing.
-
-1. Firmware logging on (`ENABLE_LOGGING 1`), `clear` any old data.
-2. Have someone **film in slow-mo (120–240 fps)** while you do a few clear jumps
-   holding the board (or drop it from a measured height onto something soft).
-3. Read the puck's heights: `stats` and `jumps`.
-4. **Ground truth from the video:** count the frames the board is airborne,
-   `airtime = frames ÷ fps`, then true `height = 9.81 × airtime² ÷ 8`.
-5. Compare. If the puck reads consistently, say, 8% low, that's your **correction
-   factor** — note it. (We can bake it into the firmware or apply it after.)
-
-Also pull the raw trace and confirm the offline detector agrees:
+**2. Plug into the laptop and run:**
 
 ```bash
-# in the serial monitor, run:  trace
-# copy the CSV output (the lines starting at "t,mag") into data/landtest.csv, then:
-python3 sim/run.py --csv data/landtest.csv
+./tools/jump flash
 ```
 
+That regenerates settings, builds, uploads (first build downloads the compiler
+— a few minutes, once), then **automatically self-tests the wiring** and prints
+✅/❌ per check with a plain-English fix hint for anything wrong. Fix wires →
+`./tools/jump selftest` → repeat until green. No re-flashing needed between
+wiring fixes.
+
+**3. Prove the whole pipeline:**
+
+```bash
+./tools/jump desktest
+```
+
+It walks you through a shake and 3 gentle tosses onto a cushion and verifies
+detection end-to-end. `PASS` = your assembly works. (If a clone MPU turns out
+to be a dud, the self-test says so — swap in a spare; you bought 4 for exactly
+this.)
+
+## Day 2 — calibration (~20 minutes)
+
+The trick: a drop from a **measured height is perfect ground truth** — physics
+fixes its free-fall time exactly (1.00 m ⇒ 0.452 s), so the tool can measure
+the detector's timing bias and correct it, no video needed:
+
+```bash
+./tools/jump drop --height-cm 100
+```
+
+Hold the puck with its bottom exactly at 100 cm above a cushion, let go (don't
+throw), 5 times. The tool computes the correction, saves it to
+`config/params.json` with your consent, and then:
+
+```bash
+./tools/jump flash    # bake the calibration into the device
+```
+
+Don't drop from below ~50 cm — short falls are ignored by design
+(`min_airtime_s`). The slow-mo video check stays in the plan for the *water*
+session; this bench step just means you arrive at the water already close.
+
+## Day 3+ — waterproof, mount, send it 🌊
+
+1. **Capsule:** electronics out, dry tissue in, closed, 10 min in a bucket.
+   Tissue dry = sealed. **Repeat this before every session.** Confirm it floats.
+2. **Mount:** hard smooth patch near board center (not the soft foam pad),
+   alcohol-wipe, press the GoPro mount on hard, **24 h cure** before water.
+   Tether the capsule.
+3. **Session:** charge → `./tools/jump sync --clear` (empties it) → seal near
+   launch → ride. Have someone slow-mo a few jumps for the video cross-check.
+4. **Back on land:**
+
+```bash
+./tools/jump sync
+```
+
+Downloads everything, re-analyzes the raw trace offline, cross-checks it
+against the live detection, and writes `data/sessions/<date>/report.md` —
+jump list, best height, and a flag if anything disagrees. The raw trace is
+kept forever, so any session can be re-scored later with improved settings:
+
+```bash
+./tools/jump replay --csv data/sessions/<date>/trace.csv
+```
+
+**Video check:** count the frames your brother is airborne in the slow-mo,
+`airtime = frames ÷ fps`, `true height = 9.81 × airtime² ÷ 8`. If the device
+is consistently off by a percentage, set `height_scale` in
+`config/params.json` and re-flash. After that, you trust the number.
+
 ---
 
-## Step 3 — Waterproof it, then bucket-test (non-negotiable)
+## Command reference
 
-1. Put the FireBeetle + battery in the capsule, close it.
-2. **Before it ever goes near the sea:** drop the *closed, empty-of-electronics*
-   capsule (with a dry tissue inside) in a bucket of water for 10 minutes. Tissue
-   dry = good. Do this **every** session — it's 10 minutes of insurance against a
-   drowned build.
-3. Confirm the sealed capsule **floats**. Add a scrap of foam if it doesn't.
+| Command | What it does |
+|---------|--------------|
+| `./tools/jump setup` | one-time toolchain install |
+| `./tools/jump simtest` | full software test suite (no hardware) |
+| `./tools/jump flash` | settings → build → upload → self-test |
+| `./tools/jump selftest` | wiring/sensor/storage check, fix hints |
+| `./tools/jump desktest` | guided assembly verification (3 tosses) |
+| `./tools/jump drop` | guided timing calibration from measured drops |
+| `./tools/jump sync` | download session → analyze → report.md |
+| `./tools/jump replay --csv f` | re-run the detector over any saved capture |
+| `./tools/jump monitor` | raw serial console (type `help`) |
+| `./tools/jump gen` | regenerate firmware settings from config/params.json |
 
----
+Add `--fake` to selftest/desktest/drop/sync to rehearse without hardware, and
+`--port /dev/ttyUSB0` anywhere if auto-detection picks the wrong port.
 
-## Step 4 — Mount it
-
-1. Pick a **hard, smooth** spot near the **center** of the deck (not the soft foam
-   pad — tape won't hold there).
-2. Wipe with rubbing alcohol, let it dry.
-3. Stick the GoPro mount down firmly and **leave it 24 hours before it gets wet.**
-4. Clip the capsule in, and **tether** it to the board.
-
----
-
-## Step 5 — Send it 🌊
-
-1. Charge the puck, `clear` old data, seal it **near launch time** (remember: it
-   records the whole time it's awake — battery covers a few hours).
-2. Have someone film a few of his jumps in slow-mo for the final accuracy check.
-3. After the session: open capsule, plug into laptop, run `stats` for the headline
-   and `dump` to export everything.
-4. Re-run the trace through `python3 sim/run.py --csv …` and, if needed, nudge the
-   detector thresholds in `sim/detector.py`, confirm on the captured data, then copy
-   the tuned numbers into `firmware/include/jump_detector.h` and re-flash.
-
-That loop — capture, replay, tune, re-flash — is how you get from "roughly right" to
-"trust it." After that, you actually know how high your brother jumps.
-
----
+**Tuning:** every threshold lives in **`config/params.json`** — one file, used
+by the firmware, the simulator, and the analysis identically. Edit → `flash`.
 
 ## Troubleshooting
 
-| Symptom | Likely cause / fix |
-|---------|--------------------|
-| `MPU6050 not found` | Check the 4 wires; try I²C address 0x69 (some boards); confirm 3V3 not 5V. |
-| No `JUMP` lines | Motion detected but no free-fall + landing — you need an actual airborne moment. Lower `freefall_enter_g` / `landing_threshold_g` in the header if real jumps are missed. |
-| Lots of false jumps | Raise `landing_threshold_g` or `min_airtime_s`. |
-| Heights consistently off | Apply your Step 2 correction factor. |
-| `trace log full` | ~30 min of moving-time logged; `dump` then `clear`. Consider a microSD later. |
-| Board won't charge / died | **Battery polarity** — see Safety. |
+Most problems are caught by `selftest`/`desktest`, which print their own fix
+hints. Beyond those:
+
+| Symptom | Fix |
+|---------|-----|
+| `flash` can't find the port | data-capable USB cable? (many are charge-only) Try `--port`. On Linux you may need to join the `dialout` group. |
+| Real jumps missed on the water | lower `landing_threshold_g` or `freefall_enter_g` in `config/params.json`, test against your synced trace with `replay`, then re-flash |
+| False jumps from chop | raise `landing_threshold_g` or `min_airtime_s` (same loop) |
+| `trace log full` during long session | `sync` then clear; ~30 min of *moving* time fits per session by design |
+| Board won't charge / dead | battery polarity — see Safety |

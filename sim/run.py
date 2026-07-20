@@ -23,7 +23,7 @@ import math
 import sys
 from typing import List, Tuple
 
-from detector import Detector, JumpEvent, Params, height_for_airtime
+from detector import Detector, JumpEvent, Params, height_for_airtime, load_params
 from generate import DEMO_JUMPS, synth_session
 
 
@@ -138,7 +138,7 @@ def maybe_plot(times: List[float], mag: List[float], detected: List[JumpEvent]) 
     except ImportError:
         print("\n(--plot needs matplotlib: pip install matplotlib)", file=sys.stderr)
         return
-    p = Params()
+    p = load_params()
     plt.figure(figsize=(12, 4))
     plt.plot(times, mag, lw=0.7, label="|a| (g)")
     plt.axhline(p.freefall_enter_g, color="green", ls="--", lw=0.8, label="free-fall enter")
@@ -161,7 +161,7 @@ def main() -> int:
     ap.add_argument("--plot", action="store_true", help="plot the signal + detections")
     args = ap.parse_args()
 
-    params = Params()
+    params = load_params()
 
     if args.csv:
         times, mag = load_csv(args.csv)

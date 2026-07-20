@@ -1,0 +1,857 @@
+#!/usr/bin/env python3
+"""jump — the one-command interface to the Jump Height device.
+
+Your job is hardware (wires, glue, water). This tool does everything else.
+
+    ./tools/jump setup       one-time: install the toolchain
+    ./tools/jump simtest     full software test suite, no hardware needed
+    ./tools/jump flash       build + upload firmware, then self-test the device
+    ./tools/jump selftest    check wiring/sensor/storage, plain-English hints
+    ./tools/jump desktest    guided assembly check (3 tosses onto a cushion)
+    ./tools/jump drop        guided calibration from measured drops
+    ./tools/jump sync        download a session, analyze it, write a report
+    ./tools/jump replay      re-run the detector over a saved capture CSV
+    ./tools/jump monitor     raw serial console
+    ./tools/jump gen         regenerate firmware params from config/params.json
+
+desktest / drop / selftest / sync accept --fake to run against a simulated
+device (tools/fake_device.py) — rehearse the whole flow with zero hardware.
+
+Requires Python 3.8+. Serial I/O uses pyserial if installed, else a built-in
+POSIX fallback (Linux/macOS). Windows users: `setup` installs pyserial.
+"""
+
+from __future__ import annotations
+
+import argparse
+import glob
+import json
+import math
+import os
+import select
+import shutil
+import statistics
+import subprocess
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO / "sim"))
+sys.path.insert(0, str(REPO / "tools"))
+
+BAUD = 115200
+CONFIG_PATH = Path(os.environ.get("JH_CONFIG") or REPO / "config" / "params.json")
+
+# ---------------------------------------------------------------- serial I/O
+
+
+class SerialPort:
+    """Minimal line-oriented serial port. pyserial if available, else POSIX
+    termios. Also works on a pty (the fake device)."""
+
+    def __init__(self, path: str, baud: int = BAUD):
+        self.path = path
+        self._buf = b""
+        self._ser = None
+        self._fd = None
+        try:
+            import serial  # type: ignore
+
+            self._ser = serial.Serial(path, baud, timeout=0)
+            # Deassert DTR/RTS so ESP32 boards settle into RUN mode.
+            try:
+                self._ser.dtr = False
+                self._ser.rts = False
+            except Exception:
+                pass
+            self._fd = self._ser.fileno()
+        except ImportError:
+            import termios
+            import tty
+
+            self._fd = os.open(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+            try:
+                tty.setraw(self._fd)
+                attrs = termios.tcgetattr(self._fd)
+                attrs[4] = attrs[5] = termios.B115200
+                termios.tcsetattr(self._fd, termios.TCSANOW, attrs)
+            except termios.error:
+                pass  # pty: raw/baud not meaningful
+
+    def write_line(self, s: str) -> None:
+        data = (s + "\n").encode()
+        if self._ser is not None:
+            self._ser.write(data)
+        else:
+            os.write(self._fd, data)
+
+    def read_line(self, timeout: float) -> str | None:
+        """Next complete line (without newline), or None on timeout."""
+        deadline = time.monotonic() + timeout
+        while True:
+            nl = self._buf.find(b"\n")
+            if nl >= 0:
+                line = self._buf[:nl].rstrip(b"\r")
+                self._buf = self._buf[nl + 1:]
+                return line.decode(errors="replace")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            r, _, _ = select.select([self._fd], [], [], min(remaining, 0.25))
+            if r:
+                try:
+                    chunk = (self._ser.read(4096) if self._ser is not None
+                             else os.read(self._fd, 4096))
+                except (OSError, BlockingIOError):
+                    chunk = b""
+                if chunk:
+                    self._buf += chunk
+
+    def close(self) -> None:
+        if self._ser is not None:
+            self._ser.close()
+        elif self._fd is not None:
+            os.close(self._fd)
+
+
+KNOWN_USB_GLOBS = [
+    "/dev/ttyUSB*", "/dev/ttyACM*",
+    "/dev/cu.usbserial*", "/dev/cu.wchusbserial*", "/dev/cu.SLAB*",
+]
+
+
+def autodetect_port() -> str:
+    candidates: list[str] = []
+    try:
+        from serial.tools import list_ports  # type: ignore
+
+        candidates = [p.device for p in list_ports.comports() if p.vid is not None]
+    except ImportError:
+        for g in KNOWN_USB_GLOBS:
+            candidates.extend(glob.glob(g))
+    candidates = sorted(set(candidates))
+    if len(candidates) == 1:
+        return candidates[0]
+    if not candidates:
+        raise SystemExit(
+            "No USB serial device found. Plug the FireBeetle in (data USB cable, "
+            "not charge-only), or pass --port /dev/ttyUSB0")
+    raise SystemExit(
+        f"Multiple serial devices found: {', '.join(candidates)} — pick one with --port")
+
+
+def parse_kv(line: str) -> dict:
+    """'JUMP n=1 airtime_s=0.62' -> {'_tag': 'JUMP', 'n': '1', 'airtime_s': '0.62'}"""
+    parts = line.split()
+    out = {"_tag": parts[0] if parts else ""}
+    for p in parts[1:]:
+        if "=" in p:
+            k, v = p.split("=", 1)
+            out[k] = v
+    return out
+
+
+# ------------------------------------------------------------- device session
+
+
+class Device:
+    """A connected (real or fake) device speaking the firmware protocol."""
+
+    def __init__(self, port: str):
+        self.sp = SerialPort(port)
+        self.boot_lines: list[str] = []
+
+    def drain_boot(self, timeout: float = 5.0) -> None:
+        """Board resets when the port opens; swallow the boot banner/POST."""
+        deadline = time.monotonic() + timeout
+        saw_any = False
+        while time.monotonic() < deadline:
+            line = self.sp.read_line(0.6)
+            if line is None:
+                if saw_any:
+                    break  # went quiet after output: boot finished
+                continue
+            saw_any = True
+            self.boot_lines.append(line)
+            if line.strip() == "READY":
+                break
+
+    def command(self, cmd: str, timeout: float = 20.0) -> list[str]:
+        """Send a command, return all lines up to its OK/ERR terminator."""
+        self.sp.write_line(cmd)
+        lines: list[str] = []
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            line = self.sp.read_line(deadline - time.monotonic())
+            if line is None:
+                break
+            if line.strip() == f"OK {cmd.split()[0]}":
+                return lines
+            if line.startswith("ERR"):
+                lines.append(line)
+                return lines
+            lines.append(line)
+        raise TimeoutError(f"device did not finish '{cmd}' — is the right firmware flashed?")
+
+    def wait_for(self, tag: str, timeout: float, echo_chatter: bool = True) -> dict | None:
+        """Wait for the next machine line with the given tag (e.g. 'JUMP')."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            line = self.sp.read_line(deadline - time.monotonic())
+            if line is None:
+                return None
+            if line.startswith(tag + " ") or line.strip() == tag:
+                return parse_kv(line)
+            if echo_chatter and line.startswith("#"):
+                print(f"    {line}")
+        return None
+
+    def close(self) -> None:
+        self.sp.close()
+
+
+def spawn_fake(scenario: str, fast: bool, extra: list[str] | None = None):
+    cmd = [sys.executable, str(REPO / "tools" / "fake_device.py"),
+           "--scenario", scenario]
+    if fast:
+        cmd.append("--fast")
+    cmd += extra or []
+    env = dict(os.environ)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True, env=env)
+    first = proc.stdout.readline().strip()
+    if not first.startswith("PTY "):
+        proc.terminate()
+        raise SystemExit(f"fake device failed to start: {first!r}")
+    return proc, first.split(None, 1)[1]
+
+
+def open_device(args, fake_scenario: str = "ok", fake_extra: list[str] | None = None):
+    """Returns (Device, fake_proc_or_None)."""
+    if getattr(args, "fake", False):
+        proc, port = spawn_fake(fake_scenario, getattr(args, "fast", False), fake_extra)
+        dev = Device(port)
+        dev.drain_boot(timeout=3.0)
+        return dev, proc
+    port = args.port or autodetect_port()
+    print(f"Connecting to {port} (the board resets when the port opens — normal)...")
+    dev = Device(port)
+    dev.drain_boot()
+    return dev, None
+
+
+# ----------------------------------------------------------------- self-test
+
+MARKS = {"PASS": "✅", "WARN": "⚠️ ", "FAIL": "❌", "SKIP": "—"}
+
+
+def render_selftest(lines: list[str]) -> bool:
+    """Pretty-print SELFTEST lines + hints. Returns True if result=PASS."""
+    ok = False
+    for line in lines:
+        if line.startswith("SELFTEST END"):
+            ok = "result=PASS" in line
+        elif line.startswith("SELFTEST BEGIN"):
+            continue
+        elif line.startswith("SELFTEST "):
+            _, name, status, *rest = line.split()
+            detail = rest[0].replace("detail=", "") if rest else ""
+            print(f"  {MARKS.get(status, '?')} {name:<8} {detail}")
+        elif line.startswith("# hint:"):
+            print(f"       {line.replace('# hint:', 'hint:')}")
+    return ok
+
+
+def check_device_params(dev: Device) -> bool:
+    """Compare the flashed firmware's params against local config/params.json."""
+    try:
+        lines = dev.command("info", timeout=8)
+    except TimeoutError:
+        print("  (couldn't read device info — old firmware? run ./tools/jump flash)")
+        return False
+    from detector import load_params
+
+    local = load_params(CONFIG_PATH)
+    device_kv = {}
+    for line in lines:
+        if line.startswith("PARAMS "):
+            device_kv = {k: v for k, v in parse_kv(line).items() if k != "_tag"}
+    if not device_kv:
+        print("  (device didn't report its params — old firmware? run ./tools/jump flash)")
+        return False
+    mismatches = []
+    for key, dev_val in device_kv.items():
+        local_val = getattr(local, key, None)
+        if local_val is None:
+            continue
+        try:
+            if not math.isclose(float(dev_val), float(local_val),
+                                rel_tol=1e-4, abs_tol=1e-6):
+                mismatches.append(f"{key}: device={dev_val} local={local_val:g}")
+        except ValueError:
+            pass
+    if mismatches:
+        print("  ⚠️  device settings differ from config/params.json — run ./tools/jump flash:")
+        for m in mismatches:
+            print(f"       {m}")
+        return False
+    print("  ✅ device settings match config/params.json")
+    return True
+
+
+def cmd_selftest(args) -> int:
+    dev, proc = open_device(args, "badwiring" if getattr(args, "fake_fail", False) else "ok")
+    try:
+        lines = dev.command("selftest", timeout=15)
+        print("Self-test:")
+        ok = render_selftest(lines)
+        params_ok = check_device_params(dev)
+        if ok:
+            print("\nRESULT: PASS ✅ — hardware is good."
+                  + ("" if params_ok else " (but re-flash to sync settings)"))
+            return 0
+        print("\nRESULT: FAIL ❌ — follow the hints above, fix the wiring, and run "
+              "./tools/jump selftest again. No re-flash needed.")
+        return 1
+    finally:
+        dev.close()
+        if proc:
+            proc.terminate()
+
+
+# ------------------------------------------------------------------ desktest
+
+
+def _pause(args, dev: Device, msg: str) -> None:
+    if getattr(args, "fake", False):
+        print(f">> {msg}")
+        dev.sp.write_line("_sim next")  # tell the fake "the human just did this"
+    elif not sys.stdin.isatty():
+        print(f">> {msg}")
+    else:
+        input(f">> {msg}  [Enter when ready] ")
+
+
+def cmd_desktest(args) -> int:
+    dev, proc = open_device(args, "desktest")
+    try:
+        print("=== Desk test: proves the whole assembly works ===\n")
+        print("[1/3] Self-test...")
+        ok = render_selftest(dev.command("selftest", timeout=15))
+        if not ok:
+            print("\nFix the wiring per the hints above, then re-run. Stopping here.")
+            return 1
+
+        print("\n[2/3] Motion gate...")
+        _pause(args, dev, "Pick the device up and give it a shake.")
+        if dev.wait_for("STATE", timeout=30) is None:
+            print("❌ Never saw motion. Is it wired and self-testing OK? Try again.")
+            return 1
+        print("  ✅ motion detected — recording")
+
+        print("\n[3/3] Jump detection: 3 gentle tosses.")
+        print("  Toss the device ~30–50 cm straight up over a cushion or bed and")
+        print("  let it land. (Drops under ~35 cm are ignored by design.)\n")
+        heights = []
+        for i in range(1, 4):
+            _pause(args, dev, f"Toss {i} of 3.")
+            ev = dev.wait_for("JUMP", timeout=60)
+            if ev is None:
+                print(f"  ❌ toss {i}: nothing detected in 60s. Toss a little higher —")
+                print("     airtime must exceed min_airtime_s "
+                      "(see config/params.json).")
+                return 1
+            raw = float(ev.get("airtime_raw_s", 0))
+            h = float(ev.get("height_m", 0))
+            plaus = "✅" if 0.10 <= raw <= 1.2 else "⚠️ implausible for a hand toss"
+            print(f"  {plaus} toss {i}: airtime {raw:.2f}s → height {h:.2f} m")
+            heights.append(h)
+
+        stats_lines = dev.command("stats", timeout=8)
+        n = 0
+        for line in stats_lines:
+            if line.startswith("STATS"):
+                n = int(parse_kv(line).get("session_jumps", "0"))
+        if n >= 3 and len(heights) == 3:
+            print(f"\nRESULT: PASS ✅ — assembly verified ({n} jumps this session).")
+            print("Next: calibration with ./tools/jump drop")
+            return 0
+        print(f"\nRESULT: CHECK ⚠️ — expected 3 recorded jumps, device says {n}.")
+        return 1
+    finally:
+        dev.close()
+        if proc:
+            proc.terminate()
+
+
+# ---------------------------------------------------------------------- drop
+
+
+def cmd_drop(args) -> int:
+    from detector import load_params
+
+    p = load_params(CONFIG_PATH)
+    h = args.height_cm / 100.0
+    expected = math.sqrt(2.0 * h / p.g)
+    min_h_cm = 100.0 * p.g * p.min_airtime_s ** 2 / 2.0
+    if args.height_cm < min_h_cm + 10:
+        print(f"Drop height {args.height_cm:.0f} cm is too low — anything under "
+              f"~{min_h_cm:.0f} cm is ignored by design (min_airtime_s). "
+              f"Use ≥ {min_h_cm + 15:.0f} cm (a table or head height works).")
+        return 1
+
+    dev, proc = open_device(
+        args, "drop",
+        ["--height-cm", str(args.height_cm), "--drops", str(args.drops)])
+    try:
+        print("=== Drop calibration ===")
+        print(f"Physics: a drop from {args.height_cm:.0f} cm free-falls for exactly "
+              f"{expected:.3f}s.\nWe compare what the device measures against that "
+              "to find its timing bias.\n")
+        print("Setup: hold the device so its BOTTOM is exactly at your measured")
+        print(f"height ({args.height_cm:.0f} cm above a cushion/pillow), then let go —")
+        print("don't throw it. Keep still for a second before each drop.\n")
+
+        _pause(args, dev, "Shake the device once to wake it.")
+        dev.wait_for("STATE", timeout=30)
+
+        raws: list[float] = []
+        for i in range(1, args.drops + 1):
+            _pause(args, dev, f"Drop {i} of {args.drops}.")
+            ev = dev.wait_for("JUMP", timeout=90)
+            if ev is None:
+                print(f"  ⚠️ drop {i}: not detected (too low? bounced oddly?) — skipping")
+                continue
+            raw = float(ev.get("airtime_raw_s", 0))
+            raws.append(raw)
+            print(f"  drop {i}: measured {raw:.3f}s (true {expected:.3f}s, "
+                  f"error {raw - expected:+.3f}s)")
+
+        if len(raws) < 3:
+            print(f"\nOnly {len(raws)} good drops — need at least 3. Re-run, "
+                  "dropping from a bit higher.")
+            return 1
+
+        offset = -statistics.median(r - expected for r in raws)
+        spread = statistics.pstdev(raws)
+        print(f"\nMeasured timing bias: {-offset * 1000:+.0f} ms "
+              f"(spread ±{spread * 1000:.0f} ms over {len(raws)} drops)")
+        print(f"Recommended airtime_offset_s = {offset:+.4f}")
+        resid = p.g * (expected ** 2) / 8 - p.g * max(0.0, statistics.median(raws) + offset) ** 2 / 8
+        print(f"After correction, drop-height error ≈ {abs(resid) * 100:.1f} cm "
+              f"on this test.")
+
+        if spread > 0.03:
+            print("⚠️  spread is high — results may be sloppy. Consider re-running "
+                  "with more careful, stiller drops.")
+
+        write = args.yes
+        if not write and sys.stdin.isatty() and not getattr(args, "fake", False):
+            write = input("\nWrite this into config/params.json? [y/N] ").strip().lower() == "y"
+        if write:
+            with open(CONFIG_PATH) as f:
+                cfg = json.load(f)
+            cfg["detector"]["airtime_offset_s"] = round(offset, 4)
+            with open(CONFIG_PATH, "w") as f:
+                json.dump(cfg, f, indent=2)
+                f.write("\n")
+            print(f"✅ saved to {CONFIG_PATH}")
+            print("Now run  ./tools/jump flash  to bake it into the device.")
+        else:
+            print("(not saved — re-run with --yes to save automatically)")
+        return 0
+    finally:
+        dev.close()
+        if proc:
+            proc.terminate()
+
+
+# ---------------------------------------------------------------------- sync
+
+
+def split_segments(rows: list[tuple[float, float]]) -> list[list[tuple[float, float]]]:
+    """Split a trace wherever time goes backwards (device rebooted)."""
+    segs: list[list[tuple[float, float]]] = []
+    cur: list[tuple[float, float]] = []
+    last_t = None
+    for t, m in rows:
+        if last_t is not None and t < last_t:
+            if cur:
+                segs.append(cur)
+            cur = []
+        cur.append((t, m))
+        last_t = t
+    if cur:
+        segs.append(cur)
+    return segs
+
+
+def parse_file_sections(lines: list[str]) -> dict:
+    files: dict[str, list[str]] = {}
+    current = None
+    for line in lines:
+        if line.startswith("FILE ") and line.endswith(" BEGIN"):
+            current = line.split()[1]
+            files[current] = []
+        elif line.startswith("FILE ") and line.endswith(" END"):
+            current = None
+        elif current is not None:
+            files[current].append(line)
+    return files
+
+
+def cmd_sync(args) -> int:
+    from detector import Detector, load_params
+
+    dev, proc = open_device(args, "session")
+    try:
+        print("Downloading session data...")
+        check_device_params(dev)
+        lines = dev.command("dump", timeout=120)
+        files = parse_file_sections(lines)
+        jumps_csv = "\n".join(files.get("jumps.csv", []))
+        trace_csv = "\n".join(files.get("trace.csv", []))
+
+        out_root = Path(args.out) if args.out else REPO / "data" / "sessions"
+        sess = out_root / datetime.now().strftime("%Y%m%d-%H%M%S")
+        sess.mkdir(parents=True, exist_ok=True)
+        (sess / "jumps.csv").write_text(jumps_csv + "\n")
+        (sess / "trace.csv").write_text(trace_csv + "\n")
+
+        # Device's own jump list
+        dev_jumps: list[dict] = []
+        for row in files.get("jumps.csv", [])[1:]:
+            cells = row.split(",")
+            if len(cells) >= 5:
+                try:
+                    dev_jumps.append({
+                        "takeoff": float(cells[1]), "raw": float(cells[2]),
+                        "airtime": float(cells[3]), "height": float(cells[4])})
+                except ValueError:
+                    pass
+
+        # Offline re-detection over the trace (catches jumps the live pass missed)
+        rows: list[tuple[float, float]] = []
+        for row in files.get("trace.csv", [])[1:]:
+            cells = row.split(",")
+            if len(cells) >= 2:
+                try:
+                    rows.append((float(cells[0]), float(cells[1])))
+                except ValueError:
+                    pass
+        params = load_params(CONFIG_PATH)
+        offline: list = []
+        for seg in split_segments(rows):
+            det = Detector(params)
+            for t, m in seg:
+                ev = det.update(t, m)
+                if ev:
+                    offline.append(ev)
+
+        # Cross-check: match by airtime (times reset per boot, so counts +
+        # airtimes are the robust comparison)
+        dev_raws = sorted(j["raw"] for j in dev_jumps)
+        off_raws = sorted(e.airtime_raw_s for e in offline)
+        agree = len(dev_raws) == len(off_raws) and all(
+            abs(a - b) <= 0.05 for a, b in zip(dev_raws, off_raws))
+
+        best = max((j["height"] for j in dev_jumps), default=0.0)
+        best_off = max((e.height_m for e in offline), default=0.0)
+
+        report = [
+            f"# Session report — {sess.name}", "",
+            f"**Device:** {len(dev_jumps)} jumps, best {best:.2f} m "
+            f"({best * 3.28084:.1f} ft)",
+            f"**Offline re-analysis:** {len(offline)} jumps, best {best_off:.2f} m", "",
+            "Agreement: " + ("✅ live and offline detection agree"
+                             if agree else
+                             "⚠️ live vs offline differ — see tables; consider tuning "
+                             "config/params.json and re-running "
+                             f"`./tools/jump replay --csv {sess / 'trace.csv'}`"), "",
+            "| # | airtime (s) | height (m) | height (ft) |",
+            "|---|-------------|------------|-------------|",
+        ]
+        for i, j in enumerate(dev_jumps, 1):
+            report.append(f"| {i} | {j['airtime']:.2f} | {j['height']:.2f} | "
+                          f"{j['height'] * 3.28084:.1f} |")
+        report += [
+            "",
+            f"Params: `{params}`", "",
+            "_Note: the device accumulates jumps until `clear`; timestamps reset "
+            "each power-up. Sync + clear after every session to keep reports "
+            "one-session-per-file._",
+        ]
+        (sess / "report.md").write_text("\n".join(report) + "\n")
+
+        print(f"\n=== {len(dev_jumps)} jumps — best {best:.2f} m "
+              f"({best * 3.28084:.1f} ft) ===")
+        for i, j in enumerate(dev_jumps, 1):
+            print(f"  #{i}: airtime {j['airtime']:.2f}s → {j['height']:.2f} m")
+        if not agree:
+            print("⚠️  offline re-analysis differs from the live detection — "
+                  "see the report.")
+        print(f"\nSaved: {sess}/report.md (+ raw CSVs for re-tuning)")
+
+        do_clear = args.clear
+        if not do_clear and sys.stdin.isatty() and not getattr(args, "fake", False):
+            do_clear = input(
+                "Clear the device for the next session? [y/N] ").strip().lower() == "y"
+        if do_clear:
+            dev.command("clear", timeout=10)
+            print("✅ device cleared")
+        return 0
+    finally:
+        dev.close()
+        if proc:
+            proc.terminate()
+
+
+# ------------------------------------------------------------------- simtest
+
+
+def _run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, cwd=str(REPO), capture_output=True, text=True, **kw)
+
+
+def cmd_simtest(args) -> int:
+    print("=== Software test suite (no hardware needed) ===\n")
+    results: list[tuple[str, bool, str]] = []
+
+    # 1. Synthetic detector tests across noise seeds
+    ok = True
+    for seed in range(5):
+        r = _run([sys.executable, "sim/run.py", "--seed", str(seed)])
+        if "RESULT: PASS" not in r.stdout:
+            ok = False
+    results.append(("detector vs synthetic ground truth (5 seeds)", ok, ""))
+
+    # 2. Generated params header is in sync with config/params.json
+    r = _run([sys.executable, "tools/gen_params.py", "--check"])
+    results.append(("params.gen.h in sync with config/params.json", r.returncode == 0,
+                    "" if r.returncode == 0 else "run ./tools/jump gen"))
+
+    # 3. C++ (firmware) vs Python (sim) detector parity
+    gxx = shutil.which("g++") or shutil.which("c++")
+    if gxx:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            binp = os.path.join(td, "host_test")
+            r = _run([gxx, "-std=c++14", "-Wall", "-Wextra", "-I", "firmware/include",
+                      "firmware/test/host_test.cpp", "-o", binp])
+            if r.returncode != 0:
+                results.append(("C++ firmware detector compiles", False, r.stderr[:400]))
+            else:
+                results.append(("C++ firmware detector compiles", True, ""))
+                with open(REPO / "data" / "example_session.csv") as f:
+                    rc = subprocess.run([binp], stdin=f, capture_output=True, text=True)
+                rp = _run([sys.executable, "sim/golden.py", "data/example_session.csv"])
+
+                def nums(out):
+                    return [[float(x.split("=")[1]) for x in ln.split()[1:]]
+                            for ln in out.strip().splitlines() if ln.startswith("JUMP")]
+
+                a, b = nums(rc.stdout), nums(rp.stdout)
+                parity = (len(a) == len(b) and len(a) > 0 and all(
+                    abs(x - y) <= 0.002 for ra, rb in zip(a, b) for x, y in zip(ra, rb)))
+                results.append(("C++ and Python detectors agree exactly", parity,
+                                f"C++ {len(a)} jumps vs Python {len(b)}"))
+    else:
+        results.append(("C++ parity check", True, "skipped: no g++ on this machine"))
+
+    # 4. CLI integration tests against the fake device
+    r = _run([sys.executable, "-m", "unittest", "discover", "-s", "tools/tests"])
+    results.append(("CLI + fake-device integration tests", r.returncode == 0,
+                    (r.stderr or r.stdout)[-600:] if r.returncode != 0 else ""))
+
+    print()
+    all_ok = True
+    for name, ok, note in results:
+        mark = "✅" if ok else "❌"
+        print(f"  {mark} {name}" + (f"  ({note})" if note and not ok else
+                                    f"  ({note})" if note else ""))
+        all_ok &= ok
+    print(f"\nRESULT: {'PASS ✅ — software is good' if all_ok else 'FAIL ❌'}")
+    return 0 if all_ok else 1
+
+
+# ------------------------------------------------------- setup / flash / misc
+
+
+def find_pio() -> str | None:
+    for cand in ("pio", "platformio"):
+        p = shutil.which(cand)
+        if p:
+            return p
+    for p in (Path.home() / ".local" / "bin" / "pio",
+              Path.home() / ".platformio" / "penv" / "bin" / "pio"):
+        if p.exists():
+            return str(p)
+    return None
+
+
+def cmd_setup(args) -> int:
+    print("=== One-time toolchain setup ===\n")
+    ok = True
+    print(f"✅ Python {sys.version.split()[0]}")
+
+    if find_pio():
+        print("✅ PlatformIO already installed")
+    else:
+        print("Installing PlatformIO (builds + uploads the firmware)...")
+        r = subprocess.run([sys.executable, "-m", "pip", "install", "--user",
+                            "platformio"])
+        if r.returncode == 0 and find_pio():
+            print("✅ PlatformIO installed")
+        else:
+            print("❌ PlatformIO install failed — see https://platformio.org/install")
+            ok = False
+
+    try:
+        import serial  # type: ignore  # noqa: F401
+        print("✅ pyserial available")
+    except ImportError:
+        r = subprocess.run([sys.executable, "-m", "pip", "install", "--user",
+                            "pyserial"])
+        if r.returncode == 0:
+            print("✅ pyserial installed")
+        elif os.name == "posix":
+            print("⚠️  pyserial install failed — built-in fallback will be used")
+        else:
+            print("❌ pyserial install failed (required on Windows)")
+            ok = False
+
+    if shutil.which("g++") or shutil.which("c++"):
+        print("✅ C++ compiler (enables the firmware parity test)")
+    else:
+        print("⚠️  no C++ compiler — simtest will skip the parity check (fine)")
+
+    local_bin = str(Path.home() / ".local" / "bin")
+    if local_bin not in os.environ.get("PATH", ""):
+        print(f"\nNote: if 'pio' isn't found later, add {local_bin} to your PATH.")
+    print("\nNext: ./tools/jump simtest   (should PASS with no hardware)")
+    return 0 if ok else 1
+
+
+def cmd_gen(args) -> int:
+    import gen_params
+
+    gen_params.HEADER_PATH.write_text(
+        gen_params.render_header(gen_params.load_config(CONFIG_PATH)))
+    print(f"wrote {gen_params.HEADER_PATH}")
+    return 0
+
+
+def cmd_flash(args) -> int:
+    cmd_gen(args)
+    pio = find_pio()
+    if not pio:
+        print("PlatformIO not found — run ./tools/jump setup first.")
+        return 1
+    cmd = [pio, "run", "-d", str(REPO / "firmware"), "-t", "upload"]
+    if args.port:
+        cmd += ["--upload-port", args.port]
+    print("Building + uploading firmware (first build downloads the toolchain — "
+          "takes a few minutes once)...")
+    r = subprocess.run(cmd)
+    if r.returncode != 0:
+        print("\n❌ upload failed. Board plugged in? Data-capable USB cable? "
+              "Try --port /dev/ttyUSB0.")
+        return 1
+    print("\n✅ flashed. Running self-test...")
+    time.sleep(1.5)
+    return cmd_selftest(args)
+
+
+def cmd_monitor(args) -> int:
+    port = args.port or autodetect_port()
+    sp = SerialPort(port)
+    print(f"--- monitor {port} (Ctrl-C to exit; type a command + Enter) ---")
+    try:
+        while True:
+            line = sp.read_line(0.1)
+            if line is not None:
+                print(line)
+            r, _, _ = select.select([sys.stdin], [], [], 0)
+            if r:
+                cmdline = sys.stdin.readline()
+                if cmdline:
+                    sp.write_line(cmdline.strip())
+    except KeyboardInterrupt:
+        print("\n--- bye ---")
+        return 0
+    finally:
+        sp.close()
+
+
+def cmd_replay(args) -> int:
+    cmd = [sys.executable, "sim/run.py", "--csv", args.csv]
+    if args.plot:
+        cmd.append("--plot")
+    return subprocess.run(cmd, cwd=str(REPO)).returncode
+
+
+# ---------------------------------------------------------------------- main
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        prog="jump", description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    def add(name, fn, **kw):
+        p = sub.add_parser(name, **kw)
+        p.set_defaults(fn=fn)
+        p.add_argument("--port", help="serial port (default: autodetect)")
+        return p
+
+    add("setup", cmd_setup, help="one-time toolchain install")
+    add("gen", cmd_gen, help="regenerate firmware params header from config")
+    add("simtest", cmd_simtest, help="full software test suite, no hardware")
+
+    p = add("flash", cmd_flash, help="build + upload firmware, then self-test")
+
+    p = add("selftest", cmd_selftest, help="check wiring/sensor/storage")
+    p.add_argument("--fake", action="store_true", help="use a simulated device")
+    p.add_argument("--fake-fail", action="store_true", help=argparse.SUPPRESS)
+    p.add_argument("--fast", action="store_true", help=argparse.SUPPRESS)
+
+    p = add("desktest", cmd_desktest, help="guided assembly check (3 tosses)")
+    p.add_argument("--fake", action="store_true", help="rehearse with a simulated device")
+    p.add_argument("--fast", action="store_true", help=argparse.SUPPRESS)
+
+    p = add("drop", cmd_drop, help="calibrate timing from measured drops")
+    p.add_argument("--height-cm", type=float, default=100.0,
+                   help="measured drop height in cm (default 100)")
+    p.add_argument("--drops", type=int, default=5, help="number of drops (default 5)")
+    p.add_argument("--yes", action="store_true", help="save result without asking")
+    p.add_argument("--fake", action="store_true", help="rehearse with a simulated device")
+    p.add_argument("--fast", action="store_true", help=argparse.SUPPRESS)
+
+    p = add("sync", cmd_sync, help="download session, analyze, write report")
+    p.add_argument("--clear", action="store_true", help="clear device after download")
+    p.add_argument("--out", help=argparse.SUPPRESS)  # session dir root (tests)
+    p.add_argument("--fake", action="store_true", help="rehearse with a simulated device")
+    p.add_argument("--fast", action="store_true", help=argparse.SUPPRESS)
+
+    add("monitor", cmd_monitor, help="raw serial console")
+
+    p = add("replay", cmd_replay, help="re-run detector over a capture CSV")
+    p.add_argument("--csv", required=True)
+    p.add_argument("--plot", action="store_true")
+
+    args = ap.parse_args()
+    try:
+        return args.fn(args)
+    except TimeoutError as e:
+        print(f"❌ {e}")
+        return 1
+    except KeyboardInterrupt:
+        print("\ninterrupted")
+        return 130
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
