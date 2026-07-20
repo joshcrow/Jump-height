@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# PlatformIO / firmware build output
+firmware/.pio/
+firmware/.pioenvs/
+firmware/.piolibdeps/
+.vscode/
+
+# Captured session data / logs
+*.log
+data/*.csv
+!data/example_session.csv
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Plots
+*.png
+!docs/**/*.png
