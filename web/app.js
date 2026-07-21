@@ -273,12 +273,23 @@ function heightPref(m) {
   if (!(m > 0)) return '–';
   return unitPref === 'ft' ? fmt(m * M_TO_FT, 1) + ' ft' : fmt(m, 2) + ' m';
 }
-/** Both units, preferred first: '5.9 ft (1.79 m)'. */
+/** Both units, preferred first: '5.9 ft (1.79 m)'. Same zero-guard as
+ *  heightPref so the two can never disagree side by side. */
 function heightPair(m) {
+  if (!(m > 0)) return '–';
   const ft = m * M_TO_FT;
   return unitPref === 'ft'
     ? `${fmt(ft, 1)} ft (${fmt(m, 2)} m)`
     : `${fmt(m, 2)} m (${fmt(ft, 1)} ft)`;
+}
+
+/** Content identity for a synced session: same device bytes => same key, so
+ *  re-syncing an uncleared device can be recognised instead of duplicated. */
+function contentKey(jumpsCsv, traceCsv) {
+  const s = jumpsCsv + ' ' + traceCsv;
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+  return h.toString(36) + '-' + s.length.toString(36);
 }
 
 // ------------------------------------------------------------- line handling
@@ -501,7 +512,10 @@ function renderSelftest() {
     for (const h of row.hints) table.append(el('div', { class: 'st-hint muted', text: h }));
   }
   c.append(table);
-  if (selftest.result) {
+  if (selftest.result === 'INTERRUPTED') {
+    c.append(el('div', { class: 'st-result bad',
+      text: 'Interrupted — the device disconnected. Reconnect and run it again.' }));
+  } else if (selftest.result) {
     const ok = selftest.result === 'PASS';
     c.append(el('div', { class: 'st-result ' + (ok ? 'ok' : 'bad'), text: `Result: ${selftest.result} ${ok ? '✅' : '❌'}` }));
   } else if (!selftest.rows.length) {
@@ -817,7 +831,24 @@ function onSyncDone(lines, err) {
     });
   }
 
-  const session = { when: new Date().toISOString(), jumps, jumpsCsv, traceCsv: traceRows.join('\n') };
+  // A device with nothing on it must not manufacture an empty session.
+  if (!jumps.length) {
+    showDumpStatus('Nothing to sync — no jumps on the device yet.');
+    return;
+  }
+
+  // Re-syncing an uncleared device (the "Keep" path, or a double sync) returns
+  // the identical bytes — recognise it instead of duplicating history.
+  const traceCsv = traceRows.join('\n');
+  const key = contentKey(jumpsCsv, traceCsv);
+  const existing = loadSessions().find((s) => s.key === key);
+  if (existing) {
+    showDumpStatus('Already saved — no new jumps since the last sync.');
+    showSyncResult(existing); // the device still holds them: clear/keep still applies
+    return;
+  }
+
+  const session = { when: new Date().toISOString(), key, jumps, jumpsCsv, traceCsv };
   const saved = saveSession(session);
   if (!saved) return; // storeSessions already showed the failure — don't mask it
   renderSessions();
@@ -993,10 +1024,18 @@ function importBackup(file) {
       : (data && Array.isArray(data.sessions) ? data.sessions : null);
     if (!incoming) { showDumpStatus("That file didn't look like a Jump Height backup."); return; }
     const cur = loadSessions();
-    const seen = new Set(cur.map((s) => s.when));
+    // Dedupe by timestamp AND by content key: two browsers that each synced
+    // the same on-device session have different 'when's but identical bytes.
+    const seenWhen = new Set(cur.map((s) => s.when));
+    const seenKey = new Set(cur.map((s) => s.key).filter(Boolean));
     let added = 0;
     for (const s of incoming) {
-      if (s && s.when && !seen.has(s.when)) { cur.push(s); seen.add(s.when); added++; }
+      if (!s || !s.when) continue;
+      if (seenWhen.has(s.when) || (s.key && seenKey.has(s.key))) continue;
+      cur.push(s);
+      seenWhen.add(s.when);
+      if (s.key) seenKey.add(s.key);
+      added++;
     }
     cur.sort((a, b) => new Date(b.when) - new Date(a.when)); // newest first
     if (storeSessions(cur)) {
@@ -1113,6 +1152,11 @@ function setTransport(t, kind) {
   t.onLine(handleLine);
   t.onClose(() => onTransportClosed(t));
   resetLiveSession();
+  // Never carry one device's numbers into another connection: the banner and
+  // the sync progress denominator must start unknown until THIS device reports.
+  lastStored = { jumps: 0, bestM: 0 };
+  lastTraceBytes = NaN;
+  renderBanner();
   setStatus('connected', kind);
   acquireWakeLock(); // keep the screen awake while riding (feature-detected)
   // Pull current info + stats so the UI isn't blank on connect. (In demo mode
@@ -1135,6 +1179,12 @@ function onTransportClosed(t) {
     syncState = null;
     hideSyncProgress();
     showDumpStatus('Sync interrupted — the device disconnected. Reconnect and try again.');
+  }
+  // A self-test cut off mid-run must not sit on "Running…" forever.
+  if (selftest.active) {
+    selftest.active = false;
+    selftest.result = 'INTERRUPTED';
+    renderSelftest();
   }
   renderBanner();
   setStatus('off');

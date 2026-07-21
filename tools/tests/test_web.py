@@ -340,19 +340,18 @@ class TestWebApp(unittest.TestCase):
         offers to clear the device — only now, after the save is verified."""
         self._open()
 
+        # Before any STATS arrives the banner must be hidden — this is the
+        # regression check for the [hidden]-vs-display:flex cascade bug (a
+        # class's display rule silently beat the hidden attribute until
+        # style.css gained a global [hidden]{display:none !important} guard).
+        banner = _resilient(self.page, [
+            ("testid", "sync-banner"), ("css", "#sync-banner")], "sync banner")
+        expect(banner).to_be_hidden()
+
         # A STATS line with stored_jumps (+ the optional trace_bytes, parsed
         # if present per the parallel STATS change) should raise the banner.
         self._feed("STATS session_jumps=0 session_best_m=0 "
                    "stored_jumps=5 stored_best_m=1.790 trace_bytes=2048")
-        banner = _resilient(self.page, [
-            ("testid", "sync-banner"), ("css", "#sync-banner")], "sync banner")
-        # NOTE: not asserting it was hidden *before* this STATS line — the
-        # '.sync-banner' rule in style.css sets `display: flex` unconditionally
-        # (no `:not([hidden])` guard), which beats the UA's default
-        # `[hidden] { display: none }` in the cascade (author-normal outranks
-        # UA-normal regardless of specificity). So the banner actually renders
-        # from page load regardless of stored_jumps — a real style.css bug,
-        # not this test's file to fix; see the risk in the run summary.
         expect(banner).to_be_visible()
         expect(banner).to_contain_text("5")
 
@@ -414,6 +413,9 @@ class TestWebApp(unittest.TestCase):
         clear_btn.click()
         self.assertIn("clear", self._sent(),
                       "clicking the post-sync Clear device button should send 'clear'")
+        # ...and once cleared, the banner must actually go away (regression
+        # check: it used to stay visible forever showing stale pre-clear text).
+        expect(banner).to_be_hidden()
 
     def test_theme_toggle_cycles_and_persists(self):
         """Clicking the theme toggle cycles Auto/Light/Dark on data-theme and

@@ -129,7 +129,11 @@ static void flushTrace() {
   if (!fs_ok || trace_buf.length() == 0) return;
   File f = LittleFS.open(TRACE_PATH, FILE_APPEND);
   if (f) {
-    if (!trace_header) { f.print("t,mag\n"); trace_header = true; }
+    if (!trace_header) {
+      f.print("t,mag\n");
+      trace_header = true;
+      trace_bytes += 6;  // count the header too: STATS trace_bytes sizes the dump
+    }
     f.print(trace_buf);
     f.close();
     // Account and enforce the cap here so every flush path (loop, idle

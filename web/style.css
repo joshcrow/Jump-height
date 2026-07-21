@@ -63,6 +63,12 @@
 
 * { box-sizing: border-box; }
 
+/* The hidden attribute must ALWAYS win. Any class that sets `display` would
+   otherwise override the browser's built-in [hidden]{display:none} (author
+   rules beat user-agent rules regardless of specificity) — which is exactly
+   how the sync banner once became permanently visible. */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
   /* Bottom padding leaves room for the collapsed console bar so it never
