@@ -15,7 +15,7 @@
 
   The head/body skeleton is real here (unlike an Artifact) because this file is
   served directly. All app logic lives in app.js (an ES module); all styling in
-  style.css. IDs below are the contract app.js binds to.
+  style.css. IDs and data-testid hooks below are the contract app.js binds to.
 -->
 <html lang="en">
 <head>
@@ -24,8 +24,25 @@
   <title>Jump Height</title>
   <meta name="description" content="Live stats, session history and browser flashing for the Jump Height wing-foil jump tracker." />
   <meta name="theme-color" content="#0e1116" media="(prefers-color-scheme: dark)" />
-  <meta name="theme-color" content="#f6f8fa" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#fcfcfb" media="(prefers-color-scheme: light)" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%AA%82%3C/text%3E%3C/svg%3E" />
+  <!-- Set the theme + unit BEFORE the stylesheet paints, so there's no flash of
+       the wrong theme. Defaults are the sunlight-first light theme and feet.
+       Everything here is guarded so a blocked localStorage can never break boot. -->
+  <script>
+    (function () {
+      try {
+        var m = localStorage.getItem('jh_theme') || 'light';
+        var dark = m === 'dark' || (m === 'auto' &&
+          window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+        document.documentElement.setAttribute('data-unit', localStorage.getItem('jh_unit') || 'ft');
+      } catch (e) {
+        document.documentElement.setAttribute('data-theme', 'light');
+        document.documentElement.setAttribute('data-unit', 'ft');
+      }
+    })();
+  </script>
   <link rel="stylesheet" href="style.css" />
   <!-- Browser flasher. Loads from the internet; the Install tab explains that
        and handles the offline / not-built-yet cases gracefully. -->
@@ -40,22 +57,35 @@
     </div>
     <div class="conn">
       <span id="conn-status" data-testid="connect" class="pill pill-off">Disconnected</span>
-      <button id="btn-disconnect" class="btn btn-ghost" type="button" hidden>Disconnect</button>
+      <button id="btn-disconnect" class="btn btn-ghost btn-sm" type="button" hidden>Disconnect</button>
+      <button id="btn-theme" data-testid="theme-toggle" class="theme-toggle" type="button" aria-label="Theme: Light. Tap to change.">
+        <span id="theme-ico" class="theme-ico" aria-hidden="true">☀️</span><span id="theme-label" class="theme-label">Light</span>
+      </button>
     </div>
   </header>
 
+  <!-- Sync banner: lives outside the tab panels so it is visible on every tab.
+       app.js shows it whenever a device is connected and has stored jumps. -->
+  <div id="sync-banner" data-testid="sync-banner" class="sync-banner" hidden>
+    <div class="sync-banner-text">
+      <strong id="sync-banner-count">jumps stored on the device</strong>
+      <span id="sync-banner-best" class="sync-banner-best"></span>
+    </div>
+    <button id="btn-sync" data-testid="btn-sync" class="btn btn-primary" type="button">Sync</button>
+  </div>
+
   <nav class="tabs" role="tablist" aria-label="Sections">
-    <button class="tab-btn is-active" data-tab="connect" role="tab">Connect</button>
-    <button class="tab-btn" data-tab="live" role="tab">Live</button>
-    <button class="tab-btn" data-tab="sessions" data-testid="tab-sessions" role="tab">Sessions</button>
-    <button class="tab-btn" data-tab="install" role="tab">Install</button>
+    <button class="tab-btn is-active" data-tab="connect" role="tab" aria-selected="true" aria-controls="tab-connect">Connect</button>
+    <button class="tab-btn" data-tab="live" role="tab" aria-selected="false" aria-controls="tab-live">Live</button>
+    <button class="tab-btn" data-tab="sessions" data-testid="tab-sessions" role="tab" aria-selected="false" aria-controls="tab-sessions">Sessions</button>
+    <button class="tab-btn" data-tab="install" role="tab" aria-selected="false" aria-controls="tab-install">Install</button>
   </nav>
 
   <main>
     <!-- 1. CONNECT -->
     <section id="tab-connect" class="tab-panel is-active" role="tabpanel">
       <h2>Connect your device</h2>
-      <p class="muted">Pair over Bluetooth for the water, or plug in over USB for the fastest downloads.</p>
+      <p class="muted">Pair over Bluetooth for the water, or plug in over USB for the fastest sync.</p>
       <div class="btn-row">
         <button id="btn-connect-ble" class="btn btn-primary" type="button">Connect Bluetooth</button>
         <button id="btn-connect-usb" class="btn btn-primary" type="button">Connect USB</button>
@@ -74,20 +104,29 @@
 
     <!-- 2. LIVE -->
     <section id="tab-live" class="tab-panel" role="tabpanel">
-      <div class="live-hero card">
+      <div class="live-hero card" id="live-hero">
         <div class="row-between">
           <span class="live-label">Latest jump</span>
           <span id="live-state" data-testid="live-state" class="badge badge-idle" hidden></span>
         </div>
-        <div class="live-height"><span id="live-height-m" data-testid="live-height">–</span><span class="unit">m</span></div>
-        <div class="live-sub"><span id="live-height-ft">–</span> ft &middot; <span id="live-airtime">–</span> s airtime</div>
+        <!-- Both units are always rendered; CSS shows the preferred one big and
+             the other small, driven by data-unit on <html>. The meters spans
+             carry the data-testid hooks the tests read. -->
+        <div class="hero-readout udual" aria-live="polite">
+          <div class="urow r-ft"><span id="live-height-ft">–</span><span class="u">ft</span></div>
+          <div class="urow r-m"><span id="live-height-m" data-testid="live-height">–</span><span class="u">m</span></div>
+        </div>
+        <div class="live-sub"><span id="live-airtime">–</span> s airtime</div>
+        <button id="btn-unit" data-testid="unit-toggle" class="unit-toggle" type="button">Show meters</button>
       </div>
 
       <div class="stat-grid">
         <div class="card stat">
-          <div class="stat-num" id="live-best-m" data-testid="live-best">–</div>
+          <div class="udual statdual">
+            <div class="urow r-ft"><span id="live-best-ft">–</span><span class="u">ft</span></div>
+            <div class="urow r-m"><span id="live-best-m" data-testid="live-best">–</span><span class="u">m</span></div>
+          </div>
           <div class="stat-label">Session best</div>
-          <div class="stat-sub" id="live-best-ft"></div>
         </div>
         <div class="card stat">
           <div class="stat-num" id="live-count" data-testid="live-count">0</div>
@@ -95,6 +134,8 @@
           <div class="stat-sub" id="live-stored"></div>
         </div>
       </div>
+
+      <div id="live-mini" class="mini-wrap" data-testid="live-mini" hidden></div>
 
       <div class="row-between mt">
         <h3>This session</h3>
@@ -107,15 +148,31 @@
     <!-- 3. SESSIONS -->
     <section id="tab-sessions" class="tab-panel" role="tabpanel">
       <h2>Sessions</h2>
-      <p class="muted">Download the jumps stored on your device, keep a history here, and export the raw CSV.</p>
-      <div class="btn-row">
-        <button id="btn-download-session" data-testid="btn-dump" class="btn btn-primary" type="button">Download session</button>
-        <button id="btn-clear-device" class="btn btn-danger" type="button">Clear device</button>
+      <div class="chips">
+        <span class="chip" data-testid="alltime-best" id="chip-alltime-best">All-time best: –</span>
+        <span class="chip" id="chip-total-jumps">Total jumps: 0</span>
       </div>
-      <p class="muted small">A Bluetooth download is slow — all the raw trace data trickles over the air. Plugging in over USB is much faster.</p>
+      <p class="muted">Your device holds every jump until you sync it here. Sync keeps a copy in this browser and lets you look back over each session.</p>
+      <div class="btn-row">
+        <button id="btn-download-session" data-testid="btn-dump" class="btn btn-primary" type="button">Sync from device</button>
+      </div>
       <div id="dump-status" class="status" hidden></div>
+      <div id="sync-progress" data-testid="sync-progress" class="status" hidden></div>
+      <div id="sync-result"></div>
       <div id="sessions-list"></div>
-      <p id="sessions-empty" class="muted">No saved sessions yet.</p>
+      <p id="sessions-empty" class="muted">No saved sessions yet — Sync from your device to keep them here.</p>
+
+      <div class="sessions-foot">
+        <div class="btn-row">
+          <button id="btn-export-all" data-testid="btn-export-all" class="btn btn-ghost btn-sm" type="button">Back up all sessions</button>
+          <label class="btn btn-ghost btn-sm file-btn">
+            <span>Restore backup</span>
+            <input id="import-file" data-testid="btn-import" type="file" accept="application/json,.json" />
+          </label>
+          <button id="btn-clear-device" class="btn btn-quiet btn-sm" type="button">Clear device</button>
+        </div>
+        <p class="muted small">Browser storage can be wiped by your phone or computer — keep a backup, or sync over USB on the laptop (that also archives to the repo's data/sessions).</p>
+      </div>
     </section>
 
     <!-- 4. INSTALL -->

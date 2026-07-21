@@ -19,6 +19,15 @@
   Machine lines are parsed with parseKV, a faithful port of tools/jump's
   parse_kv (tag, key=value pairs, bare words as _args), so the browser and the
   CLI read the wire identically.
+
+  Presentation notes (the UI/UX layer, safe to evolve):
+  - Sunlight-first: light theme is the default; Auto/Light/Dark is an explicit
+    choice persisted in localStorage and applied via data-theme on <html>.
+  - The owner thinks in FEET: a global unit preference (data-unit on <html>)
+    decides which number is shown big; the other is shown small beneath.
+  - "Sync" is the one word for pulling a session off the device (the wire
+    command is still 'dump'); the flow shows live progress and, on a verified
+    save, offers to clear the device.
 */
 
 // ------------------------------------------------------------------ protocol
@@ -31,6 +40,9 @@ const DEVICE_NAME = 'JumpHeight';
 
 const BAUD = 115200;
 const STORAGE_KEY = 'jh_sessions';
+const THEME_KEY = 'jh_theme';
+const UNIT_KEY = 'jh_unit';
+const M_TO_FT = 3.28084;
 
 // Same glyphs the CLI's render_selftest uses, so the two UIs read alike.
 const MARKS = { PASS: '✅', WARN: '⚠️', FAIL: '❌', SKIP: '—' };
@@ -214,7 +226,16 @@ let transportKind = null;  // 'USB' | 'BLE' | 'Demo'
 const deviceInfo = {};     // last INFO/PARAMS seen
 const live = { count: 0, bestM: 0 };
 const selftest = { active: false, rows: [], result: null };
-let activeCapture = null;  // in-flight command capture (used by 'dump')
+let activeCapture = null;  // in-flight command capture (used by 'dump'/sync)
+
+let unitPref = 'ft';       // 'ft' | 'm' — the owner thinks in feet
+let themeMode = 'light';   // 'auto' | 'light' | 'dark'
+const liveJumps = [];      // per-jump data for this session's live mini-chart
+let lastStored = { jumps: 0, bestM: 0 };  // last STATS stored_* seen (for the banner)
+let lastTraceBytes = NaN;  // optional STATS trace_bytes, for a real sync %
+let syncState = null;      // { bytes, expected, kind } while a sync is running
+let lastSynced = null;     // the session object shown in the inline result panel
+let wakeLock = null;       // Screen Wake Lock sentinel while connected
 
 // tiny helpers
 const $ = (id) => document.getElementById(id);
@@ -237,15 +258,47 @@ function el(tag, props = {}, ...kids) {
   return n;
 }
 
+/** SVG element builder (charts are hand-built inline SVG, no libraries). */
+function svg(tag, attrs = {}, ...kids) {
+  const n = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const k in attrs) if (attrs[k] != null) n.setAttribute(k, attrs[k]);
+  for (const c of kids) if (c != null) n.append(c);
+  return n;
+}
+
+// --------------------------------------------------------------- unit helpers
+
+/** Best height in the preferred unit, e.g. '5.9 ft' or '1.79 m'. */
+function heightPref(m) {
+  if (!(m > 0)) return '–';
+  return unitPref === 'ft' ? fmt(m * M_TO_FT, 1) + ' ft' : fmt(m, 2) + ' m';
+}
+/** Both units, preferred first: '5.9 ft (1.79 m)'. */
+function heightPair(m) {
+  const ft = m * M_TO_FT;
+  return unitPref === 'ft'
+    ? `${fmt(ft, 1)} ft (${fmt(m, 2)} m)`
+    : `${fmt(m, 2)} m (${fmt(ft, 1)} ft)`;
+}
+
 // ------------------------------------------------------------- line handling
 
 /** Every incoming line goes through here, whatever the link. */
 function handleLine(line) {
   if (line == null || line.trim() === '') return;
   appendConsole(line, 'rx');
-  feedCapture(line);  // command capture (dump) — independent of the live UI
+  feedCapture(line);  // command capture (sync) — independent of the live UI
+  // A running sync tracks bytes for its progress readout. feedCapture may have
+  // just finished the sync on the 'OK dump'/'ERR' line (clearing syncState), in
+  // which case we skip — the terminal line isn't payload.
+  if (syncState) {
+    syncState.bytes += byteLen(line) + 1;
+    showSyncProgress(syncProgressText());
+  }
   dispatch(line);     // live UI updates
 }
+
+function byteLen(s) { try { return new TextEncoder().encode(s).length; } catch (_e) { return s.length; } }
 
 /** Route a line to whatever cares about its tag. */
 function dispatch(line) {
@@ -322,6 +375,11 @@ function onJump(kv) {
   if (!Number.isNaN(best)) live.bestM = best;
   renderLiveStats();
   addJumpToFeed(n, hm, hft, at);
+  if (!Number.isNaN(hm)) {
+    liveJumps.push({ n: Number.isNaN(n) ? liveJumps.length + 1 : n, height_m: hm,
+                     height_ft: Number.isNaN(hft) ? hm * M_TO_FT : hft, airtime_s: at });
+    renderLiveMini();
+  }
   $('live-empty').hidden = true;
 }
 
@@ -332,7 +390,16 @@ function onStats(kv) {
   if (!Number.isNaN(sb)) live.bestM = sb;
   renderLiveStats();
   if (kv.stored_jumps != null) {
-    setText('live-stored', `On device: ${kv.stored_jumps} jumps, best ${fmt(pf(kv.stored_best_m), 2)} m`);
+    const n = parseInt(kv.stored_jumps, 10) || 0;
+    const bm = pf(kv.stored_best_m);
+    lastStored = { jumps: n, bestM: Number.isNaN(bm) ? 0 : bm };
+    setText('live-stored', n ? `On device: ${n} jumps, best ${heightPref(lastStored.bestM)}` : '');
+    renderBanner();
+  }
+  // Optional field, added to STATS in parallel. Parse if present, tolerate absence.
+  if (kv.trace_bytes != null) {
+    const tb = parseInt(kv.trace_bytes, 10);
+    lastTraceBytes = Number.isNaN(tb) ? NaN : tb;
   }
 }
 
@@ -345,8 +412,9 @@ function onState(kv) {
 }
 
 function renderLiveStats() {
-  setText('live-best-m', live.bestM ? fmt(live.bestM, 2) + ' m' : '–');
-  setText('live-best-ft', live.bestM ? fmt(live.bestM * 3.28084, 1) + ' ft' : '');
+  const b = live.bestM;
+  setText('live-best-m', b ? fmt(b, 2) : '–');
+  setText('live-best-ft', b ? fmt(b * M_TO_FT, 1) : '–');
   setText('live-count', String(live.count || 0));
 }
 
@@ -362,13 +430,24 @@ function addJumpToFeed(n, hm, hft, at) {
   while (feed.childNodes.length > 100) feed.removeChild(feed.lastChild);
 }
 
+function renderLiveMini() {
+  const host = $('live-mini');
+  if (!host) return;
+  host.textContent = '';
+  if (!liveJumps.length) { host.hidden = true; return; }
+  host.hidden = false;
+  host.append(buildBarChart(liveJumps, { vbh: 64, mini: true }));
+}
+
 function resetLiveSession() {
   live.count = 0; live.bestM = 0;
+  liveJumps.length = 0;
   ['live-height-m', 'live-height-ft', 'live-airtime'].forEach((id) => setText(id, '–'));
-  setText('live-best-m', '–'); setText('live-best-ft', ''); setText('live-count', '0'); setText('live-stored', '');
+  setText('live-best-m', '–'); setText('live-best-ft', '–'); setText('live-count', '0'); setText('live-stored', '');
   $('jump-feed').textContent = '';
   $('live-empty').hidden = false;
   $('live-state').hidden = true;
+  renderLiveMini();
 }
 
 // -------------------------------------------------------- device info + self-test
@@ -426,6 +505,108 @@ function renderSelftest() {
   }
 }
 
+// ------------------------------------------------------------------ charts
+// One inline-SVG bar chart, no libraries. Single series in the accent colour.
+// Rules (a validated design method): thin bars, 2px min gap, 4px rounded TOP
+// corners only (flat at the baseline), a visible baseline, at most one gridline
+// at the max, no y-axis, and a direct label on ONLY the tallest bar in text ink
+// (never the series colour). Per-bar hover/tap tooltip, hit target the full
+// column height and >=24px wide even for a thin bar.
+
+const VBW = 640; // nominal viewBox width; the SVG scales to its container.
+
+function maxHeightM(jumps) { return jumps.reduce((m, j) => Math.max(m, j.height_m || 0), 0); }
+
+/** Path for a bar with rounded top corners (radius r) and a flat base. */
+function barPath(x, y, w, h, r) {
+  r = Math.max(0, Math.min(r, w / 2, h));
+  const x2 = x + w, yb = y + h;
+  return `M${x},${yb} L${x},${y + r} Q${x},${y} ${x + r},${y} `
+       + `L${x2 - r},${y} Q${x2},${y} ${x2},${y + r} L${x2},${yb} Z`;
+}
+
+function barTooltip(j) {
+  const ft = (j.height_m || 0) * M_TO_FT;
+  const h = unitPref === 'ft'
+    ? `${fmt(ft, 1)} ft (${fmt(j.height_m, 2)} m)`
+    : `${fmt(j.height_m, 2)} m (${fmt(ft, 1)} ft)`;
+  return `#${j.n} · ${h} · ${fmt(j.airtime_s, 2)} s air`;
+}
+
+function buildBarChart(jumps, opts = {}) {
+  const vbh = opts.vbh || 140;
+  const wrap = el('div', { class: 'chart' + (opts.mini ? ' chart-mini' : '') });
+  if (opts.testid) wrap.setAttribute('data-testid', opts.testid);
+  if (!jumps || !jumps.length) {
+    wrap.append(el('div', { class: 'muted small', text: 'No jumps in this session.' }));
+    return wrap;
+  }
+  const s = svg('svg', {
+    viewBox: `0 0 ${VBW} ${vbh}`, preserveAspectRatio: 'none', role: 'img',
+    'aria-label': 'Per-jump height chart',
+  });
+  s.style.height = (opts.mini ? 64 : vbh) + 'px';
+
+  const padX = 6;
+  const topPad = opts.showLabel ? 24 : 8;
+  const basePad = 8;
+  const baseY = vbh - basePad;
+  const plotH = baseY - topPad;
+  const n = jumps.length;
+  const slot = (VBW - padX * 2) / n;
+  const gap = Math.max(2, Math.min(slot * 0.35, 10));
+  const bw = Math.max(1, slot - gap);
+  const maxH = maxHeightM(jumps) || 1;
+  let maxIdx = 0;
+  for (let i = 1; i < n; i++) if ((jumps[i].height_m || 0) > (jumps[maxIdx].height_m || 0)) maxIdx = i;
+
+  // At most one gridline, at the max value (skip on the tiny live strip).
+  if (!opts.mini) s.append(svg('line', { x1: 0, y1: topPad, x2: VBW, y2: topPad, stroke: 'var(--grid)', 'stroke-width': 1 }));
+
+  const centers = [];
+  jumps.forEach((j, i) => {
+    const h = Math.max(2, (Math.max(0, j.height_m || 0) / maxH) * plotH);
+    const x = padX + slot * i + (slot - bw) / 2;
+    const y = baseY - h;
+    s.append(svg('path', { d: barPath(x, y, bw, h, 4), fill: 'var(--series)' }));
+    centers.push(x + bw / 2);
+  });
+
+  // Visible baseline sits above the bars' flat feet.
+  s.append(svg('line', { x1: 0, y1: baseY, x2: VBW, y2: baseY, stroke: 'var(--baseline)', 'stroke-width': 2 }));
+
+  // Direct label on the tallest bar only, in normal text ink.
+  if (opts.showLabel) {
+    const lbl = heightPref(jumps[maxIdx].height_m);
+    const cx = Math.max(20, Math.min(VBW - 20, centers[maxIdx]));
+    s.append(svg('text', { x: cx, y: topPad - 8, 'text-anchor': 'middle', class: 'bar-label' }, document.createTextNode(lbl)));
+  }
+
+  // Tooltip + transparent hit targets last, so they sit on top.
+  const tip = el('div', { class: 'chart-tip', hidden: true });
+  const show = (i) => {
+    tip.textContent = barTooltip(jumps[i]);
+    tip.hidden = false;
+    const cw = wrap.clientWidth || VBW;
+    tip.style.left = Math.round(centers[i] * (cw / VBW)) + 'px';
+  };
+  const hide = () => { tip.hidden = true; };
+  jumps.forEach((j, i) => {
+    const hitW = Math.max(bw, 24);
+    const hit = svg('rect', { x: centers[i] - hitW / 2, y: 0, width: hitW, height: vbh, fill: 'transparent', class: 'bar-hit' });
+    hit.append(svg('title', {}, document.createTextNode(barTooltip(j)))); // native hover fallback
+    hit.addEventListener('pointerenter', () => show(i));
+    hit.addEventListener('pointerleave', hide);
+    hit.addEventListener('click', () => show(i));
+    s.append(hit);
+  });
+  wrap.addEventListener('pointerleave', hide);
+
+  wrap.append(s);
+  wrap.append(tip);
+  return wrap;
+}
+
 // ----------------------------------------------------------- SESSIONS section
 
 function loadSessions() {
@@ -438,19 +619,175 @@ function storeSessions(arr) {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(arr)); return true; }
   catch (e) {
     showDumpStatus("Couldn't save (browser storage full or blocked): " + e.message
-      + ' Try deleting old sessions below, then download again.');
+      + ' Try deleting old sessions below, then sync again.');
     return false;
   }
 }
 function saveSession(s) { const a = loadSessions(); a.unshift(s); return storeSessions(a); } // newest first
-function deleteSession(idx) { const a = loadSessions(); a.splice(idx, 1); storeSessions(a); renderSessions(); }
+function deleteSession(when) {
+  const a = loadSessions().filter((s) => s.when !== when);
+  storeSessions(a); renderSessions();
+}
 
-/** Turn a captured 'dump' into a stored session and render it. */
-function onDumpDone(lines, err) {
+/** Compute a session's headline numbers once, for reuse across views. */
+function sessionSummary(s) {
+  const jumps = s.jumps || [];
+  const bestM = maxHeightM(jumps);
+  const longestAir = jumps.reduce((m, j) => Math.max(m, j.airtime_s || 0), 0);
+  const avgM = jumps.length ? jumps.reduce((t, j) => t + (j.height_m || 0), 0) / jumps.length : 0;
+  return { jumps, bestM, longestAir, avgM };
+}
+
+/** A stat cell showing the preferred unit big and the other unit small. */
+function dualStat(label, m) {
+  const ft = m * M_TO_FT;
+  const val = m > 0
+    ? el('div', { class: 'v' },
+        unitPref === 'ft' ? fmt(ft, 1) + ' ft' : fmt(m, 2) + ' m',
+        el('span', { class: 'sub', text: unitPref === 'ft' ? fmt(m, 2) + ' m' : fmt(ft, 1) + ' ft' }))
+    : el('div', { class: 'v', text: '–' });
+  return el('div', { class: 'mini-stat' }, val, el('div', { class: 'k', text: label }));
+}
+
+/** Build the stats-row + chart that both the session card and the inline
+ *  just-synced panel share. */
+function sessionBody(s) {
+  const { jumps, bestM, longestAir, avgM } = sessionSummary(s);
+  const frag = document.createDocumentFragment();
+  frag.append(el('div', { class: 'stat-strip' },
+    el('div', { class: 'mini-stat' }, el('div', { class: 'v', text: String(jumps.length) }), el('div', { class: 'k', text: 'Jumps' })),
+    dualStat('Best', bestM),
+    el('div', { class: 'mini-stat' }, el('div', { class: 'v', text: fmt(longestAir, 2) + ' s' }), el('div', { class: 'k', text: 'Longest air' })),
+    dualStat('Avg height', avgM),
+  ));
+  frag.append(buildBarChart(jumps, { vbh: 140, showLabel: true, testid: 'session-chart' }));
+  return frag;
+}
+
+function renderSessions() {
+  const list = $('sessions-list');
+  const sessions = loadSessions();
+  list.textContent = '';
+  $('sessions-empty').hidden = sessions.length > 0;
+  renderAlltimeChips(sessions);
+  sessions.forEach((s) => {
+    const { jumps, bestM } = sessionSummary(s);
+    const when = new Date(s.when);
+    const card = el('div', { class: 'card session', 'data-testid': 'session-row' });
+    card.append(el('div', { class: 'session-head' },
+      el('div', {},
+        el('div', { class: 'session-date', text: isNaN(when) ? s.when : when.toLocaleString() }),
+        // "N jumps" stays a single contiguous text node (a test reads it).
+        el('div', { class: 'session-meta muted', text: `${jumps.length} jumps · best ${heightPair(bestM)}` }),
+      ),
+      el('button', { class: 'btn btn-ghost btn-sm', type: 'button', 'data-testid': 'btn-share',
+        onclick: () => shareSession(s) }, 'Share'),
+    ));
+    card.append(sessionBody(s));
+    card.append(el('div', { class: 'session-foot' },
+      el('button', { class: 'btn btn-ghost btn-sm', type: 'button',
+        onclick: () => downloadText(`jumps-${stamp(s.when)}.csv`, s.jumpsCsv || jumpsToCsv(jumps)) }, 'jumps.csv'),
+      s.traceCsv ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button',
+        onclick: () => downloadText(`trace-${stamp(s.when)}.csv`, s.traceCsv) }, 'trace.csv') : null,
+      el('button', { class: 'btn btn-danger-ghost btn-sm', type: 'button',
+        onclick: () => { if (confirm('Delete this saved session?')) deleteSession(s.when); } }, 'Delete'),
+    ));
+    list.append(card);
+  });
+}
+
+/** All-time chips across every stored session. */
+function renderAlltimeChips(sessions) {
+  sessions = sessions || loadSessions();
+  let bestM = 0, total = 0;
+  for (const s of sessions) {
+    const jumps = s.jumps || [];
+    total += jumps.length;
+    bestM = Math.max(bestM, maxHeightM(jumps));
+  }
+  setText('chip-alltime-best', 'All-time best: ' + (bestM > 0 ? heightPref(bestM) : '–'));
+  setText('chip-total-jumps', 'Total jumps: ' + total);
+}
+
+function jumpsToCsv(jumps) {
+  const head = 'n,takeoff_s,airtime_raw_s,airtime_s,height_m';
+  const rows = jumps.map((j) => [j.n, j.takeoff_s, j.airtime_raw_s, j.airtime_s, j.height_m].join(','));
+  return [head, ...rows].join('\n');
+}
+function stamp(when) { return String(when).replace(/[:.]/g, '-').replace('T', '_').replace('Z', ''); }
+function todayStamp() { return new Date().toISOString().slice(0, 10); }
+
+/** Download text as a file via a Blob + a temporary <a download>. */
+function downloadText(filename, text, mime) {
+  downloadBlob(filename, new Blob([text], { type: mime || 'text/csv' }));
+}
+function downloadBlob(filename, blob) {
+  const url = URL.createObjectURL(blob);
+  const a = el('a', { href: url, download: filename });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function showDumpStatus(text, busy) {
+  const s = $('dump-status');
+  s.hidden = false;
+  s.textContent = text;
+  s.classList.toggle('busy', !!busy);
+}
+function showSyncProgress(text) {
+  const s = $('sync-progress');
+  s.hidden = false;
+  s.classList.add('busy');
+  s.textContent = text;
+}
+function hideSyncProgress() {
+  const s = $('sync-progress');
+  s.hidden = true;
+  s.classList.remove('busy');
+  s.textContent = '';
+}
+
+// -------------------------------------------------------------------- sync
+// "Sync" is the user-facing word; the wire command is still 'dump'.
+
+function syncProgressText() {
+  const s = syncState;
+  let line;
+  if (s.expected > 0) {
+    const pct = Math.min(99, Math.floor((s.bytes / s.expected) * 100));
+    line = `Syncing… ${pct}%`;
+  } else {
+    const kb = s.bytes / 1024;
+    line = `Syncing… ${kb < 10 ? kb.toFixed(1) : Math.round(kb)} KB received`;
+  }
+  // BLE-only hint, shown ONLY during the sync (not as permanent copy).
+  if (s.kind === 'BLE') line += '\nBluetooth is slow for big sessions — USB is faster.';
+  return line;
+}
+
+function beginSync() {
+  if (!requireDevice()) return;
+  if (activeCapture || syncState) return; // a sync is already running
+  clearSyncResult();
+  showDumpStatus('', false); $('dump-status').hidden = true;
+  syncState = { bytes: 0, expected: lastTraceBytes, kind: transportKind };
+  switchTab('sessions');
+  showSyncProgress(syncProgressText());
+  startCapture('dump', onSyncDone, 60000); // generous: BLE trickles slowly
+  send('dump');
+}
+
+/** Turn a captured 'dump' into a stored session, show it inline, and offer to
+ *  clear the device — but only after the save is verified. */
+function onSyncDone(lines, err) {
+  syncState = null;
+  hideSyncProgress();
   if (err) {
     showDumpStatus(err === 'timeout'
-      ? "Download timed out. Over Bluetooth this can happen on a big session — try again, or plug in over USB."
-      : 'Download failed: ' + err);
+      ? 'Sync timed out. Over Bluetooth a big session can take a while — try again, or plug in over USB.'
+      : 'Sync failed: ' + err);
     return;
   }
   const files = parseFileSections(lines);
@@ -472,66 +809,200 @@ function onDumpDone(lines, err) {
       airtime_raw_s: parseFloat(c[2]),
       airtime_s: parseFloat(c[3]),
       height_m,
-      height_ft: height_m * 3.28084,
+      height_ft: height_m * M_TO_FT,
     });
   }
 
-  const saved = saveSession({ when: new Date().toISOString(), jumps, jumpsCsv,
-                              traceCsv: traceRows.join('\n') });
-  if (!saved) return;  // storeSessions already showed the failure — don't mask it
+  const session = { when: new Date().toISOString(), jumps, jumpsCsv, traceCsv: traceRows.join('\n') };
+  const saved = saveSession(session);
+  if (!saved) return; // storeSessions already showed the failure — don't mask it
   renderSessions();
-  const best = jumps.reduce((m, j) => Math.max(m, j.height_m || 0), 0);
-  showDumpStatus(`Saved ${jumps.length} jumps${jumps.length ? ` — best ${best.toFixed(2)} m (${(best * 3.28084).toFixed(1)} ft)` : ''}.`);
+  showSyncResult(session);
 }
 
-function renderSessions() {
-  const list = $('sessions-list');
-  const sessions = loadSessions();
-  list.textContent = '';
-  $('sessions-empty').hidden = sessions.length > 0;
-  sessions.forEach((s, idx) => {
-    const jumps = s.jumps || [];
-    const best = jumps.reduce((m, j) => Math.max(m, j.height_m || 0), 0);
-    const when = new Date(s.when);
-    list.append(el('div', { class: 'card session', 'data-testid': 'session-row' },
-      el('div', {},
-        el('div', { class: 'session-date', text: isNaN(when) ? s.when : when.toLocaleString() }),
-        el('div', { class: 'session-meta muted', text: `${jumps.length} jumps · best ${best.toFixed(2)} m (${(best * 3.28084).toFixed(1)} ft)` }),
-      ),
-      el('div', { class: 'btn-row wrap' },
-        el('button', { class: 'btn btn-ghost', type: 'button',
-          onclick: () => downloadText(`jumps-${stamp(s.when)}.csv`, s.jumpsCsv || jumpsToCsv(jumps)) }, 'jumps.csv'),
-        s.traceCsv ? el('button', { class: 'btn btn-ghost', type: 'button',
-          onclick: () => downloadText(`trace-${stamp(s.when)}.csv`, s.traceCsv) }, 'trace.csv') : null,
-        el('button', { class: 'btn btn-danger-ghost', type: 'button',
-          onclick: () => { if (confirm('Delete this saved session?')) deleteSession(idx); } }, 'Delete'),
-      ),
-    ));
+/** The inline just-synced panel: the session's own stats + chart, then the
+ *  clear-or-keep choice. Clearing is only ever offered here, after a save. */
+function showSyncResult(session) {
+  lastSynced = session;
+  const host = $('sync-result');
+  host.textContent = '';
+  const { jumps, bestM } = sessionSummary(session);
+  const panel = el('div', { class: 'card sync-result' });
+  panel.append(el('div', { class: 'synced-head' },
+    el('span', { class: 'ok-dot', text: '✓' }),
+    el('span', { text: `Saved here — ${jumps.length} jumps, best ${heightPair(bestM)}` }),
+  ));
+  panel.append(sessionBody(session));
+
+  const choice = el('div', { class: 'after-sync' });
+  choice.append(el('p', { text: 'Saved here ✓ — clear the device for the next session?' }));
+  choice.append(el('div', { class: 'btn-row' },
+    el('button', { class: 'btn btn-danger', type: 'button', 'data-testid': 'btn-clear-after-sync',
+      onclick: () => clearDeviceAfterSync(choice) }, 'Clear device'),
+    el('button', { class: 'btn btn-ghost', type: 'button', onclick: () => clearSyncResult() }, 'Keep'),
+  ));
+  panel.append(choice);
+  host.append(panel);
+}
+function clearSyncResult() { lastSynced = null; const h = $('sync-result'); if (h) h.textContent = ''; }
+
+function clearDeviceAfterSync(choiceNode) {
+  send('clear');
+  lastStored = { jumps: 0, bestM: 0 };
+  renderBanner();
+  if (transportKind !== 'Demo') send('stats'); // confirm the wipe
+  choiceNode.textContent = '';
+  choiceNode.append(el('p', { class: 'muted', text: 'Device cleared ✓ — ready for your next session.' }));
+}
+
+// ---------------------------------------------------------------- share
+
+/** Draw the session onto a 1200x630 canvas — always beach-light styling,
+ *  regardless of the app theme (a share card is read in the sun too). */
+function drawShareCanvas(session) {
+  const SURFACE = '#fcfcfb', INK = '#0b0b0b', MUTED = '#52514e', ACCENT = '#2a78d6';
+  const FONT = '-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif';
+  const c = el('canvas'); c.width = 1200; c.height = 630;
+  const g = c.getContext('2d');
+  g.fillStyle = SURFACE; g.fillRect(0, 0, 1200, 630);
+  g.textBaseline = 'alphabetic';
+
+  // Wordmark.
+  g.fillStyle = MUTED; g.font = `700 30px ${FONT}`;
+  g.fillText('J U M P   H E I G H T', 64, 78);
+
+  const { jumps, bestM } = sessionSummary(session);
+  const ft = bestM * M_TO_FT;
+  const bigVal = unitPref === 'ft' ? fmt(ft, 1) : fmt(bestM, 2);
+  const bigUnit = unitPref === 'ft' ? 'ft' : 'm';
+  const smallStr = unitPref === 'ft' ? `${fmt(bestM, 2)} m` : `${fmt(ft, 1)} ft`;
+
+  // Huge best height + small other unit.
+  g.fillStyle = INK; g.font = `800 180px ${FONT}`;
+  g.fillText(bigVal, 60, 290);
+  const bvW = g.measureText(bigVal).width;
+  g.fillStyle = MUTED; g.font = `800 60px ${FONT}`;
+  g.fillText(' ' + bigUnit, 60 + bvW, 290);
+  g.font = `700 40px ${FONT}`;
+  g.fillText(smallStr, 66, 346);
+
+  // Date + jump count.
+  g.fillStyle = INK; g.font = `600 34px ${FONT}`;
+  g.fillText(`${jumps.length} jumps · ${longDate(session.when)}`, 64, 408);
+
+  // Bar strip (same rules, no labels).
+  drawBarsCanvas(g, 64, 450, 1072, 120, jumps, ACCENT);
+  return c;
+}
+
+function drawBarsCanvas(g, x0, y0, w, h, jumps, accent) {
+  if (!jumps || !jumps.length) return;
+  const n = jumps.length;
+  const padX = 4;
+  const slot = (w - padX * 2) / n;
+  const gap = Math.max(3, Math.min(slot * 0.35, 14));
+  const bw = Math.max(2, slot - gap);
+  const maxH = maxHeightM(jumps) || 1;
+  const baseY = y0 + h;
+  g.fillStyle = accent;
+  jumps.forEach((j, i) => {
+    const bh = Math.max(3, (Math.max(0, j.height_m || 0) / maxH) * h);
+    const x = x0 + padX + slot * i + (slot - bw) / 2;
+    const y = baseY - bh;
+    roundTopRect(g, x, y, bw, bh, Math.min(4, bw / 2));
+    g.fill();
   });
+  // Baseline.
+  g.strokeStyle = 'rgba(11,11,11,.34)'; g.lineWidth = 2;
+  g.beginPath(); g.moveTo(x0, baseY); g.lineTo(x0 + w, baseY); g.stroke();
+}
+function roundTopRect(g, x, y, w, h, r) {
+  r = Math.max(0, Math.min(r, w / 2, h));
+  g.beginPath();
+  g.moveTo(x, y + h);
+  g.lineTo(x, y + r);
+  g.quadraticCurveTo(x, y, x + r, y);
+  g.lineTo(x + w - r, y);
+  g.quadraticCurveTo(x + w, y, x + w, y + r);
+  g.lineTo(x + w, y + h);
+  g.closePath();
 }
 
-function jumpsToCsv(jumps) {
-  const head = 'n,takeoff_s,airtime_raw_s,airtime_s,height_m';
-  const rows = jumps.map((j) => [j.n, j.takeoff_s, j.airtime_raw_s, j.airtime_s, j.height_m].join(','));
-  return [head, ...rows].join('\n');
+function longDate(when) {
+  const d = new Date(when);
+  if (isNaN(d)) return String(when);
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
-function stamp(when) { return String(when).replace(/[:.]/g, '-').replace('T', '_').replace('Z', ''); }
-
-/** Download text as a file via a Blob + a temporary <a download>. */
-function downloadText(filename, text) {
-  const url = URL.createObjectURL(new Blob([text], { type: 'text/csv' }));
-  const a = el('a', { href: url, download: filename });
-  document.body.append(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+function shortDate(when) {
+  const d = new Date(when);
+  if (isNaN(d)) return String(when);
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+function canvasToBlob(canvas) {
+  return new Promise((res) => { try { canvas.toBlob((b) => res(b), 'image/png'); } catch (_e) { res(null); } });
 }
 
-function showDumpStatus(text, busy) {
-  const s = $('dump-status');
-  s.hidden = false;
-  s.textContent = text;
-  s.classList.toggle('busy', !!busy);
+async function shareSession(session) {
+  const { jumps, bestM } = sessionSummary(session);
+  const text = `Best jump ${heightPair(bestM)} — ${jumps.length} jumps · ${shortDate(session.when)}`;
+  const title = 'Jump Height';
+  let blob = null;
+  try { blob = await canvasToBlob(drawShareCanvas(session)); } catch (_e) {}
+  const fname = `jump-height-${stamp(session.when)}.png`;
+  const file = blob ? new File([blob], fname, { type: 'image/png' }) : null;
+
+  try {
+    if (file && navigator.canShare && navigator.canShare({ files: [file] }) && navigator.share) {
+      await navigator.share({ files: [file], text, title });
+      return;
+    }
+    if (navigator.share) { await navigator.share({ text, title }); return; }
+  } catch (e) {
+    if (e && e.name === 'AbortError') return; // user dismissed the share sheet
+    // otherwise fall through to the download path
+  }
+
+  // No share support: download the PNG, copy the text, and SAY so.
+  if (blob) downloadBlob(fname, blob);
+  let copied = false;
+  try { if (navigator.clipboard && navigator.clipboard.writeText) { await navigator.clipboard.writeText(text); copied = true; } } catch (_e) {}
+  showDumpStatus(`This browser can't open a share sheet, so I saved the share image to your downloads${copied ? ' and copied the summary to your clipboard' : ''}.`);
+}
+
+// ------------------------------------------------------------- backup / restore
+
+function exportAll() {
+  const sessions = loadSessions();
+  if (!sessions.length) { showDumpStatus('No sessions to back up yet.'); return; }
+  const payload = JSON.stringify({ version: 1, sessions }, null, 2);
+  downloadText(`jump-height-backup-${todayStamp()}.json`, payload, 'application/json');
+  showDumpStatus(`Backed up ${sessions.length} session${sessions.length === 1 ? '' : 's'} to your downloads.`);
+}
+
+function importBackup(file) {
+  const r = new FileReader();
+  r.onload = () => {
+    let data;
+    try { data = JSON.parse(r.result); }
+    catch (e) { showDumpStatus("Couldn't read that backup file — it isn't valid JSON."); return; }
+    const incoming = Array.isArray(data) ? data
+      : (data && Array.isArray(data.sessions) ? data.sessions : null);
+    if (!incoming) { showDumpStatus("That file didn't look like a Jump Height backup."); return; }
+    const cur = loadSessions();
+    const seen = new Set(cur.map((s) => s.when));
+    let added = 0;
+    for (const s of incoming) {
+      if (s && s.when && !seen.has(s.when)) { cur.push(s); seen.add(s.when); added++; }
+    }
+    cur.sort((a, b) => new Date(b.when) - new Date(a.when)); // newest first
+    if (storeSessions(cur)) {
+      renderSessions();
+      showDumpStatus(added
+        ? `Restored ${added} session${added === 1 ? '' : 's'} from the backup.`
+        : 'Nothing new to restore — those sessions were already here.');
+    }
+  };
+  r.readAsText(file);
 }
 
 // ------------------------------------------------------------- INSTALL section
@@ -621,6 +1092,17 @@ function setStatus(state, kind) {
   $('btn-disconnect').hidden = state !== 'connected';
 }
 
+/** Show/hide the cross-tab sync banner from the last STATS + connection state. */
+function renderBanner() {
+  const b = $('sync-banner');
+  if (!b) return;
+  const show = !!transport && lastStored.jumps > 0;
+  b.hidden = !show;
+  if (!show) return;
+  setText('sync-banner-count', `${lastStored.jumps} jumps stored on the device`);
+  setText('sync-banner-best', lastStored.bestM > 0 ? `best ${heightPref(lastStored.bestM)}` : '');
+}
+
 function setTransport(t, kind) {
   transport = t;
   transportKind = kind;
@@ -628,6 +1110,7 @@ function setTransport(t, kind) {
   t.onClose(() => onTransportClosed(t));
   resetLiveSession();
   setStatus('connected', kind);
+  acquireWakeLock(); // keep the screen awake while riding (feature-detected)
   // Pull current info + stats so the UI isn't blank on connect. (In demo mode
   // there's no device to answer, and we keep sent[] clean for the test.)
   if (kind !== 'Demo') { send('info'); send('stats'); }
@@ -637,15 +1120,19 @@ function onTransportClosed(t) {
   if (t && t !== transport) return; // a stale/older transport closing — ignore
   transport = null;
   transportKind = null;
-  // Abort any in-flight capture: without this a dump interrupted by the
-  // disconnect leaves the Download button dead (guarded by activeCapture) and
-  // a stale "Downloading…" spinner up, and after a reconnect the old capture
-  // would keep swallowing lines with its timer re-arming forever.
+  releaseWakeLock();
+  // Abort any in-flight capture: without this a sync interrupted by the
+  // disconnect leaves the button dead (guarded by activeCapture) and a stale
+  // progress line up, and after a reconnect the old capture would keep
+  // swallowing lines with its timer re-arming forever.
   if (activeCapture) {
     clearTimeout(activeCapture.timer);
     activeCapture = null;
-    showDumpStatus('Download interrupted — the device disconnected. Reconnect and try again.');
+    syncState = null;
+    hideSyncProgress();
+    showDumpStatus('Sync interrupted — the device disconnected. Reconnect and try again.');
   }
+  renderBanner();
   setStatus('off');
   appendConsole('device disconnected', 'err');
 }
@@ -701,11 +1188,86 @@ function requireDevice() {
   return false;
 }
 
+// ------------------------------------------------------------- wake lock
+
+async function acquireWakeLock() {
+  try {
+    if ('wakeLock' in navigator && document.visibilityState === 'visible' && !wakeLock) {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener && wakeLock.addEventListener('release', () => { wakeLock = null; });
+    }
+  } catch (_e) { /* denied or unsupported — silently do without */ }
+}
+async function releaseWakeLock() {
+  try { if (wakeLock) await wakeLock.release(); } catch (_e) {}
+  wakeLock = null;
+}
+
 // --------------------------------------------------------------------- tabs
 
 function switchTab(name) {
-  document.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('is-active', b.dataset.tab === name));
+  document.querySelectorAll('.tab-btn').forEach((b) => {
+    const on = b.dataset.tab === name;
+    b.classList.toggle('is-active', on);
+    b.setAttribute('aria-selected', String(on));
+  });
   document.querySelectorAll('.tab-panel').forEach((p) => p.classList.toggle('is-active', p.id === 'tab-' + name));
+}
+
+// -------------------------------------------------------------- theme + units
+
+function prefersDark() {
+  return !!(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);
+}
+function applyTheme() {
+  const dark = themeMode === 'dark' || (themeMode === 'auto' && prefersDark());
+  document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+  const label = themeMode.charAt(0).toUpperCase() + themeMode.slice(1);
+  setText('theme-label', label);
+  const ico = $('theme-ico');
+  if (ico) ico.textContent = themeMode === 'auto' ? '🌗' : themeMode === 'dark' ? '🌙' : '☀️';
+  const btn = $('btn-theme');
+  if (btn) btn.setAttribute('aria-label', `Theme: ${label}. Tap to change.`);
+}
+function cycleTheme() {
+  themeMode = themeMode === 'auto' ? 'light' : themeMode === 'light' ? 'dark' : 'auto';
+  try { localStorage.setItem(THEME_KEY, themeMode); } catch (_e) {}
+  applyTheme();
+}
+
+function applyUnit() {
+  document.documentElement.setAttribute('data-unit', unitPref);
+  setText('btn-unit', unitPref === 'ft' ? 'Show meters' : 'Show feet');
+}
+function toggleUnit() {
+  unitPref = unitPref === 'ft' ? 'm' : 'ft';
+  try { localStorage.setItem(UNIT_KEY, unitPref); } catch (_e) {}
+  applyUnit();
+  // Everything that prints the preferred unit needs a refresh (the big hero /
+  // tile numbers are pure CSS and don't).
+  renderBanner();
+  renderSessions();
+  renderLiveMini();
+  if (lastSynced) showSyncResult(lastSynced);
+  setText('live-stored', lastStored.jumps ? `On device: ${lastStored.jumps} jumps, best ${heightPref(lastStored.bestM)}` : '');
+}
+
+function initThemeUnit() {
+  try { themeMode = localStorage.getItem(THEME_KEY) || 'light'; } catch (_e) { themeMode = 'light'; }
+  try { unitPref = localStorage.getItem(UNIT_KEY) || 'ft'; } catch (_e) { unitPref = 'ft'; }
+  if (!['auto', 'light', 'dark'].includes(themeMode)) themeMode = 'light';
+  if (!['ft', 'm'].includes(unitPref)) unitPref = 'ft';
+  applyTheme();
+  applyUnit();
+  $('btn-theme').addEventListener('click', cycleTheme);
+  $('btn-unit').addEventListener('click', toggleUnit);
+  // Follow the OS when in Auto.
+  if (window.matchMedia) {
+    const mq = matchMedia('(prefers-color-scheme: dark)');
+    const onChange = () => { if (themeMode === 'auto') applyTheme(); };
+    if (mq.addEventListener) mq.addEventListener('change', onChange);
+    else if (mq.addListener) mq.addListener(onChange);
+  }
 }
 
 // --------------------------------------------------------------------- init
@@ -735,28 +1297,45 @@ function setupMock() {
 }
 
 function init() {
+  initThemeUnit();
   document.querySelectorAll('.tab-btn').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
   initConnectTab();
   $('btn-disconnect').addEventListener('click', doDisconnect);
   $('btn-refresh-stats').addEventListener('click', () => { if (requireDevice()) send('stats'); });
-  $('btn-download-session').addEventListener('click', () => {
-    if (!requireDevice()) return;
-    if (activeCapture) return; // a download is already running
-    showDumpStatus(transportKind === 'BLE'
-      ? 'Downloading over Bluetooth — this can take a while…'
-      : 'Downloading…', true);
-    startCapture('dump', onDumpDone, 60000); // generous: BLE trickles slowly
-    send('dump');
+
+  // Sync is one word, one tap — from the banner or the Sessions tab.
+  $('btn-sync').addEventListener('click', beginSync);
+  $('btn-download-session').addEventListener('click', beginSync);
+
+  // Backup / restore.
+  $('btn-export-all').addEventListener('click', exportAll);
+  $('import-file').addEventListener('change', (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (f) importBackup(f);
+    e.target.value = ''; // let the same file be re-imported later
   });
+
+  // Manual clear lives quietly here for the rare hands-on case.
   $('btn-clear-device').addEventListener('click', () => {
     if (!requireDevice()) return;
     if (!confirm('This erases every jump and the trace stored on the device. It cannot be undone. Continue?')) return;
     send('clear');
+    lastStored = { jumps: 0, bestM: 0 };
+    renderBanner();
     showDumpStatus('Sent “clear” — the device is wiping its stored data.');
   });
+
   initConsole();
   initInstallTab();
   renderSessions();
+
+  // Ask the browser to keep our stored sessions around (best-effort, silent).
+  try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (_e) {}
+
+  // Re-acquire the wake lock when the tab comes back to the foreground.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && transport && !wakeLock) acquireWakeLock();
+  });
 
   if (location.hash === '#mock') setupMock();
 }
