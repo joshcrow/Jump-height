@@ -10,10 +10,12 @@ the air**.
 > flash, wiring self-test, desk test, drop-test calibration, session sync), all
 > **rehearsable with zero hardware** against a simulated device. The firmware
 > compiles clean on the real ESP32 toolchain, speaks its protocol over **Bluetooth**
-> too, and there's a **browser app** (`./tools/jump web`): live jump stats via Web
-> Bluetooth, session history + CSV via Web Serial, and in-browser flashing via ESP
-> Web Tools. Start with **[BUILD.md](BUILD.md)** (the runbook) and
-> **[DECISIONS.md](DECISIONS.md)** (what was chosen and why).
+> too, and there's a **browser app** (`./tools/jump web`) built sunlight-first for
+> the beach: live jump stats via Web Bluetooth (feet-or-meters, glare-readable),
+> one-tap **Sync** with real progress, per-session charts, a shareable session
+> card, backup/restore, and in-browser flashing via ESP Web Tools. Start with
+> **[BUILD.md](BUILD.md)** (the runbook) and **[DECISIONS.md](DECISIONS.md)**
+> (what was chosen and why).
 >
 > ```bash
 > ./tools/jump wizard           # plug in and follow along: setup → flash →

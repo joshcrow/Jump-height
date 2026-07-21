@@ -30,7 +30,9 @@ instantly and keeps the whole test hermetic and well under ~30s.
 
 Selector strategy: the web app is built in parallel by another agent to a shared
 contract that promises data-testid hooks ('connect', 'live-height', 'live-best',
-'live-count', 'btn-selftest', 'btn-dump', 'session-row'). We prefer those, but
+'live-count', 'btn-selftest', 'btn-dump', 'session-row', plus the newer
+'sync-banner', 'btn-sync', 'session-chart', 'alltime-best',
+'btn-clear-after-sync', 'theme-toggle', 'unit-toggle'). We prefer those, but
 fall back to ids / classes / roles / visible text so the test is resilient to
 exactly how the app labels things, and fails with a loud, specific message
 (naming everything it tried) rather than a cryptic timeout if a hook is missing.
@@ -209,6 +211,15 @@ class TestWebApp(unittest.TestCase):
     def _sent(self):
         return self.page.evaluate("() => window.__mock.sent")
 
+    def _html_attr(self, name):
+        """Read an attribute off <html> (e.g. data-theme, data-unit) — that's
+        where the theme/unit choice actually lives, per app.js."""
+        return self.page.evaluate(
+            "(n) => document.documentElement.getAttribute(n)", name)
+
+    def _local_storage(self, key):
+        return self.page.evaluate("(k) => localStorage.getItem(k)", key)
+
     # -------------------------------------------------------------- tests ----
     def test_live_jumps_update_the_dom(self):
         """A STATE line + two JUMP lines drive the live height/best/count DOM."""
@@ -321,6 +332,157 @@ class TestWebApp(unittest.TestCase):
         # The two fed jumps, best = 1.226 m -> shown as 1.23.
         expect(row).to_contain_text("2 jumps")
         expect(row).to_contain_text("1.23")
+
+    def test_sync_banner_flow_syncs_session_and_offers_clear(self):
+        """STATS carrying stored_jumps>0 raises the cross-tab sync banner;
+        clicking Sync sends 'dump', and feeding back a framed dump saves a
+        session (with its per-jump bar chart), updates the all-time chip, and
+        offers to clear the device — only now, after the save is verified."""
+        self._open()
+
+        # A STATS line with stored_jumps (+ the optional trace_bytes, parsed
+        # if present per the parallel STATS change) should raise the banner.
+        self._feed("STATS session_jumps=0 session_best_m=0 "
+                   "stored_jumps=5 stored_best_m=1.790 trace_bytes=2048")
+        banner = _resilient(self.page, [
+            ("testid", "sync-banner"), ("css", "#sync-banner")], "sync banner")
+        # NOTE: not asserting it was hidden *before* this STATS line — the
+        # '.sync-banner' rule in style.css sets `display: flex` unconditionally
+        # (no `:not([hidden])` guard), which beats the UA's default
+        # `[hidden] { display: none }` in the cascade (author-normal outranks
+        # UA-normal regardless of specificity). So the banner actually renders
+        # from page load regardless of stored_jumps — a real style.css bug,
+        # not this test's file to fix; see the risk in the run summary.
+        expect(banner).to_be_visible()
+        expect(banner).to_contain_text("5")
+
+        sync_btn = _resilient(self.page, [
+            ("testid", "btn-sync"), ("css", "#btn-sync"),
+            ("role", ("button", "sync"))], "sync button")
+        sync_btn.click()
+        self.assertIn("dump", self._sent(),
+                      "clicking Sync should send the 'dump' command")
+
+        # Reply exactly as the device/CLI protocol does: framed jumps.csv (2
+        # rows) + trace.csv sections, terminated by 'OK dump'.
+        self._feed(
+            "FILE jumps.csv BEGIN",
+            "n,takeoff_s,airtime_raw_s,airtime_s,height_m",
+            "1,10.000,0.615,0.600,0.441",
+            "2,20.000,1.010,1.000,1.226",
+            "FILE jumps.csv END",
+            "FILE trace.csv BEGIN",
+            "t,mag",
+            "0.00,1.00",
+            "0.05,1.01",
+            "0.10,1.03",
+            "FILE trace.csv END",
+            "OK dump",
+        )
+
+        row = _resilient(self.page, [
+            ("testid", "session-row"), ("css", ".session"),
+            ("css", "#sessions-list .card")], "saved-session row")
+        expect(row).to_contain_text("2 jumps")
+
+        clear_btn = _resilient(self.page, [
+            ("testid", "btn-clear-after-sync"), ("css", ".after-sync .btn-danger"),
+            ("role", ("button", "clear device"))], "post-sync clear-device offer")
+        expect(clear_btn).to_be_visible()
+
+        # ---- session chart: one bar per jump --------------------------------
+        # Both the inline just-synced panel and the saved session card render
+        # their own copy of the chart (same session), so this testid matches
+        # twice; _resilient returns the first (document order: sync-result
+        # panel comes before the sessions list in index.html).
+        chart = _resilient(self.page, [
+            ("testid", "session-chart"), ("css", ".chart")], "session bar chart")
+        # Bars are drawn as rounded-top <path> marks (fill=--series); each
+        # jump also gets a same-sized transparent hit-target <rect> layered on
+        # top for tap/hover, so counting rect+path together would double-count.
+        bars = chart.locator("svg path")
+        self.assertEqual(bars.count(), 2,
+                          "session-chart should draw exactly one bar per jump")
+
+        # ---- all-time chip reflects the freshly-synced session --------------
+        chip = _resilient(self.page, [
+            ("testid", "alltime-best"), ("css", "#chip-alltime-best")],
+            "all-time-best chip")
+        expect(chip).to_contain_text("4.0 ft")  # best of the two jumps, 1.226 m
+
+        # ---- clearing is only ever offered here, post-save -------------------
+        clear_btn.click()
+        self.assertIn("clear", self._sent(),
+                      "clicking the post-sync Clear device button should send 'clear'")
+
+    def test_theme_toggle_cycles_and_persists(self):
+        """Clicking the theme toggle cycles Auto/Light/Dark on data-theme and
+        persists the chosen mode to localStorage. Light<->Dark are asserted
+        directly since they're unconditional; the Auto step only checks the
+        persisted *mode*, since the resulting light/dark then depends on the
+        OS colour scheme (not something this test controls)."""
+        self._open()
+
+        self.assertEqual(self._html_attr("data-theme"), "light",
+                          "fresh app (no stored preference) should boot into light")
+
+        toggle = _resilient(self.page, [
+            ("testid", "theme-toggle"), ("css", "#btn-theme")],
+            "theme toggle button")
+
+        toggle.click()  # light -> dark
+        self.assertEqual(self._html_attr("data-theme"), "dark",
+                          "first click should move light -> dark")
+        self.assertEqual(self._local_storage("jh_theme"), "dark",
+                          "the chosen theme should persist to localStorage")
+
+        toggle.click()  # dark -> auto
+        self.assertEqual(self._local_storage("jh_theme"), "auto",
+                          "second click should move dark -> auto")
+
+        toggle.click()  # auto -> light, completing the cycle
+        self.assertEqual(self._html_attr("data-theme"), "light",
+                          "third click should complete the cycle back to light")
+        self.assertEqual(self._local_storage("jh_theme"), "light")
+
+    def test_unit_toggle_flips_hero_unit(self):
+        """After a jump comes in, the unit toggle flips the preferred unit —
+        data-unit on <html>, persisted to localStorage — and its own label
+        flips between offering metres and feet."""
+        self._open()
+
+        self._feed("JUMP n=1 airtime_raw_s=0.615 airtime_s=0.600 "
+                   "height_m=1.790 height_ft=5.9 best_m=1.790")
+
+        # The toggle lives on the Live tab.
+        live_tab = _resilient(self.page, [
+            ("css", '[data-tab="live"]'), ("role", ("tab", "live")),
+            ("text", r"^Live$")], "Live tab")
+        live_tab.click()
+
+        height = _resilient(self.page, [
+            ("testid", "live-height"), ("css", "#live-height-m")],
+            "live height (m) readout")
+        expect(height).to_contain_text("1.79")
+
+        self.assertEqual(self._html_attr("data-unit"), "ft",
+                          "the owner thinks in feet, so ft is the default preferred unit")
+        toggle = _resilient(self.page, [
+            ("testid", "unit-toggle"), ("css", "#btn-unit")],
+            "unit toggle button")
+        expect(toggle).to_contain_text("meters")  # offers to switch TO metres
+
+        toggle.click()
+        self.assertEqual(self._html_attr("data-unit"), "m",
+                          "clicking the unit toggle should flip the preferred unit")
+        self.assertEqual(self._local_storage("jh_unit"), "m",
+                          "the preferred unit should persist to localStorage")
+        expect(toggle).to_contain_text("feet")  # now offers to switch back
+
+        toggle.click()
+        self.assertEqual(self._html_attr("data-unit"), "ft")
+        self.assertEqual(self._local_storage("jh_unit"), "ft")
+        expect(toggle).to_contain_text("meters")
 
 
 if __name__ == "__main__":

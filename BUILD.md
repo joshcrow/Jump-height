@@ -155,13 +155,23 @@ a browser app for it:
 What the app does:
 
 - **Live** (Bluetooth): connect to `JumpHeight` and watch jumps pop up in real
-  time — height, airtime, session best, count. Great on the beach between
-  runs. *Phones:* Android Chrome works out of the box; **iPhone Safari has no
-  Web Bluetooth — install the free "Bluefy" browser and use that.** (And
-  water blocks Bluetooth — live stats are for on land, by physics.)
-- **USB**: run the self-test, download sessions into browser-local history,
-  export CSV. Prefer USB for session downloads — a Bluetooth dump works but
-  is slow and best-effort.
+  time — big glare-readable numbers (feet first; one tap swaps to meters),
+  session best, count, and a growing bar strip. The screen stays awake while
+  connected. Built sunlight-first: high-contrast light theme by default, with
+  an Auto/Light/Dark toggle in the header. *Phones:* Android Chrome works out
+  of the box; **iPhone Safari has no Web Bluetooth — install the free
+  "Bluefy" browser and use that.** (And water blocks Bluetooth — live stats
+  are for on land, by physics.)
+- **Sync**: when a connected device is holding jumps, a banner offers one
+  button — **Sync**. It shows real progress, saves the session into the
+  browser, opens it immediately (stats + per-jump bar chart), and only after
+  a verified save offers to clear the device for the next session. USB syncs
+  fastest; Bluetooth works but is slow for big sessions.
+- **Sessions**: history with all-time best, per-jump charts, **Share** (a
+  clean share-card image of the session via your phone's share sheet), CSV
+  export per session, and **Back up all / Restore** (a JSON file) so browser
+  storage is never the only copy. The laptop's `./tools/jump sync` remains
+  the archival path into `data/sessions/`.
 - **Install**: flash a brand-new board from the web page (ESP Web Tools) —
   no toolchain, no terminal. `./tools/jump web` stages binaries from your
   local build; CI builds them for the hosted page.
