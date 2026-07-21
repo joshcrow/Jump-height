@@ -98,10 +98,14 @@ class TxCallbacks : public NimBLECharacteristicCallbacks {
                    uint16_t subValue) override {
     (void)c; (void)desc;
     if (subValue > 0) {
+      // Publish s_subscribed BEFORE the greet flag: loop() consumes the flag
+      // (one-shot) and then calls write(), which no-ops unless s_subscribed —
+      // the reverse order lets a preemption window eat the banner+READY.
+      // The critical section's barrier orders this write ahead of the flag.
+      s_subscribed = true;
       portENTER_CRITICAL(&s_mux);
       s_greet_pending = true;  // loop() sends the banner + READY
       portEXIT_CRITICAL(&s_mux);
-      s_subscribed = true;
     } else {
       s_subscribed = false;
     }

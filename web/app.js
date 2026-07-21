@@ -432,11 +432,17 @@ function loadSessions() {
   try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; }
   catch (_e) { return []; }
 }
+// Both return true only when the write actually persisted — a full/blocked
+// localStorage must surface as a failure, never as a silent success.
 function storeSessions(arr) {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(arr)); }
-  catch (e) { showDumpStatus("Couldn't save (browser storage full or blocked): " + e.message); }
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(arr)); return true; }
+  catch (e) {
+    showDumpStatus("Couldn't save (browser storage full or blocked): " + e.message
+      + ' Try deleting old sessions below, then download again.');
+    return false;
+  }
 }
-function saveSession(s) { const a = loadSessions(); a.unshift(s); storeSessions(a); } // newest first
+function saveSession(s) { const a = loadSessions(); a.unshift(s); return storeSessions(a); } // newest first
 function deleteSession(idx) { const a = loadSessions(); a.splice(idx, 1); storeSessions(a); renderSessions(); }
 
 /** Turn a captured 'dump' into a stored session and render it. */
@@ -470,7 +476,9 @@ function onDumpDone(lines, err) {
     });
   }
 
-  saveSession({ when: new Date().toISOString(), jumps, jumpsCsv, traceCsv: traceRows.join('\n') });
+  const saved = saveSession({ when: new Date().toISOString(), jumps, jumpsCsv,
+                              traceCsv: traceRows.join('\n') });
+  if (!saved) return;  // storeSessions already showed the failure — don't mask it
   renderSessions();
   const best = jumps.reduce((m, j) => Math.max(m, j.height_m || 0), 0);
   showDumpStatus(`Saved ${jumps.length} jumps${jumps.length ? ` — best ${best.toFixed(2)} m (${(best * 3.28084).toFixed(1)} ft)` : ''}.`);
@@ -485,7 +493,7 @@ function renderSessions() {
     const jumps = s.jumps || [];
     const best = jumps.reduce((m, j) => Math.max(m, j.height_m || 0), 0);
     const when = new Date(s.when);
-    list.append(el('div', { class: 'card session' },
+    list.append(el('div', { class: 'card session', 'data-testid': 'session-row' },
       el('div', {},
         el('div', { class: 'session-date', text: isNaN(when) ? s.when : when.toLocaleString() }),
         el('div', { class: 'session-meta muted', text: `${jumps.length} jumps · best ${best.toFixed(2)} m (${(best * 3.28084).toFixed(1)} ft)` }),
@@ -629,6 +637,15 @@ function onTransportClosed(t) {
   if (t && t !== transport) return; // a stale/older transport closing — ignore
   transport = null;
   transportKind = null;
+  // Abort any in-flight capture: without this a dump interrupted by the
+  // disconnect leaves the Download button dead (guarded by activeCapture) and
+  // a stale "Downloading…" spinner up, and after a reconnect the old capture
+  // would keep swallowing lines with its timer re-arming forever.
+  if (activeCapture) {
+    clearTimeout(activeCapture.timer);
+    activeCapture = null;
+    showDumpStatus('Download interrupted — the device disconnected. Reconnect and try again.');
+  }
   setStatus('off');
   appendConsole('device disconnected', 'err');
 }

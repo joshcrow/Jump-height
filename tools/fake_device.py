@@ -198,7 +198,11 @@ class FakeDevice:
             summary = " ".join(
                 f"{k}={gen_params.fmt_summary(v)}"
                 for k, v in sorted(cfg["detector"].items()) if not k.startswith("_"))
-            self.send("INFO fw=" + FW_VERSION + " sample_hz=200 log_hz=50 ble=1")
+            # Rates come from the config, exactly like the firmware's JH_ macros
+            # do — hardcoding them here would drift the moment config changes.
+            fw_cfg = cfg["firmware"]
+            self.send(f"INFO fw={FW_VERSION} sample_hz={fw_cfg['sample_hz']} "
+                      f"log_hz={fw_cfg['log_hz']} ble=1")
             self.send("PARAMS " + summary)
             self.send("OK info")
         else:

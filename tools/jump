@@ -931,38 +931,16 @@ def cmd_replay(args) -> int:
 # this is the way to run the app during development.
 
 
-def _find_boot_app0() -> Path | None:
-    """Locate boot_app0.bin inside the installed PlatformIO Arduino framework.
-
-    It doesn't come out of the project build — it ships with the framework
-    package (…/framework-arduinoespressif32*/tools/partitions/boot_app0.bin) —
-    so we glob PlatformIO's packages dir for it.
-    """
-    roots = [
-        Path.home() / ".platformio" / "packages",
-        REPO / "firmware" / ".pio" / "packages",  # project-local packages, if any
-    ]
-    for root in roots:
-        if not root.exists():
-            continue
-        for pattern in (
-            "framework-arduinoespressif32*/tools/partitions/boot_app0.bin",
-            "**/tools/partitions/boot_app0.bin",  # oddly-nested installs
-        ):
-            hits = sorted(root.glob(pattern))
-            if hits:
-                return hits[0]
-    return None
-
-
 def stage_firmware(web_dir: Path) -> None:
     """Copy a fresh firmware build into web/firmware/ for the browser flasher.
 
-    ESP Web Tools (the app's Install tab) flashes four files: the bootloader,
-    the partition table, boot_app0, and the app image. Three come from the
-    PlatformIO build dir; boot_app0.bin comes from the framework package. If the
-    build hasn't happened yet we just say so — the app already degrades to a
-    friendly 'not built yet' note when the binaries aren't served.
+    ESP Web Tools (the app's Install tab) flashes three files: the bootloader,
+    the partition table, and the app image — all from the PlatformIO build dir.
+    (No boot_app0.bin: that's the OTA-slot selector, and our partition map is
+    factory-only with no OTA, so flashing it would just scribble on the unused
+    phy_init region and diverge from what a USB flash writes.) If the build
+    hasn't happened yet we just say so — the app already degrades to a friendly
+    'not built yet' note when the binaries aren't served.
     """
     build = REPO / "firmware" / ".pio" / "build" / "firebeetle32"
     wanted = ["bootloader.bin", "partitions.bin", "firmware.bin"]
@@ -972,20 +950,13 @@ def stage_firmware(web_dir: Path) -> None:
         return
     out = web_dir / "firmware"
     out.mkdir(parents=True, exist_ok=True)
-    staged = []
     for f in wanted:
         shutil.copy2(build / f, out / f)
-        staged.append(f)
-    boot = _find_boot_app0()
-    if boot:
-        shutil.copy2(boot, out / "boot_app0.bin")
-        staged.append("boot_app0.bin")
-    else:
-        print("  (couldn't find boot_app0.bin in the PlatformIO packages — the "
-              "in-browser flasher needs it; a full  ./tools/jump flash  installs "
-              "the framework that ships it.)")
+    # Drop a stale boot_app0 from an older staging so the served set matches
+    # the manifest exactly.
+    (out / "boot_app0.bin").unlink(missing_ok=True)
     print(f"Staged firmware into {out} for the in-browser flasher: "
-          + ", ".join(staged) + "\n")
+          + ", ".join(wanted) + "\n")
 
 
 def cmd_web(args) -> int:

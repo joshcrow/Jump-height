@@ -34,6 +34,11 @@ jobs:
           path: ~/.platformio
           key: pio-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini') }}
 
+      - name: Check generated params header is fresh
+        # config/params.json is the source of truth; a stale committed
+        # params.gen.h would silently ship wrong detector thresholds.
+        run: python3 tools/gen_params.py --check
+
       - name: Build firmware
         run: |
           pip install platformio
@@ -45,8 +50,8 @@ jobs:
           cp firmware/.pio/build/firebeetle32/bootloader.bin web/firmware/
           cp firmware/.pio/build/firebeetle32/partitions.bin web/firmware/
           cp firmware/.pio/build/firebeetle32/firmware.bin   web/firmware/
-          # boot_app0 ships with the Arduino core inside the PlatformIO packages
-          find ~/.platformio/packages -name boot_app0.bin -exec cp {} web/firmware/ \; -quit
+          # No boot_app0.bin: the partition map is factory-only (no OTA), so the
+          # manifest doesn't flash an OTA selector — same bytes as a USB flash.
           ls -la web/firmware/
 
       - name: Upload firmware binaries (artifact)

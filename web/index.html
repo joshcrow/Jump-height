@@ -39,7 +39,7 @@
       <span class="brand-name">Jump Height</span>
     </div>
     <div class="conn">
-      <span id="conn-status" class="pill pill-off">Disconnected</span>
+      <span id="conn-status" data-testid="connect" class="pill pill-off">Disconnected</span>
       <button id="btn-disconnect" class="btn btn-ghost" type="button" hidden>Disconnect</button>
     </div>
   </header>
@@ -47,7 +47,7 @@
   <nav class="tabs" role="tablist" aria-label="Sections">
     <button class="tab-btn is-active" data-tab="connect" role="tab">Connect</button>
     <button class="tab-btn" data-tab="live" role="tab">Live</button>
-    <button class="tab-btn" data-tab="sessions" role="tab">Sessions</button>
+    <button class="tab-btn" data-tab="sessions" data-testid="tab-sessions" role="tab">Sessions</button>
     <button class="tab-btn" data-tab="install" role="tab">Install</button>
   </nav>
 
@@ -66,10 +66,10 @@
 
       <div class="row-between mt">
         <h3>Hardware self-test</h3>
-        <button id="btn-selftest" class="btn btn-ghost" type="button">Run self-test</button>
+        <button id="btn-selftest" data-testid="btn-selftest" class="btn btn-ghost" type="button">Run self-test</button>
       </div>
       <p class="muted small">Checks the wiring, sensor and storage — the same five-second check the device runs at boot.</p>
-      <div id="selftest-card" class="card" hidden></div>
+      <div id="selftest-card" data-testid="selftest" class="card" hidden></div>
     </section>
 
     <!-- 2. LIVE -->
@@ -77,20 +77,20 @@
       <div class="live-hero card">
         <div class="row-between">
           <span class="live-label">Latest jump</span>
-          <span id="live-state" class="badge badge-idle" hidden></span>
+          <span id="live-state" data-testid="live-state" class="badge badge-idle" hidden></span>
         </div>
-        <div class="live-height"><span id="live-height-m">–</span><span class="unit">m</span></div>
+        <div class="live-height"><span id="live-height-m" data-testid="live-height">–</span><span class="unit">m</span></div>
         <div class="live-sub"><span id="live-height-ft">–</span> ft &middot; <span id="live-airtime">–</span> s airtime</div>
       </div>
 
       <div class="stat-grid">
         <div class="card stat">
-          <div class="stat-num" id="live-best-m">–</div>
+          <div class="stat-num" id="live-best-m" data-testid="live-best">–</div>
           <div class="stat-label">Session best</div>
           <div class="stat-sub" id="live-best-ft"></div>
         </div>
         <div class="card stat">
-          <div class="stat-num" id="live-count">0</div>
+          <div class="stat-num" id="live-count" data-testid="live-count">0</div>
           <div class="stat-label">Jumps this session</div>
           <div class="stat-sub" id="live-stored"></div>
         </div>
@@ -109,7 +109,7 @@
       <h2>Sessions</h2>
       <p class="muted">Download the jumps stored on your device, keep a history here, and export the raw CSV.</p>
       <div class="btn-row">
-        <button id="btn-download-session" class="btn btn-primary" type="button">Download session</button>
+        <button id="btn-download-session" data-testid="btn-dump" class="btn btn-primary" type="button">Download session</button>
         <button id="btn-clear-device" class="btn btn-danger" type="button">Clear device</button>
       </div>
       <p class="muted small">A Bluetooth download is slow — all the raw trace data trickles over the air. Plugging in over USB is much faster.</p>
