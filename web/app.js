@@ -44,8 +44,39 @@ const THEME_KEY = 'jh_theme';
 const UNIT_KEY = 'jh_unit';
 const M_TO_FT = 3.28084;
 
-// Same glyphs the CLI's render_selftest uses, so the two UIs read alike.
-const MARKS = { PASS: '✅', WARN: '⚠️', FAIL: '❌', SKIP: '—' };
+// ------------------------------------------------------------------- icons
+// Lucide icons (lucide.dev, ISC/MIT), inlined as path data so the page stays
+// dependency-free and offline-capable. No emoji anywhere in the UI — icons
+// carry state alongside words (never color or icon alone).
+const ICON_PATHS = {
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  'triangle-alert': '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+  minus: '<path d="M5 12h14"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>',
+  moon: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',
+  monitor: '<rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/>',
+  'chevron-right': '<path d="m9 18 6-6-6-6"/>',
+  waves: '<path d="M2 6c.6.5 1.2 1 2.5 1C7 7 7 5 9.5 5c2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/><path d="M2 12c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/><path d="M2 18c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/>',
+};
+function icon(name, cls) {
+  const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  s.setAttribute('viewBox', '0 0 24 24');
+  s.setAttribute('fill', 'none');
+  s.setAttribute('stroke', 'currentColor');
+  s.setAttribute('stroke-width', '2');
+  s.setAttribute('stroke-linecap', 'round');
+  s.setAttribute('stroke-linejoin', 'round');
+  s.setAttribute('aria-hidden', 'true');
+  s.setAttribute('class', 'ico' + (cls ? ' ' + cls : ''));
+  s.innerHTML = ICON_PATHS[name] || '';
+  return s;
+}
+
+// Self-test status → icon + color class; the status is also conveyed by the
+// row's text, so it is never icon-or-color alone.
+const STATUS_ICON = { PASS: 'check', WARN: 'triangle-alert', FAIL: 'x', SKIP: 'minus' };
+const STATUS_CLASS = { PASS: 'ok', WARN: 'warn', FAIL: 'bad', SKIP: 'skip' };
 
 const BLE_UNSUPPORTED =
   "This browser can't use Bluetooth. Use Chrome or Edge on a computer or " +
@@ -504,8 +535,10 @@ function renderSelftest() {
   c.hidden = false; c.textContent = '';
   const table = el('div', { class: 'selftest' });
   for (const row of selftest.rows) {
+    const mark = el('span', { class: 'st-mark ' + (STATUS_CLASS[row.status] || ''), title: row.status });
+    mark.append(icon(STATUS_ICON[row.status] || 'minus'));
     table.append(el('div', { class: 'st-row' },
-      el('span', { class: 'st-mark', text: MARKS[row.status] || '?' }),
+      mark,
       el('span', { class: 'st-name', text: row.name }),
       el('span', { class: 'st-detail muted', text: row.detail }),
     ));
@@ -517,7 +550,9 @@ function renderSelftest() {
       text: 'Interrupted — the device disconnected. Reconnect and run it again.' }));
   } else if (selftest.result) {
     const ok = selftest.result === 'PASS';
-    c.append(el('div', { class: 'st-result ' + (ok ? 'ok' : 'bad'), text: `Result: ${selftest.result} ${ok ? '✅' : '❌'}` }));
+    const line = el('div', { class: 'st-result ' + (ok ? 'ok' : 'bad') });
+    line.append(icon(ok ? 'check' : 'x'), document.createTextNode(` Result: ${selftest.result}`));
+    c.append(line);
   } else if (!selftest.rows.length) {
     c.append(el('div', { class: 'muted', text: 'Running…' }));
   }
@@ -869,13 +904,13 @@ function showSyncResult(session) {
   const { jumps, bestM } = sessionSummary(session);
   const panel = el('div', { class: 'card sync-result' });
   panel.append(el('div', { class: 'synced-head' },
-    el('span', { class: 'ok-dot', text: '✓' }),
+    icon('check', 'ok'),
     el('span', { text: `Saved here — ${jumps.length} jumps, best ${heightPair(bestM)}` }),
   ));
   panel.append(sessionBody(session));
 
   const choice = el('div', { class: 'after-sync' });
-  choice.append(el('p', { text: 'Saved here ✓ — clear the device for the next session?' }));
+  choice.append(el('p', { text: 'Saved — clear the device for the next session?' }));
   choice.append(el('div', { class: 'btn-row' },
     el('button', { class: 'btn btn-danger', type: 'button', 'data-testid': 'btn-clear-after-sync',
       onclick: () => clearDeviceAfterSync(choice) }, 'Clear device'),
@@ -892,7 +927,7 @@ function clearDeviceAfterSync(choiceNode) {
   renderBanner();
   if (transportKind !== 'Demo') send('stats'); // confirm the wipe
   choiceNode.textContent = '';
-  choiceNode.append(el('p', { class: 'muted', text: 'Device cleared ✓ — ready for your next session.' }));
+  choiceNode.append(el('p', { class: 'muted', text: 'Device cleared — ready for your next session.' }));
 }
 
 // ---------------------------------------------------------------- share
@@ -1117,7 +1152,7 @@ function initConsole() {
     const open = body.hidden;
     body.hidden = !open;
     toggle.setAttribute('aria-expanded', String(open));
-    $('console-caret').textContent = open ? '▾' : '▸';
+    $('console-caret').classList.toggle('is-open', open);
   });
   $('console-form').addEventListener('submit', (e) => {
     e.preventDefault();
@@ -1289,7 +1324,10 @@ function applyTheme() {
   const label = themeMode.charAt(0).toUpperCase() + themeMode.slice(1);
   setText('theme-label', label);
   const ico = $('theme-ico');
-  if (ico) ico.textContent = themeMode === 'auto' ? '🌗' : themeMode === 'dark' ? '🌙' : '☀️';
+  if (ico) {
+    ico.textContent = '';
+    ico.append(icon(themeMode === 'auto' ? 'monitor' : themeMode === 'dark' ? 'moon' : 'sun'));
+  }
   const btn = $('btn-theme');
   if (btn) btn.setAttribute('aria-label', `Theme: ${label}. Tap to change.`);
 }

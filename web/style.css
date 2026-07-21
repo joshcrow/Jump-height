@@ -78,20 +78,32 @@ body {
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   line-height: 1.5;
-  font-weight: 500;
+  font-weight: 400;
   -webkit-text-size-adjust: 100%;
 }
 
-h2 { font-size: 1.3rem; margin: 0 0 .3rem; font-weight: 800; letter-spacing: -.01em; }
-h3 { font-size: 1.02rem; margin: 0; font-weight: 700; }
+h2 { font-size: 1.3rem; margin: 0 0 .3rem; font-weight: 600; letter-spacing: 0; }
+h3 { font-size: 1rem; margin: 0; font-weight: 600; }
 p { margin: .4rem 0 .8rem; }
-.muted { color: var(--muted); font-weight: 600; }
+.muted { color: var(--muted); font-weight: 400; }
 .small { font-size: .85rem; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .mt { margin-top: 1.25rem; }
 
-/* Visible keyboard focus everywhere. */
-:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; border-radius: 6px; }
+/* Visible keyboard focus everywhere (Carbon: crisp 2px). */
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* Inline Lucide icons: sized by context, colored by currentColor. */
+.ico { width: 16px; height: 16px; flex: 0 0 auto; vertical-align: -2px; }
+.brand-logo { width: 22px; height: 22px; color: var(--primary); }
+.caret .ico { transition: transform .15s ease; }
+.caret.is-open .ico { transform: rotate(90deg); }
+.st-mark.ok { color: var(--ok); }
+.st-mark.warn { color: var(--warn); }
+.st-mark.bad { color: var(--danger); }
+.st-mark.skip { color: var(--muted); }
+.st-result { display: flex; align-items: center; gap: .4rem; }
+.synced-head .ico.ok { color: var(--ok); }
 
 /* Headings exist for screen-reader navigation; the tab bar is the visible
    heading, so printing them again would be ink without information. */
@@ -123,8 +135,7 @@ p { margin: .4rem 0 .8rem; }
   background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
-.brand { display: flex; align-items: center; gap: .5rem; font-weight: 800; }
-.brand-logo { font-size: 1.35rem; }
+.brand { display: flex; align-items: center; gap: .5rem; font-weight: 600; }
 .conn { display: flex; align-items: center; gap: .5rem; }
 
 /* Connection state: a colored dot + a plain-ink word. (Colored text on a
@@ -158,14 +169,14 @@ p { margin: .4rem 0 .8rem; }
   min-width: 44px;
   justify-content: center;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 0;
   background: transparent;
   color: var(--text);
   font: inherit;
   font-size: .8rem;
-  font-weight: 600;
+  font-weight: 400;
   cursor: pointer;
-  transition: background-color .12s ease;
+  transition: background-color .11s ease;
 }
 .theme-toggle:hover { background: var(--surface-2); }
 .theme-ico { font-size: .95rem; line-height: 1; }
@@ -186,8 +197,9 @@ p { margin: .4rem 0 .8rem; }
   gap: .8rem;
   flex-wrap: wrap;
   padding: .8rem 1rem;
-  background: color-mix(in srgb, var(--primary) 12%, var(--surface));
-  border-bottom: 2px solid color-mix(in srgb, var(--primary) 55%, var(--border));
+  background: color-mix(in srgb, var(--primary) 8%, var(--surface));
+  border-left: 3px solid var(--primary);
+  border-bottom: 1px solid var(--border);
 }
 .sync-banner-text { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
 .sync-banner-text strong { font-weight: 800; font-size: 1rem; }
@@ -210,23 +222,23 @@ p { margin: .4rem 0 .8rem; }
   padding: .5rem .6rem;
   border: none;
   border-bottom: 2px solid transparent;
-  border-radius: 8px 8px 0 0;
+  border-radius: 0;
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-weight: 600;
+  font-size: .875rem;
+  font-weight: 400;
+  letter-spacing: .16px;
   cursor: pointer;
-  transition: background-color .12s ease;
+  transition: background-color .11s ease, color .11s ease;
 }
-.tab-btn:hover { background: var(--surface-2); }
-/* Active = tinted fill + a 2px accent underline + full-strength bold ink.
-   Two coordinated cues, no border box, no shadow — unmistakable in glare
-   without reading as a raised widget. */
+.tab-btn:hover { background: var(--surface-2); color: var(--text); }
+/* Carbon line tabs: selection = a 2px accent underline + full ink + semibold.
+   No fill, no border box, no shadow. */
 .tab-btn.is-active {
-  background: color-mix(in srgb, var(--primary) 14%, var(--surface));
-  border-bottom: 2px solid var(--primary);
+  border-bottom-color: var(--primary);
   color: var(--text);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 /* ---------- panels ---------- */
@@ -237,8 +249,7 @@ main { max-width: 680px; margin: 0 auto; padding: 1rem; }
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
+  border-radius: 0;
   padding: 1rem;
   margin: .75rem 0;
 }
@@ -246,50 +257,53 @@ main { max-width: 680px; margin: 0 auto; padding: 1rem; }
 .row-between { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
 
 /* ---------- buttons ----------
-   Professional register: one 8px radius across the family, flat fills, no
-   shadows, no press-bounce, hover = one shade change. Exactly one filled
-   (primary) button per view; everything else is an outline or a quiet text
-   action. Tap targets stay >= 44px — density comes from type and padding,
-   never from shrinking the target. */
+   Carbon-style register (see IBM Carbon Design System): rectangular (0
+   radius), flat, no shadows, LEFT-aligned label with roomy trailing padding,
+   regular-weight type. Kinds: primary (the one filled action per view),
+   tertiary (accent outline that fills on hover), ghost (accent text only),
+   and their danger variants. Tap targets stay >= 44px. */
 .btn {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
+  text-align: left;
   font: inherit;
-  font-size: .95rem;
-  font-weight: 600;
-  min-height: 44px;
-  padding: .55rem 1rem;
-  border-radius: 8px;
+  font-size: .875rem;
+  font-weight: 400;
+  letter-spacing: .16px;
+  min-height: 48px;
+  padding: .6rem 2.25rem .6rem 1rem;
+  border-radius: 0;
   border: 1px solid transparent;
   cursor: pointer;
   color: var(--text);
   background: transparent;
-  transition: background-color .12s ease, border-color .12s ease;
+  transition: background-color .11s ease, border-color .11s ease, color .11s ease;
 }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
 
 .btn-primary {
   background: var(--primary);
   color: var(--primary-ink);
-  font-weight: 700;
 }
 .btn-primary:hover { background: color-mix(in srgb, var(--primary) 88%, var(--text)); }
 .btn-primary:active { background: color-mix(in srgb, var(--primary) 78%, var(--text)); }
 
-.btn-ghost { border-color: var(--border); }
-.btn-ghost:hover { background: var(--surface-2); }
+/* Tertiary: accent outline, fills on hover (Carbon's secondary-on-a-page). */
+.btn-ghost { border-color: var(--primary); color: var(--primary); }
+.btn-ghost:hover { background: var(--primary); color: var(--primary-ink); }
 
-/* Destructive: restrained until engaged — outline, not a red slab. */
-.btn-danger { border-color: color-mix(in srgb, var(--danger) 40%, var(--border)); color: var(--danger); }
-.btn-danger:hover { background: color-mix(in srgb, var(--danger) 8%, var(--surface)); }
-.btn-danger-ghost { border-color: var(--border); color: var(--danger); }
-.btn-danger-ghost:hover { background: color-mix(in srgb, var(--danger) 8%, var(--surface)); }
+/* Danger tertiary/ghost: restrained until engaged. */
+.btn-danger { border-color: var(--danger); color: var(--danger); }
+.btn-danger:hover { background: var(--danger); color: var(--surface); }
+.btn-danger-ghost { color: var(--danger); }
+.btn-danger-ghost:hover { background: color-mix(in srgb, var(--danger) 10%, var(--surface)); }
 
-.btn-quiet { color: var(--muted); }
-.btn-quiet:hover { background: var(--surface-2); }
+/* Ghost: accent text, quiet hover tint. */
+.btn-quiet { color: var(--primary); }
+.btn-quiet:hover { background: color-mix(in srgb, var(--primary) 10%, var(--surface)); }
 
-.btn-sm { font-size: .88rem; padding: .45rem .8rem; }
+.btn-sm { min-height: 44px; padding: .45rem 1.25rem .45rem .85rem; }
 .btn-row { display: flex; gap: .5rem; flex-wrap: wrap; margin: .5rem 0; align-items: center; }
 
 /* File input styled as a button. */
@@ -297,13 +311,13 @@ main { max-width: 680px; margin: 0 auto; padding: 1rem; }
 .file-btn input[type="file"] {
   width: .1px; height: .1px; opacity: 0; overflow: hidden; position: absolute; z-index: -1;
 }
-.file-btn:focus-within { outline: 3px solid var(--focus); outline-offset: 2px; border-radius: 8px; }
+.file-btn:focus-within { outline: 2px solid var(--focus); outline-offset: 2px; }
 
 /* ---------- status + notes ---------- */
 .status {
   margin: .6rem 0;
   padding: .65rem .85rem;
-  border-radius: 10px;
+  border-radius: 0;
   background: var(--surface-2);
   border: 1px solid var(--border);
   font-size: .92rem;
@@ -344,11 +358,11 @@ main { max-width: 680px; margin: 0 auto; padding: 1rem; }
 .udual .urow { display: flex; align-items: baseline; gap: .12em; white-space: nowrap; }
 :root[data-unit="ft"] .udual .r-ft,
 :root[data-unit="m"]  .udual .r-m {
-  order: 0; font-size: var(--big); font-weight: 800; color: var(--text);
+  order: 0; font-size: var(--big); font-weight: 300; letter-spacing: -.01em; font-variant-numeric: tabular-nums; color: var(--text);
 }
 :root[data-unit="ft"] .udual .r-m,
 :root[data-unit="m"]  .udual .r-ft {
-  order: 1; font-size: var(--small); font-weight: 700; color: var(--muted);
+  order: 1; font-size: var(--small); font-weight: 400; color: var(--muted);
 }
 :root[data-unit="ft"] .udual .r-ft .u,
 :root[data-unit="m"]  .udual .r-m .u { font-size: .42em; font-weight: 700; color: var(--muted); }
@@ -357,7 +371,7 @@ main { max-width: 680px; margin: 0 auto; padding: 1rem; }
 
 /* ---------- live ---------- */
 .live-hero { text-align: center; padding: 1.4rem 1rem 1.1rem; }
-.live-label { color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: .05em; font-size: .78rem; }
+.live-label { color: var(--muted); font-weight: 400; letter-spacing: .32px; font-size: .75rem; text-transform: uppercase; }
 .hero-readout { --big: clamp(2.9rem, 17vw, 4.8rem); --small: 1.25rem; margin-top: .15rem; }
 .live-sub { color: var(--muted); font-weight: 700; margin-top: .2rem; }
 /* A utility action, not a primary one: quiet text button, but the full 44px
@@ -367,16 +381,16 @@ main { max-width: 680px; margin: 0 auto; padding: 1rem; }
   min-height: 44px;
   padding: .4rem .9rem;
   border: none;
-  border-radius: 8px;
+  border-radius: 0;
   background: transparent;
-  color: var(--muted);
+  color: var(--primary);
   font: inherit;
-  font-weight: 700;
-  font-size: .88rem;
-  text-decoration: underline;
-  text-underline-offset: 3px;
+  font-weight: 400;
+  font-size: .875rem;
+  letter-spacing: .16px;
   cursor: pointer;
 }
+.unit-toggle:hover { background: color-mix(in srgb, var(--primary) 10%, var(--surface)); }
 
 /* Recording state: a small conventional red dot carries the meaning; the text
    stays in ink tokens. A full red-tinted pill read as an alarm, and recording
@@ -390,7 +404,7 @@ main { max-width: 680px; margin: 0 auto; padding: 1rem; }
 .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
 .stat { text-align: center; }
 .stat .statdual { --big: 1.75rem; --small: .9rem; }
-.stat-num { font-size: 1.75rem; font-weight: 800; }
+.stat-num { font-size: 1.75rem; font-weight: 300; font-variant-numeric: tabular-nums; }
 .stat-label { color: var(--muted); font-size: .86rem; font-weight: 700; margin-top: .2rem; }
 .stat-sub { color: var(--muted); font-size: .8rem; font-weight: 600; min-height: 1rem; }
 
