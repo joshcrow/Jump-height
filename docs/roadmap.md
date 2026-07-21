@@ -69,6 +69,32 @@ goal (aim for ~10%). Now you actually know how high he jumps.
 afterward. *(Software side is done and tested; the two unchecked boxes need the
 physical board.)*
 
+## Phase 3.5 — WiFi sync mode *(scoped; build after the first water session)*
+
+WiFi is the answer to BLE's two weaknesses — bulk-transfer speed (seconds vs
+minutes for a full trace) and iPhones (no Web Bluetooth on iOS, but every phone
+can join a WiFi network). Zero new hardware; it's all firmware + serving.
+
+- [ ] **Hotspot ("beach sync") mode:** device broadcasts a `JumpHeight` WPA2
+      network on demand and serves the web app itself from LittleFS at
+      `http://jump.local` — live stats + sync on ANY phone, no internet, no
+      app store. (The device must serve its own app here: an https-hosted page
+      isn't allowed to talk to a local http device.)
+- [ ] Entered with one tap from the app (BLE/USB command) or automatically
+      after N minutes still on land; strictly time-boxed auto-off — WiFi draws
+      ~10× BLE's power, so it's a sync window, not an all-day mode.
+- [ ] Radio **modes**, not coexistence: BLE by default, WiFi while syncing.
+      (Classic-ESP32 BLE+WiFi concurrency is possible but flaky and RAM-hungry;
+      sequential modes sidestep it.)
+- [ ] WebSocket bridge carrying the same line protocol (the app's transport
+      abstraction gets a third implementation next to BLE/Serial/Mock).
+- [ ] Phase 4 follow-on: **station mode** — device joins home WiFi (provisioned
+      via the app over USB/BLE), announces itself via mDNS, and sessions
+      auto-archive to the laptop: the board syncs itself from the garage.
+
+**Done when:** an iPhone with no special browser joins the board's network and
+syncs a session in seconds.
+
 ## Phase 4 — "Real" hardware
 
 - [ ] Custom PCB: ESP32 module + IMU + LiPo charger + fuel gauge

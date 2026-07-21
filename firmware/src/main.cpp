@@ -16,7 +16,7 @@
 //   READY                      — boot complete
 //   STATE recording|idle       — motion gate transitions
 //   JUMP n=.. airtime_raw_s=.. airtime_s=.. height_m=.. height_ft=.. best_m=..
-//   STATS session_jumps=.. session_best_m=.. stored_jumps=.. stored_best_m=..
+//   STATS session_jumps=.. session_best_m=.. stored_jumps=.. stored_best_m=.. trace_bytes=..
 //   INFO fw=.. sample_hz=.. log_hz=.. ble=1 / PARAMS <key=value ...>
 //   FILE <name> BEGIN ... FILE <name> END
 //   OK <cmd> | ERR <detail>    — every typed command finishes with one of these
@@ -327,9 +327,10 @@ static void handleCommand(const String& cmd) {
     printHelp();
     emitLine("OK help");
   } else if (cmd == "stats") {
-    emitf("STATS session_jumps=%lu session_best_m=%.3f stored_jumps=%lu stored_best_m=%.3f\n",
+    flushTrace();  // so trace_bytes matches what a `dump` would actually deliver
+    emitf("STATS session_jumps=%lu session_best_m=%.3f stored_jumps=%lu stored_best_m=%.3f trace_bytes=%lu\n",
           (unsigned long)session_jumps, session_best,
-          (unsigned long)stored_jumps, stored_best);
+          (unsigned long)stored_jumps, stored_best, (unsigned long)trace_bytes);
     emitLine("OK stats");
   } else if (cmd == "jumps") {
     flushTrace();

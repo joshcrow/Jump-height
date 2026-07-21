@@ -162,10 +162,17 @@ class FakeDevice:
         elif cmd == "stats":
             stored_best = max((float(r.split(",")[-1]) for r in self.jumps_rows),
                               default=0.0)
+            # Bytes trace.csv would take in a dump — lets a client size a
+            # download before starting it (mirrors the firmware's counter).
+            if self.trace_rows:
+                trace_bytes = len("t,mag\n") + sum(len(r) + 1 for r in self.trace_rows)
+            else:
+                trace_bytes = 0
             self.send(f"STATS session_jumps={self.session_jumps} "
                       f"session_best_m={self.session_best:.3f} "
                       f"stored_jumps={len(self.jumps_rows)} "
-                      f"stored_best_m={stored_best:.3f}")
+                      f"stored_best_m={stored_best:.3f} "
+                      f"trace_bytes={trace_bytes}")
             self.send("OK stats")
         elif cmd == "jumps":
             self.send_file("jumps.csv", "n,takeoff_s,airtime_raw_s,airtime_s,height_m",
