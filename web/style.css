@@ -16,6 +16,11 @@
   No external fonts — the system font stack keeps it fast, offline and native.
 */
 
+/* Contrast contract (WCAG AAA): every TEXT/background pair here is >= 7:1
+   (>= 4.5:1 for large text). --series is chart marks ONLY (non-text, 3:1
+   rule, CVD-validated) and never carries text; --primary is the separate
+   action color whose job is to hold button ink at >= 7:1. Verified by
+   computation — if you change a value, re-check the ratios, don't eyeball. */
 :root,
 :root[data-theme="light"] {
   --bg: #eef0ee;
@@ -23,13 +28,13 @@
   --surface-2: #ececeb;
   --border: #cbcbc7;
   --text: #0b0b0b;
-  --muted: #52514e;          /* secondary text — never lighter than this */
-  --series: #2a78d6;         /* VALIDATED accent — data marks + primary actions */
-  --series-ink: #ffffff;
+  --muted: #4a4a46;          /* 8.7:1 on surface, 7.5:1 on surface-2 */
+  --series: #2a78d6;         /* VALIDATED accent — data marks only, never text */
+  --primary: #1d55a0;        /* action fill: white ink = 7.3:1 */
   --primary-ink: #ffffff;
-  --danger: #c02525;
-  --ok: #167c34;
-  --warn: #8a5a00;
+  --danger: #9d1f1f;         /* 7.6:1 on surface as text */
+  --ok: #135f2b;             /* 7.4:1 */
+  --warn: #6e4700;           /* 7.8:1 */
   --grid: color-mix(in srgb, #0b0b0b 12%, transparent);
   --baseline: color-mix(in srgb, #0b0b0b 34%, transparent);
   --focus: #0b57c0;
@@ -43,13 +48,13 @@
   --surface-2: #1c2230;
   --border: #303845;
   --text: #eef3f8;
-  --muted: #aab4c0;
-  --series: #3987e5;         /* VALIDATED accent, dark */
-  --series-ink: #06121f;
-  --primary-ink: #ffffff;
-  --danger: #f6685e;
-  --ok: #46c257;
-  --warn: #e0a92a;
+  --muted: #aab4c0;          /* 8.2:1 on surface */
+  --series: #3987e5;         /* VALIDATED accent, dark — data marks only */
+  --primary: #8fc1f7;        /* action fill: dark ink = 10.0:1 */
+  --primary-ink: #06121f;
+  --danger: #ff958d;         /* >= 7:1 on surface as text */
+  --ok: #46c257;             /* 7.5:1 */
+  --warn: #e0a92a;           /* 8.1:1 */
   --grid: color-mix(in srgb, #eef3f8 12%, transparent);
   --baseline: color-mix(in srgb, #eef3f8 34%, transparent);
   --focus: #9ecbff;
@@ -82,6 +87,17 @@ p { margin: .4rem 0 .8rem; }
 /* Visible keyboard focus everywhere. */
 :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; border-radius: 6px; }
 
+/* Headings exist for screen-reader navigation; the tab bar is the visible
+   heading, so printing them again would be ink without information. */
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0; border: 0;
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
 /* Motion is minimal and always short; honour reduced-motion fully. */
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
@@ -105,23 +121,36 @@ p { margin: .4rem 0 .8rem; }
 .brand-logo { font-size: 1.35rem; }
 .conn { display: flex; align-items: center; gap: .5rem; }
 
+/* Connection state: a colored dot + a plain-ink word. (Colored text on a
+   same-hue tint can't reach AAA and the tint was decoration anyway; the dot
+   plus the word itself carry the state — never color alone.) */
 .pill {
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
   font-size: .82rem;
   font-weight: 700;
   padding: .28rem .6rem;
   border-radius: 999px;
   white-space: nowrap;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
 }
-.pill-off { background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); }
-.pill-wait { background: color-mix(in srgb, var(--warn) 22%, var(--surface)); color: var(--warn); }
-.pill-on { background: color-mix(in srgb, var(--ok) 22%, var(--surface)); color: var(--ok); }
+.pill::before { content: ""; width: .55em; height: .55em; border-radius: 50%; flex: 0 0 auto; }
+.pill-off { color: var(--muted); }
+.pill-off::before { background: var(--border); }
+.pill-wait::before { background: var(--warn); }
+.pill-on::before { background: var(--ok); }
 
 .theme-toggle {
   display: inline-flex;
   align-items: center;
   gap: .3rem;
   padding: .34rem .55rem;
-  min-height: 36px;
+  min-height: 44px;  /* AAA target size */
+  min-width: 44px;
+  justify-content: center;
   border: 1px solid var(--border);
   border-radius: 999px;
   background: var(--surface-2);
@@ -149,12 +178,12 @@ p { margin: .4rem 0 .8rem; }
   gap: .8rem;
   flex-wrap: wrap;
   padding: .8rem 1rem;
-  background: color-mix(in srgb, var(--series) 12%, var(--surface));
-  border-bottom: 2px solid color-mix(in srgb, var(--series) 55%, var(--border));
+  background: color-mix(in srgb, var(--primary) 12%, var(--surface));
+  border-bottom: 2px solid color-mix(in srgb, var(--primary) 55%, var(--border));
 }
 .sync-banner-text { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
 .sync-banner-text strong { font-weight: 800; font-size: 1rem; }
-.sync-banner-best { color: var(--muted); font-weight: 700; font-size: .9rem; }
+.sync-banner-best { color: var(--text); font-weight: 700; font-size: .9rem; }
 .sync-banner .btn { flex: 0 0 auto; min-width: 120px; }
 
 /* ---------- tabs ---------- */
@@ -182,9 +211,9 @@ p { margin: .4rem 0 .8rem; }
 /* Filled active state (not just an underline): tinted fill + accent underline
    + full-strength ink + bold, so it's unmistakable in glare. */
 .tab-btn.is-active {
-  background: color-mix(in srgb, var(--series) 16%, var(--surface));
-  border-color: color-mix(in srgb, var(--series) 40%, var(--border));
-  border-bottom: 3px solid var(--series);
+  background: color-mix(in srgb, var(--primary) 16%, var(--surface));
+  border-color: color-mix(in srgb, var(--primary) 40%, var(--border));
+  border-bottom: 3px solid var(--primary);
   color: var(--text);
   box-shadow: var(--shadow);
 }
@@ -220,7 +249,7 @@ main { max-width: 680px; margin: 0 auto; padding: 1rem; }
 }
 .btn:active { transform: translateY(1px); }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
-.btn-primary { background: var(--series); color: var(--primary-ink); border-color: color-mix(in srgb, var(--series) 70%, #000); }
+.btn-primary { background: var(--primary); color: var(--primary-ink); border-color: color-mix(in srgb, var(--primary) 70%, #000); }
 .btn-primary:hover { filter: brightness(1.05); }
 .btn-ghost { background: transparent; border-color: var(--border); }
 .btn-danger { background: transparent; border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); color: var(--danger); }
@@ -248,13 +277,13 @@ main { max-width: 680px; margin: 0 auto; padding: 1rem; }
   font-weight: 600;
   white-space: pre-line;            /* lets the sync progress show a second line */
 }
-.status.busy { border-color: color-mix(in srgb, var(--series) 45%, var(--border)); }
+.status.busy { border-color: color-mix(in srgb, var(--primary) 45%, var(--border)); }
 .status.warn { border-color: color-mix(in srgb, var(--warn) 50%, var(--border)); color: var(--warn); }
 .status.ok { border-color: color-mix(in srgb, var(--ok) 50%, var(--border)); }
 .note {
   margin: .5rem 0;
   padding: .6rem .85rem;
-  border-left: 3px solid var(--series);
+  border-left: 3px solid var(--primary);
   background: var(--surface-2);
   border-radius: 6px;
   font-size: .92rem;
@@ -298,23 +327,32 @@ main { max-width: 680px; margin: 0 auto; padding: 1rem; }
 .live-label { color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: .05em; font-size: .78rem; }
 .hero-readout { --big: clamp(2.9rem, 17vw, 4.8rem); --small: 1.25rem; margin-top: .15rem; }
 .live-sub { color: var(--muted); font-weight: 700; margin-top: .2rem; }
+/* A utility action, not a primary one: quiet text button, but the full 44px
+   AAA touch target is preserved via padding. */
 .unit-toggle {
-  margin-top: .7rem;
+  margin-top: .35rem;
   min-height: 44px;
   padding: .4rem .9rem;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--surface-2);
-  color: var(--text);
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
   font: inherit;
   font-weight: 700;
   font-size: .88rem;
+  text-decoration: underline;
+  text-underline-offset: 3px;
   cursor: pointer;
 }
 
-.badge { font-size: .8rem; font-weight: 800; padding: .18rem .6rem; border-radius: 999px; }
-.badge-rec { background: color-mix(in srgb, var(--danger) 20%, var(--surface)); color: var(--danger); }
-.badge-idle { background: var(--surface-2); color: var(--muted); }
+/* Recording state: a small conventional red dot carries the meaning; the text
+   stays in ink tokens. A full red-tinted pill read as an alarm, and recording
+   is the happy path, not an error. */
+.badge { font-size: .8rem; font-weight: 800; display: inline-flex; align-items: center; gap: .35rem; }
+.badge-rec { color: var(--text); }
+.badge-rec::before { content: ""; width: .55em; height: .55em; border-radius: 50%; background: var(--danger); }
+.badge-idle { color: var(--muted); }
+.badge-idle::before { content: ""; width: .55em; height: .55em; border-radius: 50%; background: var(--border); }
 
 .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
 .stat { text-align: center; }
@@ -396,8 +434,8 @@ main { max-width: 680px; margin: 0 auto; padding: 1rem; }
 
 /* Inline "just synced" success panel. */
 .sync-result {
-  border: 1px solid color-mix(in srgb, var(--series) 45%, var(--border));
-  background: color-mix(in srgb, var(--series) 8%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--primary) 45%, var(--border));
+  background: color-mix(in srgb, var(--primary) 8%, var(--surface));
 }
 .sync-result .synced-head { display: flex; align-items: center; gap: .5rem; font-weight: 800; }
 .sync-result .synced-head .ok-dot { color: var(--ok); }
@@ -448,7 +486,7 @@ esp-web-install-button { display: inline-block; }
   background: var(--bg);
 }
 .cl { white-space: pre-wrap; word-break: break-word; }
-.cl-tx { color: var(--series); font-weight: 700; }
+.cl-tx { color: var(--text); font-weight: 700; }
 .cl-err { color: var(--danger); font-weight: 700; }
 .cl-rx { color: var(--text); }
 .console-input-row {

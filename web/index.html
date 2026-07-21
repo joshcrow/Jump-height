@@ -82,10 +82,11 @@
   </nav>
 
   <main>
-    <!-- 1. CONNECT -->
+    <!-- 1. CONNECT. Headings are sr-only throughout: the tab bar is the visible
+         heading; repeating it in ink buys nothing. -->
     <section id="tab-connect" class="tab-panel is-active" role="tabpanel">
-      <h2>Connect your device</h2>
-      <p class="muted">Pair over Bluetooth for the water, or plug in over USB for the fastest sync.</p>
+      <h2 class="sr-only">Connect</h2>
+      <p class="muted">Bluetooth for the beach, USB for the fastest sync.</p>
       <div class="btn-row">
         <button id="btn-connect-ble" class="btn btn-primary" type="button">Connect Bluetooth</button>
         <button id="btn-connect-usb" class="btn btn-primary" type="button">Connect USB</button>
@@ -95,18 +96,19 @@
       <div id="device-info" class="card" hidden></div>
 
       <div class="row-between mt">
-        <h3>Hardware self-test</h3>
-        <button id="btn-selftest" data-testid="btn-selftest" class="btn btn-ghost" type="button">Run self-test</button>
+        <h3>Self-test</h3>
+        <button id="btn-selftest" data-testid="btn-selftest" class="btn btn-ghost" type="button">Run</button>
       </div>
-      <p class="muted small">Checks the wiring, sensor and storage — the same five-second check the device runs at boot.</p>
+      <p class="muted small">The same five-second wiring check the device runs at boot.</p>
       <div id="selftest-card" data-testid="selftest" class="card" hidden></div>
     </section>
 
     <!-- 2. LIVE -->
     <section id="tab-live" class="tab-panel" role="tabpanel">
+      <h2 class="sr-only">Live</h2>
       <div class="live-hero card" id="live-hero">
         <div class="row-between">
-          <span class="live-label">Latest jump</span>
+          <span class="live-label">Last jump</span>
           <span id="live-state" data-testid="live-state" class="badge badge-idle" hidden></span>
         </div>
         <!-- Both units are always rendered; CSS shows the preferred one big and
@@ -131,54 +133,49 @@
         <div class="card stat">
           <div class="stat-num" id="live-count" data-testid="live-count">0</div>
           <div class="stat-label">Jumps this session</div>
-          <div class="stat-sub" id="live-stored"></div>
         </div>
       </div>
 
       <div id="live-mini" class="mini-wrap" data-testid="live-mini" hidden></div>
 
-      <div class="row-between mt">
-        <h3>This session</h3>
-        <button id="btn-refresh-stats" class="btn btn-ghost" type="button">Refresh stats</button>
-      </div>
+      <h3 class="mt">This session</h3>
       <ul id="jump-feed" class="feed"></ul>
-      <p id="live-empty" class="muted">No jumps yet — they show up here the moment your device detects one.</p>
+      <p id="live-empty" class="muted">No jumps yet. Land one and it appears here.</p>
     </section>
 
     <!-- 3. SESSIONS -->
     <section id="tab-sessions" class="tab-panel" role="tabpanel">
-      <h2>Sessions</h2>
+      <h2 class="sr-only">Sessions</h2>
       <div class="chips">
         <span class="chip" data-testid="alltime-best" id="chip-alltime-best">All-time best: –</span>
         <span class="chip" id="chip-total-jumps">Total jumps: 0</span>
       </div>
-      <p class="muted">Your device holds every jump until you sync it here. Sync keeps a copy in this browser and lets you look back over each session.</p>
       <div class="btn-row">
-        <button id="btn-download-session" data-testid="btn-dump" class="btn btn-primary" type="button">Sync from device</button>
+        <button id="btn-download-session" data-testid="btn-dump" class="btn btn-primary" type="button">Sync</button>
       </div>
       <div id="dump-status" class="status" hidden></div>
-      <div id="sync-progress" data-testid="sync-progress" class="status" hidden></div>
+      <div id="sync-progress" data-testid="sync-progress" class="status" role="status" hidden></div>
       <div id="sync-result"></div>
       <div id="sessions-list"></div>
-      <p id="sessions-empty" class="muted">No saved sessions yet — Sync from your device to keep them here.</p>
+      <p id="sessions-empty" class="muted">Nothing here yet. Connect your device and tap Sync — sessions are saved in this browser.</p>
 
       <div class="sessions-foot">
         <div class="btn-row">
-          <button id="btn-export-all" data-testid="btn-export-all" class="btn btn-ghost btn-sm" type="button">Back up all sessions</button>
+          <button id="btn-export-all" data-testid="btn-export-all" class="btn btn-ghost btn-sm" type="button">Back up all</button>
           <label class="btn btn-ghost btn-sm file-btn">
-            <span>Restore backup</span>
+            <span>Restore</span>
             <input id="import-file" data-testid="btn-import" type="file" accept="application/json,.json" />
           </label>
           <button id="btn-clear-device" class="btn btn-quiet btn-sm" type="button">Clear device</button>
         </div>
-        <p class="muted small">Browser storage can be wiped by your phone or computer — keep a backup, or sync over USB on the laptop (that also archives to the repo's data/sessions).</p>
+        <p class="muted small">Your phone can wipe browser storage — keep a backup file too.</p>
       </div>
     </section>
 
     <!-- 4. INSTALL -->
     <section id="tab-install" class="tab-panel" role="tabpanel">
-      <h2>Install firmware</h2>
-      <p class="muted">Flash the Jump Height firmware straight from your browser — no toolchain, no terminal. Use Chrome or Edge on a desktop computer with a USB cable.</p>
+      <h2 class="sr-only">Install</h2>
+      <p class="muted">Flash a board straight from this page — no software to install. Chrome or Edge on a computer, USB cable.</p>
       <div id="install-container"></div>
       <div id="install-note" class="card" hidden></div>
     </section>

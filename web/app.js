@@ -393,8 +393,7 @@ function onStats(kv) {
     const n = parseInt(kv.stored_jumps, 10) || 0;
     const bm = pf(kv.stored_best_m);
     lastStored = { jumps: n, bestM: Number.isNaN(bm) ? 0 : bm };
-    setText('live-stored', n ? `On device: ${n} jumps, best ${heightPref(lastStored.bestM)}` : '');
-    renderBanner();
+    renderBanner();  // the banner is the single place this fact is shown
   }
   // Optional field, added to STATS in parallel. Parse if present, tolerate absence.
   if (kv.trace_bytes != null) {
@@ -407,7 +406,7 @@ function onState(kv) {
   const rec = kv._args[0] === 'recording';
   const st = $('live-state');
   st.hidden = false;
-  st.textContent = rec ? '● recording' : 'idle';
+  st.textContent = rec ? 'recording' : 'idle';  // the CSS ::before dot carries the color
   st.className = 'badge ' + (rec ? 'badge-rec' : 'badge-idle');
 }
 
@@ -420,10 +419,15 @@ function renderLiveStats() {
 
 function addJumpToFeed(n, hm, hft, at) {
   const feed = $('jump-feed');
+  // The preferred unit leads here too — one preference governs every number
+  // on the page, so the feed never contradicts the hero.
+  const ft = unitPref === 'ft';
+  const big = ft ? `${fmt(hft, 1)} ft` : `${fmt(hm, 2)} m`;
+  const sml = ft ? `${fmt(hm, 2)} m` : `${fmt(hft, 1)} ft`;
   const li = el('li', { class: 'feed-item' },
     el('span', { class: 'feed-n', text: '#' + (Number.isNaN(n) ? '?' : n) }),
-    el('span', { class: 'feed-h', text: `${fmt(hm, 2)} m` }),
-    el('span', { class: 'feed-ft muted', text: `${fmt(hft, 1)} ft` }),
+    el('span', { class: 'feed-h', text: big }),
+    el('span', { class: 'feed-ft muted', text: sml }),
     el('span', { class: 'feed-at muted', text: `${fmt(at, 2)} s` }),
   );
   feed.insertBefore(li, feed.firstChild); // newest on top
@@ -443,7 +447,7 @@ function resetLiveSession() {
   live.count = 0; live.bestM = 0;
   liveJumps.length = 0;
   ['live-height-m', 'live-height-ft', 'live-airtime'].forEach((id) => setText(id, '–'));
-  setText('live-best-m', '–'); setText('live-best-ft', '–'); setText('live-count', '0'); setText('live-stored', '');
+  setText('live-best-m', '–'); setText('live-best-ft', '–'); setText('live-count', '0');
   $('jump-feed').textContent = '';
   $('live-empty').hidden = false;
   $('live-state').hidden = true;
@@ -1099,7 +1103,7 @@ function renderBanner() {
   const show = !!transport && lastStored.jumps > 0;
   b.hidden = !show;
   if (!show) return;
-  setText('sync-banner-count', `${lastStored.jumps} jumps stored on the device`);
+  setText('sync-banner-count', `${lastStored.jumps} jumps on the device`);
   setText('sync-banner-best', lastStored.bestM > 0 ? `best ${heightPref(lastStored.bestM)}` : '');
 }
 
@@ -1212,6 +1216,11 @@ function switchTab(name) {
     b.setAttribute('aria-selected', String(on));
   });
   document.querySelectorAll('.tab-panel').forEach((p) => p.classList.toggle('is-active', p.id === 'tab-' + name));
+  // Opening Live quietly refreshes the numbers (replaces the old
+  // "Refresh stats" button — the user should never have to ask for stats).
+  if (name === 'live' && transport && transportKind !== 'Demo' && !activeCapture) {
+    try { send('stats'); } catch (_e) { /* connection raced away — harmless */ }
+  }
 }
 
 // -------------------------------------------------------------- theme + units
@@ -1249,7 +1258,6 @@ function toggleUnit() {
   renderSessions();
   renderLiveMini();
   if (lastSynced) showSyncResult(lastSynced);
-  setText('live-stored', lastStored.jumps ? `On device: ${lastStored.jumps} jumps, best ${heightPref(lastStored.bestM)}` : '');
 }
 
 function initThemeUnit() {
@@ -1301,7 +1309,8 @@ function init() {
   document.querySelectorAll('.tab-btn').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
   initConnectTab();
   $('btn-disconnect').addEventListener('click', doDisconnect);
-  $('btn-refresh-stats').addEventListener('click', () => { if (requireDevice()) send('stats'); });
+  // No refresh button: stats arrive on connect and with every jump, and
+  // switching to Live quietly re-asks — the user never has to think about it.
 
   // Sync is one word, one tap — from the banner or the Sessions tab.
   $('btn-sync').addEventListener('click', beginSync);
