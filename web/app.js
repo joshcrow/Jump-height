@@ -564,6 +564,11 @@ function buildBarChart(jumps, opts = {}) {
     'aria-label': 'Per-jump height chart',
   });
   s.style.height = (opts.mini ? 64 : vbh) + 'px';
+  // A sparse session must not stretch into a handful of screen-wide slabs:
+  // cap the rendered width so a bar never exceeds ~72px on screen, and keep
+  // the chart left-aligned (bars grow rightward as jumps land).
+  s.style.maxWidth = Math.min(100, jumps.length * 18 + 6) + '%';
+  s.style.display = 'block';
 
   const padX = 6;
   const topPad = opts.showLabel ? 24 : 8;

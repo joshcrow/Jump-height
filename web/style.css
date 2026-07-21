@@ -158,14 +158,16 @@ p { margin: .4rem 0 .8rem; }
   min-width: 44px;
   justify-content: center;
   border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--surface-2);
+  border-radius: 8px;
+  background: transparent;
   color: var(--text);
   font: inherit;
   font-size: .8rem;
-  font-weight: 700;
+  font-weight: 600;
   cursor: pointer;
+  transition: background-color .12s ease;
 }
+.theme-toggle:hover { background: var(--surface-2); }
 .theme-ico { font-size: .95rem; line-height: 1; }
 /* Narrow phones: the header can't fit brand + status + Disconnect + toggle,
    and the toggle was getting clipped off the right edge. Drop its text label
@@ -206,22 +208,25 @@ p { margin: .4rem 0 .8rem; }
   min-width: 84px;
   min-height: 44px;
   padding: .5rem .6rem;
-  border: 1px solid transparent;
-  border-radius: 10px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 8px 8px 0 0;
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-weight: 700;
+  font-weight: 600;
   cursor: pointer;
+  transition: background-color .12s ease;
 }
-/* Filled active state (not just an underline): tinted fill + accent underline
-   + full-strength ink + bold, so it's unmistakable in glare. */
+.tab-btn:hover { background: var(--surface-2); }
+/* Active = tinted fill + a 2px accent underline + full-strength bold ink.
+   Two coordinated cues, no border box, no shadow — unmistakable in glare
+   without reading as a raised widget. */
 .tab-btn.is-active {
-  background: color-mix(in srgb, var(--primary) 16%, var(--surface));
-  border-color: color-mix(in srgb, var(--primary) 40%, var(--border));
-  border-bottom: 3px solid var(--primary);
+  background: color-mix(in srgb, var(--primary) 14%, var(--surface));
+  border-bottom: 2px solid var(--primary);
   color: var(--text);
-  box-shadow: var(--shadow);
+  font-weight: 700;
 }
 
 /* ---------- panels ---------- */
@@ -240,37 +245,59 @@ main { max-width: 680px; margin: 0 auto; padding: 1rem; }
 
 .row-between { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
 
-/* ---------- buttons ---------- */
+/* ---------- buttons ----------
+   Professional register: one 8px radius across the family, flat fills, no
+   shadows, no press-bounce, hover = one shade change. Exactly one filled
+   (primary) button per view; everything else is an outline or a quiet text
+   action. Tap targets stay >= 44px — density comes from type and padding,
+   never from shrinking the target. */
 .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font: inherit;
-  font-weight: 700;
-  min-height: 48px;                 /* big tap target for wet fingers */
-  padding: .7rem 1.15rem;
-  border-radius: 11px;
+  font-size: .95rem;
+  font-weight: 600;
+  min-height: 44px;
+  padding: .55rem 1rem;
+  border-radius: 8px;
   border: 1px solid transparent;
   cursor: pointer;
   color: var(--text);
-  background: var(--surface-2);
-  transition: transform .08s ease, filter .12s ease;
+  background: transparent;
+  transition: background-color .12s ease, border-color .12s ease;
 }
-.btn:active { transform: translateY(1px); }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
-.btn-primary { background: var(--primary); color: var(--primary-ink); border-color: color-mix(in srgb, var(--primary) 70%, #000); }
-.btn-primary:hover { filter: brightness(1.05); }
-.btn-ghost { background: transparent; border-color: var(--border); }
-.btn-danger { background: transparent; border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); color: var(--danger); }
-.btn-danger-ghost { background: transparent; border-color: var(--border); color: var(--danger); }
-.btn-quiet { background: transparent; border-color: transparent; color: var(--muted); text-decoration: underline; text-underline-offset: 3px; }
-.btn-sm { min-height: 44px; padding: .5rem .8rem; font-size: .9rem; border-radius: 9px; }
-.btn-row { display: flex; gap: .6rem; flex-wrap: wrap; margin: .5rem 0; align-items: center; }
-.btn-row.wrap .btn { min-height: 40px; padding: .45rem .8rem; font-size: .9rem; }
+
+.btn-primary {
+  background: var(--primary);
+  color: var(--primary-ink);
+  font-weight: 700;
+}
+.btn-primary:hover { background: color-mix(in srgb, var(--primary) 88%, var(--text)); }
+.btn-primary:active { background: color-mix(in srgb, var(--primary) 78%, var(--text)); }
+
+.btn-ghost { border-color: var(--border); }
+.btn-ghost:hover { background: var(--surface-2); }
+
+/* Destructive: restrained until engaged — outline, not a red slab. */
+.btn-danger { border-color: color-mix(in srgb, var(--danger) 40%, var(--border)); color: var(--danger); }
+.btn-danger:hover { background: color-mix(in srgb, var(--danger) 8%, var(--surface)); }
+.btn-danger-ghost { border-color: var(--border); color: var(--danger); }
+.btn-danger-ghost:hover { background: color-mix(in srgb, var(--danger) 8%, var(--surface)); }
+
+.btn-quiet { color: var(--muted); }
+.btn-quiet:hover { background: var(--surface-2); }
+
+.btn-sm { font-size: .88rem; padding: .45rem .8rem; }
+.btn-row { display: flex; gap: .5rem; flex-wrap: wrap; margin: .5rem 0; align-items: center; }
 
 /* File input styled as a button. */
 .file-btn { display: inline-flex; align-items: center; }
 .file-btn input[type="file"] {
   width: .1px; height: .1px; opacity: 0; overflow: hidden; position: absolute; z-index: -1;
 }
-.file-btn:focus-within { outline: 3px solid var(--focus); outline-offset: 2px; border-radius: 9px; }
+.file-btn:focus-within { outline: 3px solid var(--focus); outline-offset: 2px; border-radius: 8px; }
 
 /* ---------- status + notes ---------- */
 .status {
