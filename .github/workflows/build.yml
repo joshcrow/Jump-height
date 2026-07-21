@@ -1,0 +1,73 @@
+# Builds the firmware and publishes the web app (with flasher binaries) to
+# GitHub Pages — this is what makes the zero-install story real: anyone can
+# open the Pages URL, click Install, and flash a board from the browser.
+#
+# One-time repo setup for the Pages half: Settings → Pages → Source: "GitHub
+# Actions". Until then, the pages job fails harmlessly and the firmware
+# artifact is still produced.
+
+name: build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  firmware:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini') }}
+
+      - name: Build firmware
+        run: |
+          pip install platformio
+          pio run -d firmware -e firebeetle32
+
+      - name: Stage web app + flasher binaries
+        run: |
+          mkdir -p web/firmware
+          cp firmware/.pio/build/firebeetle32/bootloader.bin web/firmware/
+          cp firmware/.pio/build/firebeetle32/partitions.bin web/firmware/
+          cp firmware/.pio/build/firebeetle32/firmware.bin   web/firmware/
+          # boot_app0 ships with the Arduino core inside the PlatformIO packages
+          find ~/.platformio/packages -name boot_app0.bin -exec cp {} web/firmware/ \; -quit
+          ls -la web/firmware/
+
+      - name: Upload firmware binaries (artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-binaries
+          path: web/firmware/
+
+      - name: Upload Pages artifact (web app + binaries)
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/
+
+  pages:
+    needs: firmware
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
