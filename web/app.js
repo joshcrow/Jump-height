@@ -79,13 +79,14 @@ const STATUS_ICON = { PASS: 'check', WARN: 'triangle-alert', FAIL: 'x', SKIP: 'm
 const STATUS_CLASS = { PASS: 'ok', WARN: 'warn', FAIL: 'bad', SKIP: 'skip' };
 
 const BLE_UNSUPPORTED =
-  "This browser can't use Bluetooth. Use Chrome or Edge on a computer or " +
-  "Android phone. On an iPhone or iPad, install the free “Bluefy” app " +
-  "from the App Store and open this page inside it.";
+  'No Bluetooth in this browser. iPhone/iPad: open this page in the free ' +
+  '“Bluefy” app.';
 const SERIAL_UNSUPPORTED =
-  "This browser can't use USB. Use Chrome or Edge on a desktop computer (or " +
-  "Android with an OTG adapter). iPhones and iPads can't do USB in the browser " +
-  "— connect over Bluetooth instead.";
+  'No USB in this browser — connect over Bluetooth instead.';
+const BOTH_UNSUPPORTED =
+  'This browser can\u2019t reach the device. Use Chrome or Edge on a computer ' +
+  'or Android phone — on an iPhone or iPad, open this page in the free ' +
+  '“Bluefy” app.';
 
 /** 'JUMP n=1 airtime_s=0.62' -> {_tag:'JUMP', n:'1', airtime_s:'0.62', _args:[]}.
  *  Bare words land in _args: 'STATE recording' -> {_tag:'STATE', _args:['recording']}.
@@ -260,7 +261,7 @@ const selftest = { active: false, rows: [], result: null };
 let activeCapture = null;  // in-flight command capture (used by 'dump'/sync)
 
 let unitPref = 'ft';       // 'ft' | 'm' — the owner thinks in feet
-let themeMode = 'light';   // 'auto' | 'light' | 'dark'
+let themeMode = 'light';   // 'light' | 'dark' (seeded from the OS until first tap)
 const liveJumps = [];      // per-jump data for this session's live mini-chart
 let lastStored = { jumps: 0, bestM: 0 };  // last STATS stored_* seen (for the banner)
 let lastTraceBytes = NaN;  // optional STATS trace_bytes, for a real sync %
@@ -744,7 +745,7 @@ function renderSessions() {
     card.append(sessionBody(s));
     card.append(el('div', { class: 'session-foot' },
       el('button', { class: 'btn btn-ghost btn-sm', type: 'button',
-        onclick: () => downloadText(`jumps-${stamp(s.when)}.csv`, s.jumpsCsv || jumpsToCsv(jumps)) }, 'jumps.csv'),
+        onclick: () => downloadText(`jumps-${stamp(s.when)}.csv`, s.jumpsCsv || jumpsToCsv(jumps)) }, 'CSV'),
       s.traceCsv ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button',
         onclick: () => downloadText(`trace-${stamp(s.when)}.csv`, s.traceCsv) }, 'trace.csv') : null,
       el('button', { class: 'btn btn-danger-ghost btn-sm', type: 'button',
@@ -1181,6 +1182,8 @@ function renderBanner() {
   if (!b) return;
   const show = !!transport && lastStored.jumps > 0;
   b.hidden = !show;
+  const tabSync = $('btn-download-session');
+  if (tabSync) tabSync.hidden = show;  // the banner owns Sync while it's up
   if (!show) return;
   setText('sync-banner-count', `${lastStored.jumps} jumps on the device`);
   setText('sync-banner-best', lastStored.bestM > 0 ? `best ${heightPref(lastStored.bestM)}` : '');
@@ -1199,9 +1202,10 @@ function setTransport(t, kind) {
   renderBanner();
   setStatus('connected', kind);
   acquireWakeLock(); // keep the screen awake while riding (feature-detected)
-  // Pull current info + stats so the UI isn't blank on connect. (In demo mode
-  // there's no device to answer, and we keep sent[] clean for the test.)
-  if (kind !== 'Demo') { send('info'); send('stats'); }
+  // Pull current info + stats so the UI isn't blank on connect, and land the
+  // user on Live — that's what connecting is FOR. (Demo/mock stays put so the
+  // test suite starts from a known tab.)
+  if (kind !== 'Demo') { send('info'); send('stats'); switchTab('live'); }
 }
 
 function onTransportClosed(t) {
@@ -1319,20 +1323,19 @@ function prefersDark() {
   return !!(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);
 }
 function applyTheme() {
-  const dark = themeMode === 'dark' || (themeMode === 'auto' && prefersDark());
+  const dark = themeMode === 'dark';
   document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
-  const label = themeMode.charAt(0).toUpperCase() + themeMode.slice(1);
-  setText('theme-label', label);
   const ico = $('theme-ico');
   if (ico) {
+    // The icon shows what a tap GIVES you, not what you have.
     ico.textContent = '';
-    ico.append(icon(themeMode === 'auto' ? 'monitor' : themeMode === 'dark' ? 'moon' : 'sun'));
+    ico.append(icon(dark ? 'sun' : 'moon'));
   }
   const btn = $('btn-theme');
-  if (btn) btn.setAttribute('aria-label', `Theme: ${label}. Tap to change.`);
+  if (btn) btn.setAttribute('aria-label', dark ? 'Switch to light theme' : 'Switch to dark theme');
 }
 function cycleTheme() {
-  themeMode = themeMode === 'auto' ? 'light' : themeMode === 'light' ? 'dark' : 'auto';
+  themeMode = themeMode === 'dark' ? 'light' : 'dark';
   try { localStorage.setItem(THEME_KEY, themeMode); } catch (_e) {}
   applyTheme();
 }
@@ -1354,21 +1357,18 @@ function toggleUnit() {
 }
 
 function initThemeUnit() {
-  try { themeMode = localStorage.getItem(THEME_KEY) || 'light'; } catch (_e) { themeMode = 'light'; }
+  // Before the first explicit tap we follow the system; a tap makes the
+  // choice explicit and remembered. Two states — dark mode is ONE tap away.
+  let stored = null;
+  try { stored = localStorage.getItem(THEME_KEY); } catch (_e) { /* blocked storage */ }
+  if (stored === 'light' || stored === 'dark') themeMode = stored;
+  else themeMode = prefersDark() ? 'dark' : 'light';
   try { unitPref = localStorage.getItem(UNIT_KEY) || 'ft'; } catch (_e) { unitPref = 'ft'; }
-  if (!['auto', 'light', 'dark'].includes(themeMode)) themeMode = 'light';
   if (!['ft', 'm'].includes(unitPref)) unitPref = 'ft';
   applyTheme();
   applyUnit();
   $('btn-theme').addEventListener('click', cycleTheme);
   $('btn-unit').addEventListener('click', toggleUnit);
-  // Follow the OS when in Auto.
-  if (window.matchMedia) {
-    const mq = matchMedia('(prefers-color-scheme: dark)');
-    const onChange = () => { if (themeMode === 'auto') applyTheme(); };
-    if (mq.addEventListener) mq.addEventListener('change', onChange);
-    else if (mq.addListener) mq.addListener(onChange);
-  }
 }
 
 // --------------------------------------------------------------------- init
@@ -1378,11 +1378,18 @@ function initConnectTab() {
   if (!window.isSecureContext) {
     notes.push('This page must be opened over https or from localhost for Bluetooth and USB to work.');
   }
-  if (!navigator.bluetooth) { $('btn-connect-ble').disabled = true; notes.push(BLE_UNSUPPORTED); }
-  if (!navigator.serial) { $('btn-connect-usb').disabled = true; notes.push(SERIAL_UNSUPPORTED); }
+  // One message channel, one message: two stacked near-duplicate paragraphs
+  // read as a malfunction, not help.
+  const noBle = !navigator.bluetooth;
+  const noUsb = !navigator.serial;
+  if (noBle) $('btn-connect-ble').disabled = true;
+  if (noUsb) $('btn-connect-usb').disabled = true;
+  if (noBle && noUsb) notes.push(BOTH_UNSUPPORTED);
+  else if (noBle) notes.push(BLE_UNSUPPORTED);
+  else if (noUsb) notes.push(SERIAL_UNSUPPORTED);
   const help = $('connect-help');
   help.textContent = '';
-  for (const n of notes) help.append(el('div', { class: 'note', text: n }));
+  if (notes.length) help.append(el('p', { class: 'note', text: notes.join(' ') }));
 
   $('btn-connect-ble').addEventListener('click', connectBle);
   $('btn-connect-usb').addEventListener('click', connectUsb);

@@ -1,79 +1,74 @@
 /*
-  Jump Height browser app — styles.
+  Jump Height browser app — styles. v3 "instrument".
 
-  Sunlight-first: the DEFAULT theme is a high-contrast light theme tuned for
-  reading a phone in bright beach glare — near-black text on a near-white
-  surface, heavy weights on anything read at arm's length, big tap targets for
-  wet fingers. A real dark theme ships too. Theme is chosen explicitly via the
-  data-theme attribute on <html> (Auto/Light/Dark, set by app.js); it is not an
-  automatic prefers-color-scheme flip.
+  Design position (owner-directed, NN/g-aligned):
+  - WHITE page, ink text, hairline dividers. No grey-on-grey zones, no cards
+    inside cards: exactly ONE bordered card exists (the LAST JUMP hero).
+    Everything else is typography, whitespace and 1px hairlines.
+  - MONOCHROME chrome. Actions are ink-filled or ink-outlined; links are
+    underlined ink. Color has exactly two reserved jobs: data marks (the
+    validated --series blue on chart bars, nowhere else) and status
+    (ok/warn/danger, always beside a word, never alone).
+  - Buttons: rectangular, flat, CENTERED labels, symmetric padding. Kinds:
+    primary (one ink-filled action per view), outline (secondary), link
+    (underlined text), danger variants. Tap targets >= 44px always.
+  - Type: regular-weight body, semibold headings/emphasis, LIGHT display
+    numerals with tabular figures — the number reads like an instrument.
 
-  Colour lives in CSS custom properties. --series is the VALIDATED accent used
-  ONLY for data marks and primary actions — never for body text. Status colours
-  (--ok/--warn/--danger) are reserved for status. The preferred unit (feet or
-  metres) is driven by data-unit on <html>, which swaps which number is big.
-
-  No external fonts — the system font stack keeps it fast, offline and native.
+  Contrast contract (WCAG AAA, verified by computation): every text pair
+  >= 7:1; non-text (borders, marks) >= 3:1. If you change a value, re-run
+  the ratio check — never eyeball.
 */
 
-/* Contrast contract (WCAG AAA): every TEXT/background pair here is >= 7:1
-   (>= 4.5:1 for large text). --series is chart marks ONLY (non-text, 3:1
-   rule, CVD-validated) and never carries text; --primary is the separate
-   action color whose job is to hold button ink at >= 7:1. Verified by
-   computation — if you change a value, re-check the ratios, don't eyeball. */
 :root,
 :root[data-theme="light"] {
-  --bg: #eef0ee;
-  --surface: #fcfcfb;
-  --surface-2: #ececeb;
-  --border: #cbcbc7;
+  --bg: #ffffff;
+  --hairline: #e4e4e1;        /* dividers (non-text) */
+  --outline: #767672;         /* outline-button borders, 3.9:1 on bg */
+  --hover: #f4f4f2;           /* hover fill for quiet/outline controls */
+  --code-bg: #f7f7f5;
   --text: #0b0b0b;
-  --muted: #4a4a46;          /* 8.7:1 on surface, 7.5:1 on surface-2 */
-  --series: #2a78d6;         /* VALIDATED accent — data marks only, never text */
-  --primary: #1d55a0;        /* action fill: white ink = 7.3:1 */
-  --primary-ink: #ffffff;
-  --danger: #9d1f1f;         /* 7.6:1 on surface as text */
-  --ok: #135f2b;             /* 7.4:1 */
-  --warn: #6e4700;           /* 7.8:1 */
-  --grid: color-mix(in srgb, #0b0b0b 12%, transparent);
-  --baseline: color-mix(in srgb, #0b0b0b 34%, transparent);
+  --muted: #4a4a46;           /* 9.2:1 on bg */
+  --action: #0b0b0b;          /* primary buttons: ink fill, 19:1 with ink below */
+  --action-ink: #ffffff;
+  --series: #2a78d6;          /* VALIDATED — chart marks ONLY, never text/chrome */
+  --danger: #9d1f1f;          /* 7.6:1 as text */
+  --ok: #135f2b;              /* 7.4:1 */
+  --warn: #6e4700;            /* 7.8:1 */
+  --baseline: rgba(11, 11, 11, .34);
   --focus: #0b57c0;
-  --shadow: 0 1px 2px rgba(0, 0, 0, .10), 0 2px 6px rgba(0, 0, 0, .06);
-  --radius: 12px;
+  --shadow: 0 2px 8px rgba(0, 0, 0, .12);   /* floating layers only (tooltip) */
 }
 
 :root[data-theme="dark"] {
-  --bg: #0e1116;
-  --surface: #161b22;
-  --surface-2: #1c2230;
-  --border: #303845;
+  --bg: #111418;
+  --hairline: #2a3038;
+  --outline: #78828f;         /* 3.4:1 on bg */
+  --hover: #1b2027;
+  --code-bg: #171b21;
   --text: #eef3f8;
-  --muted: #aab4c0;          /* 8.2:1 on surface */
-  --series: #3987e5;         /* VALIDATED accent, dark — data marks only */
-  --primary: #8fc1f7;        /* action fill: dark ink = 10.0:1 */
-  --primary-ink: #06121f;
-  --danger: #ff958d;         /* >= 7:1 on surface as text */
-  --ok: #46c257;             /* 7.5:1 */
-  --warn: #e0a92a;           /* 8.1:1 */
-  --grid: color-mix(in srgb, #eef3f8 12%, transparent);
-  --baseline: color-mix(in srgb, #eef3f8 34%, transparent);
+  --muted: #aab4c0;           /* 8.9:1 on bg */
+  --action: #eef3f8;          /* inverted: light fill, dark ink, 15.5:1 */
+  --action-ink: #111418;
+  --series: #3987e5;          /* VALIDATED, dark */
+  --danger: #ff958d;
+  --ok: #46c257;
+  --warn: #e0a92a;
+  --baseline: rgba(238, 243, 248, .34);
   --focus: #9ecbff;
-  --shadow: 0 1px 2px rgba(0, 0, 0, .5);
+  --shadow: 0 2px 10px rgba(0, 0, 0, .6);
 }
 
 * { box-sizing: border-box; }
 
-/* The hidden attribute must ALWAYS win. Any class that sets `display` would
-   otherwise override the browser's built-in [hidden]{display:none} (author
-   rules beat user-agent rules regardless of specificity) — which is exactly
-   how the sync banner once became permanently visible. */
+/* The hidden attribute must ALWAYS win — an author display rule on a class
+   would otherwise override the UA's [hidden]{display:none} and quietly
+   unhide things (this bit us once; see the sync banner's history). */
 [hidden] { display: none !important; }
 
 body {
   margin: 0;
-  /* Bottom padding leaves room for the collapsed console bar so it never
-     covers the last bit of content. */
-  padding-bottom: 68px;
+  padding-bottom: 68px; /* room for the collapsed console bar */
   background: var(--bg);
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -82,30 +77,27 @@ body {
   -webkit-text-size-adjust: 100%;
 }
 
-h2 { font-size: 1.3rem; margin: 0 0 .3rem; font-weight: 600; letter-spacing: 0; }
+h2 { font-size: 1.25rem; margin: 0 0 .3rem; font-weight: 600; }
 h3 { font-size: 1rem; margin: 0; font-weight: 600; }
 p { margin: .4rem 0 .8rem; }
 .muted { color: var(--muted); font-weight: 400; }
 .small { font-size: .85rem; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-.mt { margin-top: 1.25rem; }
+.mt { margin-top: 1.5rem; }
 
-/* Visible keyboard focus everywhere (Carbon: crisp 2px). */
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
 /* Inline Lucide icons: sized by context, colored by currentColor. */
 .ico { width: 16px; height: 16px; flex: 0 0 auto; vertical-align: -2px; }
-.brand-logo { width: 22px; height: 22px; color: var(--primary); }
+.brand-logo { width: 22px; height: 22px; color: var(--text); }
 .caret .ico { transition: transform .15s ease; }
-.caret.is-open .ico { transform: rotate(90deg); }
+.console-toggle[aria-expanded="true"] .caret .ico { transform: rotate(90deg); }
 .st-mark.ok { color: var(--ok); }
 .st-mark.warn { color: var(--warn); }
 .st-mark.bad { color: var(--danger); }
 .st-mark.skip { color: var(--muted); }
-.st-result { display: flex; align-items: center; gap: .4rem; }
-.synced-head .ico.ok { color: var(--ok); }
 
-/* Headings exist for screen-reader navigation; the tab bar is the visible
+/* Headings live for screen-reader navigation; the tab bar is the visible
    heading, so printing them again would be ink without information. */
 .sr-only {
   position: absolute;
@@ -116,7 +108,6 @@ p { margin: .4rem 0 .8rem; }
   white-space: nowrap;
 }
 
-/* Motion is minimal and always short; honour reduced-motion fully. */
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
 }
@@ -132,93 +123,76 @@ p { margin: .4rem 0 .8rem; }
   gap: .6rem;
   padding: .6rem 1rem;
   padding-top: max(.6rem, env(safe-area-inset-top));
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  border-bottom: 1px solid var(--hairline);
 }
 .brand { display: flex; align-items: center; gap: .5rem; font-weight: 600; }
 .conn { display: flex; align-items: center; gap: .5rem; }
 
-/* Connection state: a colored dot + a plain-ink word. (Colored text on a
-   same-hue tint can't reach AAA and the tint was decoration anyway; the dot
-   plus the word itself carry the state — never color alone.) */
+/* Connection state: colored dot + plain-ink word. Never color alone. */
 .pill {
   display: inline-flex;
   align-items: center;
   gap: .4rem;
   font-size: .82rem;
-  font-weight: 700;
-  padding: .28rem .6rem;
-  border-radius: 999px;
+  font-weight: 600;
   white-space: nowrap;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
   color: var(--text);
 }
 .pill::before { content: ""; width: .55em; height: .55em; border-radius: 50%; flex: 0 0 auto; }
 .pill-off { color: var(--muted); }
-.pill-off::before { background: var(--border); }
+.pill-off::before { background: var(--outline); }
 .pill-wait::before { background: var(--warn); }
 .pill-on::before { background: var(--ok); }
 
+/* One tap: light <-> dark. The icon shows what a tap gives you. */
 .theme-toggle {
   display: inline-flex;
   align-items: center;
-  gap: .3rem;
-  padding: .34rem .55rem;
-  min-height: 44px;  /* AAA target size */
-  min-width: 44px;
   justify-content: center;
-  border: 1px solid var(--border);
+  min-height: 44px;
+  min-width: 44px;
+  border: 1px solid var(--outline);
   border-radius: 0;
   background: transparent;
   color: var(--text);
-  font: inherit;
-  font-size: .8rem;
-  font-weight: 400;
   cursor: pointer;
   transition: background-color .11s ease;
 }
-.theme-toggle:hover { background: var(--surface-2); }
-.theme-ico { font-size: .95rem; line-height: 1; }
-/* Narrow phones: the header can't fit brand + status + Disconnect + toggle,
-   and the toggle was getting clipped off the right edge. Drop its text label
-   (the icon still communicates state; the aria-label carries the words). */
+.theme-toggle:hover { background: var(--hover); }
+
 @media (max-width: 480px) {
-  .theme-label { display: none; }
   .app-header { gap: .4rem; padding-left: .7rem; padding-right: .7rem; }
   .brand { min-width: 0; }
 }
 
-/* ---------- sync banner ---------- */
+/* ---------- sync banner: a plain strip, not a notification widget ---------- */
 .sync-banner {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: .8rem;
   flex-wrap: wrap;
-  padding: .8rem 1rem;
-  background: color-mix(in srgb, var(--primary) 8%, var(--surface));
-  border-left: 3px solid var(--primary);
-  border-bottom: 1px solid var(--border);
+  padding: .7rem 1rem;
+  background: var(--bg);
+  border-bottom: 1px solid var(--hairline);
 }
-.sync-banner-text { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
-.sync-banner-text strong { font-weight: 800; font-size: 1rem; }
-.sync-banner-best { color: var(--text); font-weight: 700; font-size: .9rem; }
-.sync-banner .btn { flex: 0 0 auto; min-width: 120px; }
+.sync-banner-text { display: flex; flex-direction: column; line-height: 1.3; min-width: 0; }
+.sync-banner-text strong { font-weight: 600; font-size: 1rem; }
+.sync-banner-best { color: var(--muted); font-weight: 400; font-size: .9rem; }
+.sync-banner .btn { flex: 0 0 auto; min-width: 110px; }
 
-/* ---------- tabs ---------- */
+/* ---------- tabs: line tabs, ink underline carries selection ---------- */
 .tabs {
   display: flex;
-  gap: .3rem;
-  padding: .45rem;
   background: var(--bg);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--hairline);
   overflow-x: auto;
 }
 .tab-btn {
   flex: 1 0 auto;
   min-width: 84px;
-  min-height: 44px;
+  min-height: 48px;
   padding: .5rem .6rem;
   border: none;
   border-bottom: 2px solid transparent;
@@ -226,221 +200,193 @@ p { margin: .4rem 0 .8rem; }
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: .875rem;
-  font-weight: 400;
-  letter-spacing: .16px;
+  font-size: .9rem;
+  font-weight: 500;
   cursor: pointer;
-  transition: background-color .11s ease, color .11s ease;
+  transition: color .11s ease;
 }
-.tab-btn:hover { background: var(--surface-2); color: var(--text); }
-/* Carbon line tabs: selection = a 2px accent underline + full ink + semibold.
-   No fill, no border box, no shadow. */
+.tab-btn:hover { color: var(--text); }
 .tab-btn.is-active {
-  border-bottom-color: var(--primary);
+  border-bottom-color: var(--text);
   color: var(--text);
   font-weight: 600;
 }
 
 /* ---------- panels ---------- */
-main { max-width: 680px; margin: 0 auto; padding: 1rem; }
+main { max-width: 680px; margin: 0 auto; padding: 1.25rem 1rem; }
 .tab-panel { display: none; }
 .tab-panel.is-active { display: block; }
 
-.card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 0;
-  padding: 1rem;
-  margin: .75rem 0;
-}
+/* .card is spacing, not chrome — the hero below is the one bordered box. */
+.card { padding: 0; margin: 1rem 0; }
 
 .row-between { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
 
-/* ---------- buttons ----------
-   Carbon-style register (see IBM Carbon Design System): rectangular (0
-   radius), flat, no shadows, LEFT-aligned label with roomy trailing padding,
-   regular-weight type. Kinds: primary (the one filled action per view),
-   tertiary (accent outline that fills on hover), ghost (accent text only),
-   and their danger variants. Tap targets stay >= 44px. */
+/* ---------- buttons ---------- */
 .btn {
   display: inline-flex;
   align-items: center;
-  justify-content: flex-start;
-  text-align: left;
+  justify-content: center;
   font: inherit;
-  font-size: .875rem;
-  font-weight: 400;
-  letter-spacing: .16px;
+  font-size: .9rem;
+  font-weight: 500;
   min-height: 48px;
-  padding: .6rem 2.25rem .6rem 1rem;
+  padding: .6rem 1.25rem;
   border-radius: 0;
   border: 1px solid transparent;
   cursor: pointer;
   color: var(--text);
   background: transparent;
-  transition: background-color .11s ease, border-color .11s ease, color .11s ease;
+  transition: background-color .11s ease, color .11s ease, border-color .11s ease;
 }
-.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
 
-.btn-primary {
-  background: var(--primary);
-  color: var(--primary-ink);
-}
-.btn-primary:hover { background: color-mix(in srgb, var(--primary) 88%, var(--text)); }
-.btn-primary:active { background: color-mix(in srgb, var(--primary) 78%, var(--text)); }
+/* Primary: the ONE ink-filled action per view. */
+.btn-primary { background: var(--action); color: var(--action-ink); font-weight: 600; }
+.btn-primary:hover { background: color-mix(in srgb, var(--action) 85%, var(--bg)); }
+.btn-primary:active { background: color-mix(in srgb, var(--action) 72%, var(--bg)); }
 
-/* Tertiary: accent outline, fills on hover (Carbon's secondary-on-a-page). */
-.btn-ghost { border-color: var(--primary); color: var(--primary); }
-.btn-ghost:hover { background: var(--primary); color: var(--primary-ink); }
+/* Outline: secondary actions. */
+.btn-ghost { border-color: var(--outline); }
+.btn-ghost:hover { background: var(--hover); }
 
-/* Danger tertiary/ghost: restrained until engaged. */
+/* Danger: outlined, engages on hover; never a red slab. */
 .btn-danger { border-color: var(--danger); color: var(--danger); }
-.btn-danger:hover { background: var(--danger); color: var(--surface); }
+.btn-danger:hover { background: color-mix(in srgb, var(--danger) 10%, var(--bg)); }
+
+/* Links-as-buttons: underlined text, full tap target. */
+.btn-quiet,
+.btn-danger-ghost {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  padding-left: .6rem;
+  padding-right: .6rem;
+}
+.btn-quiet:hover, .btn-danger-ghost:hover { background: var(--hover); }
 .btn-danger-ghost { color: var(--danger); }
-.btn-danger-ghost:hover { background: color-mix(in srgb, var(--danger) 10%, var(--surface)); }
 
-/* Ghost: accent text, quiet hover tint. */
-.btn-quiet { color: var(--primary); }
-.btn-quiet:hover { background: color-mix(in srgb, var(--primary) 10%, var(--surface)); }
+.btn-sm { min-height: 44px; padding: .45rem 1rem; font-size: .875rem; }
+.btn-row { display: flex; gap: .6rem; flex-wrap: wrap; margin: .6rem 0; align-items: center; }
 
-.btn-sm { min-height: 44px; padding: .45rem 1.25rem .45rem .85rem; }
-.btn-row { display: flex; gap: .5rem; flex-wrap: wrap; margin: .5rem 0; align-items: center; }
-
-/* File input styled as a button. */
 .file-btn { display: inline-flex; align-items: center; }
 .file-btn input[type="file"] {
   width: .1px; height: .1px; opacity: 0; overflow: hidden; position: absolute; z-index: -1;
 }
 .file-btn:focus-within { outline: 2px solid var(--focus); outline-offset: 2px; }
 
-/* ---------- status + notes ---------- */
+/* ---------- status & helper text: plain lines, no boxes, no bars ---------- */
 .status {
-  margin: .6rem 0;
-  padding: .65rem .85rem;
-  border-radius: 0;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
+  margin: .7rem 0;
   font-size: .92rem;
-  font-weight: 600;
-  white-space: pre-line;            /* lets the sync progress show a second line */
+  font-weight: 500;
+  white-space: pre-line;   /* sync progress uses a second line */
 }
-.status.busy { border-color: color-mix(in srgb, var(--primary) 45%, var(--border)); }
-.status.warn { border-color: color-mix(in srgb, var(--warn) 50%, var(--border)); color: var(--warn); }
-.status.ok { border-color: color-mix(in srgb, var(--ok) 50%, var(--border)); }
-.note {
-  margin: .5rem 0;
-  padding: .6rem .85rem;
-  border-left: 3px solid var(--primary);
-  background: var(--surface-2);
-  border-radius: 6px;
-  font-size: .92rem;
-  font-weight: 600;
-}
-.info-line { font-weight: 700; }
+.status.warn { color: var(--warn); }
+.status.ok { color: var(--ok); }
+.status.busy { color: var(--muted); }
+.note { margin: .5rem 0; font-size: .9rem; color: var(--muted); }
+.info-line { font-weight: 500; }
 
-/* ---------- chips ---------- */
-.chips { display: flex; flex-wrap: wrap; gap: .5rem; margin: .3rem 0 .6rem; }
-.chip {
-  display: inline-flex;
-  align-items: center;
-  padding: .4rem .75rem;
-  border-radius: 999px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  font-weight: 700;
-  font-size: .9rem;
-}
+/* ---------- summary line (was chips): text, not widgets ---------- */
+.chips { display: flex; flex-wrap: wrap; gap: .4rem 1.25rem; margin: .2rem 0 .8rem; }
+.chip { font-size: .95rem; color: var(--muted); }
+.chip strong, .chip b { color: var(--text); }
 
 /* ---------- dual-unit readouts (hero + tiles) ---------- */
-/* Both rows are always present; data-unit on <html> picks which is primary.
-   --big / --small are set by the context (hero vs stat). */
 .udual { display: flex; flex-direction: column; align-items: center; line-height: 1.02; }
 .udual .urow { display: flex; align-items: baseline; gap: .12em; white-space: nowrap; }
 :root[data-unit="ft"] .udual .r-ft,
 :root[data-unit="m"]  .udual .r-m {
-  order: 0; font-size: var(--big); font-weight: 300; letter-spacing: -.01em; font-variant-numeric: tabular-nums; color: var(--text);
+  order: 0; font-size: var(--big); font-weight: 300; letter-spacing: -.01em;
+  font-variant-numeric: tabular-nums; color: var(--text);
 }
 :root[data-unit="ft"] .udual .r-m,
 :root[data-unit="m"]  .udual .r-ft {
   order: 1; font-size: var(--small); font-weight: 400; color: var(--muted);
 }
+.udual .u { font-weight: 500; color: var(--muted); }
 :root[data-unit="ft"] .udual .r-ft .u,
-:root[data-unit="m"]  .udual .r-m .u { font-size: .42em; font-weight: 700; color: var(--muted); }
+:root[data-unit="m"]  .udual .r-m .u { font-size: .42em; }
 :root[data-unit="ft"] .udual .r-m .u,
-:root[data-unit="m"]  .udual .r-ft .u { font-size: .7em; font-weight: 700; color: var(--muted); }
+:root[data-unit="m"]  .udual .r-ft .u { font-size: .7em; }
 
 /* ---------- live ---------- */
-.live-hero { text-align: center; padding: 1.4rem 1rem 1.1rem; }
-.live-label { color: var(--muted); font-weight: 400; letter-spacing: .32px; font-size: .75rem; text-transform: uppercase; }
-.hero-readout { --big: clamp(2.9rem, 17vw, 4.8rem); --small: 1.25rem; margin-top: .15rem; }
-.live-sub { color: var(--muted); font-weight: 700; margin-top: .2rem; }
-/* A utility action, not a primary one: quiet text button, but the full 44px
-   AAA touch target is preserved via padding. */
+/* The one bordered card in the app. */
+.live-hero {
+  text-align: center;
+  padding: 1.5rem 1rem 1.2rem;
+  border: 1px solid var(--hairline);
+}
+.live-label { color: var(--muted); font-weight: 500; letter-spacing: .04em; font-size: .75rem; text-transform: uppercase; }
+.hero-readout { --big: clamp(3rem, 18vw, 5rem); --small: 1.25rem; margin-top: .2rem; }
+.live-sub { color: var(--muted); font-weight: 400; margin-top: .25rem; }
 .unit-toggle {
-  margin-top: .35rem;
+  margin-top: .4rem;
   min-height: 44px;
   padding: .4rem .9rem;
   border: none;
   border-radius: 0;
   background: transparent;
-  color: var(--primary);
+  color: var(--text);
   font: inherit;
-  font-weight: 400;
+  font-weight: 500;
   font-size: .875rem;
-  letter-spacing: .16px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
   cursor: pointer;
 }
-.unit-toggle:hover { background: color-mix(in srgb, var(--primary) 10%, var(--surface)); }
+.unit-toggle:hover { background: var(--hover); }
 
-/* Recording state: a small conventional red dot carries the meaning; the text
-   stays in ink tokens. A full red-tinted pill read as an alarm, and recording
-   is the happy path, not an error. */
-.badge { font-size: .8rem; font-weight: 800; display: inline-flex; align-items: center; gap: .35rem; }
+/* Recording state: conventional red dot + ink word. */
+.badge { font-size: .8rem; font-weight: 600; display: inline-flex; align-items: center; gap: .35rem; }
 .badge-rec { color: var(--text); }
 .badge-rec::before { content: ""; width: .55em; height: .55em; border-radius: 50%; background: var(--danger); }
 .badge-idle { color: var(--muted); }
-.badge-idle::before { content: ""; width: .55em; height: .55em; border-radius: 50%; background: var(--border); }
+.badge-idle::before { content: ""; width: .55em; height: .55em; border-radius: 50%; background: var(--outline); }
 
-.stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
-.stat { text-align: center; }
-.stat .statdual { --big: 1.75rem; --small: .9rem; }
-.stat-num { font-size: 1.75rem; font-weight: 300; font-variant-numeric: tabular-nums; }
-.stat-label { color: var(--muted); font-size: .86rem; font-weight: 700; margin-top: .2rem; }
-.stat-sub { color: var(--muted); font-size: .8rem; font-weight: 600; min-height: 1rem; }
+/* Stat tiles: numbers on the page, separated by a hairline — not boxes. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  margin: 1rem 0;
+}
+.stat { text-align: center; padding: .4rem 0; }
+.stat + .stat { border-left: 1px solid var(--hairline); }
+.stat .statdual { --big: 1.9rem; --small: .9rem; }
+.stat-num { font-size: 1.9rem; font-weight: 300; font-variant-numeric: tabular-nums; }
+.stat-label { color: var(--muted); font-size: .82rem; font-weight: 500; margin-top: .15rem; }
 
-.mini-wrap { margin: .9rem 0 .2rem; }
+.mini-wrap { margin: 1rem 0 .2rem; }
 
-.feed { list-style: none; margin: .5rem 0; padding: 0; }
+.feed { list-style: none; margin: .5rem 0 0; padding: 0; }
 .feed-item {
   display: flex;
   align-items: baseline;
   gap: .6rem;
-  padding: .6rem .2rem;
-  border-bottom: 1px solid var(--border);
+  padding: .6rem .1rem;
+  border-bottom: 1px solid var(--hairline);
 }
-.feed-n { font-weight: 800; color: var(--muted); min-width: 2.2rem; }
-.feed-h { font-weight: 800; }
-.feed-ft, .feed-at { font-size: .9rem; font-weight: 600; }
+.feed-n { font-weight: 500; color: var(--muted); min-width: 2.2rem; font-variant-numeric: tabular-nums; }
+.feed-h { font-weight: 600; font-variant-numeric: tabular-nums; }
+.feed-ft, .feed-at { font-size: .9rem; font-weight: 400; font-variant-numeric: tabular-nums; }
 .feed-at { margin-left: auto; }
 
-/* ---------- charts ---------- */
-.chart { position: relative; margin: .3rem 0; }
+/* ---------- charts (data marks are the ONLY blue on the page) ---------- */
+.chart { position: relative; margin: .4rem 0; }
 .chart svg { width: 100%; display: block; }
-.chart-mini svg { }
 .bar-hit { cursor: pointer; }
-.bar-label { fill: var(--text); font-size: 15px; font-weight: 700; font-family: inherit; }
+.bar-label { fill: var(--text); font-size: 15px; font-weight: 600; font-family: inherit; }
 .chart-tip {
   position: absolute;
   top: 0;
   transform: translateX(-50%);
   max-width: 90%;
-  background: var(--surface);
+  background: var(--bg);
   color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  border: 1px solid var(--hairline);
   padding: .3rem .55rem;
   font-size: .82rem;
-  font-weight: 700;
+  font-weight: 500;
   white-space: nowrap;
   pointer-events: none;
   box-shadow: var(--shadow);
@@ -448,54 +394,49 @@ main { max-width: 680px; margin: 0 auto; padding: 1rem; }
 }
 
 /* ---------- self-test table ---------- */
-.selftest { display: grid; gap: .1rem; }
-.st-row { display: flex; align-items: baseline; gap: .6rem; padding: .28rem 0; }
+.selftest { margin: .5rem 0; }
+.st-row { display: flex; align-items: baseline; gap: .6rem; padding: .45rem 0; border-bottom: 1px solid var(--hairline); }
 .st-mark { width: 1.4rem; text-align: center; }
-.st-name { font-weight: 700; min-width: 5.5rem; }
+.st-name { font-weight: 600; min-width: 5.5rem; }
 .st-detail { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .85rem; }
-.st-hint { margin: 0 0 .3rem 2rem; font-size: .85rem; }
-.st-result { margin-top: .6rem; font-weight: 800; }
+.st-hint { margin: .3rem 0 .3rem 2rem; font-size: .85rem; }
+.st-result { margin-top: .7rem; font-weight: 600; }
 .st-result.ok { color: var(--ok); }
 .st-result.bad { color: var(--danger); }
 
-/* ---------- sessions ---------- */
+/* ---------- sessions: list rows separated by hairlines ---------- */
+.session { padding: 1rem 0; border-top: 1px solid var(--hairline); }
 .session-head { display: flex; align-items: flex-start; justify-content: space-between; gap: .75rem; }
-.session-date { font-weight: 800; font-size: 1.02rem; }
-.session-meta { font-size: .92rem; margin-top: .1rem; }
+.session-date { font-weight: 600; font-size: 1rem; }
+.session-meta { font-size: .9rem; margin-top: .1rem; }
 
 .stat-strip {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: .5rem;
-  margin: .7rem 0 .4rem;
+  margin: .8rem 0 .4rem;
 }
 .mini-stat { text-align: center; padding: .3rem 0; }
-.mini-stat .v { font-weight: 800; font-size: 1.05rem; }
-.mini-stat .v .sub { display: block; font-size: .74rem; font-weight: 700; color: var(--muted); }
-.mini-stat .k { color: var(--muted); font-size: .74rem; font-weight: 700; margin-top: .1rem; }
+.mini-stat + .mini-stat { border-left: 1px solid var(--hairline); }
+.mini-stat .v { font-weight: 500; font-size: 1.05rem; font-variant-numeric: tabular-nums; }
+.mini-stat .v .sub { display: block; font-size: .74rem; font-weight: 400; color: var(--muted); }
+.mini-stat .k { color: var(--muted); font-size: .74rem; font-weight: 500; margin-top: .1rem; }
 @media (max-width: 460px) {
   .stat-strip { grid-template-columns: repeat(2, 1fr); }
+  .mini-stat:nth-child(3) { border-left: none; }
 }
 
 .session-foot { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .6rem; align-items: center; }
 
-/* Inline "just synced" success panel. */
-.sync-result {
-  border: 1px solid color-mix(in srgb, var(--primary) 45%, var(--border));
-  background: color-mix(in srgb, var(--primary) 8%, var(--surface));
-}
-.sync-result .synced-head { display: flex; align-items: center; gap: .5rem; font-weight: 800; }
-.sync-result .synced-head .ok-dot { color: var(--ok); }
-.after-sync {
-  margin-top: .8rem;
-  padding-top: .8rem;
-  border-top: 1px solid var(--border);
-}
-.after-sync p { font-weight: 700; margin: 0 0 .5rem; }
+/* Just-synced confirmation: a bounded moment, so it gets a hairline box. */
+.sync-result { border: 1px solid var(--hairline); padding: 1rem; }
+.sync-result .synced-head { display: flex; align-items: center; gap: .5rem; font-weight: 600; }
+.sync-result .synced-head .ico { color: var(--ok); }
+.after-sync { margin-top: .8rem; padding-top: .8rem; border-top: 1px solid var(--hairline); }
+.after-sync p { font-weight: 500; margin: 0 0 .5rem; }
 
-.sessions-foot { margin-top: 1.4rem; padding-top: .8rem; border-top: 1px solid var(--border); }
+.sessions-foot { margin-top: 1.5rem; padding-top: .8rem; border-top: 1px solid var(--hairline); }
 
-/* ---------- install ---------- */
+/* ---------- install (lives inside Connect) ---------- */
 #install-container { margin: .75rem 0; }
 esp-web-install-button { display: inline-block; }
 
@@ -504,8 +445,8 @@ esp-web-install-button { display: inline-block; }
   position: fixed;
   left: 0; right: 0; bottom: 0;
   z-index: 20;
-  background: var(--surface);
-  border-top: 1px solid var(--border);
+  background: var(--bg);
+  border-top: 1px solid var(--hairline);
 }
 .console-toggle {
   width: 100%;
@@ -516,21 +457,22 @@ esp-web-install-button { display: inline-block; }
   padding-bottom: max(.7rem, env(safe-area-inset-bottom));
   border: 0;
   background: transparent;
-  color: var(--text);
+  color: var(--muted);
   font: inherit;
-  font-weight: 700;
+  font-size: .9rem;
+  font-weight: 500;
   cursor: pointer;
 }
-.caret { transition: transform .15s ease; color: var(--muted); }
-.console-toggle[aria-expanded="true"] .caret { transform: rotate(90deg); }
-.console-body { border-top: 1px solid var(--border); }
+.console-toggle:hover { color: var(--text); }
+.caret { color: var(--muted); }
+.console-body { border-top: 1px solid var(--hairline); }
 .console-log {
   height: 34vh;
   overflow-y: auto;
   padding: .6rem 1rem;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: .8rem;
-  background: var(--bg);
+  background: var(--code-bg);
 }
 .cl { white-space: pre-wrap; word-break: break-word; }
 .cl-tx { color: var(--text); font-weight: 700; }
@@ -546,8 +488,8 @@ esp-web-install-button { display: inline-block; }
   flex: 1;
   min-width: 0;
   padding: .55rem .7rem;
-  border-radius: 8px;
-  border: 1px solid var(--border);
+  border-radius: 0;
+  border: 1px solid var(--outline);
   background: var(--bg);
   color: var(--text);
   font: inherit;

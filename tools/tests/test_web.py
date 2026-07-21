@@ -417,34 +417,29 @@ class TestWebApp(unittest.TestCase):
         # check: it used to stay visible forever showing stale pre-clear text).
         expect(banner).to_be_hidden()
 
-    def test_theme_toggle_cycles_and_persists(self):
-        """Clicking the theme toggle cycles Auto/Light/Dark on data-theme and
-        persists the chosen mode to localStorage. Light<->Dark are asserted
-        directly since they're unconditional; the Auto step only checks the
-        persisted *mode*, since the resulting light/dark then depends on the
-        OS colour scheme (not something this test controls)."""
+    def test_theme_toggle_is_one_tap_and_persists(self):
+        """Dark mode is ONE tap away (the old three-state cycle was a real
+        usability complaint). Before any tap the app follows the OS scheme
+        (light, in this headless run); each tap flips light<->dark and the
+        explicit choice persists to localStorage."""
         self._open()
 
         self.assertEqual(self._html_attr("data-theme"), "light",
-                          "fresh app (no stored preference) should boot into light")
+                          "no stored preference + light OS scheme should boot light")
 
         toggle = _resilient(self.page, [
             ("testid", "theme-toggle"), ("css", "#btn-theme")],
             "theme toggle button")
 
-        toggle.click()  # light -> dark
+        toggle.click()  # light -> dark, one tap
         self.assertEqual(self._html_attr("data-theme"), "dark",
-                          "first click should move light -> dark")
+                          "one tap must reach dark mode")
         self.assertEqual(self._local_storage("jh_theme"), "dark",
                           "the chosen theme should persist to localStorage")
 
-        toggle.click()  # dark -> auto
-        self.assertEqual(self._local_storage("jh_theme"), "auto",
-                          "second click should move dark -> auto")
-
-        toggle.click()  # auto -> light, completing the cycle
+        toggle.click()  # dark -> light
         self.assertEqual(self._html_attr("data-theme"), "light",
-                          "third click should complete the cycle back to light")
+                          "second tap returns to light")
         self.assertEqual(self._local_storage("jh_theme"), "light")
 
     def test_unit_toggle_flips_hero_unit(self):

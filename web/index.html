@@ -32,9 +32,11 @@
   <script>
     (function () {
       try {
-        var m = localStorage.getItem('jh_theme') || 'light';
-        var dark = m === 'dark' || (m === 'auto' &&
-          window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);
+        // Two states only. An explicit choice is remembered; before the first
+        // tap we follow the system, so nobody ever has to configure anything.
+        var m = localStorage.getItem('jh_theme');
+        var dark = m ? m === 'dark'
+          : (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);
         document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
         document.documentElement.setAttribute('data-unit', localStorage.getItem('jh_unit') || 'ft');
       } catch (e) {
@@ -58,8 +60,9 @@
     <div class="conn">
       <span id="conn-status" data-testid="connect" class="pill pill-off">Disconnected</span>
       <button id="btn-disconnect" class="btn btn-ghost btn-sm" type="button" hidden>Disconnect</button>
-      <button id="btn-theme" data-testid="theme-toggle" class="theme-toggle" type="button" aria-label="Theme: Light. Tap to change.">
-        <span id="theme-ico" class="theme-ico" aria-hidden="true"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg></span><span id="theme-label" class="theme-label">Light</span>
+      <!-- One tap flips light/dark; the icon shows what a tap gives you. -->
+      <button id="btn-theme" data-testid="theme-toggle" class="theme-toggle" type="button" aria-label="Switch to dark theme">
+        <span id="theme-ico" aria-hidden="true"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg></span>
       </button>
     </div>
   </header>
@@ -78,7 +81,6 @@
     <button class="tab-btn is-active" data-tab="connect" role="tab" aria-selected="true" aria-controls="tab-connect">Connect</button>
     <button class="tab-btn" data-tab="live" role="tab" aria-selected="false" aria-controls="tab-live">Live</button>
     <button class="tab-btn" data-tab="sessions" data-testid="tab-sessions" role="tab" aria-selected="false" aria-controls="tab-sessions">Sessions</button>
-    <button class="tab-btn" data-tab="install" role="tab" aria-selected="false" aria-controls="tab-install">Install</button>
   </nav>
 
   <main>
@@ -97,10 +99,20 @@
 
       <div class="row-between mt">
         <h3>Self-test</h3>
-        <button id="btn-selftest" data-testid="btn-selftest" class="btn btn-ghost" type="button">Run</button>
+        <button id="btn-selftest" data-testid="btn-selftest" class="btn btn-ghost" type="button">Run self-test</button>
       </div>
       <p class="muted small">The same five-second wiring check the device runs at boot.</p>
       <div id="selftest-card" data-testid="selftest" class="card" hidden></div>
+
+      <!-- Install lives here, not in top-level navigation: flashing firmware is
+           a once-per-device task, and navigation should be weighted by use. -->
+      <div class="mt">
+        <h3>New device</h3>
+        <p class="muted small">Flash a blank board straight from this page — no software to
+        install. Chrome or Edge on a computer, USB cable.</p>
+        <div id="install-container"></div>
+        <div id="install-note" class="card" hidden></div>
+      </div>
     </section>
 
     <!-- 2. LIVE -->
@@ -172,13 +184,6 @@
       </div>
     </section>
 
-    <!-- 4. INSTALL -->
-    <section id="tab-install" class="tab-panel" role="tabpanel">
-      <h2 class="sr-only">Install</h2>
-      <p class="muted">Flash a board straight from this page — no software to install. Chrome or Edge on a computer, USB cable.</p>
-      <div id="install-container"></div>
-      <div id="install-note" class="card" hidden></div>
-    </section>
   </main>
 
   <!-- 5. Device console (collapsible) — raw protocol + a command box. Invaluable
