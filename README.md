@@ -13,9 +13,11 @@ the air**.
 > was chosen and why).
 >
 > ```bash
-> ./tools/jump setup            # one-time toolchain install
-> ./tools/jump simtest          # full software test suite — no hardware needed
-> ./tools/jump desktest --fake  # rehearse the hardware bring-up, today
+> ./tools/jump wizard           # plug in and follow along: setup → flash →
+>                               # wiring check → desk test → calibration
+> ./tools/jump wizard --fake    # rehearse the exact same flow today, no hardware
+> ./tools/jump report           # stuck? one file with everything Claude needs
+>                               # to troubleshoot remotely (logs, config, self-test)
 > ```
 
 ---

@@ -76,6 +76,43 @@ class TestDropCalibration(unittest.TestCase):
         self.assertIn("too low", r.stdout)
 
 
+class TestWizardAndReport(unittest.TestCase):
+    def test_wizard_fake_end_to_end_and_resume(self):
+        with tempfile.TemporaryDirectory() as td:
+            cfg = Path(td) / "params.json"
+            shutil.copy(REPO / "config" / "params.json", cfg)
+            env = {"JH_DATA_DIR": str(Path(td) / "data"), "JH_CONFIG": str(cfg)}
+            r = run_cli(["wizard", "--fake", "--yes"], env_extra=env, timeout=300)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("WIZARD COMPLETE", r.stdout)
+            state = json.loads((Path(td) / "data" / "wizard_state.json").read_text())
+            for step in ("software", "connect", "flash", "desktest", "drop"):
+                self.assertIn(step, state["completed"])
+            # calibration must have been written to the config
+            self.assertNotEqual(
+                json.loads(cfg.read_text())["detector"]["airtime_offset_s"], 0.0)
+            # session log captured serial traffic
+            logs = list((Path(td) / "data" / "logs").glob("*-wizard.log"))
+            self.assertTrue(logs and any("RX SELFTEST" in p.read_text() for p in logs))
+            # second run resumes instantly as complete
+            r2 = run_cli(["wizard", "--fake", "--yes"], env_extra=env, timeout=60)
+            self.assertEqual(r2.returncode, 0)
+            self.assertIn("Welcome back", r2.stdout)
+            self.assertIn("WIZARD COMPLETE", r2.stdout)
+
+    def test_report_fake(self):
+        with tempfile.TemporaryDirectory() as td:
+            env = {"JH_DATA_DIR": str(Path(td) / "data")}
+            r = run_cli(["report", "--fake"], env_extra=env, timeout=120)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            reports = list((Path(td) / "data" / "diagnostics").glob("report-*.txt"))
+            self.assertEqual(len(reports), 1)
+            body = reports[0].read_text()
+            for marker in ("== system", "== config/params.json", "== live device",
+                           "SELFTEST END result=PASS", "== END REPORT"):
+                self.assertIn(marker, body)
+
+
 class TestSync(unittest.TestCase):
     def test_sync_downloads_and_reports(self):
         with tempfile.TemporaryDirectory() as td:

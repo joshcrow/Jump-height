@@ -3,6 +3,15 @@
 
 Your job is hardware (wires, glue, water). This tool does everything else.
 
+    ./tools/jump wizard      ← START HERE: plug in and follow along — guided
+                               setup, flash, wiring check, desk test, and
+                               calibration in one resumable flow
+    ./tools/jump report      collect a diagnostic bundle (system, config,
+                               live self-test, logs) to send to Claude when
+                               something needs troubleshooting
+
+Individual steps, if you'd rather drive manually:
+
     ./tools/jump setup       one-time: install the toolchain
     ./tools/jump simtest     full software test suite, no hardware needed
     ./tools/jump flash       build + upload firmware, then self-test the device
@@ -14,8 +23,10 @@ Your job is hardware (wires, glue, water). This tool does everything else.
     ./tools/jump monitor     raw serial console
     ./tools/jump gen         regenerate firmware params from config/params.json
 
-desktest / drop / selftest / sync accept --fake to run against a simulated
-device (tools/fake_device.py) — rehearse the whole flow with zero hardware.
+wizard / desktest / drop / selftest / sync / report accept --fake to run
+against a simulated device (tools/fake_device.py) — rehearse everything with
+zero hardware. Every run also writes a full session log (terminal output +
+raw serial traffic) under data/logs/.
 
 Requires Python 3.8+. Serial I/O uses pyserial if installed, else a built-in
 POSIX fallback (Linux/macOS). Windows users: `setup` installs pyserial.
@@ -43,6 +54,62 @@ sys.path.insert(0, str(REPO / "tools"))
 
 BAUD = 115200
 CONFIG_PATH = Path(os.environ.get("JH_CONFIG") or REPO / "config" / "params.json")
+DATA_DIR = Path(os.environ.get("JH_DATA_DIR") or REPO / "data")
+
+# ------------------------------------------------------------------- logging
+# Every command tees its terminal output AND raw serial traffic (TX/RX,
+# timestamped) into data/logs/<time>-<cmd>.log — so when something goes
+# wrong, `./tools/jump report` can hand the whole story to a human or an AI
+# assistant without the user having to reproduce anything.
+
+
+class SessionLog:
+    def __init__(self):
+        self.path: Path | None = None
+        self._f = None
+        self._t0 = 0.0
+
+    def start(self, cmd: str) -> None:
+        logs = DATA_DIR / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        self.path = logs / f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{cmd}.log"
+        self._f = open(self.path, "w")
+        self._t0 = time.monotonic()
+        self._f.write(f"# jump {cmd} — {datetime.now().isoformat()}\n"
+                      f"# argv: {' '.join(sys.argv[1:])}\n"
+                      f"# platform: {sys.platform}  python: {sys.version.split()[0]}\n\n")
+        sys.stdout = _Tee(sys.stdout, self)
+        sys.stderr = _Tee(sys.stderr, self)
+
+    def serial(self, direction: str, text: str) -> None:
+        if self._f:
+            self._f.write(f"[{time.monotonic() - self._t0:9.3f}] {direction} {text}\n")
+            self._f.flush()
+
+    def raw(self, text: str) -> None:
+        if self._f:
+            self._f.write(text)
+            self._f.flush()
+
+
+class _Tee:
+    def __init__(self, orig, log: SessionLog):
+        self._orig = orig
+        self._log = log
+
+    def write(self, s: str):
+        self._orig.write(s)
+        self._log.raw(s)
+        return len(s)
+
+    def flush(self):
+        self._orig.flush()
+
+    def isatty(self):
+        return self._orig.isatty()
+
+
+LOG = SessionLog()
 
 # ---------------------------------------------------------------- serial I/O
 
@@ -83,6 +150,7 @@ class SerialPort:
                 pass  # pty: raw/baud not meaningful
 
     def write_line(self, s: str) -> None:
+        LOG.serial("TX", s)
         data = (s + "\n").encode()
         if self._ser is not None:
             self._ser.write(data)
@@ -97,7 +165,10 @@ class SerialPort:
             if nl >= 0:
                 line = self._buf[:nl].rstrip(b"\r")
                 self._buf = self._buf[nl + 1:]
-                return line.decode(errors="replace")
+                decoded = line.decode(errors="replace")
+                if decoded:
+                    LOG.serial("RX", decoded)
+                return decoded
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return None
@@ -131,20 +202,28 @@ class SerialPort:
 
 KNOWN_USB_GLOBS = [
     "/dev/ttyUSB*", "/dev/ttyACM*",
+    # macOS: always the cu.* device, never tty.* (tty blocks on carrier-detect)
     "/dev/cu.usbserial*", "/dev/cu.wchusbserial*", "/dev/cu.SLAB*",
+    "/dev/cu.usbmodem*",
 ]
 
 
-def autodetect_port() -> str:
+def scan_ports() -> list[str]:
     candidates: list[str] = []
     try:
         from serial.tools import list_ports  # type: ignore
 
         candidates = [p.device for p in list_ports.comports() if p.vid is not None]
+        # On macOS pyserial reports both /dev/cu.* and /dev/tty.* — keep cu only.
+        candidates = [c for c in candidates if not c.startswith("/dev/tty.")]
     except ImportError:
         for g in KNOWN_USB_GLOBS:
             candidates.extend(glob.glob(g))
-    candidates = sorted(set(candidates))
+    return sorted(set(candidates))
+
+
+def autodetect_port() -> str:
+    candidates = scan_ports()
     if len(candidates) == 1:
         return candidates[0]
     if not candidates:
@@ -547,7 +626,7 @@ def cmd_sync(args) -> int:
         jumps_csv = "\n".join(files.get("jumps.csv", []))
         trace_csv = "\n".join(files.get("trace.csv", []))
 
-        out_root = Path(args.out) if args.out else REPO / "data" / "sessions"
+        out_root = Path(args.out) if args.out else DATA_DIR / "sessions"
         sess = out_root / datetime.now().strftime("%Y%m%d-%H%M%S")
         sess.mkdir(parents=True, exist_ok=True)
         (sess / "jumps.csv").write_text(jumps_csv + "\n")
@@ -694,10 +773,16 @@ def cmd_simtest(args) -> int:
     else:
         results.append(("C++ parity check", True, "skipped: no g++ on this machine"))
 
-    # 4. CLI integration tests against the fake device
-    r = _run([sys.executable, "-m", "unittest", "discover", "-s", "tools/tests"])
-    results.append(("CLI + fake-device integration tests", r.returncode == 0,
-                    (r.stderr or r.stdout)[-600:] if r.returncode != 0 else ""))
+    # 4. CLI integration tests against the fake device.
+    # (JH_SKIP_CLI_TESTS guards recursion: the wizard's software check runs
+    # simtest, and these tests themselves run the wizard.)
+    if os.environ.get("JH_SKIP_CLI_TESTS"):
+        results.append(("CLI + fake-device integration tests", True,
+                        "skipped inside wizard"))
+    else:
+        r = _run([sys.executable, "-m", "unittest", "discover", "-s", "tools/tests"])
+        results.append(("CLI + fake-device integration tests", r.returncode == 0,
+                        (r.stderr or r.stdout)[-600:] if r.returncode != 0 else ""))
 
     print()
     all_ok = True
@@ -788,10 +873,16 @@ def cmd_flash(args) -> int:
         cmd += ["--upload-port", args.port]
     print("Building + uploading firmware (first build downloads the toolchain — "
           "takes a few minutes once)...")
-    r = subprocess.run(cmd)
-    if r.returncode != 0:
+    # Stream pio's output line by line through our stdout so it lands in the
+    # session log too (a plain subprocess would bypass the log tee).
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True)
+    for line in proc.stdout:
+        print(line, end="")
+    proc.wait()
+    if proc.returncode != 0:
         print("\n❌ upload failed. Board plugged in? Data-capable USB cable? "
-              "Try --port /dev/ttyUSB0.")
+              "Try --port <port>, and `./tools/jump report` to collect diagnostics.")
         return 1
     print("\n✅ flashed. Running self-test...")
     time.sleep(1.5)
@@ -832,6 +923,303 @@ def cmd_replay(args) -> int:
     return subprocess.run(cmd, cwd=str(REPO)).returncode
 
 
+# -------------------------------------------------------------------- wizard
+
+STATE_PATH_NAME = "wizard_state.json"
+WIZARD_STEPS = ["software", "connect", "flash", "desktest", "drop"]
+STEP_TITLES = {
+    "software": "Software check (no hardware needed)",
+    "connect":  "Find your board",
+    "flash":    "Install the firmware + wiring self-test",
+    "desktest": "Prove the assembly (3 tosses)",
+    "drop":     "Calibrate (measured drops)",
+}
+
+
+def _state_path() -> Path:
+    return DATA_DIR / STATE_PATH_NAME
+
+
+def load_wizard_state() -> dict:
+    try:
+        return json.loads(_state_path().read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def save_wizard_state(st: dict) -> None:
+    _state_path().parent.mkdir(parents=True, exist_ok=True)
+    _state_path().write_text(json.dumps(st, indent=2) + "\n")
+
+
+def _confirm(args, msg: str, default: bool = True) -> bool:
+    if getattr(args, "yes", False) or getattr(args, "fake", False) or not sys.stdin.isatty():
+        print(f">> {msg}  [auto-{'yes' if default else 'no'}]")
+        return default
+    d = "Y/n" if default else "y/N"
+    ans = input(f">> {msg}  [{d}] ").strip().lower()
+    if not ans:
+        return default
+    return ans.startswith("y")
+
+
+def _ns(args, **kw) -> argparse.Namespace:
+    """Build a Namespace for calling another cmd_* from the wizard."""
+    base = dict(port=getattr(args, "port", None), fake=getattr(args, "fake", False),
+                fast=getattr(args, "fast", False), fake_fail=False, yes=True)
+    base.update(kw)
+    return argparse.Namespace(**base)
+
+
+def wizard_connect(args, st: dict) -> str | None:
+    """Find the board's serial port, by watching for it to appear."""
+    before = set(scan_ports())
+    if len(before) == 1 and _confirm(args, f"Found one device at {next(iter(before))} — use it?"):
+        return next(iter(before))
+    if before:
+        print(f"  (currently visible: {', '.join(sorted(before))})")
+        print("  To be sure we pick the right one, unplug the board now.")
+        if sys.stdin.isatty():
+            input(">> Unplugged (or it never was plugged in)?  [Enter] ")
+        before = set(scan_ports())
+    print("\n  Now plug the FireBeetle into this computer with a USB DATA cable.")
+    print("  (Charge-only cables are the #1 gotcha — if in doubt, try another cable.)")
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        new = set(scan_ports()) - before
+        if new:
+            port = sorted(new)[0]
+            print(f"  ✅ found it: {port}")
+            return port
+        time.sleep(0.5)
+    print("""  ❌ No new serial device appeared in 60s. In order of likelihood:
+     1. The USB cable is charge-only — swap cables (most common by far).
+     2. Try a different USB port / skip any hub.
+     3. macOS: open  > About This Mac > System Report > USB — if the board
+        shows up there but no /dev/cu.* port exists, the USB-serial chip
+        driver is missing (search: "CH34x macOS driver" or "CP210x driver").
+     4. Run ./tools/jump report and send the file to Claude.""")
+    return None
+
+
+def cmd_wizard(args) -> int:
+    st = {} if args.restart else load_wizard_state()
+    done: dict = st.setdefault("completed", {})
+
+    print("=" * 62)
+    print("  JUMP HEIGHT — guided setup")
+    print("  Plug in, follow along; every screen ends in ✅ or a fix.")
+    print("  Safe to quit anytime (Ctrl-C) — it resumes where you left off.")
+    print("=" * 62)
+    if done:
+        print("\nWelcome back. Already done: "
+              + ", ".join(STEP_TITLES[s] for s in WIZARD_STEPS if s in done))
+        print("(start over with: ./tools/jump wizard --restart)")
+
+    def begin(step: str) -> bool:
+        if step in done:
+            return False
+        n = WIZARD_STEPS.index(step) + 1
+        print(f"\n───── Step {n}/{len(WIZARD_STEPS)}: {STEP_TITLES[step]} ─────")
+        return True
+
+    def finish(step: str) -> None:
+        done[step] = datetime.now().isoformat(timespec="seconds")
+        save_wizard_state(st)
+
+    def bail(msg: str) -> int:
+        print(f"\n⏸  {msg}")
+        print("   Fix that, then run  ./tools/jump wizard  again — it resumes here.")
+        print("   Stuck? Run  ./tools/jump report  and send the file to Claude.")
+        return 1
+
+    # 1. software
+    if begin("software"):
+        os.environ["JH_SKIP_CLI_TESTS"] = "1"  # the CLI test suite runs the wizard
+        try:
+            if find_pio() is None:
+                print("  PlatformIO not found — running the one-time setup first.\n")
+                cmd_setup(args)
+                if find_pio() is None:
+                    return bail("PlatformIO didn't install — see https://platformio.org/install")
+            if cmd_simtest(args) != 0:
+                return bail("The software self-test failed.")
+        finally:
+            os.environ.pop("JH_SKIP_CLI_TESTS", None)
+        finish("software")
+
+    # 2. connect
+    if begin("connect"):
+        if args.fake:
+            print("  (simulated device mode — skipping the real port hunt)")
+        else:
+            port = args.port or wizard_connect(args, st)
+            if port is None:
+                return bail("Couldn't find the board.")
+            st["port"] = port
+        finish("connect")
+    args.port = args.port or st.get("port")
+
+    # 3. flash (includes the automatic wiring self-test)
+    if begin("flash"):
+        if args.fake:
+            print("  (simulated device — skipping the real flash; running self-test)")
+            if cmd_selftest(_ns(args)) != 0:
+                return bail("Self-test failed.")
+        else:
+            print("  Make sure the 4 sensor wires are connected (BUILD.md wiring table):")
+            print("    VCC→3V3   GND→GND   SDA→SDA(IO21)   SCL→SCL(IO22)")
+            if not _confirm(args, "Wired up and plugged in — flash the firmware now?"):
+                return bail("Flash skipped.")
+            if cmd_flash(_ns(args)) != 0:
+                return bail("Flashing or the wiring self-test failed (hints above).")
+        finish("flash")
+
+    # 4. desk test
+    if begin("desktest"):
+        if cmd_desktest(_ns(args)) != 0:
+            return bail("Desk test didn't pass.")
+        finish("desktest")
+
+    # 5. drop calibration
+    if begin("drop"):
+        h = 100.0
+        if sys.stdin.isatty() and not args.fake:
+            raw = input(">> Drop height you can measure accurately, in cm  [100] ").strip()
+            if raw:
+                try:
+                    h = float(raw)
+                except ValueError:
+                    pass
+        if cmd_drop(_ns(args, height_cm=h, drops=5, yes=True)) != 0:
+            return bail("Calibration didn't complete.")
+        if not args.fake:
+            print("\n  Baking the calibration into the device...")
+            if cmd_flash(_ns(args)) != 0:
+                return bail("Re-flash with calibration failed.")
+        st["calibrated"] = True
+        finish("drop")
+
+    print("\n" + "=" * 62)
+    print("  🎉 WIZARD COMPLETE — the electronics are built, verified, and")
+    print("  calibrated. What's left is physical (BUILD.md 'Day 3+'):")
+    print("    1. capsule bucket-test (tissue trick)  2. GoPro mount, 24h cure")
+    print("    3. ride  4. ./tools/jump sync   → report with his best jump")
+    print("=" * 62)
+    if LOG.path:
+        print(f"  (full log of everything: {LOG.path})")
+    return 0
+
+
+# -------------------------------------------------------------------- report
+
+
+def _tail(path: Path, max_bytes: int = 14000) -> str:
+    try:
+        data = path.read_text(errors="replace")
+    except OSError as e:
+        return f"(unreadable: {e})"
+    if len(data) > max_bytes:
+        return f"(...{len(data) - max_bytes} bytes trimmed...)\n" + data[-max_bytes:]
+    return data
+
+
+def cmd_report(args) -> int:
+    """Collect everything needed to troubleshoot remotely into one file."""
+    out_dir = DATA_DIR / "diagnostics"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / f"report-{datetime.now().strftime('%Y%m%d-%H%M%S')}.txt"
+    S: list[str] = []
+
+    def sec(title: str):
+        S.append(f"\n{'=' * 60}\n== {title}\n{'=' * 60}")
+
+    import platform as pf
+
+    S.append("JUMP HEIGHT DIAGNOSTIC REPORT")
+    S.append("Send this whole file to Claude (or attach to a GitHub issue).")
+    S.append(f"generated: {datetime.now().isoformat()}")
+
+    sec("system")
+    S.append(f"platform : {pf.platform()}")
+    if sys.platform == "darwin":
+        S.append(f"macOS    : {pf.mac_ver()[0]}")
+    S.append(f"python   : {sys.version.split()[0]} ({sys.executable})")
+    pio = find_pio()
+    if pio:
+        try:
+            v = subprocess.run([pio, "--version"], capture_output=True, text=True,
+                               timeout=20).stdout.strip()
+        except Exception as e:
+            v = f"(error: {e})"
+        S.append(f"pio      : {v} [{pio}]")
+    else:
+        S.append("pio      : NOT FOUND (run ./tools/jump setup)")
+    try:
+        import serial  # type: ignore
+        S.append(f"pyserial : {getattr(serial, '__version__', '?')}")
+    except ImportError:
+        S.append("pyserial : not installed (POSIX fallback in use)")
+
+    sec("repo")
+    for c in (["git", "rev-parse", "--abbrev-ref", "HEAD"],
+              ["git", "rev-parse", "--short", "HEAD"],
+              ["git", "status", "--short"]):
+        r = subprocess.run(c, capture_output=True, text=True, cwd=str(REPO))
+        S.append(f"$ {' '.join(c)}\n{(r.stdout or r.stderr).strip()}")
+
+    sec("config/params.json")
+    try:
+        S.append(CONFIG_PATH.read_text().strip())
+    except OSError as e:
+        S.append(f"(unreadable: {e})")
+
+    sec("wizard progress")
+    S.append(json.dumps(load_wizard_state(), indent=2))
+
+    sec("serial ports visible")
+    ports = scan_ports()
+    S.append("\n".join(ports) if ports else "(none)")
+
+    sec("live device")
+    dev = proc = None
+    try:
+        dev, proc = open_device(args)
+        S.append("connected: " + dev.sp.path)
+        S.append("--- selftest ---")
+        S.extend(dev.command("selftest", timeout=15))
+        S.append("--- info ---")
+        S.extend(dev.command("info", timeout=10))
+        S.append("--- stats ---")
+        S.extend(dev.command("stats", timeout=10))
+    except (SystemExit, TimeoutError, OSError) as e:
+        S.append(f"(no live device: {e})")
+    finally:
+        if dev:
+            dev.close()
+        if proc:
+            proc.terminate()
+
+    sec("recent logs")
+    logs = []
+    if (DATA_DIR / "logs").exists():
+        logs = sorted((p for p in (DATA_DIR / "logs").glob("*.log") if p != LOG.path),
+                      key=lambda p: p.stat().st_mtime)[-3:]
+    if logs:
+        for lp in logs:
+            S.append(f"\n----- {lp.name} -----\n{_tail(lp)}")
+    else:
+        S.append("(no logs yet)")
+
+    S.append("\n" + "=" * 60 + "\n== END REPORT\n" + "=" * 60)
+    path.write_text("\n".join(S) + "\n")
+    print(f"\n📋 Diagnostic report written to:\n   {path}\n")
+    print("Send that file to Claude (paste it, or attach it) and it has "
+          "everything:\nsystem, versions, config, wizard progress, ports, live "
+          "self-test, recent logs.")
+    return 0
+
+
 # ---------------------------------------------------------------------- main
 
 
@@ -846,6 +1234,17 @@ def main() -> int:
         p.set_defaults(fn=fn)
         p.add_argument("--port", help="serial port (default: autodetect)")
         return p
+
+    p = add("wizard", cmd_wizard,
+            help="guided end-to-end setup: plug in and follow along (resumable)")
+    p.add_argument("--restart", action="store_true", help="forget progress, start over")
+    p.add_argument("--yes", action="store_true", help="assume yes at every prompt")
+    p.add_argument("--fake", action="store_true", help="rehearse with a simulated device")
+    p.add_argument("--fast", action="store_true", help=argparse.SUPPRESS)
+
+    p = add("report", cmd_report, help="write a diagnostic bundle to send for help")
+    p.add_argument("--fake", action="store_true", help=argparse.SUPPRESS)
+    p.add_argument("--fast", action="store_true", help=argparse.SUPPRESS)
 
     add("setup", cmd_setup, help="one-time toolchain install")
     add("gen", cmd_gen, help="regenerate firmware params header from config")
@@ -884,9 +1283,20 @@ def main() -> int:
 
     args = ap.parse_args()
     try:
-        return args.fn(args)
+        LOG.start(args.cmd)
+    except OSError:
+        pass  # logging is best-effort; never block the actual work
+    try:
+        rc = args.fn(args)
+        if LOG.path and args.cmd in ("flash", "selftest", "desktest", "drop",
+                                     "sync", "monitor"):
+            print(f"(session log: {LOG.path})")
+        return rc
     except TimeoutError as e:
         print(f"❌ {e}")
+        if LOG.path:
+            print(f"(session log for troubleshooting: {LOG.path} — "
+                  "or run ./tools/jump report)")
         return 1
     except KeyboardInterrupt:
         print("\ninterrupted")

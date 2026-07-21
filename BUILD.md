@@ -11,8 +11,9 @@ Design decisions behind all of this: [`DECISIONS.md`](DECISIONS.md).
 
 ## Shopping list
 
-**Have:** FireBeetle ESP32, small single-cell LiPo, MPU-6050 ×4 (ordered),
-phone with 120–240 fps slow-mo, laptop.
+**Have:** FireBeetle ESP32, small single-cell LiPo, Ximimark GY-521 MPU-6050
+boards ×4 (headers unsoldered — see the soldering section), phone with
+120–240 fps slow-mo, a Mac (any laptop works; the tooling is Mac-first).
 
 **Still to get:**
 
@@ -38,77 +39,78 @@ phone with 120–240 fps slow-mo, laptop.
 
 ---
 
-## Day 0 — today, before the hardware arrives (~10 minutes)
+## The wizard: the whole bench phase is ONE command
 
 ```bash
-./tools/jump setup      # one-time toolchain install
-./tools/jump simtest    # full software test suite — should end PASS ✅
-./tools/jump desktest --fake   # rehearse the desk test against a simulated device
-./tools/jump drop --fake       # rehearse the calibration flow too
+./tools/jump wizard
 ```
 
-`--fake` runs the real tool against a simulated device, so you'll have seen
-every screen before touching hardware. When the real thing behaves differently,
-that difference *is* the diagnostic information.
+Plug the FireBeetle into your Mac and run that. It walks you through
+everything, in order, with a ✅ or a concrete fix at every step:
 
-## Day 1 — MPUs arrive: wire, flash, verify (~1 hour, mostly soldering)
+1. **Software check** — installs the toolchain if needed, runs the full
+   software test suite.
+2. **Find your board** — watches for the serial port to appear when you plug
+   in (and tells you about charge-only cables, the #1 gotcha, if it doesn't).
+3. **Flash + wiring self-test** — builds, uploads, then the device tests its
+   own wiring and prints per-check results with fix hints.
+4. **Desk test** — a shake and 3 gentle tosses onto a cushion prove the whole
+   detection pipeline.
+5. **Calibration** — guided measured drops; physics gives exact ground truth
+   (1.00 m ⇒ 0.452 s of free-fall), the timing correction is computed, saved,
+   and baked back into the device automatically.
 
-**1. Solder + wire (the only manual skill needed today).** Solder the 4-pin
-header onto an MPU-6050 breakout, then four jumper wires to the FireBeetle:
+It's **resumable**: quit anytime, run it again, it continues where you left
+off (`--restart` starts over). Every run — wizard or any other command — also
+writes a full session log (everything on screen *plus* raw serial traffic)
+under `data/logs/`.
 
-| MPU-6050 | FireBeetle |
-|----------|------------|
-| VCC | 3V3 |
-| GND | GND |
-| SDA | pin marked **SDA** (IO21) |
-| SCL | pin marked **SCL** (IO22) |
-
-No battery yet — run from USB. (Sensor mounting orientation never matters.)
-
-**2. Plug into the laptop and run:**
+**Today, before the hardware arrives:** rehearse the whole thing against a
+simulated device, end to end:
 
 ```bash
-./tools/jump flash
+./tools/jump wizard --fake
 ```
 
-That regenerates settings, builds, uploads (first build downloads the compiler
-— a few minutes, once), then **automatically self-tests the wiring** and prints
-✅/❌ per check with a plain-English fix hint for anything wrong. Fix wires →
-`./tools/jump selftest` → repeat until green. No re-flashing needed between
-wiring fixes.
-
-**3. Prove the whole pipeline:**
+**If anything ever gets stuck:**
 
 ```bash
-./tools/jump desktest
+./tools/jump report
 ```
 
-It walks you through a shake and 3 gentle tosses onto a cushion and verifies
-detection end-to-end. `PASS` = your assembly works. (If a clone MPU turns out
-to be a dud, the self-test says so — swap in a spare; you bought 4 for exactly
-this.)
+writes one file (`data/diagnostics/report-*.txt`) containing your system info,
+tool versions, config, wizard progress, visible ports, a live self-test of the
+device if connected, and the recent logs — paste it to Claude and it has
+everything needed to troubleshoot remotely.
 
-## Day 2 — calibration (~20 minutes)
+## The one manual skill: solder + wire (Day 1, before the wizard's flash step)
 
-The trick: a drop from a **measured height is perfect ground truth** — physics
-fixes its free-fall time exactly (1.00 m ⇒ 0.452 s), so the tool can measure
-the detector's timing bias and correct it, no video needed:
+Your sensors are Ximimark **GY-521** MPU-6050 boards: they arrive with the
+8-pin header strip loose, so solder the header to the board first (8 joints,
+any orientation of board vs. capsule is fine). Then four female-female jumper
+wires to the FireBeetle — the other 4 header pins stay empty:
 
-```bash
-./tools/jump drop --height-cm 100
-```
+| GY-521 pin | FireBeetle | |
+|------------|------------|---|
+| VCC | 3V3 | (the GY-521 has its own regulator; 3.3 V is right) |
+| GND | GND | |
+| SDA | pin marked **SDA** (IO21) | |
+| SCL | pin marked **SCL** (IO22) | |
+| XDA, XCL, AD0, INT | *not connected* | normal — they're unused here |
 
-Hold the puck with its bottom exactly at 100 cm above a cushion, let go (don't
-throw), 5 times. The tool computes the correction, saves it to
-`config/params.json` with your consent, and then:
+No battery yet — run from USB. Sensor mounting orientation never matters. At
+this price these are likely clone chips: the firmware is built for that (an
+odd chip ID is a warning, not a failure — what matters is the gravity/noise
+check, which the self-test does directly). If one board is a genuine dud,
+the self-test will say so; swap in a spare — you bought 4 for exactly this.
 
-```bash
-./tools/jump flash    # bake the calibration into the device
-```
+## Calibration notes (the wizard handles the mechanics)
 
-Don't drop from below ~50 cm — short falls are ignored by design
-(`min_airtime_s`). The slow-mo video check stays in the plan for the *water*
-session; this bench step just means you arrive at the water already close.
+Hold the puck with its **bottom** exactly at your measured height above a
+cushion and let go — don't throw. Don't drop from below ~50 cm (short falls
+are ignored by design, `min_airtime_s`). The slow-mo video check stays in the
+plan for the *water* session; this bench step just means you arrive at the
+water already close.
 
 ## Day 3+ — waterproof, mount, send it 🌊
 
@@ -145,6 +147,8 @@ is consistently off by a percentage, set `height_scale` in
 
 | Command | What it does |
 |---------|--------------|
+| **`./tools/jump wizard`** | **the guided end-to-end flow above (resumable; `--fake` to rehearse)** |
+| **`./tools/jump report`** | **diagnostic bundle to send to Claude when stuck** |
 | `./tools/jump setup` | one-time toolchain install |
 | `./tools/jump simtest` | full software test suite (no hardware) |
 | `./tools/jump flash` | settings → build → upload → self-test |

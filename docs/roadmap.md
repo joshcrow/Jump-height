@@ -54,6 +54,10 @@ goal (aim for ~10%). Now you actually know how high he jumps.
 - [ ] BLE notify of jump events (to be added to the firmware)
 - [ ] Web Bluetooth page or mobile app: live height, airtime, session best, count
 - [ ] Session history / export
+- [ ] **Zero-install browser flasher** (ESP Web Tools / WebSerial): flash and
+      set up from a web page — no toolchain, no terminal. The natural end state
+      of the `jump wizard` experience, and how other people build one without
+      installing anything.
 
 **Done when:** you can see jumps pop up live on a phone and review a session
 afterward.

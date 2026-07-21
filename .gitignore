@@ -12,11 +12,14 @@ firmware/.pioenvs/
 firmware/.piolibdeps/
 .vscode/
 
-# Captured session data / logs
+# Captured session data / logs / diagnostics (user-local)
 *.log
 data/*.csv
 !data/example_session.csv
 data/sessions/
+data/logs/
+data/diagnostics/
+data/wizard_state.json
 
 # OS
 .DS_Store
