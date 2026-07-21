@@ -30,6 +30,7 @@
 #include <Wire.h>
 #include <FS.h>
 #include <LittleFS.h>
+#include <esp_timer.h>
 #include "params.gen.h"
 #include "mpu6050_min.h"
 #include "jump_detector.h"
@@ -55,10 +56,16 @@ static uint32_t session_jumps = 0;
 static float    session_best  = 0.0f;
 static uint32_t stored_jumps  = 0;
 static float    stored_best   = 0.0f;
-static uint32_t t0_us         = 0;
+// 64-bit microsecond timebase: 32-bit micros() wraps at ~71.6 min, which is
+// shorter than a wing session and would reset t mid-file (and could eat a
+// jump in flight at the wrap instant). esp_timer_get_time() never wraps.
+static int64_t  t0_us         = 0;
 
-// Motion gate
+// Motion gate. motion_seen keeps the gate idle from power-on until the first
+// real over-threshold sample — without it, (now_ms - 0) < timeout reads as
+// "active" at boot and the desktest shake step can never see a transition.
 static uint32_t last_motion_ms = 0;
+static bool     motion_seen    = false;
 static bool     active         = false;
 
 // Trace buffering (keeps slow flash writes off the sampling path)
@@ -81,6 +88,13 @@ static void flushTrace() {
     if (!trace_header) { f.print("t,mag\n"); trace_header = true; }
     f.print(trace_buf);
     f.close();
+    // Account and enforce the cap here so every flush path (loop, idle
+    // transition, serial commands) counts — not just the loop's.
+    trace_bytes += trace_buf.length();
+    if (trace_bytes >= JH_TRACE_MAX_BYTES && !trace_full) {
+      trace_full = true;
+      Serial.println("# trace log full — still counting jumps. `dump` then `clear` to reset.");
+    }
   }
   trace_buf = "";
 }
@@ -332,7 +346,7 @@ void setup() {
   Serial.println("READY");
 
   trace_buf.reserve(2048);
-  t0_us         = micros();
+  t0_us         = esp_timer_get_time();
   last_flush_ms = millis();
 }
 
@@ -341,10 +355,13 @@ void loop() {
   pollSerial();
   if (!sensor_ok) { delay(10); return; }  // command loop still runs; sampling paused
 
-  static uint32_t next_us = micros();
-  const uint32_t  now_us  = micros();
-  if ((int32_t)(now_us - next_us) < 0) return;  // pace to SAMPLE_HZ (wraparound-safe)
+  static int64_t next_us = esp_timer_get_time();
+  const int64_t  now_us  = esp_timer_get_time();
+  if (now_us < next_us) return;  // pace to SAMPLE_HZ
   next_us += SAMPLE_INTERVAL_US;
+  // After a long stall (e.g. a 100 s serial dump) don't "catch up" with a
+  // burst of thousands of back-to-back samples — resynchronize instead.
+  if (now_us - next_us > 20 * (int64_t)SAMPLE_INTERVAL_US) next_us = now_us;
 
   float ax, ay, az;
   if (!imu.readAccelG(ax, ay, az)) return;  // transient I2C hiccup: skip sample
@@ -353,9 +370,12 @@ void loop() {
 
   // --- motion gate ---
   const uint32_t now_ms = millis();
-  if (fabsf(mag - 1.0f) > JH_MOTION_THRESH_G) last_motion_ms = now_ms;
+  if (fabsf(mag - 1.0f) > JH_MOTION_THRESH_G) {
+    last_motion_ms = now_ms;
+    motion_seen    = true;
+  }
   const bool was_active = active;
-  active = (now_ms - last_motion_ms) < IDLE_TIMEOUT_MS;
+  active = motion_seen && (now_ms - last_motion_ms) < IDLE_TIMEOUT_MS;
   if (active && !was_active) Serial.println("STATE recording");
   if (!active && was_active) {
     Serial.println("STATE idle");
@@ -384,13 +404,8 @@ void loop() {
     trace_buf += String(mag, 3);
     trace_buf += '\n';
     if (now_ms - last_flush_ms > 1000) {
-      trace_bytes += trace_buf.length();
-      flushTrace();
+      flushTrace();  // does the byte accounting + cap check
       last_flush_ms = now_ms;
-      if (trace_bytes >= JH_TRACE_MAX_BYTES) {
-        trace_full = true;
-        Serial.println("# trace log full — still counting jumps. `dump` then `clear` to reset.");
-      }
     }
   }
 }

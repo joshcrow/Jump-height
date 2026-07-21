@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 """Fake Jump Height device: emulates the firmware's serial protocol on a pty.
 
-Lets you rehearse and integration-test the entire CLI flow with zero hardware:
+Lets you rehearse and integration-test the entire CLI flow with zero hardware.
+Use it through the CLI's --fake flag, which spawns it and drives it:
 
-    python3 tools/fake_device.py --scenario desktest
-    # prints "PTY /dev/pts/N" — then in another shell:
-    ./tools/jump desktest --port /dev/pts/N
+    ./tools/jump desktest --fake
+    ./tools/jump drop --fake
 
-(You normally don't run this by hand: `./tools/jump <cmd> --fake` spawns it.)
+Running it by hand (`python3 tools/fake_device.py --scenario desktest` prints
+"PTY /dev/pts/N" to connect a monitor to) is for protocol debugging only: the
+scripted shake/toss/drop events only advance when the connected client sends
+`_sim next` — the CLI does that automatically in --fake mode, so a manual
+`--port /dev/pts/N` desktest would wait forever at the shake step unless you
+type `_sim next` yourself.
 
 Scenarios:
     ok         boots clean, responds to commands, no events

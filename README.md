@@ -117,8 +117,9 @@ python3 sim/run.py
 
 You'll see the detector pick out synthetic jumps and compare its height estimates
 against the known ground truth. This is your development sandbox: tweak thresholds
-in `sim/detector.py`, re-run, and see the effect instantly. Once you're happy, the
-same logic is already ported to `firmware/include/jump_detector.h`.
+in **`config/params.json`** (the single source of truth for firmware, simulator, and
+analysis alike), re-run, and see the effect instantly. The same detector logic is
+already ported to `firmware/include/jump_detector.h` and consumes the same config.
 
 Replay a real capture (once you have hardware logging CSVs):
 

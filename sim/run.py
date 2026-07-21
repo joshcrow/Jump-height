@@ -7,10 +7,10 @@ Examples:
     python3 sim/run.py --csv data/my_session.csv   # replay a real capture
     python3 sim/run.py --plot              # also plot (needs matplotlib)
 
-CSV format (as emitted by the firmware's STREAM_RAW mode):
-    t_s,ax,ay,az        # acceleration per axis in g  (magnitude computed here)
-  or a two-column form:
-    t_s,mag             # precomputed |a| in g
+CSV formats accepted:
+    t,mag               # |a| in g — what the firmware logs (trace.csv, via
+                        # `./tools/jump sync`)
+    t_s,ax,ay,az        # per-axis in g (magnitude computed here)
 
 No third-party dependencies required (matplotlib only for --plot).
 """
@@ -128,7 +128,7 @@ def report_vs_truth(detected: List[JumpEvent], truth: List[Tuple[float, float]])
         mae = sum(errors) / len(errors)
         print(f"  mean abs height error: {mae:.3f} m  (max {max(errors):.3f} m)")
     ok = matched == len(truth) and spurious == 0
-    print("  RESULT:", "PASS ✅" if ok else "CHECK ⚠️  (tune Params in detector.py)")
+    print("  RESULT:", "PASS ✅" if ok else "CHECK ⚠️  (tune detector params in config/params.json)")
     return 0 if ok else 1
 
 

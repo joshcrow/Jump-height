@@ -31,7 +31,7 @@ building this) knows what was chosen on purpose vs. what's just incidental.
 ## Deliberately deferred to later phases
 
 - **Real deep-sleep** power management (multi-session battery life). v1 charges after each outing.
-- **Live phone app / BLE** readout. v1 reads over USB. (Firmware has a disabled BLE hook.)
+- **Live phone app / BLE** readout. v1 reads over USB; BLE gets added to the firmware in Phase 3.
 - **microSD card** for unlimited logging. v1 uses built-in flash (~30 min of moving-time trace, capped).
 - **Better IMU / GPS / custom PCB.** All Phase 4.
 - **Air-drag / wave-landing correction** beyond a single global factor.

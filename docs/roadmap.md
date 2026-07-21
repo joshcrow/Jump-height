@@ -16,39 +16,42 @@ Validate the whole concept in software before spending a cent.
 **Done when:** `python3 sim/run.py` detects the synthetic jumps with small height
 error. *(It does — this is the starting point.)*
 
-## Phase 1 — Bench firmware
+## Phase 1 — Bench firmware ✅ *(written; validate on hardware via BUILD.md)*
 
-Get the same algorithm running on real hardware on your desk.
+Get the same algorithm running on real hardware on your desk. The firmware and
+tooling exist — the runbook for executing this phase is **[../BUILD.md](../BUILD.md)**.
 
-- [ ] ESP32 + MPU-6050 on a breadboard, I²C talking (`firmware/`)
-- [ ] Set accel range to ±8 g, sample at ~200 Hz with precise timestamps
-- [ ] Run `jump_detector.h`, print detected jumps over USB serial
-- [ ] Add a **raw CSV streaming mode** (`t,ax,ay,az`) for capturing data
-- [ ] Sanity test: gentle controlled drops / tosses onto a soft surface; compare
-      reported height to a tape measure or slow-mo video
+- [x] FireBeetle ESP32 + MPU-6050 firmware (`firmware/`), ±8 g, 200 Hz, clone-tolerant
+      raw driver, power-on self-test with fix hints
+- [x] One-command flash + wiring check: `./tools/jump flash` / `selftest`
+- [x] Guided assembly verification: `./tools/jump desktest` (3 tosses)
+- [x] Trace logging to flash + offline replay: `./tools/jump sync` / `replay`
+- [ ] **On hardware:** desk test passes on the real assembly (BUILD.md Day 1)
+- [ ] **On hardware:** drop calibration run and baked in (`./tools/jump drop`, Day 2)
 
-**Done when:** the board reliably reports a plausible height for a controlled drop,
-and can stream raw CSV you can replay through `sim/run.py --csv`.
+**Done when:** `./tools/jump desktest` passes on the real device and a measured
+drop reads correctly after calibration.
 
 ## Phase 2 — On the water 🌊
 
 The real test — and where you get your answer.
 
-- [ ] Battery power + wake-on-motion (see `docs/hardware.md`)
-- [ ] Waterproof enclosure; **bucket-test it empty first**
-- [ ] Log raw CSV to flash/SD for a full session
-- [ ] Mount on the board; capture a session with your brother wing foiling
+- [ ] Battery power (charge over USB when the capsule is open)
+- [ ] Waterproof capsule; **bucket-test it empty first**; floats; tethered
+- [ ] Mount on the board (GoPro adhesive, center deck); capture a session with
+      your brother wing foiling
 - [ ] **Ground truth:** film some jumps at 120–240 fps; count airborne frames for
       true airtime
-- [ ] Tune `Params` in `sim/detector.py` against the captured data + video, then
-      copy the tuned values into `firmware/include/jump_detector.h`
+- [ ] Tune thresholds in **`config/params.json`** against the synced trace
+      (`./tools/jump replay`), set `height_scale` from the video if needed, then
+      `./tools/jump flash` — one file drives firmware, simulator, and analysis
 
 **Done when:** detected heights match video-derived heights within your accuracy
 goal (aim for ~10%). Now you actually know how high he jumps.
 
 ## Phase 3 — App & live stats
 
-- [ ] BLE notify of jump events (firmware already has a hook for this)
+- [ ] BLE notify of jump events (to be added to the firmware)
 - [ ] Web Bluetooth page or mobile app: live height, airtime, session best, count
 - [ ] Session history / export
 

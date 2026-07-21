@@ -59,14 +59,16 @@ class SerialPort:
         try:
             import serial  # type: ignore
 
-            self._ser = serial.Serial(path, baud, timeout=0)
+            # Portable path: rely on pyserial's own timeout mechanism only.
+            # (No fileno()/select() here — neither works for serial handles
+            # on Windows.)
+            self._ser = serial.Serial(path, baud, timeout=0.25)
             # Deassert DTR/RTS so ESP32 boards settle into RUN mode.
             try:
                 self._ser.dtr = False
                 self._ser.rts = False
             except Exception:
                 pass
-            self._fd = self._ser.fileno()
         except ImportError:
             import termios
             import tty
@@ -99,15 +101,26 @@ class SerialPort:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return None
-            r, _, _ = select.select([self._fd], [], [], min(remaining, 0.25))
-            if r:
+            wait = min(remaining, 0.25)
+            chunk = b""
+            if self._ser is not None:
+                if self._ser.timeout != wait:
+                    self._ser.timeout = wait
                 try:
-                    chunk = (self._ser.read(4096) if self._ser is not None
-                             else os.read(self._fd, 4096))
-                except (OSError, BlockingIOError):
+                    chunk = self._ser.read(1)  # blocks up to `wait`
+                    if chunk and self._ser.in_waiting:
+                        chunk += self._ser.read(self._ser.in_waiting)
+                except OSError:
                     chunk = b""
-                if chunk:
-                    self._buf += chunk
+            else:
+                r, _, _ = select.select([self._fd], [], [], wait)
+                if r:
+                    try:
+                        chunk = os.read(self._fd, 4096)
+                    except (OSError, BlockingIOError):
+                        chunk = b""
+            if chunk:
+                self._buf += chunk
 
     def close(self) -> None:
         if self._ser is not None:
@@ -143,13 +156,17 @@ def autodetect_port() -> str:
 
 
 def parse_kv(line: str) -> dict:
-    """'JUMP n=1 airtime_s=0.62' -> {'_tag': 'JUMP', 'n': '1', 'airtime_s': '0.62'}"""
+    """'JUMP n=1 airtime_s=0.62' -> {'_tag': 'JUMP', 'n': '1', 'airtime_s': '0.62'}.
+    Bare (non key=value) words land in '_args': 'STATE recording' ->
+    {'_tag': 'STATE', '_args': ['recording']}."""
     parts = line.split()
-    out = {"_tag": parts[0] if parts else ""}
+    out: dict = {"_tag": parts[0] if parts else "", "_args": []}
     for p in parts[1:]:
         if "=" in p:
             k, v = p.split("=", 1)
             out[k] = v
+        else:
+            out["_args"].append(p)
     return out
 
 
@@ -179,31 +196,44 @@ class Device:
                 break
 
     def command(self, cmd: str, timeout: float = 20.0) -> list[str]:
-        """Send a command, return all lines up to its OK/ERR terminator."""
+        """Send a command, return all lines up to its OK/ERR terminator.
+
+        `timeout` is an INACTIVITY timeout: it resets every time a line
+        arrives, so a long-but-flowing transfer (e.g. a full `dump` at
+        115200 baud) never trips it, while a genuinely stuck device does.
+        """
         self.sp.write_line(cmd)
         lines: list[str] = []
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            line = self.sp.read_line(deadline - time.monotonic())
+        while True:
+            line = self.sp.read_line(timeout)
             if line is None:
-                break
+                raise TimeoutError(
+                    f"device went silent during '{cmd}' — is the right firmware flashed?")
             if line.strip() == f"OK {cmd.split()[0]}":
                 return lines
             if line.startswith("ERR"):
                 lines.append(line)
                 return lines
             lines.append(line)
-        raise TimeoutError(f"device did not finish '{cmd}' — is the right firmware flashed?")
 
-    def wait_for(self, tag: str, timeout: float, echo_chatter: bool = True) -> dict | None:
-        """Wait for the next machine line with the given tag (e.g. 'JUMP')."""
+    def wait_for(self, tag: str, timeout: float, echo_chatter: bool = True,
+                 value: str | None = None) -> dict | None:
+        """Wait for the next machine line with the given tag (e.g. 'JUMP').
+
+        With `value`, only a line whose first bare word matches counts —
+        e.g. wait_for('STATE', 30, value='recording') will not be satisfied
+        by 'STATE idle'.
+        """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             line = self.sp.read_line(deadline - time.monotonic())
             if line is None:
                 return None
             if line.startswith(tag + " ") or line.strip() == tag:
-                return parse_kv(line)
+                kv = parse_kv(line)
+                if value is None or (kv["_args"] and kv["_args"][0] == value):
+                    return kv
+                continue  # right tag, wrong value (e.g. STATE idle): keep waiting
             if echo_chatter and line.startswith("#"):
                 print(f"    {line}")
         return None
@@ -345,7 +375,7 @@ def cmd_desktest(args) -> int:
 
         print("\n[2/3] Motion gate...")
         _pause(args, dev, "Pick the device up and give it a shake.")
-        if dev.wait_for("STATE", timeout=30) is None:
+        if dev.wait_for("STATE", timeout=30, value="recording") is None:
             print("❌ Never saw motion. Is it wired and self-testing OK? Try again.")
             return 1
         print("  ✅ motion detected — recording")
@@ -414,7 +444,7 @@ def cmd_drop(args) -> int:
         print("don't throw it. Keep still for a second before each drop.\n")
 
         _pause(args, dev, "Shake the device once to wake it.")
-        dev.wait_for("STATE", timeout=30)
+        dev.wait_for("STATE", timeout=30, value="recording")
 
         raws: list[float] = []
         for i in range(1, args.drops + 1):
@@ -438,9 +468,13 @@ def cmd_drop(args) -> int:
         print(f"\nMeasured timing bias: {-offset * 1000:+.0f} ms "
               f"(spread ±{spread * 1000:.0f} ms over {len(raws)} drops)")
         print(f"Recommended airtime_offset_s = {offset:+.4f}")
-        resid = p.g * (expected ** 2) / 8 - p.g * max(0.0, statistics.median(raws) + offset) ** 2 / 8
-        print(f"After correction, drop-height error ≈ {abs(resid) * 100:.1f} cm "
-              f"on this test.")
+        # Honest residual: per-drop height error remaining AFTER the correction
+        # (median-centering forces the median residual to zero, so report the
+        # per-drop scatter instead; drop height obeys h = g*t^2/2).
+        errs_cm = [abs(p.g * ((r + offset) ** 2 - expected ** 2) / 2.0) * 100
+                   for r in raws]
+        print(f"Typical per-drop scatter after correction: "
+              f"{statistics.mean(errs_cm):.1f} cm of drop height.")
 
         if spread > 0.03:
             print("⚠️  spread is high — results may be sloppy. Consider re-running "
@@ -767,12 +801,16 @@ def cmd_flash(args) -> int:
 def cmd_monitor(args) -> int:
     port = args.port or autodetect_port()
     sp = SerialPort(port)
-    print(f"--- monitor {port} (Ctrl-C to exit; type a command + Enter) ---")
+    interactive = os.name == "posix"  # select() on stdin is POSIX-only
+    print(f"--- monitor {port} (Ctrl-C to exit"
+          + ("; type a command + Enter) ---" if interactive else "; read-only) ---"))
     try:
         while True:
             line = sp.read_line(0.1)
             if line is not None:
                 print(line)
+            if not interactive:
+                continue
             r, _, _ = select.select([sys.stdin], [], [], 0)
             if r:
                 cmdline = sys.stdin.readline()
@@ -786,7 +824,9 @@ def cmd_monitor(args) -> int:
 
 
 def cmd_replay(args) -> int:
-    cmd = [sys.executable, "sim/run.py", "--csv", args.csv]
+    # Absolutize before changing cwd, so a path relative to where the user
+    # ran the command still resolves.
+    cmd = [sys.executable, "sim/run.py", "--csv", os.path.abspath(args.csv)]
     if args.plot:
         cmd.append("--plot")
     return subprocess.run(cmd, cwd=str(REPO)).returncode

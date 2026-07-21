@@ -170,7 +170,7 @@ hints. Beyond those:
 | Symptom | Fix |
 |---------|-----|
 | `flash` can't find the port | data-capable USB cable? (many are charge-only) Try `--port`. On Linux you may need to join the `dialout` group. |
-| Real jumps missed on the water | lower `landing_threshold_g` or `freefall_enter_g` in `config/params.json`, test against your synced trace with `replay`, then re-flash |
+| Real jumps missed on the water | in `config/params.json`: **raise** `freefall_enter_g` (takeoff dip not registering) or **lower** `landing_threshold_g` (landing spike missed); test against your synced trace with `replay`, then re-flash |
 | False jumps from chop | raise `landing_threshold_g` or `min_airtime_s` (same loop) |
 | `trace log full` during long session | `sync` then clear; ~30 min of *moving* time fits per session by design |
 | Board won't charge / dead | battery polarity — see Safety |
