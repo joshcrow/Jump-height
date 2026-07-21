@@ -49,18 +49,25 @@ The real test — and where you get your answer.
 **Done when:** detected heights match video-derived heights within your accuracy
 goal (aim for ~10%). Now you actually know how high he jumps.
 
-## Phase 3 — App & live stats
+## Phase 3 — App & live stats ✅ *(built; validate on hardware)*
 
-- [ ] BLE notify of jump events (to be added to the firmware)
-- [ ] Web Bluetooth page or mobile app: live height, airtime, session best, count
-- [ ] Session history / export
-- [ ] **Zero-install browser flasher** (ESP Web Tools / WebSerial): flash and
-      set up from a web page — no toolchain, no terminal. The natural end state
-      of the `jump wizard` experience, and how other people build one without
-      installing anything.
+- [x] BLE in the firmware: the exact serial protocol mirrored over a Nordic
+      UART Service (NimBLE; compiles clean, 42% of the new 1.5 MB partition)
+- [x] Browser app (`web/`, served by `./tools/jump web`): live height/airtime/
+      best/count over **Web Bluetooth**, self-test + session download + CSV
+      export over **Web Serial**, Playwright-tested against a mock device
+- [x] Session history/export (browser localStorage + per-session CSV)
+- [x] **Zero-install browser flasher** (ESP Web Tools): Install button on the
+      web app; binaries staged by `./tools/jump web` locally and built/published
+      to GitHub Pages by CI (`.github/workflows/build.yml`)
+- [ ] **On hardware:** BLE advertises + a phone sees live jumps (first real
+      board is also the first real BLE radio test)
+- [ ] Enable GitHub Pages (Settings → Pages → GitHub Actions) and flash a board
+      from the hosted page
 
 **Done when:** you can see jumps pop up live on a phone and review a session
-afterward.
+afterward. *(Software side is done and tested; the two unchecked boxes need the
+physical board.)*
 
 ## Phase 4 — "Real" hardware
 

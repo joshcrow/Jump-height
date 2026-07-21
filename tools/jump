@@ -20,6 +20,7 @@ Individual steps, if you'd rather drive manually:
     ./tools/jump drop        guided calibration from measured drops
     ./tools/jump sync        download a session, analyze it, write a report
     ./tools/jump replay      re-run the detector over a saved capture CSV
+    ./tools/jump web         serve the phone/laptop app locally (Web Bluetooth)
     ./tools/jump monitor     raw serial console
     ./tools/jump gen         regenerate firmware params from config/params.json
 
@@ -923,6 +924,115 @@ def cmd_replay(args) -> int:
     return subprocess.run(cmd, cwd=str(REPO)).returncode
 
 
+# ----------------------------------------------------------------------- web
+# Serve web/ (the browser app) on localhost. WHY a local server and not just
+# opening the file: browsers only expose Web Bluetooth / Web Serial to a
+# "secure context", and localhost qualifies while a file:// path does not — so
+# this is the way to run the app during development.
+
+
+def _find_boot_app0() -> Path | None:
+    """Locate boot_app0.bin inside the installed PlatformIO Arduino framework.
+
+    It doesn't come out of the project build — it ships with the framework
+    package (…/framework-arduinoespressif32*/tools/partitions/boot_app0.bin) —
+    so we glob PlatformIO's packages dir for it.
+    """
+    roots = [
+        Path.home() / ".platformio" / "packages",
+        REPO / "firmware" / ".pio" / "packages",  # project-local packages, if any
+    ]
+    for root in roots:
+        if not root.exists():
+            continue
+        for pattern in (
+            "framework-arduinoespressif32*/tools/partitions/boot_app0.bin",
+            "**/tools/partitions/boot_app0.bin",  # oddly-nested installs
+        ):
+            hits = sorted(root.glob(pattern))
+            if hits:
+                return hits[0]
+    return None
+
+
+def stage_firmware(web_dir: Path) -> None:
+    """Copy a fresh firmware build into web/firmware/ for the browser flasher.
+
+    ESP Web Tools (the app's Install tab) flashes four files: the bootloader,
+    the partition table, boot_app0, and the app image. Three come from the
+    PlatformIO build dir; boot_app0.bin comes from the framework package. If the
+    build hasn't happened yet we just say so — the app already degrades to a
+    friendly 'not built yet' note when the binaries aren't served.
+    """
+    build = REPO / "firmware" / ".pio" / "build" / "firebeetle32"
+    wanted = ["bootloader.bin", "partitions.bin", "firmware.bin"]
+    if not all((build / f).exists() for f in wanted):
+        print("Firmware binaries aren't built yet — the app's Install tab will "
+              "say so.\n(Run  ./tools/jump flash  to build them.)\n")
+        return
+    out = web_dir / "firmware"
+    out.mkdir(parents=True, exist_ok=True)
+    staged = []
+    for f in wanted:
+        shutil.copy2(build / f, out / f)
+        staged.append(f)
+    boot = _find_boot_app0()
+    if boot:
+        shutil.copy2(boot, out / "boot_app0.bin")
+        staged.append("boot_app0.bin")
+    else:
+        print("  (couldn't find boot_app0.bin in the PlatformIO packages — the "
+              "in-browser flasher needs it; a full  ./tools/jump flash  installs "
+              "the framework that ships it.)")
+    print(f"Staged firmware into {out} for the in-browser flasher: "
+          + ", ".join(staged) + "\n")
+
+
+def cmd_web(args) -> int:
+    from functools import partial
+    from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+
+    web_dir = REPO / "web"
+    if not (web_dir / "index.html").exists():
+        print(f"❌ no browser app found at {web_dir} — is the repo intact?")
+        return 1
+
+    stage_firmware(web_dir)
+
+    port = args.port
+    url = f"http://localhost:{port}/"
+    handler = partial(SimpleHTTPRequestHandler, directory=str(web_dir))
+    try:
+        httpd = ThreadingHTTPServer(("127.0.0.1", port), handler)
+    except OSError as e:
+        print(f"❌ couldn't serve on port {port}: {e}")
+        print(f"   Port already in use? Try  ./tools/jump web --port {port + 1}")
+        return 1
+
+    print(f"Serving the Jump Height app at  {url}")
+    print("  • localhost is a secure context, so Web Bluetooth and Web Serial")
+    print("    both work here (they don't from a file:// path).")
+    print("  • Open it in Chrome or Edge on a desktop — those are the browsers")
+    print("    that support Web Bluetooth + Web Serial.")
+    print("  • Ctrl-C to stop.\n")
+
+    # macOS nicety: pop the default browser open. Best-effort — a Linux or
+    # headless box simply skips it.
+    if sys.platform == "darwin":
+        try:
+            subprocess.Popen(["open", url])
+        except Exception:
+            pass
+
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print("\n--- stopped ---")
+    finally:
+        httpd.server_close()
+    return 0
+
+
 # -------------------------------------------------------------------- wizard
 
 STATE_PATH_NAME = "wizard_state.json"
@@ -1280,6 +1390,12 @@ def main() -> int:
     p = add("replay", cmd_replay, help="re-run detector over a capture CSV")
     p.add_argument("--csv", required=True)
     p.add_argument("--plot", action="store_true")
+
+    # web serves over HTTP, so its --port is the HTTP port — not the serial
+    # --port that add() attaches to every other command. Register it directly.
+    p = sub.add_parser("web", help="serve the browser app locally (localhost)")
+    p.set_defaults(fn=cmd_web)
+    p.add_argument("--port", type=int, default=8765, help="HTTP port (default 8765)")
 
     args = ap.parse_args()
     try:

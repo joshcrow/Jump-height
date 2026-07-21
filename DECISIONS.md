@@ -29,16 +29,24 @@ building this) knows what was chosen on purpose vs. what's just incidental.
 | 17 | **Fake device for rehearsal + CI** | `tools/fake_device.py` emulates the firmware's serial protocol on a pty; every CLI flow runs against it (`--fake`) and the whole stack is integration-tested by `./tools/jump simtest`. | The entire test/calibration experience can be rehearsed before the hardware exists, and every software change is regression-tested without a board on the desk. |
 | 18 | **Wizard + diagnostic bundle** | `./tools/jump wizard` is the front door: one resumable guided flow (software → find board → flash → desk test → calibrate) with a ✅ or a concrete fix at every step. Every command logs its terminal output *and* raw serial traffic to `data/logs/`; `./tools/jump report` bundles system info, config, wizard progress, a live device self-test, and recent logs into one file to hand to Claude. | The builder experience should be "plug it into the MacBook and follow along" — and when something does go wrong, the evidence is already collected, so remote troubleshooting starts from data instead of memory. |
 
+## Added in Phase 3 (live stats + browser app + zero-install flashing)
+
+| # | Decision | Choice | Why |
+|---|----------|--------|-----|
+| 19 | **BLE = the same protocol, wireless** | The firmware mirrors its exact serial line protocol over a Nordic UART Service (NimBLE stack, not the stock Bluedroid one), device name `JumpHeight`. A phone subscribes and sees the very same `JUMP ...` lines the CLI does. | One protocol everywhere — CLI, fake device, web, BLE — means nothing can drift, and every existing tool/test stays valid. NimBLE because Bluedroid's flash/RAM footprint wouldn't leave room for a big log partition. |
+| 20 | **Browser app, no build step** | `web/` is one static vanilla-JS page: connect over Web Bluetooth (live jumps) or Web Serial (self-test, session download → history + CSV), plus an ESP Web Tools install button for in-browser flashing. Served locally by `./tools/jump web` (localhost is a secure context) or by GitHub Pages. | Zero install for the user, zero build tooling for contributors, testable end-to-end in CI (Playwright drives the real page against a mock device). iPhone caveat: iOS Safari has no Web Bluetooth — use the free Bluefy browser. |
+| 21 | **Partition map + CI binaries** | Custom no-OTA partition table (app 1.5 MB, logs 2.4 MB — trace cap raised to ~45 min). Flasher binaries are **not** committed: `./tools/jump web` stages them from a local build, and the GitHub Action builds them fresh and publishes `web/` + binaries to Pages. | No OTA slots needed when flashing is over USB/web; committing binaries would bloat and stale the repo. **Upgrade note:** the new partition table reformats stored data on first boot — `sync` before upgrading a device that has sessions on it. |
+
 ## Deliberately deferred to later phases
 
 - **Real deep-sleep** power management (multi-session battery life). v1 charges after each outing.
-- **Live phone app / BLE** readout. v1 reads over USB; BLE gets added to the firmware in Phase 3.
-- **microSD card** for unlimited logging. v1 uses built-in flash (~30 min of moving-time trace, capped).
+- **Live in-session readout on the water.** BLE + the web app now show jumps live, but 2.4 GHz doesn't travel through water and you can't read a phone mid-wing — live stats are for the beach between runs; the session record remains the product.
+- **microSD card** for unlimited logging. v1 uses built-in flash (~45 min of moving-time trace, capped; grew with the Phase 3 partition map).
 - **Better IMU / GPS / custom PCB.** All Phase 4.
 - **Air-drag / wave-landing correction** beyond a single global factor.
 
 ## Known v1 limitations (accepted on purpose)
 
 - Simple motion-gating keeps logs clean but doesn't save power yet → **seal near launch, charge after**.
-- Trace logging caps at ~30 min of *moving* time to protect flash; the jump list is always kept.
+- Trace logging caps at ~45 min of *moving* time to protect flash; the jump list is always kept.
 - A drop off a ledge reads as a "jump" (it's really fall height) — fine for this use.

@@ -1,0 +1,18 @@
+# Jump Height — 4 MB flash partition map.
+#
+# No OTA slots on purpose: v1 flashes over USB (and later the web flasher), so
+# there's no reason to reserve two app partitions. The space that OTA would
+# have taken goes to (a) a bigger app partition, which is what makes room for
+# the BLE stack, and (b) a bigger LittleFS for the moving-time trace + jumps.
+# platformio.ini points board_build.partitions at this file.
+#
+# NOTE: the data partition is *named* "littlefs" (not the usual "spiffs"), so
+# the firmware mounts it with that label explicitly — see LittleFS.begin() in
+# src/main.cpp. Its SubType stays "spiffs" (0x82), which is the subtype LittleFS
+# and SPIFFS share on ESP32.
+#
+# Name,   Type, SubType, Offset,   Size
+nvs,      data, nvs,     0x9000,   0x5000
+phy_init, data, phy,     0xe000,   0x1000
+factory,  app,  factory, 0x10000,  0x180000
+littlefs, data, spiffs,  0x190000, 0x270000

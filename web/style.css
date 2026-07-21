@@ -1,0 +1,277 @@
+/*
+  Jump Height browser app — styles.
+
+  Mobile-first (single column, big tap targets) and dark-mode friendly. Colours
+  live in CSS variables: :root is the light theme, and the prefers-color-scheme
+  media query swaps in the dark palette. No external fonts — the system font
+  stack keeps it fast, offline, and native-looking on every device.
+*/
+
+:root {
+  --bg: #f6f8fa;
+  --surface: #ffffff;
+  --surface-2: #f0f3f6;
+  --border: #d5dbe2;
+  --text: #1f2328;
+  --muted: #5b6672;
+  --primary: #1668e0;
+  --primary-ink: #ffffff;
+  --danger: #cf222e;
+  --ok: #1a7f37;
+  --warn: #9a6700;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .06), 0 1px 3px rgba(0, 0, 0, .05);
+  --radius: 12px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e1116;
+    --surface: #161b22;
+    --surface-2: #1c2230;
+    --border: #2a3140;
+    --text: #e6edf3;
+    --muted: #99a4b0;
+    --primary: #4a90ff;
+    --primary-ink: #0a0f16;
+    --danger: #f85149;
+    --ok: #3fb950;
+    --warn: #d29922;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4);
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  /* Bottom padding leaves room for the collapsed console bar so it never
+     covers the last bit of content. */
+  padding-bottom: 64px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  -webkit-text-size-adjust: 100%;
+}
+
+h2 { font-size: 1.25rem; margin: 0 0 .25rem; }
+h3 { font-size: 1rem; margin: 0; }
+p { margin: .4rem 0 .8rem; }
+.muted { color: var(--muted); }
+.small { font-size: .85rem; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.mt { margin-top: 1.25rem; }
+
+/* ---------- header ---------- */
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  padding: .7rem 1rem;
+  padding-top: max(.7rem, env(safe-area-inset-top));
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.brand { display: flex; align-items: center; gap: .5rem; font-weight: 700; }
+.brand-logo { font-size: 1.3rem; }
+.conn { display: flex; align-items: center; gap: .5rem; }
+
+.pill {
+  font-size: .8rem;
+  font-weight: 600;
+  padding: .2rem .6rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.pill-off { background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); }
+.pill-wait { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+.pill-on { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
+
+/* ---------- tabs ---------- */
+.tabs {
+  position: sticky;
+  top: 0;
+  display: flex;
+  gap: .25rem;
+  padding: .4rem;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+.tab-btn {
+  flex: 1 0 auto;
+  min-width: 84px;
+  padding: .55rem .5rem;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.tab-btn.is-active { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+
+/* ---------- panels ---------- */
+main { max-width: 680px; margin: 0 auto; padding: 1rem; }
+.tab-panel { display: none; }
+.tab-panel.is-active { display: block; }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1rem;
+  margin: .75rem 0;
+}
+
+.row-between { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
+
+/* ---------- buttons ---------- */
+.btn {
+  font: inherit;
+  font-weight: 600;
+  padding: .6rem 1rem;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  color: var(--text);
+  background: var(--surface-2);
+}
+.btn:active { transform: translateY(1px); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn-primary { background: var(--primary); color: var(--primary-ink); }
+.btn-ghost { background: transparent; border-color: var(--border); }
+.btn-danger { background: transparent; border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); color: var(--danger); }
+.btn-danger-ghost { background: transparent; border-color: var(--border); color: var(--danger); }
+.btn-row { display: flex; gap: .6rem; flex-wrap: wrap; margin: .5rem 0; }
+.btn-row.wrap .btn { padding: .45rem .8rem; font-size: .9rem; }
+
+/* ---------- status + notes ---------- */
+.status {
+  margin: .6rem 0;
+  padding: .6rem .8rem;
+  border-radius: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  font-size: .92rem;
+}
+.status.busy { border-color: color-mix(in srgb, var(--primary) 40%, var(--border)); }
+.status.warn { border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); color: var(--warn); }
+.note {
+  margin: .5rem 0;
+  padding: .6rem .8rem;
+  border-left: 3px solid var(--primary);
+  background: var(--surface-2);
+  border-radius: 6px;
+  font-size: .92rem;
+}
+.info-line { font-weight: 600; }
+
+/* ---------- live ---------- */
+.live-hero { text-align: center; padding: 1.4rem 1rem; }
+.live-label { color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; font-size: .75rem; }
+.live-height { font-size: clamp(2.8rem, 16vw, 4.5rem); font-weight: 800; line-height: 1.05; margin-top: .2rem; }
+.live-height .unit { font-size: .4em; font-weight: 600; color: var(--muted); margin-left: .15em; }
+.live-sub { color: var(--muted); font-weight: 600; }
+
+.badge { font-size: .78rem; font-weight: 700; padding: .15rem .55rem; border-radius: 999px; }
+.badge-rec { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
+.badge-idle { background: var(--surface-2); color: var(--muted); }
+
+.stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
+.stat { text-align: center; }
+.stat-num { font-size: 1.7rem; font-weight: 800; }
+.stat-label { color: var(--muted); font-size: .85rem; font-weight: 600; }
+.stat-sub { color: var(--muted); font-size: .8rem; min-height: 1rem; }
+
+.feed { list-style: none; margin: .5rem 0; padding: 0; }
+.feed-item {
+  display: flex;
+  align-items: baseline;
+  gap: .6rem;
+  padding: .55rem .2rem;
+  border-bottom: 1px solid var(--border);
+}
+.feed-n { font-weight: 700; color: var(--muted); min-width: 2.2rem; }
+.feed-h { font-weight: 700; }
+.feed-ft, .feed-at { font-size: .9rem; }
+.feed-at { margin-left: auto; }
+
+/* ---------- self-test table ---------- */
+.selftest { display: grid; gap: .1rem; }
+.st-row { display: flex; align-items: baseline; gap: .6rem; padding: .25rem 0; }
+.st-mark { width: 1.4rem; text-align: center; }
+.st-name { font-weight: 600; min-width: 5.5rem; }
+.st-detail { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .85rem; }
+.st-hint { margin: 0 0 .3rem 2rem; font-size: .85rem; }
+.st-result { margin-top: .6rem; font-weight: 700; }
+.st-result.ok { color: var(--ok); }
+.st-result.bad { color: var(--danger); }
+
+/* ---------- sessions ---------- */
+.session-date { font-weight: 700; }
+.session-meta { font-size: .9rem; }
+
+/* ---------- install ---------- */
+#install-container { margin: .75rem 0; }
+esp-web-install-button { display: inline-block; }
+
+/* ---------- console drawer ---------- */
+.console {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 20;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+.console-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: .7rem 1rem;
+  padding-bottom: max(.7rem, env(safe-area-inset-bottom));
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.caret { transition: transform .15s ease; color: var(--muted); }
+.console-toggle[aria-expanded="true"] .caret { transform: rotate(90deg); }
+.console-body { border-top: 1px solid var(--border); }
+.console-log {
+  height: 34vh;
+  overflow-y: auto;
+  padding: .6rem 1rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: .8rem;
+  background: var(--bg);
+}
+.cl { white-space: pre-wrap; word-break: break-word; }
+.cl-tx { color: var(--primary); }
+.cl-err { color: var(--danger); }
+.cl-rx { color: var(--text); }
+.console-input-row {
+  display: flex;
+  gap: .5rem;
+  padding: .6rem 1rem;
+  padding-bottom: max(.6rem, env(safe-area-inset-bottom));
+}
+.console-input-row input {
+  flex: 1;
+  min-width: 0;
+  padding: .55rem .7rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}

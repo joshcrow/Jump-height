@@ -42,7 +42,7 @@ from detector import Detector, load_params  # noqa: E402
 from generate import DEMO_JUMPS, synth_session  # noqa: E402
 import gen_params  # noqa: E402
 
-FW_VERSION = "0.2.0"
+FW_VERSION = "0.3.0"
 INJECTED_BIAS_S = 0.015  # pretend detection latency, for the drop scenario
 
 
@@ -125,6 +125,7 @@ class FakeDevice:
             self.send("# hint: #1 cause. Loose breadboard/jumper contact is #2.")
             self.send("SELFTEST accel SKIP detail=no_sensor")
             self.send("SELFTEST noise SKIP detail=no_sensor")
+            self.send("SELFTEST ble PASS detail=advertising")
             self.send("SELFTEST flash PASS detail=1441792B_free")
             self.send("SELFTEST END result=FAIL")
         else:
@@ -132,6 +133,7 @@ class FakeDevice:
             self.send("SELFTEST whoami PASS detail=0x68")
             self.send("SELFTEST accel PASS detail=1.002g")
             self.send("SELFTEST noise PASS detail=0.0061g")
+            self.send("SELFTEST ble PASS detail=advertising")
             self.send("SELFTEST flash PASS detail=1441792B_free")
             self.send("SELFTEST END result=PASS")
 
@@ -196,7 +198,7 @@ class FakeDevice:
             summary = " ".join(
                 f"{k}={gen_params.fmt_summary(v)}"
                 for k, v in sorted(cfg["detector"].items()) if not k.startswith("_"))
-            self.send("INFO fw=" + FW_VERSION + " sample_hz=200 log_hz=50")
+            self.send("INFO fw=" + FW_VERSION + " sample_hz=200 log_hz=50 ble=1")
             self.send("PARAMS " + summary)
             self.send("OK info")
         else:

@@ -15,7 +15,7 @@
     "log_hz": 50,
     "motion_thresh_g": 0.12,
     "idle_timeout_s": 20,
-    "trace_max_bytes": 1200000,
+    "trace_max_bytes": 2000000,
     "i2c_sda": 21,
     "i2c_scl": 22
   }

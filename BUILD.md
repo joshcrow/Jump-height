@@ -143,6 +143,41 @@ is consistently off by a percentage, set `height_scale` in
 
 ---
 
+## Phase 3: live stats in a browser + zero-install flashing
+
+The device now speaks Bluetooth (same protocol as USB, wireless), and there's
+a browser app for it:
+
+```bash
+./tools/jump web      # serves the app at http://localhost:8765 — open in Chrome/Edge
+```
+
+What the app does:
+
+- **Live** (Bluetooth): connect to `JumpHeight` and watch jumps pop up in real
+  time — height, airtime, session best, count. Great on the beach between
+  runs. *Phones:* Android Chrome works out of the box; **iPhone Safari has no
+  Web Bluetooth — install the free "Bluefy" browser and use that.** (And
+  water blocks Bluetooth — live stats are for on land, by physics.)
+- **USB**: run the self-test, download sessions into browser-local history,
+  export CSV. Prefer USB for session downloads — a Bluetooth dump works but
+  is slow and best-effort.
+- **Install**: flash a brand-new board from the web page (ESP Web Tools) —
+  no toolchain, no terminal. `./tools/jump web` stages binaries from your
+  local build; CI builds them for the hosted page.
+
+**Hosted version (for sharing the project):** the GitHub Action builds the
+firmware and publishes the app + flasher binaries to GitHub Pages. One-time
+setup: repo **Settings → Pages → Source: "GitHub Actions"**. After that,
+anyone can open your Pages URL and flash a board from the browser.
+
+**⚠️ Upgrading a device that has sessions on it:** Phase 3 changes the flash
+partition layout, which reformats stored data on first boot after the new
+firmware. Run `./tools/jump sync` (and confirm the report looks right)
+**before** flashing the upgrade.
+
+---
+
 ## Command reference
 
 | Command | What it does |
@@ -156,6 +191,7 @@ is consistently off by a percentage, set `height_scale` in
 | `./tools/jump desktest` | guided assembly verification (3 tosses) |
 | `./tools/jump drop` | guided timing calibration from measured drops |
 | `./tools/jump sync` | download session → analyze → report.md |
+| `./tools/jump web` | serve the browser app (live BLE stats, sessions, flasher) |
 | `./tools/jump replay --csv f` | re-run the detector over any saved capture |
 | `./tools/jump monitor` | raw serial console (type `help`) |
 | `./tools/jump gen` | regenerate firmware settings from config/params.json |
@@ -176,5 +212,5 @@ hints. Beyond those:
 | `flash` can't find the port | data-capable USB cable? (many are charge-only) Try `--port`. On Linux you may need to join the `dialout` group. |
 | Real jumps missed on the water | in `config/params.json`: **raise** `freefall_enter_g` (takeoff dip not registering) or **lower** `landing_threshold_g` (landing spike missed); test against your synced trace with `replay`, then re-flash |
 | False jumps from chop | raise `landing_threshold_g` or `min_airtime_s` (same loop) |
-| `trace log full` during long session | `sync` then clear; ~30 min of *moving* time fits per session by design |
+| `trace log full` during long session | `sync` then clear; ~45 min of *moving* time fits per session by design (grew with the Phase 3 partition map) |
 | Board won't charge / dead | battery polarity — see Safety |

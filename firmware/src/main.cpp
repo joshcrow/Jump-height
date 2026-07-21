@@ -10,17 +10,24 @@
 //   * Power-on self-test with plain-English fix hints; a wiring failure does
 //     NOT brick the session — fix the wires and type `selftest` to recover.
 //
-// Serial protocol (115200 baud) — designed for the ./tools/jump CLI but human
-// readable. Lines starting with `#` are chatter. Machine lines:
+// Protocol (115200 baud on USB serial) — designed for the ./tools/jump CLI but
+// human readable. Lines starting with `#` are chatter. Machine lines:
 //   SELFTEST BEGIN / SELFTEST <name> PASS|WARN|FAIL|SKIP detail=<v> / SELFTEST END result=...
 //   READY                      — boot complete
 //   STATE recording|idle       — motion gate transitions
 //   JUMP n=.. airtime_raw_s=.. airtime_s=.. height_m=.. height_ft=.. best_m=..
 //   STATS session_jumps=.. session_best_m=.. stored_jumps=.. stored_best_m=..
-//   INFO fw=.. sample_hz=.. / PARAMS <key=value ...>
+//   INFO fw=.. sample_hz=.. log_hz=.. ble=1 / PARAMS <key=value ...>
 //   FILE <name> BEGIN ... FILE <name> END
 //   OK <cmd> | ERR <detail>    — every typed command finishes with one of these
 // Commands: help stats jumps trace dump clear selftest info
+//
+// BLE (added in v0.3.0): the SAME protocol is mirrored over a Nordic UART
+// Service so a phone/laptop can read jumps and send commands wirelessly. Every
+// line above goes out on BOTH USB serial and (when a client is subscribed) the
+// BLE TX characteristic, via the emit layer below; the BLE stack lives in
+// include/ble_link.h. A BLE failure is reported by the self-test's `ble` row but
+// never blocks jump detection — v1 still reads over USB.
 //
 // All tunables come from config/params.json via the generated params.gen.h.
 //
@@ -31,11 +38,14 @@
 #include <FS.h>
 #include <LittleFS.h>
 #include <esp_timer.h>
+#include <stdarg.h>
+#include <string.h>
 #include "params.gen.h"
 #include "mpu6050_min.h"
 #include "jump_detector.h"
+#include "ble_link.h"
 
-#define FW_VERSION "0.2.0"
+#define FW_VERSION "0.3.0"
 
 static const float    G                  = JH_G;
 static const uint32_t SAMPLE_INTERVAL_US = 1000000UL / JH_SAMPLE_HZ;
@@ -50,6 +60,7 @@ jump::Detector detector;
 
 static bool sensor_ok = false;
 static bool fs_ok     = false;
+static bool ble_ok    = false;  // BLE stack came up; reported by the self-test
 
 // Session stats (since this power-up) + stored stats (across power-ups)
 static uint32_t session_jumps = 0;
@@ -80,6 +91,39 @@ static uint32_t last_flush_ms = 0;
 // Non-blocking serial command assembly
 static String cmd_buf;
 
+// ---------------- Protocol output (emit layer) ----------------
+// Single choke point for ALL protocol output. Every line goes to USB serial and,
+// when a BLE client is subscribed, to the Nordic UART TX characteristic — same
+// bytes on both transports. Chatter (`#`), hints, machine lines, and FILE dumps
+// all pass through here. Nothing else in this file should call Serial.print*
+// directly. Only ever called from loop()/setup() (never a NimBLE callback), so
+// the BLE notify path has no cross-task contention (see ble_link.h).
+static void emitBytes(const char* data, size_t len) {
+  Serial.write((const uint8_t*)data, len);
+  ble_link::write(data, len);
+}
+static void emit(const char* s)     { emitBytes(s, strlen(s)); }
+static void emitLine(const char* s) { emit(s); emitBytes("\n", 1); }  // like println
+static void emitf(const char* fmt, ...) {                             // like printf
+  char buf[256];
+  va_list ap;
+  va_start(ap, fmt);
+  int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+  va_end(ap);
+  if (n < 0) return;
+  if (n > (int)sizeof(buf) - 1) n = (int)sizeof(buf) - 1;  // truncated: emit what fit
+  emitBytes(buf, (size_t)n);
+}
+
+// A newly-subscribed BLE client gets the banner + READY so it knows the link is
+// live. BLE-only on purpose (not through emit): it's a per-connection greeting,
+// and re-emitting READY onto USB could confuse a serial session mid-command.
+static void bleGreet() {
+  static const char banner[] = "# JumpHeight fw v" FW_VERSION "\n";
+  ble_link::write(banner, sizeof(banner) - 1);
+  ble_link::write("READY\n", 6);
+}
+
 // ---------------- Storage ----------------
 static void flushTrace() {
   if (!fs_ok || trace_buf.length() == 0) return;
@@ -93,7 +137,7 @@ static void flushTrace() {
     trace_bytes += trace_buf.length();
     if (trace_bytes >= JH_TRACE_MAX_BYTES && !trace_full) {
       trace_full = true;
-      Serial.println("# trace log full — still counting jumps. `dump` then `clear` to reset.");
+      emitLine("# trace log full — still counting jumps. `dump` then `clear` to reset.");
     }
   }
   trace_buf = "";
@@ -111,15 +155,23 @@ static void logJump(const jump::JumpEvent& ev) {
 }
 
 static void printFileFramed(const char* path, const char* name) {
-  Serial.printf("FILE %s BEGIN\n", name);
+  emitf("FILE %s BEGIN\n", name);
   if (fs_ok) {
     File f = LittleFS.open(path, FILE_READ);
     if (f) {
-      while (f.available()) Serial.write(f.read());
+      // Read in blocks (not byte-by-byte): far fewer BLE notifications, and the
+      // emit layer chunks each block to the MTU. Notify back-pressure/pacing is
+      // handled inside ble_link::write, so a long BLE dump self-throttles.
+      uint8_t block[240];
+      while (f.available()) {
+        size_t n = f.read(block, sizeof(block));
+        if (n == 0) break;
+        emitBytes((const char*)block, n);
+      }
       f.close();
     }
   }
-  Serial.printf("FILE %s END\n", name);
+  emitf("FILE %s END\n", name);
 }
 
 static void scanStoredJumps() {
@@ -146,7 +198,7 @@ static void scanStoredJumps() {
 // Prints machine-readable results plus plain-English hints, and (re)initializes
 // the sensor. Safe to run repeatedly via the `selftest` command.
 static bool runSelfTest() {
-  Serial.println("SELFTEST BEGIN");
+  emitLine("SELFTEST BEGIN");
   bool all_ok = true;
 
   // 1. Is anything answering on the I2C bus?
@@ -156,28 +208,28 @@ static bool runSelfTest() {
 
   bool imu_up = false;
   if (addr == 0) {
-    Serial.println("SELFTEST i2c FAIL detail=no_device");
-    Serial.println("# hint: no sensor found. Check the 4 wires: VCC->3V3 (NOT 5V pin if");
-    Serial.println("# hint: unsure), GND->GND, SDA->SDA, SCL->SCL. Swapped SDA/SCL is the");
-    Serial.println("# hint: #1 cause. Loose breadboard/jumper contact is #2.");
+    emitLine("SELFTEST i2c FAIL detail=no_device");
+    emitLine("# hint: no sensor found. Check the 4 wires: VCC->3V3 (NOT 5V pin if");
+    emitLine("# hint: unsure), GND->GND, SDA->SDA, SCL->SCL. Swapped SDA/SCL is the");
+    emitLine("# hint: #1 cause. Loose breadboard/jumper contact is #2.");
     all_ok = false;
   } else {
-    Serial.printf("SELFTEST i2c PASS detail=0x%02X\n", addr);
+    emitf("SELFTEST i2c PASS detail=0x%02X\n", addr);
     imu_up = imu.begin(Wire, addr);
     if (!imu_up) {
-      Serial.println("SELFTEST config FAIL detail=write_error");
-      Serial.println("# hint: device answers but register writes fail — usually a flaky");
-      Serial.println("# hint: wire or bad solder joint. Re-check connections.");
+      emitLine("SELFTEST config FAIL detail=write_error");
+      emitLine("# hint: device answers but register writes fail — usually a flaky");
+      emitLine("# hint: wire or bad solder joint. Re-check connections.");
       all_ok = false;
     } else {
       const uint8_t who = imu.whoAmI();
       if (who == 0x68) {
-        Serial.printf("SELFTEST whoami PASS detail=0x%02X\n", who);
+        emitf("SELFTEST whoami PASS detail=0x%02X\n", who);
       } else {
         // Clone chips report odd IDs but usually work fine — warn, don't fail.
-        Serial.printf("SELFTEST whoami WARN detail=0x%02X\n", who);
-        Serial.println("# hint: unexpected chip ID — likely a clone MPU-6050. Usually fine;");
-        Serial.println("# hint: the accel/noise checks below are what actually matter.");
+        emitf("SELFTEST whoami WARN detail=0x%02X\n", who);
+        emitLine("# hint: unexpected chip ID — likely a clone MPU-6050. Usually fine;");
+        emitLine("# hint: the accel/noise checks below are what actually matter.");
       }
     }
   }
@@ -196,85 +248,102 @@ static bool runSelfTest() {
       delay(5);
     }
     if (good < N / 2) {
-      Serial.println("SELFTEST accel FAIL detail=read_errors");
-      Serial.println("# hint: reads are failing intermittently — flaky wiring.");
+      emitLine("SELFTEST accel FAIL detail=read_errors");
+      emitLine("# hint: reads are failing intermittently — flaky wiring.");
       all_ok = false;
     } else {
       const float mean = sum / good;
       const float var  = sumsq / good - mean * mean;
       const float sd   = var > 0 ? sqrtf(var) : 0;
       if (mean > 0.8f && mean < 1.2f) {
-        Serial.printf("SELFTEST accel PASS detail=%.3fg\n", mean);
+        emitf("SELFTEST accel PASS detail=%.3fg\n", mean);
       } else {
-        Serial.printf("SELFTEST accel FAIL detail=%.3fg\n", mean);
-        Serial.println("# hint: should read ~1.0g sitting still. Keep the device still on a");
-        Serial.println("# hint: table during self-test, and check VCC is on 3V3.");
+        emitf("SELFTEST accel FAIL detail=%.3fg\n", mean);
+        emitLine("# hint: should read ~1.0g sitting still. Keep the device still on a");
+        emitLine("# hint: table during self-test, and check VCC is on 3V3.");
         all_ok = false;
       }
       if (sd < 0.03f) {
-        Serial.printf("SELFTEST noise PASS detail=%.4fg\n", sd);
+        emitf("SELFTEST noise PASS detail=%.4fg\n", sd);
       } else if (sd < 0.08f) {
-        Serial.printf("SELFTEST noise WARN detail=%.4fg\n", sd);
-        Serial.println("# hint: noisier than expected — vibration or a marginal clone.");
-        Serial.println("# hint: OK to proceed; watch for false jumps in the desk test.");
+        emitf("SELFTEST noise WARN detail=%.4fg\n", sd);
+        emitLine("# hint: noisier than expected — vibration or a marginal clone.");
+        emitLine("# hint: OK to proceed; watch for false jumps in the desk test.");
       } else {
-        Serial.printf("SELFTEST noise FAIL detail=%.4fg\n", sd);
-        Serial.println("# hint: far too noisy. Was the device moving? Re-run `selftest`");
-        Serial.println("# hint: with it resting on a table. If still failing, try another");
-        Serial.println("# hint: MPU board (you bought spares for exactly this).");
+        emitf("SELFTEST noise FAIL detail=%.4fg\n", sd);
+        emitLine("# hint: far too noisy. Was the device moving? Re-run `selftest`");
+        emitLine("# hint: with it resting on a table. If still failing, try another");
+        emitLine("# hint: MPU board (you bought spares for exactly this).");
         all_ok = false;
       }
     }
   } else {
-    Serial.println("SELFTEST accel SKIP detail=no_sensor");
-    Serial.println("SELFTEST noise SKIP detail=no_sensor");
+    emitLine("SELFTEST accel SKIP detail=no_sensor");
+    emitLine("SELFTEST noise SKIP detail=no_sensor");
   }
 
-  // 3. Storage.
-  if (fs_ok) {
-    Serial.printf("SELFTEST flash PASS detail=%uB_free\n",
-                  (unsigned)(LittleFS.totalBytes() - LittleFS.usedBytes()));
+  // 3. BLE link (v0.3.0). Reported honestly, but a BLE failure does NOT flip the
+  // aggregate to FAIL: BLE is optional (v1 reads over USB), and the self-test's
+  // result gates "is this device fit to track jumps?". Marking the whole test
+  // FAIL over an optional radio would dead-end the wizard on a perfectly good
+  // jump tracker — exactly the blocking the contract says must not happen.
+  if (ble_ok) {
+    emitLine("SELFTEST ble PASS detail=advertising");
   } else {
-    Serial.println("SELFTEST flash FAIL detail=mount_failed");
-    Serial.println("# hint: flash storage didn't mount; jumps will print live but won't be");
-    Serial.println("# hint: saved. Re-flash with `./tools/jump flash` (it formats storage).");
+    emitLine("SELFTEST ble FAIL detail=init_error");
+    emitLine("# hint: Bluetooth didn't start. Jump detection and the USB console");
+    emitLine("# hint: still work fully — you can flash, test, and download over USB.");
+    emitLine("# hint: Re-flash to retry; if it keeps failing the radio may be faulty.");
+  }
+
+  // 4. Storage.
+  if (fs_ok) {
+    emitf("SELFTEST flash PASS detail=%uB_free\n",
+          (unsigned)(LittleFS.totalBytes() - LittleFS.usedBytes()));
+  } else {
+    emitLine("SELFTEST flash FAIL detail=mount_failed");
+    emitLine("# hint: flash storage didn't mount; jumps will print live but won't be");
+    emitLine("# hint: saved. Re-flash with `./tools/jump flash` (it formats storage).");
     all_ok = false;
   }
 
   // Sampling only needs a working IMU: a flash or accel-range failure still
   // leaves the device usable for live detection, and `selftest` can re-probe.
   sensor_ok = imu_up;
-  Serial.printf("SELFTEST END result=%s\n", all_ok ? "PASS" : "FAIL");
+  emitf("SELFTEST END result=%s\n", all_ok ? "PASS" : "FAIL");
   return all_ok;
 }
 
 // ---------------- Commands ----------------
 static void printHelp() {
-  Serial.println("# commands: help | stats | jumps | trace | dump | clear | selftest | info");
+  emitLine("# commands: help | stats | jumps | trace | dump | clear | selftest | info");
 }
 
+// Handles one command line from EITHER transport (serial pollSerial() or BLE
+// ble_link::poll()). Both run on the loop() task, one at a time, so a command is
+// processed exactly once; its output goes to both transports via the emit layer.
 static void handleCommand(const String& cmd) {
   if (cmd == "help") {
     printHelp();
-    Serial.println("OK help");
+    emitLine("OK help");
   } else if (cmd == "stats") {
-    Serial.printf("STATS session_jumps=%lu session_best_m=%.3f stored_jumps=%lu stored_best_m=%.3f\n",
-                  (unsigned long)session_jumps, session_best,
-                  (unsigned long)stored_jumps, stored_best);
-    Serial.println("OK stats");
+    emitf("STATS session_jumps=%lu session_best_m=%.3f stored_jumps=%lu stored_best_m=%.3f\n",
+          (unsigned long)session_jumps, session_best,
+          (unsigned long)stored_jumps, stored_best);
+    emitLine("OK stats");
   } else if (cmd == "jumps") {
     flushTrace();
     printFileFramed(JUMPS_PATH, "jumps.csv");
-    Serial.println("OK jumps");
+    emitLine("OK jumps");
   } else if (cmd == "trace") {
     flushTrace();
     printFileFramed(TRACE_PATH, "trace.csv");
-    Serial.println("OK trace");
+    emitLine("OK trace");
   } else if (cmd == "dump") {
     flushTrace();
     printFileFramed(JUMPS_PATH, "jumps.csv");
     printFileFramed(TRACE_PATH, "trace.csv");
-    Serial.println("OK dump");
+    emitLine("OK dump");
   } else if (cmd == "clear") {
     if (fs_ok) {
       LittleFS.remove(TRACE_PATH);
@@ -283,17 +352,19 @@ static void handleCommand(const String& cmd) {
     trace_buf = ""; trace_bytes = 0; trace_full = false;
     trace_header = false; jumps_header = false;
     stored_jumps = 0; stored_best = 0.0f;
-    Serial.println("# cleared stored data");
-    Serial.println("OK clear");
+    emitLine("# cleared stored data");
+    emitLine("OK clear");
   } else if (cmd == "selftest") {
     runSelfTest();
-    Serial.println("OK selftest");
+    emitLine("OK selftest");
   } else if (cmd == "info") {
-    Serial.printf("INFO fw=%s sample_hz=%d log_hz=%d\n", FW_VERSION, JH_SAMPLE_HZ, JH_LOG_HZ);
-    Serial.println("PARAMS " JH_PARAMS_SUMMARY);
-    Serial.println("OK info");
+    // ble=1 advertises the capability (this firmware speaks BLE); the runtime
+    // health of the radio is the self-test's `ble` row, not this flag.
+    emitf("INFO fw=%s sample_hz=%d log_hz=%d ble=1\n", FW_VERSION, JH_SAMPLE_HZ, JH_LOG_HZ);
+    emitLine("PARAMS " JH_PARAMS_SUMMARY);
+    emitLine("OK info");
   } else {
-    Serial.printf("ERR unknown_command %s\n", cmd.c_str());
+    emitf("ERR unknown_command %s\n", cmd.c_str());
     printHelp();
   }
 }
@@ -315,12 +386,15 @@ static void pollSerial() {
 void setup() {
   Serial.begin(115200);
   delay(300);
-  Serial.println("# JumpHeight fw v" FW_VERSION);
+  emitLine("# JumpHeight fw v" FW_VERSION);  // serial-only here: BLE isn't up yet
 
   Wire.begin(JH_I2C_SDA, JH_I2C_SCL);
   Wire.setClock(400000);
 
-  fs_ok = LittleFS.begin(true);  // format on first use
+  // Mount the data partition. Our table (partitions.csv) names it "littlefs",
+  // not the ESP32 default "spiffs", so the label must be passed explicitly or
+  // the mount silently fails. Other args are the library defaults.
+  fs_ok = LittleFS.begin(true, "/littlefs", 10, "littlefs");  // format on first use
   if (fs_ok) {
     File f = LittleFS.open(TRACE_PATH, FILE_READ);
     if (f) {
@@ -333,17 +407,21 @@ void setup() {
     if (jf) { jumps_header = jf.size() > 0; jf.close(); }
   }
 
+  // Bring BLE up before the self-test so the `ble` row reflects the real result.
+  // A failure is non-fatal: everything below (and jump detection) runs regardless.
+  ble_ok = ble_link::begin("JumpHeight");
+
   runSelfTest();
   scanStoredJumps();
   if (stored_jumps > 0) {
-    Serial.printf("# stored history: %lu jumps, best %.2f m — `dump` to export, `clear` to reset\n",
-                  (unsigned long)stored_jumps, stored_best);
+    emitf("# stored history: %lu jumps, best %.2f m — `dump` to export, `clear` to reset\n",
+          (unsigned long)stored_jumps, stored_best);
   }
   if (!sensor_ok) {
-    Serial.println("# sensor not working — fix wiring, then type `selftest` (no re-flash needed)");
+    emitLine("# sensor not working — fix wiring, then type `selftest` (no re-flash needed)");
   }
   printHelp();
-  Serial.println("READY");
+  emitLine("READY");
 
   trace_buf.reserve(2048);
   t0_us         = esp_timer_get_time();
@@ -353,6 +431,8 @@ void setup() {
 // ---------------- Loop ----------------
 void loop() {
   pollSerial();
+  ble_link::poll(handleCommand);  // BLE commands run through the same path as serial
+  if (ble_link::takeGreetPending()) bleGreet();  // greet a client that just subscribed
   if (!sensor_ok) { delay(10); return; }  // command loop still runs; sampling paused
 
   static int64_t next_us = esp_timer_get_time();
@@ -376,9 +456,9 @@ void loop() {
   }
   const bool was_active = active;
   active = motion_seen && (now_ms - last_motion_ms) < IDLE_TIMEOUT_MS;
-  if (active && !was_active) Serial.println("STATE recording");
+  if (active && !was_active) emitLine("STATE recording");
   if (!active && was_active) {
-    Serial.println("STATE idle");
+    emitLine("STATE idle");
     flushTrace();
   }
   if (!active) return;
@@ -390,9 +470,9 @@ void loop() {
     stored_jumps++;
     if (ev.height_m > session_best) session_best = ev.height_m;
     if (ev.height_m > stored_best)  stored_best  = ev.height_m;
-    Serial.printf("JUMP n=%lu airtime_raw_s=%.3f airtime_s=%.3f height_m=%.3f height_ft=%.1f best_m=%.3f\n",
-                  (unsigned long)session_jumps, ev.airtime_raw_s, ev.airtime_s,
-                  ev.height_m, ev.height_m * 3.28084f, session_best);
+    emitf("JUMP n=%lu airtime_raw_s=%.3f airtime_s=%.3f height_m=%.3f height_ft=%.1f best_m=%.3f\n",
+          (unsigned long)session_jumps, ev.airtime_raw_s, ev.airtime_s,
+          ev.height_m, ev.height_m * 3.28084f, session_best);
     logJump(ev);
   }
 

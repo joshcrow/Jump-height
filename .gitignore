@@ -21,6 +21,9 @@ data/logs/
 data/diagnostics/
 data/wizard_state.json
 
+# Flasher binaries staged by `./tools/jump web` (built locally or by CI)
+web/firmware/
+
 # OS
 .DS_Store
 Thumbs.db

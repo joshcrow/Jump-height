@@ -5,12 +5,15 @@ to the [Woo](https://www.woosports.com/). Stick a small waterproof sensor on the
 board, go send it, and find out **how high you jumped** and **how long you were in
 the air**.
 
-> Status: **v1 ready to assemble.** Building it is wires-and-glue only — every
-> software step is one command via `./tools/jump` (flash, wiring self-test, guided
-> desk test, drop-test calibration, session download + report), and the whole flow
-> can be **rehearsed with zero hardware** against a simulated device. Start with
-> **[BUILD.md](BUILD.md)** (the runbook) and **[DECISIONS.md](DECISIONS.md)** (what
-> was chosen and why).
+> Status: **v1 ready to assemble, Phase 3 built.** Building it is wires-and-glue
+> only — every software step is one command via `./tools/jump` (guided wizard,
+> flash, wiring self-test, desk test, drop-test calibration, session sync), all
+> **rehearsable with zero hardware** against a simulated device. The firmware
+> compiles clean on the real ESP32 toolchain, speaks its protocol over **Bluetooth**
+> too, and there's a **browser app** (`./tools/jump web`): live jump stats via Web
+> Bluetooth, session history + CSV via Web Serial, and in-browser flashing via ESP
+> Web Tools. Start with **[BUILD.md](BUILD.md)** (the runbook) and
+> **[DECISIONS.md](DECISIONS.md)** (what was chosen and why).
 >
 > ```bash
 > ./tools/jump wizard           # plug in and follow along: setup → flash →
@@ -87,9 +90,11 @@ Jump-height/
 ├── DECISIONS.md         ← the v1 design decisions and why
 ├── config/params.json   ← ALL tunable settings — one file feeds firmware + sim + analysis
 ├── tools/
-│   ├── jump             ← the one-command interface: setup/flash/selftest/desktest/drop/sync/simtest
+│   ├── jump             ← the one-command interface: wizard/flash/selftest/desktest/drop/sync/web/report
 │   ├── fake_device.py   ← simulated device (rehearse + test everything with no hardware)
 │   └── gen_params.py    ← bakes config/params.json into a firmware header
+├── web/                 ← browser app: live BLE stats, sessions/CSV over USB, in-browser flasher
+├── .github/workflows/   ← CI: builds firmware, publishes app + flasher binaries to Pages
 ├── docs/
 │   ├── algorithm.md     ← the physics + detection state machine, in detail
 │   ├── hardware.md      ← bill of materials, wiring, power, waterproofing
