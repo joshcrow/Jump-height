@@ -799,15 +799,51 @@ def cmd_simtest(args) -> int:
 # ------------------------------------------------------- setup / flash / misc
 
 
-def find_pio() -> str | None:
+def _user_script_dirs() -> list[Path]:
+    """Everywhere `pip install --user` may have put console scripts.
+
+    Linux: ~/.local/bin. macOS system/CLT Python: ~/Library/Python/X.Y/bin —
+    which is almost never on PATH, and is exactly how a successful PlatformIO
+    install on a Mac once got reported as a failure."""
+    dirs: list[Path] = []
+    try:
+        import sysconfig
+
+        d = sysconfig.get_path("scripts", f"{os.name}_user")
+        if d:
+            dirs.append(Path(d))
+    except (ImportError, KeyError):
+        pass
+    dirs.append(Path.home() / ".local" / "bin")
+    dirs.extend(sorted((Path.home() / "Library" / "Python").glob("*/bin")))
+    return dirs
+
+
+def find_pio() -> list[str] | None:
+    """The command argv that runs PlatformIO, or None if it's truly absent.
+
+    Order: PATH; the per-OS pip --user script dirs; PlatformIO's own venv;
+    finally `python -m platformio`, which works with no PATH setup at all
+    whenever the package is importable by this interpreter."""
     for cand in ("pio", "platformio"):
         p = shutil.which(cand)
         if p:
-            return p
-    for p in (Path.home() / ".local" / "bin" / "pio",
-              Path.home() / ".platformio" / "penv" / "bin" / "pio"):
-        if p.exists():
-            return str(p)
+            return [p]
+    for d in _user_script_dirs():
+        for cand in ("pio", "platformio"):
+            f = d / cand
+            if f.exists():
+                return [str(f)]
+    penv = Path.home() / ".platformio" / "penv" / "bin" / "pio"
+    if penv.exists():
+        return [str(penv)]
+    try:
+        import importlib.util
+
+        if importlib.util.find_spec("platformio") is not None:
+            return [sys.executable, "-m", "platformio"]
+    except (ImportError, ValueError):
+        pass
     return None
 
 
@@ -816,14 +852,16 @@ def cmd_setup(args) -> int:
     ok = True
     print(f"✅ Python {sys.version.split()[0]}")
 
-    if find_pio():
-        print("✅ PlatformIO already installed")
+    pio = find_pio()
+    if pio:
+        print(f"✅ PlatformIO already installed ({' '.join(pio)})")
     else:
         print("Installing PlatformIO (builds + uploads the firmware)...")
         r = subprocess.run([sys.executable, "-m", "pip", "install", "--user",
                             "platformio"])
-        if r.returncode == 0 and find_pio():
-            print("✅ PlatformIO installed")
+        pio = find_pio()
+        if r.returncode == 0 and pio:
+            print(f"✅ PlatformIO installed ({' '.join(pio)})")
         else:
             print("❌ PlatformIO install failed — see https://platformio.org/install")
             ok = False
@@ -847,9 +885,12 @@ def cmd_setup(args) -> int:
     else:
         print("⚠️  no C++ compiler — simtest will skip the parity check (fine)")
 
-    local_bin = str(Path.home() / ".local" / "bin")
-    if local_bin not in os.environ.get("PATH", ""):
-        print(f"\nNote: if 'pio' isn't found later, add {local_bin} to your PATH.")
+    # This tool finds pio wherever pip put it (or runs `python -m platformio`),
+    # so PATH setup is optional — offer the REAL directory for convenience only.
+    script_dir = next((str(d) for d in _user_script_dirs() if (d / "pio").exists()), None)
+    if script_dir and script_dir not in os.environ.get("PATH", ""):
+        print(f"\n(Optional) to run `pio` yourself in a terminal, add {script_dir} "
+              "to your PATH.\nEvery ./tools/jump command works without that.")
     print("\nNext: ./tools/jump simtest   (should PASS with no hardware)")
     return 0 if ok else 1
 
@@ -869,7 +910,7 @@ def cmd_flash(args) -> int:
     if not pio:
         print("PlatformIO not found — run ./tools/jump setup first.")
         return 1
-    cmd = [pio, "run", "-d", str(REPO / "firmware"), "-t", "upload"]
+    cmd = pio + ["run", "-d", str(REPO / "firmware"), "-t", "upload"]
     if args.port:
         cmd += ["--upload-port", args.port]
     print("Building + uploading firmware (first build downloads the toolchain — "
@@ -1229,11 +1270,11 @@ def cmd_report(args) -> int:
     pio = find_pio()
     if pio:
         try:
-            v = subprocess.run([pio, "--version"], capture_output=True, text=True,
+            v = subprocess.run(pio + ["--version"], capture_output=True, text=True,
                                timeout=20).stdout.strip()
         except Exception as e:
             v = f"(error: {e})"
-        S.append(f"pio      : {v} [{pio}]")
+        S.append(f"pio      : {v} [{' '.join(pio)}]")
     else:
         S.append("pio      : NOT FOUND (run ./tools/jump setup)")
     try:
