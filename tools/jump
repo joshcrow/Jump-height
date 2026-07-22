@@ -905,14 +905,40 @@ def cmd_gen(args) -> int:
 
 
 def cmd_flash(args) -> int:
+    # Find the board BEFORE building: PlatformIO's own auto-detect happily
+    # grabs macOS's phantom /dev/cu.Bluetooth-Incoming-Port and then spends
+    # three minutes failing to talk to it. Our scan only counts real USB
+    # serial devices, so "no board" fails here in a second, with the actual
+    # fix — and when there IS exactly one board, we hand pio the explicit
+    # port so its guesswork never enters the picture.
+    port = args.port
+    if not port:
+        ports = scan_ports()
+        if not ports:
+            print("""No USB serial device found — the computer can't see the board.
+In order of likelihood:
+  1. The USB cable is charge-only. Swap cables (a lit power LED proves
+     power, NOT data). Most spare micro-USB cables are charge-only.
+  2. Different USB port, or plug in directly instead of through a hub.
+  3. macOS + no port even with a good cable: check  > About This Mac >
+     System Report > USB. If a CH340/USB-Serial device shows there but no
+     /dev/cu.usbserial* exists, install the CH34x driver (older macOS
+     doesn't bundle it), approve it in Privacy & Security, reboot.
+If you're certain it's connected anyway: ./tools/jump flash --port <port>""")
+            return 1
+        if len(ports) > 1:
+            print("Multiple serial devices found: " + ", ".join(ports)
+                  + "\nPick the board with:  ./tools/jump flash --port <port>")
+            return 1
+        port = ports[0]
+        print(f"Board found at {port}")
     cmd_gen(args)
     pio = find_pio()
     if not pio:
         print("PlatformIO not found — run ./tools/jump setup first.")
         return 1
-    cmd = pio + ["run", "-d", str(REPO / "firmware"), "-t", "upload"]
-    if args.port:
-        cmd += ["--upload-port", args.port]
+    cmd = pio + ["run", "-d", str(REPO / "firmware"), "-t", "upload",
+                 "--upload-port", port]
     print("Building + uploading firmware (first build downloads the toolchain — "
           "takes a few minutes once)...")
     # Stream pio's output line by line through our stdout so it lands in the
