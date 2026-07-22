@@ -32,6 +32,7 @@ import os
 import random
 import select
 import sys
+import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -98,10 +99,28 @@ class FakeDevice:
                     f"{ev.airtime_s:.3f},{ev.height_m:.3f}")
 
     def send(self, line: str):
-        try:
-            os.write(self.master, (line + "\n").encode())
-        except (BlockingIOError, OSError):
-            pass  # no reader yet / buffer full: drop, like a real UART would
+        """Write a whole line to the pty, RELIABLY.
+
+        The master fd is non-blocking and macOS pty buffers are tiny (~1 KB,
+        vs ~64 KB on Linux), so a full `dump` overruns them instantly. A real
+        UART would drop bytes; a deterministic test double must not — dropped
+        framing (the 'OK dump' terminator) left the CLI waiting forever, but
+        only on Macs, where the smaller buffer actually overflowed. So: write
+        it all, pausing briefly for the reader to drain, and give up only
+        after a stalled 5 s (reader is gone) so nothing can hang either.
+        """
+        data = (line + "\n").encode()
+        deadline = time.monotonic() + 5.0
+        while data:
+            try:
+                n = os.write(self.master, data)
+                data = data[n:]
+            except BlockingIOError:
+                if time.monotonic() > deadline:
+                    return  # no one is draining the pipe; drop rather than hang
+                select.select([], [self.master], [], 0.05)
+            except OSError:
+                return  # reader closed the pty
 
     def emit_jump(self, raw: float):
         p = self.params
