@@ -39,7 +39,7 @@ building this) knows what was chosen on purpose vs. what's just incidental.
 
 ## Deliberately deferred to later phases
 
-- **Real deep-sleep** power management (multi-session battery life). v1 charges after each outing.
+- **Real deep-sleep** power management (multi-session battery life). v1 charges after each outing. *(Also the gate for the potted-puck + solar idea — energy math and prerequisites studied in the roadmap's Phase 4 backlog note.)*
 - **Live in-session readout on the water.** BLE + the web app now show jumps live, but 2.4 GHz doesn't travel through water and you can't read a phone mid-wing — live stats are for the beach between runs; the session record remains the product.
 - **microSD card** for unlimited logging. v1 uses built-in flash (~45 min of moving-time trace, capped; grew with the Phase 3 partition map).
 - **Better IMU / GPS / custom PCB.** All Phase 4.

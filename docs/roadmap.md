@@ -105,6 +105,47 @@ syncs a session in seconds.
 
 **Done when:** it's a self-contained puck you charge, stick on, and forget.
 
+### Backlog study — epoxy-potted puck + solar top-up *(thought through 2026-07)*
+
+Verdict: **viable, and the energy math is comfortably on our side — but only
+after deep sleep exists.** An awake ESP32 (~50 mA ≈ 4.4 Wh/day) out-eats any
+puck-sized panel (~1 Wh/day); asleep between sessions the whole device needs
+~1.3 Wh/**week** (3 × 2 h sessions + sub-mA idle), which a capsule-lid-sized
+~0.5 W panel covers 4–7× over even flat-mounted, salty, and half-clouded.
+Run-time ladder: today ≈ 10 h per 500 mAh charge; + deep sleep ≈ 1½–2 weeks
+of riding per charge (≈ 2-month shelf); + solar ≈ indefinite, battery just
+bridges dark weeks.
+
+Prerequisites potting forces (in order — each is useful on its own):
+
+1. **Deep sleep + wake-on-motion**: MPU-6050's low-power motion interrupt
+   (tens of µA) wakes the ESP32 — needs the currently-unconnected **INT pin
+   wired** to a GPIO (a 2-minute job later; the capsule stays openable).
+2. **Calibration out of the binary**: today `drop` bakes `airtime_offset_s`
+   in by *re-flashing* — impossible once potted. Params move to NVS-stored
+   settings writable over BLE.
+3. **OTA updates back in the partition map** (a potted board never sees USB
+   again). Costs FS space on 4 MB (~0.8 MB trace) — or an 8/16 MB module on
+   the Phase-4 PCB makes it free.
+4. **A real solar charge path**: bare panel → board USB charger brownout-loops;
+   use a small MPPT LiPo charger (CN3791-class) or harvesting IC (BQ25504)
+   with an NTC temp cutoff potted against the cell (no charging > ~45 °C).
+
+Potting traps (all solvable, all mandatory):
+- **The cell is the hazard**: pouch LiPo swells — never rigid-encase it. Soft
+  silicone cavity inside the epoxy shell, or switch to **LiFePO4** (safer
+  chemistry, temp-tolerant, 3.2 V still fine).
+- **Epoxy sinks** (~1.15 g/cm³): "must float" needs a syntactic-foam
+  (glass-microballoon) layer or a foam jacket. Mass also affects board feel.
+- Pour thin layers (cure is exothermic — a thick pour can cook the cell),
+  keep epoxy thin or windowed over the PCB antenna, use clear resin over the
+  charge LED, and **flash final firmware + calibrate before the pour**.
+- Boring-but-reliable alternative to solar: a potted **Qi receiver coil**
+  (charges at night, no deck real estate, but needs a human to dock it).
+
+Sequence: deep-sleep firmware → NVS params + OTA → solar trickle experiment
+on the *openable* capsule → pot as the v3 appliance once water-validated.
+
 ---
 
 ## Suggested first three sessions of work
