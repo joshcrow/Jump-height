@@ -21,9 +21,10 @@ boards ×4 (headers unsoldered — see the soldering section), phone with
 
 | Item | Notes |
 |------|-------|
-| Waterproof screw-top **capsule** | Must **float**, fit the FireBeetle **and** battery — the battery is the big item (61 × 51 × 8 mm; the board is 60 × 25 mm) — and clamp into a GoPro cradle (or zip-tie to a tray). Dive/camping "dry capsule" types work. If trying wireless charging (below), prefer a **thin flat bottom** with floor room for a ~5 cm coil — and buy the receiver first so you can size it. |
-| **GoPro adhesive mount** + cradle/tray | Plus zip ties as backup. |
-| Short **leash / tether** | A failed mount must not cost you the puck. |
+| Small waterproof **hard case**, Pelican-1010-class (~$15) | The MVP capsule. Search "micro waterproof case" (or Pelican 1010; clones fine). Interior floor ≥ **65 × 55 mm** — the battery (61 × 51 × 8 mm) is the big item; the board is 60 × 25 mm. O-ring clamshell, and **external lanyard holes** = zip-tie + tether points that never touch the seal. Must **float** loaded (bucket-test tells). Thin plastic walls usually pass Qi charging too. |
+| **GoPro surfboard mount kit** (~$12) | Purpose-built "stay on a board in waves" kit: flat adhesive bases + tether anchor + leash. Use **two bases**, fore + aft of the case. Alcohol-prep and stick **24 h before** water day — cure time is real. A failed mount must not cost you the puck: leash always. |
+| Heavy **zip ties** + Velcro cinch straps | Case cinches flat through the bases' GoPro fingers and its own lanyard holes. Zip ties = the lock; Velcro = quick beach removal. |
+| **Silica gel packet** (free in any shipment box) | Goes inside the case — hot beach → cold water means condensation fog on the electronics otherwise. |
 | **Jumper wires** (female-female) + a little solder | The MPU-6050 usually ships with its 4 header pins unsoldered. |
 | **Rubbing alcohol** | Surface prep for the adhesive mount. |
 | Multimeter *(optional, ~$10)* | To confirm battery polarity. |
@@ -131,6 +132,18 @@ slack loop and let it fall *with* the box so it never tugs mid-flight.
 Orientation inside doesn't matter. The waterproof capsule from the shopping
 list remains the container for anything near water — the kitchen box's
 jurisdiction ends at the cushion.
+
+## Water day one: the MVP rig
+
+Two adhesive bases on the center deck, **clear of where knees and feet land**,
+alcohol-wiped and stuck **24 hours before** water day. The case packs exactly
+like the bench box (snug foam, pin-tip padding, silica packet), zip-tied flat
+through both bases and its lanyard holes, leash to a footstrap insert or the
+kit's tether anchor. Before any ocean, in order: bucket-test the sealed case
+**empty** with a paper towel inside (the towel tells on leaks) → bucket-test
+**loaded** → confirm the phone still sees "JumpHeight" through the closed
+case. It floats and it's tethered, always. The slick custom housing comes
+later, informed by what this rig teaches.
 
 ## Calibration notes (the wizard handles the mechanics)
 
