@@ -131,12 +131,18 @@ class SerialPort:
             # (No fileno()/select() here — neither works for serial handles
             # on Windows.)
             self._ser = serial.Serial(path, baud, timeout=0.25)
-            # Deassert DTR/RTS so ESP32 boards settle into RUN mode.
-            try:
-                self._ser.dtr = False
-                self._ser.rts = False
-            except Exception:
-                pass
+            # Deassert DTR/RTS so ESP32 boards settle into RUN mode — except
+            # on macOS, where the WCH CH34x driver has been seen to wedge in
+            # exactly this modem-control ioctl (esptool's open works; ours
+            # hung — this poke was the one difference). Opening the port
+            # already pulses a reset via the auto-download circuit, so
+            # skipping the deassert costs nothing.
+            if sys.platform != "darwin":
+                try:
+                    self._ser.dtr = False
+                    self._ser.rts = False
+                except Exception:
+                    pass
         except ImportError:
             import termios
             import tty
