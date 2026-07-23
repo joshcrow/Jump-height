@@ -20,12 +20,14 @@ boards ×4 (headers unsoldered — see the soldering section), phone with
 
 | Item | Notes |
 |------|-------|
-| Waterproof screw-top **capsule** | Must **float**, fit the FireBeetle **and** battery, and clamp into a GoPro cradle (or zip-tie to a tray). Dive/camping "dry capsule" types work. |
+| Waterproof screw-top **capsule** | Must **float**, fit the FireBeetle **and** battery, and clamp into a GoPro cradle (or zip-tie to a tray). Dive/camping "dry capsule" types work. If trying wireless charging (below), prefer a **thin flat bottom** with floor room for a ~5 cm coil — and buy the receiver first so you can size it. |
 | **GoPro adhesive mount** + cradle/tray | Plus zip ties as backup. |
 | Short **leash / tether** | A failed mount must not cost you the puck. |
 | **Jumper wires** (female-female) + a little solder | The MPU-6050 usually ships with its 4 header pins unsoldered. |
 | **Rubbing alcohol** | Surface prep for the adhesive mount. |
 | Multimeter *(optional, ~$10)* | To confirm battery polarity. |
+| Qi **wireless receiver, USB-C plug** *(optional, ~$10)* | Thin coil + captive USB-C tail ("wireless charging receiver USB C"; Nillkin or similar). Plugs into the board, coil taped to the capsule floor → charge the sealed capsule on a phone pad. Cheap receivers can be plug-orientation picky: no red LED, flip the plug. |
+| Flat Qi **charging pad** *(optional, ~$12)* | Any reputable flat pad (not a stand), 5–10 W. A sealed puck parked on the pad also never self-drains — the wireless version of "leave it on USB". Works only if the capsule wall is thin (~few mm): that's the experiment. |
 
 ---
 
