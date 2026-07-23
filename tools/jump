@@ -253,11 +253,47 @@ def parse_kv(line: str) -> dict:
 # ------------------------------------------------------------- device session
 
 
+def open_serial_watchdogged(port: str, timeout_s: float = 8.0) -> SerialPort:
+    """Open the port, but never hang doing it.
+
+    Field find: on macOS the WCH CH34x driver can block the open() call
+    indefinitely when the port is reopened right after an esptool session —
+    a real builder watched "Connecting..." for three minutes. Nothing in this
+    tool is allowed to hang silently: open in a worker thread and give up
+    loudly after a few seconds with the actual remedy (replug the board).
+    If the stray open ever completes later, the daemon thread just closes it.
+    """
+    import threading
+
+    result: dict = {}
+
+    def _worker():
+        try:
+            result["sp"] = SerialPort(port)
+        except Exception as e:  # surfaced below on the main thread
+            result["err"] = e
+        if "sp" in result and result.get("abandoned"):
+            try: result["sp"].close()
+            except Exception: pass
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+    t.join(timeout_s)
+    if t.is_alive():
+        result["abandoned"] = True
+        raise TimeoutError(
+            f"opening {port} is stuck (a known macOS WCH-driver quirk right "
+            "after flashing). Unplug the board, plug it back in, and retry.")
+    if "err" in result:
+        raise result["err"]
+    return result["sp"]
+
+
 class Device:
     """A connected (real or fake) device speaking the firmware protocol."""
 
     def __init__(self, port: str):
-        self.sp = SerialPort(port)
+        self.sp = open_serial_watchdogged(port)
         self.boot_lines: list[str] = []
 
     def drain_boot(self, timeout: float = 5.0) -> None:
@@ -972,7 +1008,7 @@ If you're certain it's connected anyway: ./tools/jump flash --port <port>""")
 
 def cmd_monitor(args) -> int:
     port = args.port or autodetect_port()
-    sp = SerialPort(port)
+    sp = open_serial_watchdogged(port)
     interactive = os.name == "posix"  # select() on stdin is POSIX-only
     print(f"--- monitor {port} (Ctrl-C to exit"
           + ("; type a command + Enter) ---" if interactive else "; read-only) ---"))
