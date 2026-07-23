@@ -139,9 +139,9 @@ class FakeDevice:
         self.send("SELFTEST BEGIN")
         if self.args.scenario == "badwiring":
             self.send("SELFTEST i2c FAIL detail=no_device")
-            self.send("# hint: no sensor found. Check the 4 wires: VCC->3V3 (NOT 5V pin if")
-            self.send("# hint: unsure), GND->GND, SDA->SDA, SCL->SCL. Swapped SDA/SCL is the")
-            self.send("# hint: #1 cause. Loose breadboard/jumper contact is #2.")
+            self.send("# hint: no sensor found. Check the 4 wires: sensor VCC->3V3 (NOT the")
+            self.send("# hint: pin marked VCC — it carries ~4.7V), GND->GND, SDA->SDA,")
+            self.send("# hint: SCL->SCL. Swapped SDA/SCL is the #1 cause; loose jumper is #2.")
             self.send("SELFTEST accel SKIP detail=no_sensor")
             self.send("SELFTEST noise SKIP detail=no_sensor")
             self.send("SELFTEST ble PASS detail=advertising")

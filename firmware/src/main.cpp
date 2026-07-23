@@ -1,4 +1,4 @@
-// Jump Height — ESP32 firmware (FireBeetle v1 build)
+// Jump Height — ESP32 firmware (FireBeetle 2 ESP32-E field board)
 //
 // What it does (see DECISIONS.md / BUILD.md):
 //   * Samples the MPU-6050 at JH_SAMPLE_HZ over I2C (raw register driver —
@@ -213,9 +213,9 @@ static bool runSelfTest() {
   bool imu_up = false;
   if (addr == 0) {
     emitLine("SELFTEST i2c FAIL detail=no_device");
-    emitLine("# hint: no sensor found. Check the 4 wires: VCC->3V3 (NOT 5V pin if");
-    emitLine("# hint: unsure), GND->GND, SDA->SDA, SCL->SCL. Swapped SDA/SCL is the");
-    emitLine("# hint: #1 cause. Loose breadboard/jumper contact is #2.");
+    emitLine("# hint: no sensor found. Check the 4 wires: sensor VCC->3V3 (NOT the");
+    emitLine("# hint: pin marked VCC — it carries ~4.7V), GND->GND, SDA->SDA,");
+    emitLine("# hint: SCL->SCL. Swapped SDA/SCL is the #1 cause; loose jumper is #2.");
     all_ok = false;
   } else {
     emitf("SELFTEST i2c PASS detail=0x%02X\n", addr);

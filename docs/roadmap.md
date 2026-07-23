@@ -21,7 +21,7 @@ error. *(It does — this is the starting point.)*
 Get the same algorithm running on real hardware on your desk. The firmware and
 tooling exist — the runbook for executing this phase is **[../BUILD.md](../BUILD.md)**.
 
-- [x] FireBeetle ESP32 + MPU-6050 firmware (`firmware/`), ±8 g, 200 Hz, clone-tolerant
+- [x] FireBeetle 2 ESP32-E + MPU-6050 firmware (`firmware/`), ±8 g, 200 Hz, clone-tolerant
       raw driver, power-on self-test with fix hints
 - [x] One-command flash + wiring check: `./tools/jump flash` / `selftest`
 - [x] Guided assembly verification: `./tools/jump desktest` (3 tosses)

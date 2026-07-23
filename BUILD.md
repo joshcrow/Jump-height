@@ -11,7 +11,8 @@ Design decisions behind all of this: [`DECISIONS.md`](DECISIONS.md).
 
 ## Shopping list
 
-**Have:** FireBeetle ESP32, small single-cell LiPo, Ximimark GY-521 MPU-6050
+**Have:** FireBeetle 2 ESP32-E (the USB-C FireBeetle, DFR0654), small
+single-cell LiPo, Ximimark GY-521 MPU-6050
 boards ×4 (headers unsoldered — see the soldering section), phone with
 120–240 fps slow-mo, a Mac (any laptop works; the tooling is Mac-first).
 
@@ -36,6 +37,9 @@ boards ×4 (headers unsoldered — see the soldering section), phone with
   multimeter if unsure.
 - **LiPo care:** charge only via the FireBeetle's USB, never unattended, don't
   crush the cell in the capsule.
+- **The red LED is the charge gauge:** quick-flashing = USB power, no battery
+  connected (normal); solid = battery charging; off = fully charged (or no
+  USB). Plug in USB-C with the battery connected and it charges automatically.
 
 ---
 
@@ -92,7 +96,7 @@ wires to the FireBeetle — the other 4 header pins stay empty:
 
 | GY-521 pin | FireBeetle | |
 |------------|------------|---|
-| VCC | 3V3 | (the GY-521 has its own regulator; 3.3 V is right) |
+| VCC | 3V3 | 3.3 V is right — **not** the pin marked VCC (that one carries ~4.7 V) |
 | GND | GND | |
 | SDA | pin marked **SDA** (IO21) | |
 | SCL | pin marked **SCL** (IO22) | |

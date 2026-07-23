@@ -5,7 +5,7 @@ IMU, and runs the jump detector. Below is a phased BOM — start cheap on a brea
 upgrade as you go.
 
 > **Building the actual v1?** This page is the general menu of options. The specific,
-> decided build (FireBeetle ESP32 + MPU-6050, bought capsule, GoPro mount) with a
+> decided build (FireBeetle 2 ESP32-E + MPU-6050, bought capsule, GoPro mount) with a
 > step-by-step guide and shopping list is in **[../BUILD.md](../BUILD.md)**.
 
 ## Bill of materials
@@ -43,7 +43,7 @@ upgrade as you go.
 
 | MPU-6050 pin | ESP32 pin | Notes |
 |--------------|-----------|-------|
-| VCC | 3V3 | **not** 5V for 3.3 V boards |
+| VCC | 3V3 | **not** the 5V/VCC pin (the FireBeetle 2's VCC carries ~4.7 V) |
 | GND | GND | |
 | SDA | GPIO 21 (default; set in firmware) | I²C data |
 | SCL | GPIO 22 (default; set in firmware) | I²C clock |
