@@ -399,7 +399,15 @@ void setup() {
   // Mount the data partition. Our table (partitions.csv) names it "littlefs",
   // not the ESP32 default "spiffs", so the label must be passed explicitly or
   // the mount silently fails. Other args are the library defaults.
-  fs_ok = LittleFS.begin(true, "/littlefs", 10, "littlefs");  // format on first use
+  // First boot ever formats the 2.4 MB partition — tens of seconds of silence
+  // that reads as a hang unless announced (a real builder sat through it):
+  // try the plain mount first, and only format (with a heads-up) if it fails.
+  fs_ok = LittleFS.begin(false, "/littlefs", 10, "littlefs");
+  if (!fs_ok) {
+    emitLine("# first boot: formatting storage — takes up to a minute, hang tight...");
+    fs_ok = LittleFS.begin(true, "/littlefs", 10, "littlefs");  // format + mount
+    emitLine(fs_ok ? "# storage ready" : "# storage format failed");
+  }
   if (fs_ok) {
     File f = LittleFS.open(TRACE_PATH, FILE_READ);
     if (f) {

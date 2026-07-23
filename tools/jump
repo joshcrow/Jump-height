@@ -261,17 +261,30 @@ class Device:
         self.boot_lines: list[str] = []
 
     def drain_boot(self, timeout: float = 5.0) -> None:
-        """Board resets when the port opens; swallow the boot banner/POST."""
+        """Board resets when the port opens; swallow the boot banner/POST.
+
+        Special case: the firmware's first boot ever formats its storage
+        partition and announces it, then goes silent for up to a minute.
+        Seeing that announcement extends our patience so the one-time format
+        doesn't read as a dead device."""
         deadline = time.monotonic() + timeout
         saw_any = False
+        formatting = False
         while time.monotonic() < deadline:
-            line = self.sp.read_line(0.6)
+            line = self.sp.read_line(2.5 if formatting else 0.6)
             if line is None:
-                if saw_any:
+                if saw_any and not formatting:
                     break  # went quiet after output: boot finished
                 continue
             saw_any = True
             self.boot_lines.append(line)
+            if "formatting storage" in line:
+                formatting = True
+                deadline = max(deadline, time.monotonic() + 90.0)
+                print("    (first boot: the device is formatting its storage — "
+                      "up to a minute, one time only)")
+            if "storage ready" in line or "storage format failed" in line:
+                formatting = False
             if line.strip() == "READY":
                 break
 
