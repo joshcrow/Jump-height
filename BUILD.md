@@ -40,6 +40,10 @@ boards ×4 (headers unsoldered — see the soldering section), phone with
 - **The red LED is the charge gauge:** quick-flashing = USB power, no battery
   connected (normal); solid = battery charging; off = fully charged (or no
   USB). Plug in USB-C with the battery connected and it charges automatically.
+- **No power switch:** with a battery plugged in, the board (and its
+  Bluetooth) is always on — v1 has no deep sleep yet. Between sessions keep
+  it on USB (which also tops up the charge) or unplug the battery connector;
+  a cell left on the shelf drains in roughly a day.
 
 ---
 
