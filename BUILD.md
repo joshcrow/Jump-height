@@ -48,6 +48,9 @@ boards ×4 (headers unsoldered — see the soldering section), phone with
   it on USB (which also tops up the charge) or unplug the battery connector;
   the 2500 mAh cell left on the shelf drains in about two days. A full charge
   from the board's USB-C takes roughly an overnight (~6 h).
+- **Pin tips vs. the pouch:** soldered header pins are sharp; the battery is
+  a soft pouch whose one big rule is *don't pierce*. Always keep foam or
+  bubble wrap between the board's underside and the cell.
 
 ---
 
@@ -115,6 +118,19 @@ this price these are likely clone chips: the firmware is built for that (an
 odd chip ID is a warning, not a failure — what matters is the gravity/noise
 check, which the self-test does directly). If one board is a genuine dud,
 the self-test will say so; swap in a spare — you bought 4 for exactly this.
+
+## The bench "housing": raid the kitchen (the slick case comes later)
+
+For desk tests and calibration drops the assembly just needs to move as one
+rigid lump: any small **hard-sided food container** works. Pack board,
+battery, and sensor snug with foam or bubble wrap — nothing may shift or
+rattle (the sensor reads every internal wobble as signal), with padding
+between pin tips and the battery pouch. Crack the lid for the USB cable —
+bench tests run tethered; for tosses and drops give the cable a generous
+slack loop and let it fall *with* the box so it never tugs mid-flight.
+Orientation inside doesn't matter. The waterproof capsule from the shopping
+list remains the container for anything near water — the kitchen box's
+jurisdiction ends at the cushion.
 
 ## Calibration notes (the wizard handles the mechanics)
 
