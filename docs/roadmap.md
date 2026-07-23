@@ -112,9 +112,10 @@ after deep sleep exists.** An awake ESP32 (~50 mA ≈ 4.4 Wh/day) out-eats any
 puck-sized panel (~1 Wh/day); asleep between sessions the whole device needs
 ~1.3 Wh/**week** (3 × 2 h sessions + sub-mA idle), which a capsule-lid-sized
 ~0.5 W panel covers 4–7× over even flat-mounted, salty, and half-clouded.
-Run-time ladder: today ≈ 10 h per 500 mAh charge; + deep sleep ≈ 1½–2 weeks
-of riding per charge (≈ 2-month shelf); + solar ≈ indefinite, battery just
-bridges dark weeks.
+Run-time ladder with the real cell (2500 mAh / 9.4 Wh, model 785060): today's
+always-on firmware ≈ 2 days per charge; + deep sleep ≈ ~7 weeks of riding per
+charge (shelf ≈ a year); + solar ≈ indefinite — the cell alone bridges nearly
+two sunless months.
 
 Prerequisites potting forces (in order — each is useful on its own):
 
@@ -129,7 +130,8 @@ Prerequisites potting forces (in order — each is useful on its own):
    the Phase-4 PCB makes it free.
 4. **A real solar charge path**: bare panel → board USB charger brownout-loops;
    use a small MPPT LiPo charger (CN3791-class) or harvesting IC (BQ25504)
-   with an NTC temp cutoff potted against the cell (no charging > ~45 °C).
+   with an NTC temp cutoff potted against the cell (this cell's spec allows
+   charging only at 0–40 °C — a black block in the sun exceeds that).
 
 Potting traps (all solvable, all mandatory):
 - **The cell is the hazard**: pouch LiPo swells — never rigid-encase it. Soft

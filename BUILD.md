@@ -11,8 +11,9 @@ Design decisions behind all of this: [`DECISIONS.md`](DECISIONS.md).
 
 ## Shopping list
 
-**Have:** FireBeetle 2 ESP32-E (the USB-C FireBeetle, DFR0654), small
-single-cell LiPo, Ximimark GY-521 MPU-6050
+**Have:** FireBeetle 2 ESP32-E (the USB-C FireBeetle, DFR0654), a **2500 mAh**
+single-cell LiPo (model 785060 — 61 × 51 × 8 mm, 46 g, protection circuit
+built in), Ximimark GY-521 MPU-6050
 boards ×4 (headers unsoldered — see the soldering section), phone with
 120–240 fps slow-mo, a Mac (any laptop works; the tooling is Mac-first).
 
@@ -20,7 +21,7 @@ boards ×4 (headers unsoldered — see the soldering section), phone with
 
 | Item | Notes |
 |------|-------|
-| Waterproof screw-top **capsule** | Must **float**, fit the FireBeetle **and** battery, and clamp into a GoPro cradle (or zip-tie to a tray). Dive/camping "dry capsule" types work. If trying wireless charging (below), prefer a **thin flat bottom** with floor room for a ~5 cm coil — and buy the receiver first so you can size it. |
+| Waterproof screw-top **capsule** | Must **float**, fit the FireBeetle **and** battery — the battery is the big item (61 × 51 × 8 mm; the board is 60 × 25 mm) — and clamp into a GoPro cradle (or zip-tie to a tray). Dive/camping "dry capsule" types work. If trying wireless charging (below), prefer a **thin flat bottom** with floor room for a ~5 cm coil — and buy the receiver first so you can size it. |
 | **GoPro adhesive mount** + cradle/tray | Plus zip ties as backup. |
 | Short **leash / tether** | A failed mount must not cost you the puck. |
 | **Jumper wires** (female-female) + a little solder | The MPU-6050 usually ships with its 4 header pins unsoldered. |
@@ -45,7 +46,8 @@ boards ×4 (headers unsoldered — see the soldering section), phone with
 - **No power switch:** with a battery plugged in, the board (and its
   Bluetooth) is always on — v1 has no deep sleep yet. Between sessions keep
   it on USB (which also tops up the charge) or unplug the battery connector;
-  a cell left on the shelf drains in roughly a day.
+  the 2500 mAh cell left on the shelf drains in about two days. A full charge
+  from the board's USB-C takes roughly an overnight (~6 h).
 
 ---
 
