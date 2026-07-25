@@ -359,6 +359,7 @@ function dispatch(line) {
     case 'STATE':    onState(kv); break;
     case 'INFO':     onInfo(kv); break;
     case 'PARAMS':   onParams(kv); break;
+    case 'CAL':      onCal(kv); break;
     case 'SELFTEST': onSelftest(kv); break;
     default: break; // FILE/OK/ERR/READY: nothing extra; already in the console
   }
@@ -511,6 +512,18 @@ function onParams(kv) {
     .map(([k, v]) => `${k}=${v}`).join('  ');
   renderDeviceInfo();
 }
+function onCal(kv) {
+  // Effective calibration + where it lives — the phone-only rider's only way
+  // to see whether a saved calibration is actually in force.
+  const offMs = Math.round(parseFloat(kv.airtime_offset_s || '0') * 1000);
+  const scale = parseFloat(kv.height_scale || '1');
+  deviceInfo.cal = (kv.source === 'device'
+    ? 'Calibration: saved on the device'
+    : 'Calibration: factory defaults')
+    + ` (timing ${offMs >= 0 ? '+' : ''}${offMs} ms` +
+    (Math.abs(scale - 1) > 0.0005 ? `, height ×${scale.toFixed(3)})` : ')');
+  renderDeviceInfo();
+}
 function renderDeviceInfo() {
   const c = $('device-info');
   c.hidden = false; c.textContent = '';
@@ -519,6 +532,7 @@ function renderDeviceInfo() {
   if (deviceInfo.sample_hz) bits.push(deviceInfo.sample_hz + ' Hz sampling');
   if (deviceInfo.ble != null) bits.push('Bluetooth: ' + (deviceInfo.ble === '1' ? 'yes' : 'no'));
   c.append(el('div', { class: 'info-line', text: bits.join('  ·  ') || 'Device connected' }));
+  if (deviceInfo.cal) c.append(el('div', { class: 'info-line', text: deviceInfo.cal }));
   if (deviceInfo.params) c.append(el('div', { class: 'muted small mono', text: deviceInfo.params }));
 }
 
@@ -1164,7 +1178,7 @@ function benchOfferSave() {
             b.statusEl.textContent = !err
               ? 'Saved to the device — it survives reboots and reflashes. Calibration done.'
               : 'The device rejected that — check the console and try again.';
-            if (!err) bench = null; // leave the verdict on screen
+            if (!err) { bench = null; send('info'); } // refresh the CAL readout
           }, 8000);
           send(`set airtime_offset_s ${b.offset}`);
         } }, 'Save to device'));

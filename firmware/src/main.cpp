@@ -46,7 +46,7 @@
 #include "jump_detector.h"
 #include "ble_link.h"
 
-#define FW_VERSION "0.4.0"
+#define FW_VERSION "0.4.1"
 
 static const float    G                  = JH_G;
 static const uint32_t SAMPLE_INTERVAL_US = 1000000UL / JH_SAMPLE_HZ;
@@ -441,7 +441,9 @@ static void handleCommand(const String& cmd) {
   } else if (cmd == "info") {
     // ble=1 advertises the capability (this firmware speaks BLE); the runtime
     // health of the radio is the self-test's `ble` row, not this flag.
-    emitf("INFO fw=%s sample_hz=%d log_hz=%d ble=1\n", FW_VERSION, JH_SAMPLE_HZ, JH_LOG_HZ);
+    emitf("INFO fw=%s sample_hz=%d log_hz=%d motion_thresh_g=%.2f "
+          "idle_timeout_s=%d ble=1\n", FW_VERSION, JH_SAMPLE_HZ, JH_LOG_HZ,
+          (double)JH_MOTION_THRESH_G, (int)JH_IDLE_TIMEOUT_S);
     emitLine("PARAMS " JH_PARAMS_SUMMARY);
     // Effective calibration (PARAMS above shows compiled defaults).
     emitf("CAL airtime_offset_s=%.4f height_scale=%.3f source=%s\n",
@@ -449,8 +451,11 @@ static void handleCommand(const String& cmd) {
           cal_from_nvs ? "device" : "defaults");
     emitLine("OK info");
   } else {
-    emitf("ERR unknown_command %s\n", cmd.c_str());
+    // Help BEFORE the ERR terminator: clients stop reading at OK/ERR, so
+    // anything after it would sit in their buffer and corrupt the framing
+    // of the NEXT command's response.
     printHelp();
+    emitf("ERR unknown_command %s\n", cmd.c_str());
   }
 }
 
@@ -527,6 +532,7 @@ void setup() {
 void loop() {
   pollSerial();
   ble_link::poll(handleCommand);  // BLE commands run through the same path as serial
+  ble_link::pump();               // send at most one paced BLE chunk — never blocks
   if (ble_link::takeGreetPending()) bleGreet();  // greet a client that just subscribed
   if (!sensor_ok) { delay(10); return; }  // command loop still runs; sampling paused
 

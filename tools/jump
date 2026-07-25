@@ -459,11 +459,14 @@ def check_device_params(dev: Device) -> bool:
     local = load_params(CONFIG_PATH)
     device_kv = {}
     cal_kv = {}
+    info_kv = {}
     for line in lines:
         if line.startswith("PARAMS "):
             device_kv = {k: v for k, v in parse_kv(line).items() if k != "_tag"}
         elif line.startswith("CAL "):
             cal_kv = {k: v for k, v in parse_kv(line).items() if k != "_tag"}
+        elif line.startswith("INFO "):
+            info_kv = {k: v for k, v in parse_kv(line).items() if k != "_tag"}
     if not device_kv:
         print("  (device didn't report its params — old firmware? run ./tools/jump flash)")
         return False
@@ -484,6 +487,24 @@ def check_device_params(dev: Device) -> bool:
                 mismatches.append(f"{key}: device={dev_val} local={local_val:g}")
         except ValueError:
             pass
+    # The firmware section (sampling rates, motion gate) is compiled in too —
+    # compare what the INFO line reports so a config tweak without a reflash
+    # can't masquerade as applied.
+    if info_kv:
+        try:
+            with open(CONFIG_PATH) as f:
+                fw_local = json.load(f).get("firmware", {})
+        except (OSError, ValueError):
+            fw_local = {}
+        for key in ("sample_hz", "log_hz", "motion_thresh_g", "idle_timeout_s"):
+            if key in info_kv and key in fw_local:
+                try:
+                    if not math.isclose(float(info_kv[key]), float(fw_local[key]),
+                                        rel_tol=1e-4, abs_tol=1e-6):
+                        mismatches.append(f"{key}: device={info_kv[key]} "
+                                          f"local={fw_local[key]:g}")
+                except ValueError:
+                    pass
     if mismatches:
         print("  ⚠️  device settings differ from config/params.json — run ./tools/jump flash:")
         for m in mismatches:
@@ -625,20 +646,42 @@ def _autopsy_trace(dev: "Device") -> None:
         print(f"  (autopsy unavailable: {e})")
 
 
-def _wait_for_port_return(timeout: float = 90.0) -> str | None:
-    """Wait for the board's serial port to reappear after a replug."""
+def _wait_for_port_return(prev_port: str | None, baseline: set[str],
+                          timeout: float = 90.0) -> str | None:
+    """Wait for OUR board's port to reappear after a replug.
+
+    `baseline` is the port set captured while the board was still plugged in:
+    only the previous port name (macOS reuses it) or a port NOT in the
+    baseline qualifies — a second adapter that was already present can never
+    be grabbed by mistake.
+    """
     print("  Watching for the board on USB", end="", flush=True)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         ports = scan_ports()
-        if ports:
-            print(f" — found {ports[0]}")
+        pick = None
+        if prev_port and prev_port in ports:
+            pick = prev_port
+        else:
+            fresh = [p for p in ports if p not in baseline]
+            if fresh:
+                pick = fresh[0]
+        if pick:
+            print(f" — found {pick}")
             time.sleep(1.5)  # give the OS a beat to finish creating the node
-            return ports[0]
+            return pick
         print(".", end="", flush=True)
         time.sleep(1.0)
     print(" nothing.")
     return None
+
+
+def _replug_pause() -> None:
+    """Block until the human confirms the cable is back — TTY-safe."""
+    if sys.stdin.isatty():
+        input("\n>> Press Enter AFTER the cable is back in... ")
+    else:
+        print("\n>> (non-interactive: continuing)")
 
 
 def _stored_rows(dev: "Device") -> list[dict]:
@@ -678,9 +721,10 @@ def _desktest_untethered(dev: "Device") -> int:
     print("  3. THREE tosses over the cushion: a foot or more straight up,")
     print("     flat like a pizza tray — let it LAND, don't catch it.")
     print("  4. Plug the cable back in and return here.")
+    prev_port, baseline = dev.sp.path, set(scan_ports())
     dev.close()
-    input("\n>> Press Enter AFTER the cable is back in... ")
-    port = _wait_for_port_return()
+    _replug_pause()
+    port = _wait_for_port_return(prev_port, baseline)
     if port is None:
         print("❌ The board never came back on USB. Check the cable, re-run.")
         return 1
@@ -876,9 +920,10 @@ def _drop_untethered(args, dev: "Device", p, expected: float) -> int:
     print("     hold dead still a second, let go clean, let it land.")
     print("     Pick it up gently between drops.")
     print("  4. Plug the cable back in and return here.")
+    prev_port, baseline = dev.sp.path, set(scan_ports())
     dev.close()
-    input("\n>> Press Enter AFTER the cable is back in... ")
-    port = _wait_for_port_return()
+    _replug_pause()
+    port = _wait_for_port_return(prev_port, baseline)
     if port is None:
         print("❌ The board never came back on USB. Check the cable, re-run.")
         return 1
@@ -942,14 +987,27 @@ def _drop_analyze(raws: list[float], expected: float, args, p,
         applied = False
         if dev is not None:
             # The firmware stores calibration in NVS — apply it live, no
-            # reflash, and it survives future reflashes too.
+            # reflash, and it survives future reflashes too. The device
+            # answers ERR (not an exception) if it rejects the value, so
+            # check the reply — a silent false "applied" here would send a
+            # whole water session out under the wrong calibration.
             try:
-                dev.command(f"set airtime_offset_s {round(offset, 4)}", timeout=8)
-                applied = True
-                print("✅ applied to the device over the wire — no reflash needed.")
+                resp = dev.command(f"set airtime_offset_s {round(offset, 4)}",
+                                   timeout=8)
+                applied = not any(ln.startswith("ERR") for ln in resp)
+                if not applied:
+                    for ln in resp:
+                        print(f"    {ln}")
             except Exception as e:
                 print(f"(couldn't apply live: {e})")
-        if not applied:
+        if applied:
+            print("✅ applied to the device over the wire — no reflash needed.")
+        elif dev is not None:
+            print("❌ the device did NOT accept the calibration. Re-run this "
+                  "step, or run\n   ./tools/jump flash  to bake it in, then "
+                  "./tools/jump selftest  to verify.")
+            return 1
+        else:
             print("Run  ./tools/jump flash  to bake it into the device.")
     else:
         print("(not saved — re-run with --yes to save automatically)")
@@ -1048,16 +1106,31 @@ def cmd_sync(args) -> int:
         best = max((j["height"] for j in dev_jumps), default=0.0)
         best_off = max((e.height_m for e in offline), default=0.0)
 
+        # A capped trace can't cover the whole session, so live-vs-offline
+        # disagreement is expected and NOT a detector problem — don't cry wolf.
+        try:
+            with open(CONFIG_PATH) as f:
+                _cap = int(json.load(f).get("firmware", {})
+                           .get("trace_max_bytes", 2000000))
+        except (OSError, ValueError):
+            _cap = 2000000
+        trace_capped = (sess / "trace.csv").stat().st_size >= _cap * 0.98
+        if trace_capped:
+            agreement = ("ℹ️ trace hit its size cap — offline re-analysis only "
+                         "covers the first ~45 min of moving time, so live vs "
+                         "offline counts can differ legitimately")
+        elif agree:
+            agreement = "✅ live and offline detection agree"
+        else:
+            agreement = ("⚠️ live vs offline differ — see tables; consider tuning "
+                         "config/params.json and re-running "
+                         f"`./tools/jump replay --csv {sess / 'trace.csv'}`")
         report = [
             f"# Session report — {sess.name}", "",
             f"**Device:** {len(dev_jumps)} jumps, best {best:.2f} m "
             f"({best * 3.28084:.1f} ft)",
             f"**Offline re-analysis:** {len(offline)} jumps, best {best_off:.2f} m", "",
-            "Agreement: " + ("✅ live and offline detection agree"
-                             if agree else
-                             "⚠️ live vs offline differ — see tables; consider tuning "
-                             "config/params.json and re-running "
-                             f"`./tools/jump replay --csv {sess / 'trace.csv'}`"), "",
+            "Agreement: " + agreement, "",
             "| # | airtime (s) | height (m) | height (ft) |",
             "|---|-------------|------------|-------------|",
         ]

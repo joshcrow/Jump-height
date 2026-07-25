@@ -43,7 +43,7 @@ from detector import Detector, load_params  # noqa: E402
 from generate import DEMO_JUMPS, synth_session  # noqa: E402
 import gen_params  # noqa: E402
 
-FW_VERSION = "0.4.0"
+FW_VERSION = "0.4.1"
 INJECTED_BIAS_S = 0.015  # pretend detection latency, for the drop scenario
 
 
@@ -136,6 +136,10 @@ class FakeDevice:
                   f"best_m={self.session_best:.3f}")
 
     # ----------------------------------------------------------- protocol
+    def send_help(self):
+        self.send("# commands: help | stats | jumps | trace | dump | clear | selftest | info")
+        self.send("#           set <airtime_offset_s|height_scale> <value|default>")
+
     def send_selftest(self):
         self.send("SELFTEST BEGIN")
         if self.args.scenario == "badwiring":
@@ -164,7 +168,7 @@ class FakeDevice:
             best = max(float(r.split(",")[-1]) for r in self.jumps_rows)
             self.send(f"# stored history: {len(self.jumps_rows)} jumps, best "
                       f"{best:.2f} m — `dump` to export, `clear` to reset")
-        self.send("# commands: help | stats | jumps | trace | dump | clear | selftest | info")
+        self.send_help()
         self.send("READY")
 
     def send_file(self, name: str, header: str, rows: list[str]):
@@ -177,7 +181,7 @@ class FakeDevice:
 
     def handle(self, cmd: str):
         if cmd == "help":
-            self.send("# commands: help | stats | jumps | trace | dump | clear | selftest | info")
+            self.send_help()
             self.send("OK help")
         elif cmd == "stats":
             stored_best = max((float(r.split(",")[-1]) for r in self.jumps_rows),
@@ -254,13 +258,19 @@ class FakeDevice:
             # do — hardcoding them here would drift the moment config changes.
             fw_cfg = cfg["firmware"]
             self.send(f"INFO fw={FW_VERSION} sample_hz={fw_cfg['sample_hz']} "
-                      f"log_hz={fw_cfg['log_hz']} ble=1")
+                      f"log_hz={fw_cfg['log_hz']} "
+                      f"motion_thresh_g={fw_cfg['motion_thresh_g']:.2f} "
+                      f"idle_timeout_s={fw_cfg['idle_timeout_s']} ble=1")
             self.send("PARAMS " + summary)
             self.send(f"CAL airtime_offset_s={self.params.airtime_offset_s:.4f} "
                       f"height_scale={self.params.height_scale:.3f} "
                       f"source={'device' if self.cal_from_nvs else 'defaults'}")
             self.send("OK info")
         else:
+            # Help BEFORE the ERR terminator, exactly like the firmware —
+            # clients stop reading at OK/ERR, so trailing lines would corrupt
+            # the framing of the next command's response.
+            self.send_help()
             self.send(f"ERR unknown_command {cmd}")
 
     def fire(self, action: str):

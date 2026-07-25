@@ -113,6 +113,63 @@ class TestWizardAndReport(unittest.TestCase):
                 self.assertIn(marker, body)
 
 
+class TestUntetheredHelpers(unittest.TestCase):
+    """Unit coverage for the untethered flow's building blocks. The full
+    unplug/replug cycle needs a human; these at least pin the logic that
+    only real hardware exercises."""
+
+    @staticmethod
+    def _mod():
+        import importlib.machinery
+        import types
+
+        loader = importlib.machinery.SourceFileLoader("jumpcli_ut", JUMP)
+        mod = types.ModuleType("jumpcli_ut")
+        mod.__file__ = JUMP
+        loader.exec_module(mod)
+        return mod
+
+    def test_stored_rows_parses_the_fake_session(self):
+        mod = self._mod()
+        proc = subprocess.Popen(
+            [sys.executable, str(REPO / "tools" / "fake_device.py"),
+             "--scenario", "session"], stdout=subprocess.PIPE, text=True)
+        try:
+            port = proc.stdout.readline().split()[1]
+            dev = mod.Device(port)
+            try:
+                dev.drain_boot()
+                rows = mod._stored_rows(dev)
+            finally:
+                dev.close()
+            self.assertEqual(len(rows), 4)  # the demo session's 4 known jumps
+            for r in rows:
+                self.assertGreater(r["raw"], 0.2)
+                self.assertGreater(r["h"], 0.0)
+        finally:
+            proc.terminate()
+
+    def test_wait_for_port_return_ignores_stranger_ports(self):
+        mod = self._mod()
+        # A stranger adapter is present the whole time; our port vanishes then
+        # returns under its old name. The stranger must never be picked.
+        seq = [["/dev/cu.stranger"], ["/dev/cu.stranger"],
+               ["/dev/cu.stranger", "/dev/cu.wchusbserial9"]]
+        calls = {"n": 0}
+
+        def fake_scan():
+            i = min(calls["n"], len(seq) - 1)
+            calls["n"] += 1
+            return seq[i]
+
+        mod.scan_ports = fake_scan
+        port = mod._wait_for_port_return(
+            "/dev/cu.wchusbserial9",
+            baseline={"/dev/cu.stranger", "/dev/cu.wchusbserial9"},
+            timeout=15.0)
+        self.assertEqual(port, "/dev/cu.wchusbserial9")
+
+
 class TestSync(unittest.TestCase):
     def test_sync_downloads_and_reports(self):
         with tempfile.TemporaryDirectory() as td:

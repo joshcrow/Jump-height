@@ -172,26 +172,63 @@ static bool takeGreetPending() {
   return g;
 }
 
-// Notify the TX characteristic with `len` bytes, split across the negotiated
-// MTU (payload = MTU - 3; the client reassembles on '\n'). No-op unless a client
-// is subscribed. In NimBLE-Arduino 1.4.x notify() returns void (the bool return
-// arrived in 2.x), so back-pressure can't be observed directly — instead each
-// chunk is followed by a small fixed delay that lets the host task drain its
-// buffer pool. That pacing bounds FILE dumps to roughly BLE's real throughput
-// anyway; a congested/flaky link can still drop chunks silently, which is why
-// the docs steer bulk session downloads to USB and treat BLE dumps as
-// best-effort. Single protocol lines are one chunk, so live use costs ~3 ms.
+// --- TX queue (loop task only) ---
+// Notifications are paced (the NimBLE host task needs ~3 ms per chunk to drain
+// its buffer pool; notify() returns void in 1.4.x so back-pressure can't be
+// observed), but the sampling loop must NEVER wait on the radio: a JUMP line
+// relayed synchronously at the 23-byte MTU floor stalls sampling ~15-20 ms —
+// long enough to swallow the landing spike of a quick follow-up jump. So
+// write() only queues; pump(), called every loop() pass, sends at most one
+// paced chunk between samples. The queue only fills up during FILE dumps,
+// where write() drains it inline (paced) — sampling is already paused inside
+// handleCommand there, so blocking is free. A flaky link can still drop
+// chunks silently; bulk downloads remain best-effort vs USB.
+static const size_t TX_CAP = 1024;
+static uint8_t  s_txq[TX_CAP];
+static size_t   s_txq_head = 0, s_txq_tail = 0;  // loop() task only
+static uint32_t s_last_chunk_us = 0;
+static const uint32_t CHUNK_GAP_US = 2500;
+
+static size_t txqSize() { return (s_txq_head + TX_CAP - s_txq_tail) % TX_CAP; }
+
+static void sendOneChunk() {
+  size_t avail = txqSize();
+  if (avail == 0 || s_tx == nullptr) return;
+  const size_t payload = s_mtu > 3 ? (size_t)(s_mtu - 3) : 20;
+  uint8_t buf[244];
+  size_t n = avail < payload ? avail : payload;
+  if (n > sizeof(buf)) n = sizeof(buf);
+  for (size_t i = 0; i < n; ++i) buf[i] = s_txq[(s_txq_tail + i) % TX_CAP];
+  s_tx->setValue(buf, n);
+  s_tx->notify();
+  s_txq_tail = (s_txq_tail + n) % TX_CAP;
+  s_last_chunk_us = micros();
+}
+
+// Send one paced chunk if one is due. Called once per loop() pass; costs
+// microseconds when idle, so it never disturbs the 200 Hz sampling cadence.
+static void pump() {
+  if (!s_subscribed || s_tx == nullptr) {
+    s_txq_tail = s_txq_head;  // no listener: drop pending output
+    return;
+  }
+  if (txqSize() > 0 && (uint32_t)(micros() - s_last_chunk_us) >= CHUNK_GAP_US) {
+    sendOneChunk();
+  }
+}
+
 static void write(const char* data, size_t len) {
   if (!s_subscribed || s_tx == nullptr) return;
-  const size_t chunk = s_mtu > 3 ? (size_t)(s_mtu - 3) : 20;
-  size_t off = 0;
-  while (off < len) {
-    size_t n = len - off;
-    if (n > chunk) n = chunk;
-    s_tx->setValue((const uint8_t*)data + off, n);
-    s_tx->notify();
-    delay(3);  // pace: let the NimBLE host task drain before the next chunk
-    off += n;
+  for (size_t i = 0; i < len; ++i) {
+    size_t next = (s_txq_head + 1) % TX_CAP;
+    while (next == s_txq_tail) {
+      // Queue full: bulk output (a FILE dump) from inside handleCommand —
+      // sampling is paused there anyway, so drain inline, paced.
+      while ((uint32_t)(micros() - s_last_chunk_us) < CHUNK_GAP_US) delay(1);
+      sendOneChunk();
+    }
+    s_txq[s_txq_head] = data[i];
+    s_txq_head = next;
   }
 }
 
