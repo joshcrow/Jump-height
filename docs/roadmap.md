@@ -153,9 +153,13 @@ on.
 **New output surface — Garmin watch data field**: fully scoped with user
 stories, interaction design, architecture, milestones, and acceptance
 criteria in **[garmin-datafield.md](garmin-datafield.md)** — written to be
-executed by a cheaper build agent. Data field first; the custom "Wing Foil
-activity" app is a deliberate later decision (§8 there). Build after water
-validation. Precedent: Surfr ships a Garmin companion.
+executed by a cheaper build agent. STATUS 2026-07: the complete scaffold
+is authored in `garmin/` (source, tests, manifest, README,
+FIRST_COMPILE.md with 14 verify-at-compile entries) by a Sonnet agent and
+integrated after review; firmware 0.4.2 shipped the two-central BLE
+prerequisite. Next gate: M0 — SDK install + first compile on the owner's
+Mac. The custom "Wing Foil activity" app remains a deliberate later
+decision (§8 there). Precedent: Surfr ships a Garmin companion.
 
 ## Phase 4 — "Real" hardware
 

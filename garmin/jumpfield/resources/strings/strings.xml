@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<!--
+  User-facing text. Deliberately small: state labels drawn on the field
+  itself ("finding puck", "reconnecting", "BLE unavailable" — spec §4.2) are
+  plain Monkey C string literals in JumpFieldView.mc, not resources here —
+  they're fixed UI chrome, not settings, and spec's memory budget (§5.6)
+  says "no resources beyond strings [needed]"; this file holds only the
+  strings the settings UI and the app name actually need.
+-->
+<strings>
+    <string id="AppName">Jump Height</string>
+
+    <string id="SettingPuckName">Puck name</string>
+    <string id="SettingVibrateOnJump">Vibrate on jump</string>
+    <string id="SettingUnitOverride">Units</string>
+
+    <string id="UnitAuto">Auto (follow watch)</string>
+    <string id="UnitFeet">Feet</string>
+    <string id="UnitMeters">Meters</string>
+</strings>

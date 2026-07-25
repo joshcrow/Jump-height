@@ -1,0 +1,16 @@
+# Jump Height data field — build recipe for the monkeyc/monkeydo CLI.
+#
+# One source tree for one device family (Instinct 3 Solar) — deliberately
+# simple. Per-family source overrides (base.sourcePath = source;source-fenix)
+# are a spec §5.1/§9 M5 concern, not now: "Instinct correctness first."
+#
+# tests/ ships in the SAME sourcePath as source/ on purpose: Toybox.Test
+# functions are annotated (:test) and the compiler strips them from a normal
+# build automatically (ignored unless run with -t) — see garmin/README.md's
+# "test-run command". That means there is exactly one jungle file for both
+# the shipping build and the unit-test build; no separate test project.
+
+project.manifest = manifest.xml
+
+base.sourcePath = source;tests
+base.resourcePath = resources

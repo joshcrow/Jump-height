@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<!--
+  App Properties — the storage side of US7. Every default here must make
+  the field fully functional with ZERO configuration (spec §10): sideloaded
+  installs (the only distribution channel until §11.3's store submission
+  lands) never see a settings UI at all, so "default" and "only value most
+  riders will ever have" are the same thing here, not a fallback path.
+-->
+<properties>
+    <!-- Scan-response name fallback when the NUS service UUID isn't visible
+         in scan results (spec §5.1/§9.4) — must match firmware's DEVICE_NAME
+         (firmware/src/main.cpp, web/app.js) unless the owner renamed their
+         puck. -->
+    <property id="puckName" type="string">JumpHeight</property>
+
+    <!-- US3, default on; silently degrades to flash-only if the platform
+         forbids Attention.vibrate from a data field (spec §9.3). -->
+    <property id="vibrateOnJump" type="boolean">true</property>
+
+    <!-- 0=auto (follow System.getDeviceSettings, spec §4.3), 1=ft, 2=m —
+         values match UnitsFmt.mc's UNIT_* constants exactly; keep them in
+         sync if this list ever changes. -->
+    <property id="unitOverride" type="number">0</property>
+</properties>

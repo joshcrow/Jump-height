@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<!--
+  Settings UI — the Garmin Connect app side of US7. Three settings, because
+  spec §3/US7 asks for exactly the three an owner might change and nothing
+  else ("everything else just works"). Only reachable via the Connect IQ
+  Store distribution channel (spec §10) — sideload installs run on
+  properties.xml's defaults alone, which is why those defaults, not this
+  file, carry correctness.
+-->
+<settings>
+    <setting propertyKey="@Properties.puckName" title="@Strings.SettingPuckName">
+        <settingConfig type="alphaNumeric" maxLength="20"/>
+    </setting>
+
+    <setting propertyKey="@Properties.vibrateOnJump" title="@Strings.SettingVibrateOnJump">
+        <settingConfig type="boolean"/>
+    </setting>
+
+    <setting propertyKey="@Properties.unitOverride" title="@Strings.SettingUnitOverride"
+              prompt="@Strings.SettingUnitOverride">
+        <settingConfig type="list">
+            <listEntry value="0">@Strings.UnitAuto</listEntry>
+            <listEntry value="1">@Strings.UnitFeet</listEntry>
+            <listEntry value="2">@Strings.UnitMeters</listEntry>
+        </settingConfig>
+    </setting>
+</settings>

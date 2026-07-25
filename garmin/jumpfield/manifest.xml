@@ -1,0 +1,41 @@
+<?xml version="1.0"?>
+<!--
+  Jump Height data field — manifest.
+
+  type="datafield": runs inside the rider's own activity profile (GPS/HR/
+  laps stay Garmin's; we only add jumps) — see docs/garmin-datafield.md §5.1
+  for why a data field, not a standalone app, is the whole product.
+
+  minSdkVersion 3.1.0 is a floor, not the target: it's the level at which
+  Toybox.BluetoothLowEnergy is confirmed usable from a data field (spec §9,
+  resolved). The real target is the owner's Instinct 3 Solar at API 5.1;
+  everything here is written to also be correct at 3.1 semantics per the
+  build task's hard constraint (conservative APIs only, first compile is
+  unsupervised).
+-->
+<iq:manifest version="3" xmlns:iq="http://www.garmin.com/xml/connectiq">
+    <iq:application entry="JumpFieldApp" id="873B577243574E27AB454C3FF165E7B4"
+                     name="@Strings.AppName" type="datafield" minSdkVersion="3.1.0">
+        <!--
+          Instinct 3 Solar only for M0-M4 (spec §5.1: "Instinct correctness
+          first"); Fenix/Epix/Forerunner families are added at M5 once the
+          simulator layout passes on this device. See FIRST_COMPILE.md #1 —
+          instinct3solar50mm's existence as a DISTINCT product id (vs. one id
+          covering both case sizes) is unconfirmed; verify before first
+          build and delete the line if the compiler rejects it.
+        -->
+        <iq:products>
+            <iq:product id="instinct3solar45mm"/>
+            <iq:product id="instinct3solar50mm"/>
+        </iq:products>
+        <iq:permissions>
+            <!-- BLE central: scan/connect/subscribe to the puck's NUS profile. -->
+            <iq:uses-permission id="BluetoothLowEnergy"/>
+            <!-- Developer FIT fields written into the saved activity (US4). -->
+            <iq:uses-permission id="FitContributor"/>
+        </iq:permissions>
+        <iq:languages>
+            <iq:language>eng</iq:language>
+        </iq:languages>
+    </iq:application>
+</iq:manifest>
