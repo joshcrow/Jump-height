@@ -43,7 +43,7 @@ from detector import Detector, load_params  # noqa: E402
 from generate import DEMO_JUMPS, synth_session  # noqa: E402
 import gen_params  # noqa: E402
 
-FW_VERSION = "0.4.1"
+FW_VERSION = "0.4.2"
 INJECTED_BIAS_S = 0.015  # pretend detection latency, for the drop scenario
 
 

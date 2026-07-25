@@ -23,11 +23,15 @@
 // Commands: help stats jumps trace dump clear selftest info
 //
 // BLE (added in v0.3.0): the SAME protocol is mirrored over a Nordic UART
-// Service so a phone/laptop can read jumps and send commands wirelessly. Every
-// line above goes out on BOTH USB serial and (when a client is subscribed) the
-// BLE TX characteristic, via the emit layer below; the BLE stack lives in
-// include/ble_link.h. A BLE failure is reported by the self-test's `ble` row but
-// never blocks jump detection — v1 still reads over USB.
+// Service so a phone/laptop can read jumps and send commands wirelessly. Since
+// v0.4.2, TWO BLE centrals can be connected and subscribed at once (e.g. a
+// Garmin watch on the rider + a phone on the beach, per
+// docs/garmin-datafield.md §7) — every line above goes out on BOTH USB serial
+// and (when at least one BLE client is subscribed) the BLE TX characteristic,
+// via the emit layer below; a single notify() reaches every subscribed client,
+// so this file never has to loop over connections itself. The BLE stack lives
+// in include/ble_link.h. A BLE failure is reported by the self-test's `ble`
+// row but never blocks jump detection — v1 still reads over USB.
 //
 // All tunables come from config/params.json via the generated params.gen.h.
 //
@@ -46,7 +50,7 @@
 #include "jump_detector.h"
 #include "ble_link.h"
 
-#define FW_VERSION "0.4.1"
+#define FW_VERSION "0.4.2"
 
 static const float    G                  = JH_G;
 static const uint32_t SAMPLE_INTERVAL_US = 1000000UL / JH_SAMPLE_HZ;
@@ -103,11 +107,13 @@ static String cmd_buf;
 
 // ---------------- Protocol output (emit layer) ----------------
 // Single choke point for ALL protocol output. Every line goes to USB serial and,
-// when a BLE client is subscribed, to the Nordic UART TX characteristic — same
-// bytes on both transports. Chatter (`#`), hints, machine lines, and FILE dumps
-// all pass through here. Nothing else in this file should call Serial.print*
-// directly. Only ever called from loop()/setup() (never a NimBLE callback), so
-// the BLE notify path has no cross-task contention (see ble_link.h).
+// when any BLE client is subscribed, to the Nordic UART TX characteristic — same
+// bytes on both transports, and the same bytes reach every subscribed BLE
+// client (ble_link::write()/notify() broadcast; see ble_link.h). Chatter (`#`),
+// hints, machine lines, and FILE dumps all pass through here. Nothing else in
+// this file should call Serial.print* directly. Only ever called from
+// loop()/setup() (never a NimBLE callback), so the BLE notify path has no
+// cross-task contention (see ble_link.h).
 static void emitBytes(const char* data, size_t len) {
   Serial.write((const uint8_t*)data, len);
   ble_link::write(data, len);
@@ -126,8 +132,15 @@ static void emitf(const char* fmt, ...) {                             // like pr
 }
 
 // A newly-subscribed BLE client gets the banner + READY so it knows the link is
-// live. BLE-only on purpose (not through emit): it's a per-connection greeting,
-// and re-emitting READY onto USB could confuse a serial session mid-command.
+// live. BLE-only on purpose (not through emit): it's a per-subscribe-event
+// greeting, and re-emitting READY onto USB could confuse a serial session
+// mid-command. Note for the two-central case: ble_link's notify() broadcasts
+// to every currently-subscribed connection (see ble_link.h), so if client A is
+// already live when client B subscribes, this second greet reaches BOTH — A
+// sees an extra "# JumpHeight..."/READY mid-stream. Both lines are designed to
+// be tolerated by a spec-compliant reader (`#` is chatter; docs/
+// garmin-datafield.md §5.2 requires clients to skip unknown lines/keys), so
+// this is treated as a harmless, acceptable side effect rather than a bug.
 static void bleGreet() {
   static const char banner[] = "# JumpHeight fw v" FW_VERSION "\n";
   ble_link::write(banner, sizeof(banner) - 1);

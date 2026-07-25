@@ -2,31 +2,67 @@
 //
 // Nordic UART Service (NUS) BLE link for the Jump Height firmware — a thin
 // wrapper over NimBLE-Arduino that carries the EXACT same newline-terminated
-// protocol as the USB serial console, so a phone/laptop (Web Bluetooth) can
-// read jumps and send commands the same way ./tools/jump does over USB.
+// protocol as the USB serial console, so a phone/laptop (Web Bluetooth) AND a
+// Garmin watch (Connect IQ BLE central) can read jumps and send commands the
+// same way ./tools/jump does over USB — at the same time: this layer supports
+// TWO concurrently connected BLE centrals (rider's watch + beach phone), per
+// docs/garmin-datafield.md §7 (prerequisite for the M6 field trial).
 //
 // Why NimBLE (not the stock ESP32 BLE / Bluedroid stack): Bluedroid's flash and
 // RAM footprint is large; NimBLE's is a fraction of it, and that budget is what
 // lets the app + a big LittleFS fit in our no-OTA partition map (partitions.csv).
 //
+// Two centrals, mechanically: NimBLE-Arduino's own default
+// CONFIG_BT_NIMBLE_MAX_CONNECTIONS is 3 (library src/nimconfig.h; no
+// arduino-esp32 sdkconfig.h variant predefines it, so that default applies
+// unmodified) — comfortably above the 2 we need, so no build_flags override
+// is required. What DOES need help: NimBLE stops advertising the moment a
+// central connects, and only auto-resumes advertising on a FAILED connect
+// attempt or on a disconnect — never on a SUCCESSFUL connect (confirmed in
+// NimBLEServer.cpp's handleGapEvent()). Left alone, the puck would go deaf to
+// a second central the instant the first one paired. ServerCallbacks::
+// onConnect() below is what restarts advertising while a slot remains.
+//
 // Threading model — the part that's easy to get wrong:
-//   NimBLE runs its own host task. Every callback here (client writes, subscribe,
-//   MTU change, disconnect) fires on THAT task, never on loop(). So:
+//   NimBLE runs its own host task. Every callback here (client writes, connect,
+//   subscribe, MTU change, disconnect) fires on THAT task, never on loop(). So:
 //     * Received command bytes are pushed into a fixed ring buffer guarded by a
 //       portMUX spinlock; loop() drains it and runs the SAME handleCommand() as
 //       serial, so every command is handled exactly once, on the loop() task.
-//     * Subscription / MTU state are plain scalars the host task writes and
-//       loop() reads (single-writer/single-reader; a stale read is harmless).
+//       This ring (and the line-assembly buffer downstream of it) is SHARED
+//       across both centrals — by design, both speak the identical protocol
+//       through the identical dispatcher. Two clients writing multi-fragment
+//       commands in the same instant could in principle interleave bytes; in
+//       practice commands are short (the watch writes one `stats` right after
+//       connecting, per the Garmin spec; a human on the phone types
+//       occasionally) and NimBLE serializes all host-task callbacks one at a
+//       time, so this is a known, accepted narrow-window risk — not a silent
+//       one — rather than something this change attempts to fix.
+//     * Subscriber count / MTU / connection bookkeeping are plain scalars the
+//       host task writes and loop() reads (single-writer/single-reader; a
+//       stale read is harmless). s_sub_count replaces a single subscribed-bool
+//       because either central can subscribe/unsubscribe independently of the
+//       other (see TxCallbacks::onSubscribe). s_mtu tracks the MINIMUM MTU
+//       seen across both centrals since connections last dropped to 0 (see
+//       ServerCallbacks::onMTUChange), because notify() broadcasts one buffer
+//       to every subscribed connection in a single call (confirmed in the
+//       vendored library source, NimBLECharacteristic.cpp) — there is no
+//       per-connection send, so a chunk size has to satisfy whichever
+//       subscriber has the smallest MTU or that subscriber's stream corrupts.
 //     * Notifications (device -> client) are only ever sent from loop() via the
 //       emit layer in main.cpp, so the TX path has no cross-task contention.
+//       One notify() call reaches every currently-subscribed central at once
+//       (see above), so main.cpp never needs to loop over clients itself.
 //
 // Only src/main.cpp includes this header, so the definitions live here inline
 // (matching jump_detector.h / mpu6050_min.h). It pulls in <NimBLEDevice.h>, so
 // it must never be included by the host-side detector parity test.
 //
-// API note: written against NimBLE-Arduino 1.4.x. The 2.x release changed the
-// characteristic/server callback signatures (ble_gap_conn_desc* -> NimBLEConnInfo&);
-// the signatures below are the 1.4.x ones.
+// API note: written against NimBLE-Arduino 1.4.x (this repo pins ^1.4.2; 1.4.3
+// is what's actually vendored under firmware/.pio/libdeps as of this writing).
+// The 2.x release changed the characteristic/server callback signatures
+// (ble_gap_conn_desc* -> NimBLEConnInfo&); the signatures below are the 1.4.x
+// ones.
 //
 // SPDX-License-Identifier: MIT
 
@@ -44,9 +80,13 @@ static const char* TX_UUID  = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E";  // device
 
 // --- shared state (see threading model above) ---
 static NimBLECharacteristic* s_tx = nullptr;
-static volatile bool     s_subscribed    = false;  // is a client subscribed to TX?
+static volatile uint8_t  s_sub_count    = 0;      // how many centrals are subscribed to TX
 static volatile bool     s_greet_pending = false;  // loop() owes a new client its banner
-static volatile uint16_t s_mtu           = 23;     // negotiated ATT MTU (floor 23 => 20B payload)
+static volatile uint16_t s_mtu           = 23;     // MIN ATT MTU across connected centrals
+                                                    // (floor 23 => 20B payload; see
+                                                    // ServerCallbacks::onMTUChange)
+static volatile bool     s_mtu_valid     = false;  // has a real MTU report landed since the
+                                                    // last time connections hit 0?
 
 // RX ring buffer: host task writes (rxPush), loop() drains (rxPop). The spinlock
 // gives cross-core mutual exclusion between the two tasks.
@@ -93,36 +133,102 @@ class RxCallbacks : public NimBLECharacteristicCallbacks {
 };
 
 // Client subscribed/unsubscribed to TX notifications. subValue bit0 = notify.
+// Fires once per CONNECTION per actual transition — NimBLE only raises this
+// when the subscription flags really change (ble_gatts_subscribe_event() in
+// the library XORs old vs new flags before emitting anything), so a count
+// that increments/decrements here in lockstep can never drift out of sync
+// with reality.
+//
+// Critically, this ALSO fires with subValue==0 for a connection that
+// disconnects while still subscribed, and it does so per-connection, not as
+// a blanket reset: NimBLE's ble_gatts_connection_broken() (nimble/nimble/
+// host/src/ble_gatts.c) walks that one connection's still-live CCCD state and
+// synthesizes exactly this callback (reason TERM) for each characteristic it
+// had subscribed to — called from ble_gap_conn_broken() (.../src/ble_gap.c)
+// strictly BEFORE the BLE_GAP_EVENT_DISCONNECT that drives
+// ServerCallbacks::onDisconnect below. So by the time onDisconnect runs,
+// s_sub_count has ALREADY been decremented for the connection that's leaving
+// — onDisconnect must not touch it again (see the comment there).
 class TxCallbacks : public NimBLECharacteristicCallbacks {
   void onSubscribe(NimBLECharacteristic* c, ble_gap_conn_desc* desc,
                    uint16_t subValue) override {
     (void)c; (void)desc;
     if (subValue > 0) {
-      // Publish s_subscribed BEFORE the greet flag: loop() consumes the flag
-      // (one-shot) and then calls write(), which no-ops unless s_subscribed —
-      // the reverse order lets a preemption window eat the banner+READY.
-      // The critical section's barrier orders this write ahead of the flag.
-      s_subscribed = true;
+      // Publish the incremented count BEFORE the greet flag: loop() consumes
+      // the flag (one-shot) and then calls write(), which no-ops unless
+      // s_sub_count > 0 — the reverse order lets a preemption window eat the
+      // banner+READY. The critical section's barrier orders this write ahead
+      // of the flag.
+      s_sub_count++;
       portENTER_CRITICAL(&s_mux);
       s_greet_pending = true;  // loop() sends the banner + READY
       portEXIT_CRITICAL(&s_mux);
-    } else {
-      s_subscribed = false;
+    } else if (s_sub_count > 0) {
+      s_sub_count--;
     }
   }
 };
 
 class ServerCallbacks : public NimBLEServerCallbacks {
+  // A successful connect does NOT resume advertising on its own in 1.4.x —
+  // NimBLEServer::handleGapEvent()'s BLE_GAP_EVENT_CONNECT case only restarts
+  // advertising on a FAILED connect attempt; on success it does nothing. So
+  // without this override the puck would advertise exactly once and then go
+  // silent forever after the first central connects — exactly the bug this
+  // milestone exists to fix. getConnectedCount() already reflects the NEW
+  // connection by the time this fires (the library pushes the conn handle
+  // onto its internal vector before calling back), so "< 2" here really does
+  // mean "a second slot is still free."
+  void onConnect(NimBLEServer* pServer) override {
+    if (pServer->getConnectedCount() < 2) {
+      NimBLEDevice::startAdvertising();  // keep the 2nd slot discoverable
+    }
+  }
+
   void onDisconnect(NimBLEServer* pServer) override {
-    (void)pServer;
-    s_subscribed = false;
-    s_mtu = 23;  // next client re-negotiates from the floor; never send a chunk
-                 // bigger than a client's real MTU (that would truncate/corrupt)
+    // Do NOT clear s_sub_count here. TxCallbacks::onSubscribe(subValue==0)
+    // has ALREADY fired for this specific connection's own subscription (if
+    // it had one) by the time this runs — NimBLE fires it per-connection
+    // ahead of the disconnect event (verified in the library source; see the
+    // long comment on TxCallbacks). Zeroing/decrementing again here would
+    // double-count, and the OLD single-client logic (unconditionally
+    // clearing a bool) would have killed the OTHER still-connected client's
+    // stream the moment either one disconnected — the exact bug this
+    // milestone fixes.
+    //
+    // getConnectedCount() has already been decremented for the disconnecting
+    // peer by the time this runs (the library erases it from its internal
+    // vector before calling back), so "== 0" here means "well and truly
+    // nobody is connected" — safe to drop back to the MTU floor.
+    if (pServer->getConnectedCount() == 0) {
+      s_mtu = 23;
+      s_mtu_valid = false;
+    }
     NimBLEDevice::startAdvertising();  // stay discoverable for the next connect
   }
+
+  // MTU is per-connection but s_mtu is one scalar, and notify() (confirmed in
+  // NimBLECharacteristic.cpp — see the threading-model comment at the top of
+  // this file) broadcasts the SAME chunk to every subscribed connection in
+  // one call — the library only WARNS ("Truncating to N bytes") when a chunk
+  // is oversized for a given peer, it does not actually enforce a smaller
+  // size, so an oversized chunk really does reach and corrupt that peer's
+  // stream. We therefore track the MINIMUM MTU reported since connections
+  // last dropped to 0, rather than a per-connection table:
+  //   * s_mtu_valid distinguishes "no report yet since the last reset" (take
+  //     this report as-is) from "at least one report already landed" (only
+  //     ever shrink from here). This keeps the common one-client case
+  //     behaving exactly as before — a single client's negotiated MTU is
+  //     adopted outright, not floored against the 23 reset sentinel.
+  //   * Tradeoff (by design, per docs/garmin-datafield.md §7): once a
+  //     small-MTU client has been seen, a simultaneously-connected big-MTU
+  //     client is chunked down to match it until BOTH disconnect — slower
+  //     for the big-MTU client, but never wrong for the small one.
   void onMTUChange(uint16_t mtu, ble_gap_conn_desc* desc) override {
     (void)desc;
-    if (mtu >= 23) s_mtu = mtu;
+    if (mtu < 23) return;
+    if (!s_mtu_valid || mtu < s_mtu) s_mtu = mtu;
+    s_mtu_valid = true;
   }
 };
 
@@ -135,7 +241,8 @@ static bool begin(const char* name) {
   // and this form compiles against either.
   NimBLEDevice::init(name);
   if (!NimBLEDevice::getInitialized()) return false;
-  NimBLEDevice::setMTU(247);  // request a large MTU; the client caps the real value
+  NimBLEDevice::setMTU(247);  // request a large MTU; each client caps its own real value
+                              // (independently — see ServerCallbacks::onMTUChange)
 
   NimBLEServer* server = NimBLEDevice::createServer();
   if (!server) return false;
@@ -200,7 +307,13 @@ static void sendOneChunk() {
   if (n > sizeof(buf)) n = sizeof(buf);
   for (size_t i = 0; i < n; ++i) buf[i] = s_txq[(s_txq_tail + i) % TX_CAP];
   s_tx->setValue(buf, n);
-  s_tx->notify();
+  s_tx->notify();  // 1.4.x: returns void, and BROADCASTS this exact buffer to
+                   // every currently-subscribed connection in this one call
+                   // (NimBLECharacteristic::notify() loops its own internal
+                   // subscriber list — confirmed in the vendored library
+                   // source). There is no per-connection send to hook, which
+                   // is exactly why chunk size must respect the SMALLEST
+                   // subscribed MTU (s_mtu) rather than any one client's.
   s_txq_tail = (s_txq_tail + n) % TX_CAP;
   s_last_chunk_us = micros();
 }
@@ -208,7 +321,7 @@ static void sendOneChunk() {
 // Send one paced chunk if one is due. Called once per loop() pass; costs
 // microseconds when idle, so it never disturbs the 200 Hz sampling cadence.
 static void pump() {
-  if (!s_subscribed || s_tx == nullptr) {
+  if (s_sub_count == 0 || s_tx == nullptr) {
     s_txq_tail = s_txq_head;  // no listener: drop pending output
     return;
   }
@@ -218,7 +331,7 @@ static void pump() {
 }
 
 static void write(const char* data, size_t len) {
-  if (!s_subscribed || s_tx == nullptr) return;
+  if (s_sub_count == 0 || s_tx == nullptr) return;
   for (size_t i = 0; i < len; ++i) {
     size_t next = (s_txq_head + 1) % TX_CAP;
     while (next == s_txq_tail) {
@@ -235,6 +348,8 @@ static void write(const char* data, size_t len) {
 // Drain the RX ring, dispatching each completed command line through `handle`
 // (the same handleCommand() serial uses). Call once per loop(); mirrors the
 // serial pollSerial() line assembly (trim, ignore blanks, cap at 64 chars).
+// This ring and the line buffer below are shared across BOTH connected
+// centrals (see the threading-model comment at the top of this file).
 static void poll(void (*handle)(const String&)) {
   uint8_t c;
   while (rxPop(c)) {
