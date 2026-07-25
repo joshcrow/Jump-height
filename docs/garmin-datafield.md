@@ -112,7 +112,10 @@ for reconnects or state changes.
 - App type: **data field** (`<iq:application type="datafield">`), because it
   runs inside any native activity — the rider keeps their preferred sport
   profile, GPS, HR, and we add jumps.
-- **Primary target device: Garmin Instinct 3 Solar** (the rider's watch).
+- **Primary target device: Garmin Instinct 3 Solar** (the rider's watch) —
+  **API Level 5.1, 176×176 semi-octagon MIP** (confirmed against Garmin's
+  compatible-devices list, 2026-07; the clipped-corner "semi-octagon"
+  shape means keep content centered, nothing in corners).
   Consequences, binding on the design:
   - Monochrome MIP, 176×176: no dimming exists — staleness is a hollow
     glyph + "reconnecting" label, never a gray tone; the new-jump flash is
@@ -292,17 +295,31 @@ time-on-foil exists — that's the first metric a custom page shows that a
 native activity page can't. When revisited, PuckLink/Protocol/Model/FitOut
 lift unchanged; only the View/App layer is new.
 
-## 9. Verify at build time (known unknowns — check, don't assume)
+## 9. Verify at build time — updated after SDK research (2026-07)
 
-1. Owner's exact watch model + its CIQ version and datafield memory class.
-2. `Toybox.BluetoothLowEnergy` availability *in data fields* on that model
-   (device apps have it everywhere BLE exists; datafield support is the
-   thing to confirm in the SDK device matrix).
-3. Whether `Attention.vibrate` is permitted from a data field on target
-   devices; if not, drop US3 silently (setting hidden).
+**RESOLVED from Garmin's documentation (sources: Toybox.BluetoothLowEnergy
+API docs; compatible-devices list):**
+- ✅ The BluetoothLowEnergy module explicitly permits **Data Field** apps
+  (also Background/Glance/Widget/Watch App). Requires API 3.1+;
+  Instinct 3 Solar is **API 5.1**. The BLE-in-datafield gate is OPEN — the
+  §5.1 device-app fallback stays documented but is not expected.
+- ✅ Pairing "does not persist across application instances" (per
+  `pairDevice` docs) — the scan-and-connect-on-every-activity-start design
+  isn't just acceptable, it's required. `getBondedDevices` (API 4.2.5+)
+  exists on 5.1 as an optional reconnect accelerator.
+- ✅ Profile registration limit: 3 per app; we register 1 (NUS).
+- ✅ Instinct 3 Solar display: 176×176 semi-octagon (corners clipped).
+
+**Still open (check in M0/M2/M4):**
+1. Exact datafield memory limit for Instinct 3 Solar (read from the SDK's
+   device files at M0; API 5.1-era limits are expected to be generous —
+   budget stays conservative regardless).
+2. *(resolved above)*
+3. Whether `Attention.vibrate` is permitted from a data field on Instinct 3;
+   if not, drop US3 silently (setting hidden; invert-flash is the nudge).
 4. Whether the 128-bit NUS service UUID is visible in CIQ scan results on
    target (else match by name from scan response).
-5. Pairing persistence: whether pairDevice must rerun per activity start.
+5. *(resolved above)*
 6. FIT developer-field rendering in Garmin Connect for windsurf-family
    activities (charts render for most sports; confirm on a real save).
 7. Store review constraints on the word "Garmin" and on BLE scan duration
