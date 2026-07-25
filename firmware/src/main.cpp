@@ -45,7 +45,7 @@
 #include "jump_detector.h"
 #include "ble_link.h"
 
-#define FW_VERSION "0.3.0"
+#define FW_VERSION "0.3.1"
 
 static const float    G                  = JH_G;
 static const uint32_t SAMPLE_INTERVAL_US = 1000000UL / JH_SAMPLE_HZ;
@@ -78,6 +78,15 @@ static int64_t  t0_us         = 0;
 static uint32_t last_motion_ms = 0;
 static bool     motion_seen    = false;
 static bool     active         = false;
+
+// Gravity baseline, measured by the boot self-test with the device at rest.
+// Cheap sensors can be mis-scaled (a real field unit reads 0.824 g sitting
+// still — genuine 0x68 chip, superbly quiet, just 18% low). Every sample is
+// divided by this, so "1.0" always means "this sensor's own resting gravity":
+// the motion gate can settle to idle, free-fall still reads ~0, and heights
+// are untouched (the airtime method measures time, not amplitude). Updated
+// only when a self-test sees a plausible, quiet resting measurement.
+static float    g_baseline     = 1.0f;
 
 // Trace buffering (keeps slow flash writes off the sampling path)
 static String   trace_buf;
@@ -266,6 +275,15 @@ static bool runSelfTest() {
         emitLine("# hint: should read ~1.0g sitting still. Keep the device still on a");
         emitLine("# hint: table during self-test, and check VCC is on 3V3.");
         all_ok = false;
+      }
+      // Adopt this rest measurement as the gravity baseline when it's sane
+      // (plausible magnitude, quiet enough to really be "at rest").
+      if (mean > 0.5f && mean < 1.5f && sd < 0.08f) {
+        g_baseline = mean;
+        if (fabsf(mean - 1.0f) > 0.05f) {
+          emitf("# gravity reads %.3fg at rest on this unit — auto-normalizing "
+                "so motion math sees 1.000g\n", mean);
+        }
       }
       if (sd < 0.03f) {
         emitf("SELFTEST noise PASS detail=%.4fg\n", sd);
@@ -459,7 +477,8 @@ void loop() {
   float ax, ay, az;
   if (!imu.readAccelG(ax, ay, az)) return;  // transient I2C hiccup: skip sample
   const float t   = (now_us - t0_us) * 1e-6f;
-  const float mag = sqrtf(ax * ax + ay * ay + az * az);  // orientation-independent
+  // Orientation-independent, normalized to this unit's own measured gravity.
+  const float mag = sqrtf(ax * ax + ay * ay + az * az) / g_baseline;
 
   // --- motion gate ---
   const uint32_t now_ms = millis();
