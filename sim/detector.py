@@ -34,8 +34,9 @@ class Params:
     freefall_enter_g: float = 0.35     # |a| below this => possible takeoff
     freefall_confirm_s: float = 0.08   # must stay low this long to confirm launch
     landing_threshold_g: float = 2.50  # |a| above this while airborne => landing
+    landing_settle_s: float = 0.5      # this long at ordinary g => flight is over
     min_airtime_s: float = 0.25        # reject anything shorter (chop/noise)
-    max_airtime_s: float = 8.00        # sanity cap; also unsticks AIRBORNE state
+    max_airtime_s: float = 3.00        # reject longer: physically absurd for wing jumps
     airtime_offset_s: float = 0.0      # calibration: added to raw airtime
     height_scale: float = 1.0          # calibration: multiplies computed height
 
@@ -74,6 +75,7 @@ class Detector:
         self.p = params or Params()
         self.state = RIDING
         self.takeoff_time = 0.0
+        self.last_low_time = 0.0  # last sample that still read as free-fall
         # Why the last confirmed flight did NOT count ("too_short" |
         # "no_landing" | None). Set on the rejection sample, cleared on the
         # next update — mirrors jump_detector.h so tools can narrate misses.
@@ -93,8 +95,11 @@ class Detector:
                 self.state = RIDING  # popped back up: was just a bump
             elif t_s - self.takeoff_time >= p.freefall_confirm_s:
                 self.state = AIRBORNE  # sustained free-fall: real launch
+                self.last_low_time = t_s
 
         elif self.state == AIRBORNE:
+            if accel_mag_g < p.freefall_enter_g:
+                self.last_low_time = t_s  # still falling
             if accel_mag_g > p.landing_threshold_g:
                 raw = t_s - self.takeoff_time
                 self.state = RIDING
@@ -110,8 +115,17 @@ class Detector:
                 self.last_reject = ("too_short" if raw < p.min_airtime_s
                                     else "no_landing")
                 self.last_reject_airtime = raw
+            elif t_s - self.last_low_time >= p.landing_settle_s:
+                # Ordinary readings for a while: the flight is over but the
+                # landing never spiked. Release NOW — stuck-airborne is deaf
+                # to the next takeoff, and a later stray spike would close
+                # the stale flight as a monster jump (a real desk session
+                # stored a "57 m" jump exactly this way).
+                self.state = RIDING
+                self.last_reject = "no_landing"
+                self.last_reject_airtime = t_s - self.takeoff_time
             elif t_s - self.takeoff_time > p.max_airtime_s:
-                self.state = RIDING  # safety: never saw a landing, reset
+                self.state = RIDING  # belt-and-suspenders: settle fires first
                 self.last_reject = "no_landing"
                 self.last_reject_airtime = t_s - self.takeoff_time
 

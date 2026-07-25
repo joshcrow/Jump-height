@@ -45,7 +45,7 @@
 #include "jump_detector.h"
 #include "ble_link.h"
 
-#define FW_VERSION "0.3.2"
+#define FW_VERSION "0.3.3"
 
 static const float    G                  = JH_G;
 static const uint32_t SAMPLE_INTERVAL_US = 1000000UL / JH_SAMPLE_HZ;

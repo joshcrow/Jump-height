@@ -27,8 +27,9 @@ struct Params {
   float freefall_enter_g    = JH_FREEFALL_ENTER_G;    // |a| below => possible takeoff
   float freefall_confirm_s  = JH_FREEFALL_CONFIRM_S;  // stay low this long => launch
   float landing_threshold_g = JH_LANDING_THRESHOLD_G; // |a| above while airborne => landing
+  float landing_settle_s    = JH_LANDING_SETTLE_S;    // this long at ordinary g => flight over
   float min_airtime_s       = JH_MIN_AIRTIME_S;       // reject shorter (chop/noise)
-  float max_airtime_s       = JH_MAX_AIRTIME_S;       // sanity cap; unsticks AIRBORNE
+  float max_airtime_s       = JH_MAX_AIRTIME_S;       // reject longer: physically absurd
   float airtime_offset_s    = JH_AIRTIME_OFFSET_S;    // calibration: added to raw airtime
   float height_scale        = JH_HEIGHT_SCALE;        // calibration: multiplies height
 };
@@ -70,10 +71,12 @@ class Detector {
           state_ = State::RIDING;  // popped back up: was just a bump
         } else if (t_s - takeoff_time_ >= p_.freefall_confirm_s) {
           state_ = State::AIRBORNE;  // sustained free-fall: real launch
+          last_low_time_ = t_s;
         }
         break;
 
       case State::AIRBORNE:
+        if (accel_mag_g < p_.freefall_enter_g) last_low_time_ = t_s;  // still falling
         if (accel_mag_g > p_.landing_threshold_g) {
           const float raw = t_s - takeoff_time_;
           state_ = State::RIDING;
@@ -90,8 +93,17 @@ class Detector {
           last_reject_         = raw < p_.min_airtime_s ? Reject::TOO_SHORT
                                                         : Reject::NO_LANDING;
           last_reject_airtime_ = raw;
+        } else if (t_s - last_low_time_ >= p_.landing_settle_s) {
+          // Ordinary (non-free-fall) readings for a while: the flight is over
+          // but the landing never spiked past the threshold. Release NOW — a
+          // detector stuck "airborne" is deaf to the next takeoff, and the
+          // eventual stray spike would close the stale flight as a monster
+          // jump (a real desk session stored a "57 m" jump exactly this way).
+          state_ = State::RIDING;
+          last_reject_         = Reject::NO_LANDING;
+          last_reject_airtime_ = t_s - takeoff_time_;
         } else if (t_s - takeoff_time_ > p_.max_airtime_s) {
-          state_ = State::RIDING;  // safety: never saw a landing, reset
+          state_ = State::RIDING;  // belt-and-suspenders: settle above fires first
           last_reject_         = Reject::NO_LANDING;
           last_reject_airtime_ = t_s - takeoff_time_;
         }
@@ -107,8 +119,9 @@ class Detector {
 
  private:
   Params p_;
-  State state_       = State::RIDING;
+  State state_        = State::RIDING;
   float takeoff_time_ = 0.0f;
+  float last_low_time_ = 0.0f;  // last sample that still read as free-fall
   Reject last_reject_         = Reject::NONE;
   float  last_reject_airtime_ = 0.0f;
 };

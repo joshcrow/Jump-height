@@ -7,8 +7,9 @@
 #define JH_FREEFALL_ENTER_G 0.35f
 #define JH_FREEFALL_CONFIRM_S 0.08f
 #define JH_LANDING_THRESHOLD_G 2.5f
+#define JH_LANDING_SETTLE_S 0.5f
 #define JH_MIN_AIRTIME_S 0.25f
-#define JH_MAX_AIRTIME_S 8.0f
+#define JH_MAX_AIRTIME_S 3.0f
 #define JH_AIRTIME_OFFSET_S 0.0f
 #define JH_HEIGHT_SCALE 1.0f
 
@@ -21,4 +22,4 @@
 #define JH_I2C_SDA 21
 #define JH_I2C_SCL 22
 
-#define JH_PARAMS_SUMMARY "airtime_offset_s=0 freefall_confirm_s=0.08 freefall_enter_g=0.35 g=9.80665 height_scale=1 landing_threshold_g=2.5 max_airtime_s=8 min_airtime_s=0.25"
+#define JH_PARAMS_SUMMARY "airtime_offset_s=0 freefall_confirm_s=0.08 freefall_enter_g=0.35 g=9.80665 height_scale=1 landing_settle_s=0.5 landing_threshold_g=2.5 max_airtime_s=3 min_airtime_s=0.25"
