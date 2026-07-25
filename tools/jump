@@ -591,13 +591,38 @@ def _autopsy_trace(dev: "Device") -> None:
         from detector import load_params
         p = load_params(CONFIG_PATH)
         print("\n  Reading the device's own recording of what just happened...")
+        # The stored trace grows until `clear` — after a bench week it can be
+        # megabytes, and USB serial moves ~11.5 KB/s. Without progress output
+        # a big download reads as a hang (a real user watched exactly that).
+        tb = 0
+        try:
+            for ln in dev.command("stats", timeout=8):
+                if ln.startswith("STATS"):
+                    tb = int(parse_kv(ln).get("trace_bytes", "0"))
+        except Exception:
+            pass
+        if tb > 60000:
+            print(f"  ({tb // 1024} KB of recording stored — roughly "
+                  f"{max(1, tb // 11520)}s over USB. Tip: after a PASSED desk "
+                  "test, `clear` keeps this fast.)")
         rows: list[tuple[float, float]] = []
         in_file = False
-        for ln in dev.command("trace", timeout=30):
+        got = 0
+        next_mark = 51200
+        dev.sp.write_line("trace")
+        while True:
+            ln = dev.sp.read_line(30.0)
+            if ln is None or ln.strip() == "OK trace" or ln.startswith("ERR"):
+                break
+            got += len(ln) + 1
+            if got >= next_mark:
+                pct = f"  {100 * got // tb}%" if tb else ""
+                print(f"    … {got // 1024} KB{pct}", flush=True)
+                next_mark += 51200
             if ln.startswith("FILE trace.csv BEGIN"):
                 in_file = True
             elif ln.startswith("FILE trace.csv END"):
-                break
+                in_file = False
             elif in_file and "," in ln and not ln.startswith(("t,", "#")):
                 try:
                     ts, ms = ln.split(",", 1)
