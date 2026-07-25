@@ -562,12 +562,24 @@ def cmd_desktest(args) -> int:
         print("  let it land. (Drops under ~35 cm are ignored by design.)\n")
         heights = []
         for i in range(1, 4):
-            _pause(args, dev, f"Toss {i} of 3 — press Enter, then toss.")
-            ev = dev.wait_for("JUMP", timeout=60)
+            # A quiet toss (too low, or a landing too plush to spike) should
+            # cost one retry, not the whole run — a real field lesson.
+            ev = None
+            for attempt in range(1, 4):
+                label = f"Toss {i} of 3" + (f", attempt {attempt}" if attempt > 1 else "")
+                _pause(args, dev, f"{label} — press Enter, then toss.")
+                ev = dev.wait_for("JUMP", timeout=30)
+                if ev is not None:
+                    break
+                print("  … nothing detected on that one. Usual causes:")
+                print("    • toss too low — it needs ~a foot of rise (airtime ≥ 0.25 s)")
+                print("    • landing too soft — very plush bedding swallows the 'thud';")
+                print("      a firmer cushion or a folded towel on the table works better")
+                print("    • loose parts — toss it as ONE rigid lump (foam it in the box)")
             if ev is None:
-                print(f"  ❌ toss {i}: nothing detected in 60s. Toss a little higher —")
-                print("     airtime must exceed min_airtime_s "
-                      "(see config/params.json).")
+                print(f"  ❌ toss {i}: three quiet tosses in a row. Adjust height and")
+                print("     landing surface, then re-run — the wizard resumes here.")
+                print("     Stuck? ./tools/jump report and send the file to Claude.")
                 return 1
             raw = float(ev.get("airtime_raw_s", 0))
             h = float(ev.get("height_m", 0))
