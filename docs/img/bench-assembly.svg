@@ -86,8 +86,8 @@
   <!-- usb cable path out through notch -->
   <path d="M 442 948 C 520 946, 596 918, 622 868 C 640 834, 638 812, 646 792 C 656 764, 690 744, 716 752"
         fill="none" stroke="#767672" stroke-width="3.5"/>
-  <text x="826" y="734" font-size="13" fill="#4a4a46" text-anchor="end">USB-C to Mac —</text>
-  <text x="826" y="752" font-size="13" fill="#4a4a46" text-anchor="end">slack loop</text>
+  <text x="826" y="734" font-size="13" fill="#4a4a46" text-anchor="end">USB-C to Mac — bench only;</text>
+  <text x="826" y="752" font-size="13" fill="#4a4a46" text-anchor="end">unplug before tossing</text>
 
   <!-- box walls + floor -->
   <path d="M 90 808 L 90 1176 L 750 1176 L 750 808" fill="none" stroke="#0b0b0b" stroke-width="2"/>

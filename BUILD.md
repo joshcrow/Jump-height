@@ -129,9 +129,11 @@ For desk tests and calibration drops the assembly just needs to move as one
 rigid lump: any small **hard-sided food container** works. Pack board,
 battery, and sensor snug with foam or bubble wrap — nothing may shift or
 rattle (the sensor reads every internal wobble as signal), with padding
-between pin tips and the battery pouch. Crack the lid for the USB cable —
-bench tests run tethered; for tosses and drops give the cable a generous
-slack loop and let it fall *with* the box so it never tugs mid-flight.
+between pin tips and the battery pouch. Crack the lid for the USB cable
+during flashing and self-tests — but tosses and calibration drops are done
+**unplugged**: the wizard tells you when to pull the cable, the board keeps
+running on battery and records on its own, and when you plug back in the
+wizard reads the results out of storage. No cable ever flies.
 Orientation inside doesn't matter. The waterproof capsule from the shopping
 list remains the container for anything near water — the kitchen box's
 jurisdiction ends at the cushion.

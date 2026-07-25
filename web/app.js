@@ -776,9 +776,37 @@ function jumpsToCsv(jumps) {
 function stamp(when) { return String(when).replace(/[:.]/g, '-').replace('T', '_').replace('Z', ''); }
 function todayStamp() { return new Date().toISOString().slice(0, 10); }
 
-/** Download text as a file via a Blob + a temporary <a download>. */
-function downloadText(filename, text, mime) {
-  downloadBlob(filename, new Blob([text], { type: mime || 'text/csv' }));
+// iOS never honors a page-triggered <a download> the way desktop browsers
+// do, and WebBLE wrapper browsers (Bluefy) ignore it entirely — there, the
+// share sheet ("Save to Files") is the real file path, clipboard the last
+// resort. iPadOS masquerades as MacIntel, hence the maxTouchPoints check.
+const IS_IOS = /iP(hone|ad|od)/.test(navigator.userAgent)
+  || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+/** Deliver text as a file: share sheet on iOS, real download elsewhere,
+ *  clipboard as the spoken last resort. Never a silent no-op. */
+async function downloadText(filename, text, mime) {
+  const type = mime || 'text/csv';
+  if (IS_IOS && navigator.share) {
+    try {
+      const file = new File([text], filename, { type });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: filename });
+        return;
+      }
+    } catch (e) {
+      if (e && e.name === 'AbortError') return; // user closed the sheet
+    }
+  }
+  if (!IS_IOS) {
+    downloadBlob(filename, new Blob([text], { type }));
+    return;
+  }
+  let copied = false;
+  try { await navigator.clipboard.writeText(text); copied = true; } catch (_e) {}
+  showDumpStatus(copied
+    ? `This browser can't save files, so ${filename} is on your clipboard — paste it into Notes or a spreadsheet. For real downloads, open this page on a computer.`
+    : `This browser can't save files. Open this page on a computer to download ${filename}.`);
 }
 function downloadBlob(filename, blob) {
   const url = URL.createObjectURL(blob);
@@ -1038,11 +1066,14 @@ async function shareSession(session) {
     // otherwise fall through to the download path
   }
 
-  // No share support: download the PNG, copy the text, and SAY so.
-  if (blob) downloadBlob(fname, blob);
+  // No share support: on a computer, save the PNG; on iOS there is nowhere
+  // to save INTO (no downloads) — copy the summary and say so honestly.
+  if (blob && !IS_IOS) downloadBlob(fname, blob);
   let copied = false;
   try { if (navigator.clipboard && navigator.clipboard.writeText) { await navigator.clipboard.writeText(text); copied = true; } } catch (_e) {}
-  showDumpStatus(`This browser can't open a share sheet, so I saved the share image to your downloads${copied ? ' and copied the summary to your clipboard' : ''}.`);
+  showDumpStatus(IS_IOS
+    ? `This browser can't open a share sheet${copied ? ' — summary copied to your clipboard' : ''}. Screenshot the session card, or open this page on a computer.`
+    : `This browser can't open a share sheet, so I saved the share image to your downloads${copied ? ' and copied the summary to your clipboard' : ''}.`);
 }
 
 // ------------------------------------------------------------- backup / restore

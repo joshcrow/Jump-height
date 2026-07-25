@@ -201,10 +201,15 @@ class SerialPort:
                 self._buf += chunk
 
     def close(self) -> None:
+        # Idempotent on purpose: the untethered flows close a device to let
+        # the human unplug it, reconnect as a new object, and an outer
+        # finally may close the stale handle again.
         if self._ser is not None:
             self._ser.close()
+            self._ser = None
         elif self._fd is not None:
             os.close(self._fd)
+            self._fd = None
 
 
 KNOWN_USB_GLOBS = [
@@ -590,6 +595,92 @@ def _autopsy_trace(dev: "Device") -> None:
         print(f"  (autopsy unavailable: {e})")
 
 
+def _wait_for_port_return(timeout: float = 90.0) -> str | None:
+    """Wait for the board's serial port to reappear after a replug."""
+    print("  Watching for the board on USB", end="", flush=True)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        ports = scan_ports()
+        if ports:
+            print(f" — found {ports[0]}")
+            time.sleep(1.5)  # give the OS a beat to finish creating the node
+            return ports[0]
+        print(".", end="", flush=True)
+        time.sleep(1.0)
+    print(" nothing.")
+    return None
+
+
+def _stored_rows(dev: "Device") -> list[dict]:
+    """The device's jumps.csv, parsed: [{'n':…, 'raw':…, 'h':…}, …]."""
+    rows: list[dict] = []
+    in_f = False
+    for ln in dev.command("jumps", timeout=20):
+        if ln.startswith("FILE jumps.csv BEGIN"):
+            in_f = True
+        elif ln.startswith("FILE jumps.csv END"):
+            break
+        elif in_f and "," in ln and not ln.startswith(("n,", "#")):
+            parts = ln.split(",")
+            if len(parts) >= 5:
+                try:
+                    rows.append({"n": int(parts[0]),
+                                 "raw": float(parts[2]), "h": float(parts[4])})
+                except ValueError:
+                    pass
+    return rows
+
+
+def _desktest_untethered(dev: "Device") -> int:
+    """Toss test for a real board: NO cable during the tosses.
+
+    Yanked USB plugs killed more desk tests than physics did. The device is
+    a logger — so test it the way it's actually used: baseline the stored
+    jump list, unplug, toss free, replug, and read back what it recorded
+    entirely on its own.
+    """
+    print("\n[2/3] Baseline...")
+    base_n = len(_stored_rows(dev))
+    print(f"  {base_n} jump(s) already in storage (they won't count).")
+    print("\n[3/3] Untethered tosses — no cable involved:")
+    print("  1. Unplug the USB cable (the battery keeps the board running).")
+    print("  2. Give it a wake-up shake.")
+    print("  3. THREE tosses over the cushion: a foot or more straight up,")
+    print("     flat like a pizza tray — let it LAND, don't catch it.")
+    print("  4. Plug the cable back in and return here.")
+    dev.close()
+    input("\n>> Press Enter AFTER the cable is back in... ")
+    port = _wait_for_port_return()
+    if port is None:
+        print("❌ The board never came back on USB. Check the cable, re-run.")
+        return 1
+    dev2 = Device(port)
+    try:
+        dev2.drain_boot(timeout=3.0)
+        new = _stored_rows(dev2)[base_n:]
+        good = 0
+        for k, r in enumerate(new, 1):
+            ok = 0.10 <= r["raw"] <= 1.2
+            mark = "✅" if ok else "⚠️"
+            note = "" if ok else "  (implausible for a hand toss — ignored)"
+            print(f"  {mark} flight {k}: airtime {r['raw']:.2f}s → "
+                  f"height {r['h']:.2f} m{note}")
+            good += 1 if ok else 0
+        if good >= 3:
+            print(f"\nRESULT: PASS ✅ — assembly verified: {good} clean tosses,")
+            print("recorded entirely on its own, no cable. Next: ./tools/jump drop")
+            return 0
+        if not new:
+            print("  No new flights in storage at all.")
+        print(f"\nRESULT: CHECK ⚠️ — {good} plausible toss(es) in storage; need 3.")
+        _autopsy_trace(dev2)
+        print("\n     Adjust per the autopsy, then re-run — the wizard resumes here.")
+        print("     Stuck? ./tools/jump report → send the file to Claude.")
+        return 1
+    finally:
+        dev2.close()
+
+
 def cmd_desktest(args) -> int:
     dev, proc = open_device(args, "desktest")
     try:
@@ -599,6 +690,12 @@ def cmd_desktest(args) -> int:
         if not ok:
             print("\nFix the wiring per the hints above, then re-run. Stopping here.")
             return 1
+
+        # Real hardware runs the untethered flow (unplug → toss → replug →
+        # read storage back); the scripted live flow below stays for --fake,
+        # which can't be unplugged.
+        if not getattr(args, "fake", False):
+            return _desktest_untethered(dev)
 
         print("\n[2/3] Motion gate...")
         # A real board is often ALREADY recording at this point: the human
@@ -712,6 +809,11 @@ def cmd_drop(args) -> int:
         print(f"height ({args.height_cm:.0f} cm above a cushion/pillow), then let go —")
         print("don't throw it. Keep still for a second before each drop.\n")
 
+        # Real hardware collects untethered (a cable spoils clean releases
+        # and yanks itself out); the live flow below stays for --fake.
+        if not getattr(args, "fake", False):
+            return _drop_untethered(args, dev, p, expected)
+
         _pause(args, dev, "Shake the device once to wake it.")
         dev.wait_for("STATE", timeout=30, value="recording")
 
@@ -727,47 +829,89 @@ def cmd_drop(args) -> int:
             print(f"  drop {i}: measured {raw:.3f}s (true {expected:.3f}s, "
                   f"error {raw - expected:+.3f}s)")
 
-        if len(raws) < 3:
-            print(f"\nOnly {len(raws)} good drops — need at least 3. Re-run, "
-                  "dropping from a bit higher.")
-            return 1
-
-        offset = -statistics.median(r - expected for r in raws)
-        spread = statistics.pstdev(raws)
-        print(f"\nMeasured timing bias: {-offset * 1000:+.0f} ms "
-              f"(spread ±{spread * 1000:.0f} ms over {len(raws)} drops)")
-        print(f"Recommended airtime_offset_s = {offset:+.4f}")
-        # Honest residual: per-drop height error remaining AFTER the correction
-        # (median-centering forces the median residual to zero, so report the
-        # per-drop scatter instead; drop height obeys h = g*t^2/2).
-        errs_cm = [abs(p.g * ((r + offset) ** 2 - expected ** 2) / 2.0) * 100
-                   for r in raws]
-        print(f"Typical per-drop scatter after correction: "
-              f"{statistics.mean(errs_cm):.1f} cm of drop height.")
-
-        if spread > 0.03:
-            print("⚠️  spread is high — results may be sloppy. Consider re-running "
-                  "with more careful, stiller drops.")
-
-        write = args.yes
-        if not write and sys.stdin.isatty() and not getattr(args, "fake", False):
-            write = input("\nWrite this into config/params.json? [y/N] ").strip().lower() == "y"
-        if write:
-            with open(CONFIG_PATH) as f:
-                cfg = json.load(f)
-            cfg["detector"]["airtime_offset_s"] = round(offset, 4)
-            with open(CONFIG_PATH, "w") as f:
-                json.dump(cfg, f, indent=2)
-                f.write("\n")
-            print(f"✅ saved to {CONFIG_PATH}")
-            print("Now run  ./tools/jump flash  to bake it into the device.")
-        else:
-            print("(not saved — re-run with --yes to save automatically)")
-        return 0
+        return _drop_analyze(raws, expected, args, p)
     finally:
         dev.close()
         if proc:
             proc.terminate()
+
+
+def _drop_untethered(args, dev: "Device", p, expected: float) -> int:
+    """Drop collection for a real board: NO cable during the drops."""
+    base_n = len(_stored_rows(dev))
+    print("Untethered — the cable can't spoil a release:")
+    print("  1. Unplug the USB cable (the battery keeps the board running).")
+    print("  2. Give it a wake-up shake.")
+    print(f"  3. {args.drops} clean drops from exactly {args.height_cm:.0f} cm:")
+    print("     hold dead still a second, let go clean, let it land.")
+    print("     Pick it up gently between drops.")
+    print("  4. Plug the cable back in and return here.")
+    dev.close()
+    input("\n>> Press Enter AFTER the cable is back in... ")
+    port = _wait_for_port_return()
+    if port is None:
+        print("❌ The board never came back on USB. Check the cable, re-run.")
+        return 1
+    dev2 = Device(port)
+    try:
+        dev2.drain_boot(timeout=3.0)
+        new = _stored_rows(dev2)[base_n:]
+        raws: list[float] = []
+        for r in new:
+            if abs(r["raw"] - expected) <= 0.15:
+                raws.append(r["raw"])
+                print(f"  drop {len(raws)}: measured {r['raw']:.3f}s "
+                      f"(true {expected:.3f}s, error {r['raw'] - expected:+.3f}s)")
+            else:
+                print(f"  (ignoring a {r['raw']:.2f}s flight — not a clean "
+                      f"{args.height_cm:.0f} cm drop)")
+        if not new:
+            print("  No new flights in storage at all.")
+            _autopsy_trace(dev2)
+        return _drop_analyze(raws, expected, args, p)
+    finally:
+        dev2.close()
+
+
+def _drop_analyze(raws: list[float], expected: float, args, p) -> int:
+    """Turn collected drop airtimes into the calibration verdict + save."""
+    if len(raws) < 3:
+        print(f"\nOnly {len(raws)} good drops — need at least 3. Re-run, "
+              "dropping from a bit higher.")
+        return 1
+
+    offset = -statistics.median(r - expected for r in raws)
+    spread = statistics.pstdev(raws)
+    print(f"\nMeasured timing bias: {-offset * 1000:+.0f} ms "
+          f"(spread ±{spread * 1000:.0f} ms over {len(raws)} drops)")
+    print(f"Recommended airtime_offset_s = {offset:+.4f}")
+    # Honest residual: per-drop height error remaining AFTER the correction
+    # (median-centering forces the median residual to zero, so report the
+    # per-drop scatter instead; drop height obeys h = g*t^2/2).
+    errs_cm = [abs(p.g * ((r + offset) ** 2 - expected ** 2) / 2.0) * 100
+               for r in raws]
+    print(f"Typical per-drop scatter after correction: "
+          f"{statistics.mean(errs_cm):.1f} cm of drop height.")
+
+    if spread > 0.03:
+        print("⚠️  spread is high — results may be sloppy. Consider re-running "
+              "with more careful, stiller drops.")
+
+    write = args.yes
+    if not write and sys.stdin.isatty() and not getattr(args, "fake", False):
+        write = input("\nWrite this into config/params.json? [y/N] ").strip().lower() == "y"
+    if write:
+        with open(CONFIG_PATH) as f:
+            cfg = json.load(f)
+        cfg["detector"]["airtime_offset_s"] = round(offset, 4)
+        with open(CONFIG_PATH, "w") as f:
+            json.dump(cfg, f, indent=2)
+            f.write("\n")
+        print(f"✅ saved to {CONFIG_PATH}")
+        print("Now run  ./tools/jump flash  to bake it into the device.")
+    else:
+        print("(not saved — re-run with --yes to save automatically)")
+    return 0
 
 
 # ---------------------------------------------------------------------- sync
