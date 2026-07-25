@@ -88,12 +88,16 @@ simulated device, end to end:
 ./tools/jump wizard --fake
 ```
 
-**Phone-only bench:** once firmware is on the board, the web app (Bluefy on
-iPhone) carries the same checks under *Connect → Bench: test & calibrate* —
-toss test and drop calibration over Bluetooth, with calibration saved into
-the device's own memory (survives reboots *and* reflashes). The cable's only
-remaining jobs: first-ever flash, firmware upgrades, charging, and the
-fastest bulk sync.
+**Who does what — phone vs Mac:** once firmware is on the board, the phone
+(Bluefy → the web app) is daily life: self-test, toss test, drop calibration
+(saved into the device's own memory, surviving reboots *and* reflashes),
+live jumps, sync, export, clear — all under *Connect → Bench: test &
+calibrate* and *Sessions*. The Mac is the factory and the hospital: it
+**flashes firmware** (first install + upgrades — no iOS browser can do
+this), archives sessions as real files on disk, and produces the
+`./tools/jump report` diagnostic bundle when something's genuinely weird.
+If the firmware isn't changing, the puck can live for weeks without ever
+meeting the computer.
 
 **If anything ever gets stuck:**
 
