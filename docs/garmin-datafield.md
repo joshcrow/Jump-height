@@ -111,10 +111,25 @@ for reconnects or state changes.
 
 - App type: **data field** (`<iq:application type="datafield">`), because it
   runs inside any native activity — the rider keeps their preferred sport
-  profile, GPS, HR, and we add jumps. Minimum SDK: Connect IQ **3.1**
-  (BLE-in-datafield era); target devices: modern watches (Fenix 6/7/8,
-  Epix 2, Forerunner 2xx/5xx/9xx of ~2019+). Exact device list is set in
-  M0 once the owner's model is known.
+  profile, GPS, HR, and we add jumps.
+- **Primary target device: Garmin Instinct 3 Solar** (the rider's watch).
+  Consequences, binding on the design:
+  - Monochrome MIP, 176×176: no dimming exists — staleness is a hollow
+    glyph + "reconnecting" label, never a gray tone; the new-jump flash is
+    a region INVERT (MIP renders inversion beautifully); fonts chunky,
+    layouts from §4.1 verified at this resolution first.
+  - Low-memory device class: budget conservative (§5.6), no resources
+    beyond strings.
+  - MIP Solar is the ideal field display: always-on and MORE readable in
+    direct sun. The AMOLED Instinct 3 variant and bigger watches inherit
+    the same monochrome-safe design for free.
+  - **Fallback if §9.2 fails** (BLE not available to *data fields* on
+    Instinct 3): ship the same PuckLink/Protocol/Model/FitOut core as a
+    minimal full-screen **device app** ("glance mode" + its own activity
+    recording per §8) — BLE is available to device apps wherever the
+    module exists at all. The executor switches app type, not design.
+  - Store device list beyond Instinct: add Fenix/Epix/Forerunner families
+    at M5 after simulator layout passes; Instinct correctness first.
 - Permissions: `BluetoothLowEnergy`, `FitContributor`.
 - BLE: `Toybox.BluetoothLowEnergy`. One profile registered:
   - Service `6E400001-B5A3-F393-E0A9-E50E24DCCA9E` (NUS)
@@ -366,7 +381,18 @@ repo (same no-binaries rule as firmware).
   surfaces must agree on one sentence of positioning: *"An open-hardware
   jump tracker for wing foiling — build the puck, wear the watch."*
 
-## 12. Out of scope (explicitly)
+## 12. Stated position: "why not just use the watch's accelerometer?"
+
+The question everyone asks (store reviewers included), answered once: the
+airtime method detects **free-fall**, and a wing rider's wrist never
+free-falls — the wing is lifting through the arms for the whole jump, so
+the wrist stays loaded while the *board* is the thing that falls. Add
+Connect IQ's ~25 Hz app-accelerometer cap (the puck samples at 200 Hz) and
+wing airs being short (0.4-1.5 s vs the 3-10 s kite jumps that wrist-only
+apps detect), and the division of labor is physics, not preference: the
+board wears the sensor; the wrist wears the display.
+
+## 13. Out of scope (explicitly)
 
 - Sending calibration or commands from the watch (phone owns that).
 - Watch-side session storage/history (Garmin Connect is the archive).
