@@ -44,12 +44,19 @@ enum class State { RIDING, CANDIDATE, AIRBORNE };
 
 class Detector {
  public:
+  // Why the last confirmed flight did NOT count as a jump. Set on the single
+  // sample where the rejection happens (and cleared on the next update), so a
+  // caller can narrate near-misses — "0.19s of air, under the 0.25s minimum"
+  // beats silent nothing when a human is desk-testing. Mirrored in detector.py.
+  enum class Reject { NONE, TOO_SHORT, NO_LANDING };
+
   Detector() : Detector(Params()) {}
   explicit Detector(const Params& p) : p_(p) {}
 
   // Feed one sample: t_s = timestamp in seconds, accel_mag_g = |acceleration| in g.
   // Returns true exactly on the sample that completes a valid jump, filling `out`.
   bool update(float t_s, float accel_mag_g, JumpEvent& out) {
+    last_reject_ = Reject::NONE;
     switch (state_) {
       case State::RIDING:
         if (accel_mag_g < p_.freefall_enter_g) {
@@ -80,8 +87,13 @@ class Detector {
             out.height_m       = p_.height_scale * p_.g * cal * cal / 8.0f;
             return true;
           }
+          last_reject_         = raw < p_.min_airtime_s ? Reject::TOO_SHORT
+                                                        : Reject::NO_LANDING;
+          last_reject_airtime_ = raw;
         } else if (t_s - takeoff_time_ > p_.max_airtime_s) {
           state_ = State::RIDING;  // safety: never saw a landing, reset
+          last_reject_         = Reject::NO_LANDING;
+          last_reject_airtime_ = t_s - takeoff_time_;
         }
         break;
     }
@@ -90,11 +102,15 @@ class Detector {
 
   State state() const { return state_; }
   const Params& params() const { return p_; }
+  Reject last_reject() const { return last_reject_; }
+  float  last_reject_airtime() const { return last_reject_airtime_; }
 
  private:
   Params p_;
   State state_       = State::RIDING;
   float takeoff_time_ = 0.0f;
+  Reject last_reject_         = Reject::NONE;
+  float  last_reject_airtime_ = 0.0f;
 };
 
 }  // namespace jump

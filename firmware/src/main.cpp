@@ -45,7 +45,7 @@
 #include "jump_detector.h"
 #include "ble_link.h"
 
-#define FW_VERSION "0.3.1"
+#define FW_VERSION "0.3.2"
 
 static const float    G                  = JH_G;
 static const uint32_t SAMPLE_INTERVAL_US = 1000000UL / JH_SAMPLE_HZ;
@@ -506,6 +506,13 @@ void loop() {
           (unsigned long)session_jumps, ev.airtime_raw_s, ev.airtime_s,
           ev.height_m, ev.height_m * 3.28084f, session_best);
     logJump(ev);
+  } else if (detector.last_reject() == jump::Detector::Reject::TOO_SHORT) {
+    // Narrate near-misses: silence during a desk test is undebuggable.
+    emitf("# almost a jump: %.2fs of air — under the %.2fs minimum. Toss higher.\n",
+          detector.last_reject_airtime(), (double)JH_MIN_AIRTIME_S);
+  } else if (detector.last_reject() == jump::Detector::Reject::NO_LANDING) {
+    emitf("# free-fall seen but no landing spike over %.1fg — landing too soft, "
+          "or caught mid-air?\n", (double)JH_LANDING_THRESHOLD_G);
   }
 
   // --- decimated trace logging, buffered; flushed ~once/second ---

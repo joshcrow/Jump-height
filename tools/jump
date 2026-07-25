@@ -512,6 +512,84 @@ def _pause(args, dev: Device, msg: str) -> None:
         input(f">> {msg}  [Enter when ready] ")
 
 
+def _autopsy_trace(dev: "Device") -> None:
+    """After a failed desk test, read the device's own 50 Hz recording back
+    and explain every flight it saw — the sensor witnessed everything, so a
+    failure should end in a diagnosis, not a shrug. Best-effort by design."""
+    try:
+        from detector import load_params
+        p = load_params(CONFIG_PATH)
+        print("\n  Reading the device's own recording of what just happened...")
+        rows: list[tuple[float, float]] = []
+        in_file = False
+        for ln in dev.command("trace", timeout=30):
+            if ln.startswith("FILE trace.csv BEGIN"):
+                in_file = True
+            elif ln.startswith("FILE trace.csv END"):
+                break
+            elif in_file and "," in ln and not ln.startswith(("t,", "#")):
+                try:
+                    ts, ms = ln.split(",", 1)
+                    rows.append((float(ts), float(ms)))
+                except ValueError:
+                    pass
+        if len(rows) < 20:
+            print("  (not enough recorded data to analyze)")
+            return
+        out = DATA_DIR / "diagnostics" / f"desktest-trace-{datetime.now():%Y%m%d-%H%M%S}.csv"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text("t,mag\n" + "\n".join(f"{t:.3f},{m:.3f}" for t, m in rows) + "\n")
+
+        # Find free-fall dips at the trace's rate, then the landing peak after
+        # each. Slightly looser than the live detector on purpose: the 50 Hz
+        # log undersamples a 10-30 ms landing spike, so we report the peak we
+        # can SEE and judge against the threshold with honest wording.
+        flights = []  # (t_start, dip_dur, landing_peak, airtime_to_peak)
+        i = 0
+        while i < len(rows):
+            if rows[i][1] < p.freefall_enter_g:
+                j = i
+                while j < len(rows) and rows[j][1] < p.freefall_enter_g:
+                    j += 1
+                dur = rows[j - 1][0] - rows[i][0]
+                if dur >= max(0.06, p.freefall_confirm_s - 0.02):
+                    peak, peak_t = 0.0, None
+                    k = j
+                    while k < len(rows) and rows[k][0] - rows[j - 1][0] <= 0.4:
+                        if rows[k][1] > peak:
+                            peak, peak_t = rows[k][1], rows[k][0]
+                        k += 1
+                    air = (peak_t - rows[i][0]) if peak_t is not None else None
+                    flights.append((rows[i][0], dur, peak, air))
+                i = j
+            else:
+                i += 1
+
+        if not flights:
+            print("  Autopsy: the recording shows NO free-fall at all. The usual")
+            print("  culprit is SPIN — a tumbling box feels its own rotation and")
+            print("  never reads weightless. Toss it dead flat, no wrist flick,")
+            print("  straight up. (Also: is the sensor foamed near the box center?)")
+            print(f"  (recording saved: {out} — send it to Claude if stuck)")
+            return
+        print(f"  Autopsy — the device saw {len(flights)} flight(s):")
+        for t0, dur, peak, air in flights[-6:]:
+            if air is not None and air >= p.min_airtime_s and peak > p.landing_threshold_g:
+                print(f"    t={t0:6.1f}s  ✅ valid-looking jump: {air:.2f}s air, "
+                      f"{peak:.1f}g landing (this one should have counted)")
+            elif air is not None and air < p.min_airtime_s:
+                print(f"    t={t0:6.1f}s  too SHORT: ~{air:.2f}s of air "
+                      f"(needs ≥ {p.min_airtime_s:.2f}s) → toss higher")
+            else:
+                print(f"    t={t0:6.1f}s  soft LANDING: free-fall {dur:.2f}s but the "
+                      f"landing peaked at only {peak:.1f}g")
+                print(f"              (the detector needs > {p.landing_threshold_g:.1f}g)"
+                      " → land it on something firmer")
+        print(f"  (recording saved: {out} — send it to Claude if this looks wrong)")
+    except Exception as e:  # diagnosis must never crash the wizard itself
+        print(f"  (autopsy unavailable: {e})")
+
+
 def cmd_desktest(args) -> int:
     dev, proc = open_device(args, "desktest")
     try:
@@ -572,14 +650,16 @@ def cmd_desktest(args) -> int:
                 if ev is not None:
                     break
                 print("  … nothing detected on that one. Usual causes:")
+                print("    • spin — a tumbling box never reads weightless: toss it FLAT,")
+                print("      no wrist flick (watch for '# almost a jump' hints above)")
                 print("    • toss too low — it needs ~a foot of rise (airtime ≥ 0.25 s)")
                 print("    • landing too soft — very plush bedding swallows the 'thud';")
                 print("      a firmer cushion or a folded towel on the table works better")
-                print("    • loose parts — toss it as ONE rigid lump (foam it in the box)")
             if ev is None:
-                print(f"  ❌ toss {i}: three quiet tosses in a row. Adjust height and")
-                print("     landing surface, then re-run — the wizard resumes here.")
-                print("     Stuck? ./tools/jump report and send the file to Claude.")
+                print(f"  ❌ toss {i}: three quiet tosses in a row.")
+                _autopsy_trace(dev)
+                print("\n     Adjust per the autopsy above, then re-run — the wizard")
+                print("     resumes here. Stuck? ./tools/jump report → send to Claude.")
                 return 1
             raw = float(ev.get("airtime_raw_s", 0))
             h = float(ev.get("height_m", 0))

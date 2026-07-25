@@ -74,9 +74,15 @@ class Detector:
         self.p = params or Params()
         self.state = RIDING
         self.takeoff_time = 0.0
+        # Why the last confirmed flight did NOT count ("too_short" |
+        # "no_landing" | None). Set on the rejection sample, cleared on the
+        # next update — mirrors jump_detector.h so tools can narrate misses.
+        self.last_reject: str | None = None
+        self.last_reject_airtime = 0.0
 
     def update(self, t_s: float, accel_mag_g: float) -> JumpEvent | None:
         p = self.p
+        self.last_reject = None
         if self.state == RIDING:
             if accel_mag_g < p.freefall_enter_g:
                 self.state = CANDIDATE
@@ -101,8 +107,13 @@ class Detector:
                         airtime_s=cal,
                         height_m=p.height_scale * p.g * cal * cal / 8.0,
                     )
+                self.last_reject = ("too_short" if raw < p.min_airtime_s
+                                    else "no_landing")
+                self.last_reject_airtime = raw
             elif t_s - self.takeoff_time > p.max_airtime_s:
                 self.state = RIDING  # safety: never saw a landing, reset
+                self.last_reject = "no_landing"
+                self.last_reject_airtime = t_s - self.takeoff_time
 
         return None
 
