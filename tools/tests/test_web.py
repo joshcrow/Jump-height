@@ -481,6 +481,42 @@ class TestWebApp(unittest.TestCase):
         self.assertEqual(self._local_storage("jh_unit"), "ft")
         expect(toggle).to_contain_text("meters")
 
+    def test_bench_toss_flow_passes_on_three_clean_tosses(self):
+        """Phone-only toss test: three plausible JUMPs → PASS, no computer."""
+        self._open()
+        self.page.get_by_test_id("btn-bench-toss").click()
+        card = self.page.get_by_test_id("bench-card")
+        expect(card).to_contain_text("Waiting for the first toss")
+        for n, raw in enumerate(("0.400", "0.380", "0.450"), 1):
+            self._feed(f"JUMP n={n} airtime_raw_s={raw} airtime_s={raw} "
+                       f"height_m=0.200 height_ft=0.7 best_m=0.200")
+        expect(card).to_contain_text("PASS")
+
+    def test_bench_drop_calibration_saves_offset_to_device(self):
+        """Drop calibration computes the median timing offset and persists it
+        on the device via `set airtime_offset_s …` — the phone-only path."""
+        self._open()
+        self.page.get_by_test_id("btn-bench-drop").click()
+        card = self.page.get_by_test_id("bench-card")
+        self.page.locator(".bench-input").fill("100")
+        self.page.get_by_role("button", name="Start drops").click()
+        expect(card).to_contain_text("Waiting for the first drop")
+        # True free-fall time from 100 cm is 0.4516 s; feed measurement errors
+        # of −10, +14, +18 ms → median error +14 ms → offset ≈ −0.0139 s.
+        for n, raw in enumerate(("0.4415", "0.4655", "0.4695"), 1):
+            self._feed(f"JUMP n={n} airtime_raw_s={raw} airtime_s={raw} "
+                       f"height_m=0.24 height_ft=0.8 best_m=0.24")
+        expect(card).to_contain_text("Timing bias measured")
+        self.page.get_by_test_id("btn-bench-save").click()
+        setcmds = [s for s in self._sent()
+                   if s.startswith("set airtime_offset_s")]
+        self.assertTrue(setcmds, f"no set command sent; sent={self._sent()}")
+        self.assertAlmostEqual(float(setcmds[-1].split()[-1]), -0.0139,
+                               delta=0.0006)
+        self._feed("# saved to device memory — survives reboot and reflash",
+                   "OK set")
+        expect(card).to_contain_text("Saved to the device")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -37,6 +37,13 @@ building this) knows what was chosen on purpose vs. what's just incidental.
 | 20 | **Browser app, no build step** | `web/` is one static vanilla-JS page: connect over Web Bluetooth (live jumps) or Web Serial (self-test, session download → history + CSV), plus an ESP Web Tools install button for in-browser flashing. Served locally by `./tools/jump web` (localhost is a secure context) or by GitHub Pages. | Zero install for the user, zero build tooling for contributors, testable end-to-end in CI (Playwright drives the real page against a mock device). iPhone caveat: iOS Safari has no Web Bluetooth — use the free Bluefy browser. |
 | 21 | **Partition map + CI binaries** | Custom no-OTA partition table (app 1.5 MB, logs 2.4 MB — trace cap raised to ~45 min). Flasher binaries are **not** committed: `./tools/jump web` stages them from a local build, and the GitHub Action builds them fresh and publishes `web/` + binaries to Pages. | No OTA slots needed when flashing is over USB/web; committing binaries would bloat and stale the repo. **Upgrade note:** the new partition table reformats stored data on first boot — `sync` before upgrading a device that has sessions on it. |
 
+## Added during hardware bring-up (the field-debug week)
+
+| # | Decision | Choice | Why |
+|---|----------|--------|-----|
+| 22 | **Calibrate to the unit, at runtime** | Every boot, the self-test measures resting gravity and normalizes all motion math to it. The two calibration terms (`airtime_offset_s`, `height_scale`) live in device memory (NVS), settable over BLE/serial (`set airtime_offset_s …`), surviving reboot *and* reflash. | A real field sensor read 0.824 g at rest — mis-scaled, not broken; normalization makes any unit usable. Device-resident calibration makes a phone a complete calibration tool (no reflash), and is the stated prerequisite for the future sealed/potted build. |
+| 23 | **Test it untethered, the way it's used** | Desk test and drop calibration run with the cable unplugged: baseline the stored jump list → act → replug → read the results back. The web app carries phone-only versions (toss test + drop calibration) over BLE, saving calibration straight to the device. | Yanked USB plugs killed test after test — the device is a logger, so its tests should be too. The phone-only flows are the beach workflow: the cable's remaining jobs are first flash, upgrades, charging, and fastest bulk sync. |
+
 ## Deliberately deferred to later phases
 
 - **Real deep-sleep** power management (multi-session battery life). v1 charges after each outing. *(Also the gate for the potted-puck + solar idea — energy math and prerequisites studied in the roadmap's Phase 4 backlog note.)*

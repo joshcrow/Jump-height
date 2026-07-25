@@ -458,14 +458,23 @@ def check_device_params(dev: Device) -> bool:
 
     local = load_params(CONFIG_PATH)
     device_kv = {}
+    cal_kv = {}
     for line in lines:
         if line.startswith("PARAMS "):
             device_kv = {k: v for k, v in parse_kv(line).items() if k != "_tag"}
+        elif line.startswith("CAL "):
+            cal_kv = {k: v for k, v in parse_kv(line).items() if k != "_tag"}
     if not device_kv:
         print("  (device didn't report its params — old firmware? run ./tools/jump flash)")
         return False
+    # The two calibration terms may legitimately live on the DEVICE (set over
+    # BLE/serial, persisted in NVS) — judge them from the CAL line, not from
+    # the compiled PARAMS summary.
+    CAL_KEYS = ("airtime_offset_s", "height_scale")
     mismatches = []
     for key, dev_val in device_kv.items():
+        if key in CAL_KEYS and cal_kv:
+            continue
         local_val = getattr(local, key, None)
         if local_val is None:
             continue
@@ -480,6 +489,27 @@ def check_device_params(dev: Device) -> bool:
         for m in mismatches:
             print(f"       {m}")
         return False
+    if cal_kv:
+        cal_diffs = []
+        for key in CAL_KEYS:
+            try:
+                if not math.isclose(float(cal_kv.get(key, "nan")),
+                                    float(getattr(local, key)),
+                                    rel_tol=1e-4, abs_tol=1e-6):
+                    cal_diffs.append(f"{key}: device={cal_kv[key]} "
+                                     f"config={getattr(local, key):g}")
+            except ValueError:
+                pass
+        if cal_diffs and cal_kv.get("source") == "device":
+            print("  ℹ️  device carries its own calibration (saved over the wire) —")
+            print("     the device wins; config/params.json is just the bench record:")
+            for d in cal_diffs:
+                print(f"       {d}")
+        elif cal_diffs:
+            print("  ⚠️  calibration differs from config/params.json — run ./tools/jump flash:")
+            for d in cal_diffs:
+                print(f"       {d}")
+            return False
     print("  ✅ device settings match config/params.json")
     return True
 
@@ -829,7 +859,7 @@ def cmd_drop(args) -> int:
             print(f"  drop {i}: measured {raw:.3f}s (true {expected:.3f}s, "
                   f"error {raw - expected:+.3f}s)")
 
-        return _drop_analyze(raws, expected, args, p)
+        return _drop_analyze(raws, expected, args, p, dev)
     finally:
         dev.close()
         if proc:
@@ -868,12 +898,13 @@ def _drop_untethered(args, dev: "Device", p, expected: float) -> int:
         if not new:
             print("  No new flights in storage at all.")
             _autopsy_trace(dev2)
-        return _drop_analyze(raws, expected, args, p)
+        return _drop_analyze(raws, expected, args, p, dev2)
     finally:
         dev2.close()
 
 
-def _drop_analyze(raws: list[float], expected: float, args, p) -> int:
+def _drop_analyze(raws: list[float], expected: float, args, p,
+                  dev: "Device | None" = None) -> int:
     """Turn collected drop airtimes into the calibration verdict + save."""
     if len(raws) < 3:
         print(f"\nOnly {len(raws)} good drops — need at least 3. Re-run, "
@@ -908,7 +939,18 @@ def _drop_analyze(raws: list[float], expected: float, args, p) -> int:
             json.dump(cfg, f, indent=2)
             f.write("\n")
         print(f"✅ saved to {CONFIG_PATH}")
-        print("Now run  ./tools/jump flash  to bake it into the device.")
+        applied = False
+        if dev is not None:
+            # The firmware stores calibration in NVS — apply it live, no
+            # reflash, and it survives future reflashes too.
+            try:
+                dev.command(f"set airtime_offset_s {round(offset, 4)}", timeout=8)
+                applied = True
+                print("✅ applied to the device over the wire — no reflash needed.")
+            except Exception as e:
+                print(f"(couldn't apply live: {e})")
+        if not applied:
+            print("Run  ./tools/jump flash  to bake it into the device.")
     else:
         print("(not saved — re-run with --yes to save automatically)")
     return 0
@@ -1574,10 +1616,8 @@ def cmd_wizard(args) -> int:
                     pass
         if cmd_drop(_ns(args, height_cm=h, drops=5, yes=True)) != 0:
             return bail("Calibration didn't complete.")
-        if not args.fake:
-            print("\n  Baking the calibration into the device...")
-            if cmd_flash(_ns(args)) != 0:
-                return bail("Re-flash with calibration failed.")
+        # No bake-flash: calibration is applied live over the wire and lives
+        # in the device's own memory, surviving reboots and reflashes.
         st["calibrated"] = True
         finish("drop")
 

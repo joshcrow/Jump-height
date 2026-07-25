@@ -346,13 +346,15 @@ function byteLen(s) { try { return new TextEncoder().encode(s).length; } catch (
 /** Route a line to whatever cares about its tag. */
 function dispatch(line) {
   if (line.startsWith('#')) {
-    // Chatter. The only chatter the UI acts on is a self-test hint.
+    // Chatter the UI acts on: self-test hints, and the detector's near-miss
+    // narration while a bench flow is running.
     if (selftest.active && line.startsWith('# hint:')) addSelftestHint(line.slice(7).trim());
+    if (bench) benchOnChatter(line);
     return;
   }
   const kv = parseKV(line);
   switch (kv._tag) {
-    case 'JUMP':     onJump(kv); break;
+    case 'JUMP':     onJump(kv); if (bench) benchOnJump(kv); break;
     case 'STATS':    onStats(kv); break;
     case 'STATE':    onState(kv); break;
     case 'INFO':     onInfo(kv); break;
@@ -1042,6 +1044,134 @@ function shortDate(when) {
   if (isNaN(d)) return String(when);
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
+// --------------------- Bench: phone-only toss test & drop calibration ------
+// The device is a logger with a radio: with BLE connected, nothing about
+// proving the assembly or calibrating it needs a computer or a cable. Both
+// flows just watch the live JUMP stream; calibration saves straight into the
+// device's own memory (`set airtime_offset_s …`). Mirrors tools/jump.
+let bench = null;
+const BENCH_G = 9.80665;
+
+function median(a) {
+  const s = [...a].sort((x, y) => x - y);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+
+function benchStart(mode) {
+  const c = $('bench-card');
+  c.hidden = false;
+  c.textContent = '';
+  if (!transport) {
+    c.append(el('div', { class: 'status', text: 'Connect the device first (Bluetooth is fine).' }));
+    return;
+  }
+  bench = { mode, good: [], expected: null, heightCm: 0, offset: null, saveRow: null,
+            listEl: el('ul', { class: 'feed' }),
+            statusEl: el('div', { class: 'status', role: 'status' }),
+            hintEl: el('p', { class: 'muted small', hidden: true }) };
+  const cancel = el('div', { class: 'btn-row' },
+    el('button', { class: 'btn btn-quiet btn-sm', type: 'button', onclick: benchStop }, 'Cancel'));
+  if (mode === 'toss') {
+    c.append(
+      el('p', { class: 'small', text:
+        'Unplug any cable — Bluetooth stays connected. Wake the box with a shake, ' +
+        'then toss it a foot or more straight up over a cushion, flat like a pizza ' +
+        'tray, and let it land. Three clean tosses pass.' }),
+      bench.listEl, bench.hintEl, bench.statusEl, cancel);
+    bench.statusEl.textContent = 'Waiting for the first toss…';
+  } else {
+    const input = el('input', { type: 'number', value: '100', min: '40', max: '250',
+      inputmode: 'decimal', class: 'bench-input', 'aria-label': 'Drop height in centimeters' });
+    const startBtn = el('button', { class: 'btn btn-primary btn-sm', type: 'button' }, 'Start drops');
+    const setupRow = el('div', { class: 'btn-row' }, input, el('span', { class: 'muted small', text: 'cm' }), startBtn);
+    startBtn.addEventListener('click', () => {
+      const cm = parseFloat(input.value);
+      if (!(cm >= 40 && cm <= 250)) { bench.statusEl.textContent = 'Height must be 40–250 cm.'; return; }
+      bench.heightCm = cm;
+      bench.expected = Math.sqrt(2 * (cm / 100) / BENCH_G);
+      setupRow.replaceWith(el('p', { class: 'small', text:
+        `A clean drop from ${cm} cm free-falls for exactly ${bench.expected.toFixed(3)} s. ` +
+        'Unplug any cable, wake it with a shake, hold the box with its BOTTOM exactly at ' +
+        `${cm} cm, dead still for a second, then let go — don't throw. ` +
+        'Five drops is ideal; three is the minimum.' }));
+      bench.statusEl.textContent = 'Waiting for the first drop…';
+    });
+    c.append(
+      el('p', { class: 'small', text: 'Pick a height you can measure exactly — tape measure to a table edge works.' }),
+      setupRow, bench.listEl, bench.hintEl, bench.statusEl, cancel);
+  }
+}
+
+function benchStop() {
+  bench = null;
+  const c = $('bench-card');
+  c.hidden = true;
+  c.textContent = '';
+}
+
+function benchOnChatter(line) {
+  if (line.startsWith('# almost a jump') || line.startsWith('# free-fall seen')) {
+    bench.hintEl.hidden = false;
+    bench.hintEl.textContent = line.slice(2);
+  }
+}
+
+function benchOnJump(kv) {
+  const raw = parseFloat(kv.airtime_raw_s || '0');
+  const h = parseFloat(kv.height_m || '0');
+  if (bench.mode === 'toss') {
+    const ok = raw >= 0.10 && raw <= 1.2;
+    if (ok) bench.good.push(raw);
+    bench.listEl.append(el('li', { text: ok
+      ? `Toss ${bench.good.length}: ${raw.toFixed(2)} s of air → ${h.toFixed(2)} m`
+      : `Ignored a ${raw.toFixed(2)} s flight — not a hand toss` }));
+    if (bench.good.length >= 3) {
+      bench.statusEl.textContent =
+        'PASS — assembly verified: three clean tosses, no cable, no computer.';
+      bench = null; // leave the verdict on screen
+    } else {
+      bench.statusEl.textContent = `${bench.good.length} of 3 — keep going.`;
+    }
+    return;
+  }
+  if (bench.expected == null) return; // drop height not chosen yet
+  const err = raw - bench.expected;
+  if (Math.abs(err) <= 0.15) {
+    bench.good.push(raw);
+    bench.listEl.append(el('li', { text:
+      `Drop ${bench.good.length}: ${raw.toFixed(3)} s (true ${bench.expected.toFixed(3)} s, ` +
+      `${err >= 0 ? '+' : ''}${(err * 1000).toFixed(0)} ms)` }));
+  } else {
+    bench.listEl.append(el('li', { text:
+      `Ignored a ${raw.toFixed(2)} s flight — not a clean ${bench.heightCm} cm drop` }));
+  }
+  if (bench.good.length >= 3) benchOfferSave();
+  else bench.statusEl.textContent = `${bench.good.length} of 3 minimum — keep dropping.`;
+}
+
+function benchOfferSave() {
+  const b = bench;
+  b.offset = Math.round(-median(b.good.map((r) => r - b.expected)) * 10000) / 10000;
+  b.statusEl.textContent =
+    `Timing bias measured over ${b.good.length} drops: ${b.offset >= 0 ? '+' : ''}` +
+    `${(b.offset * 1000).toFixed(0)} ms correction. More drops sharpen it, or save now.`;
+  if (!b.saveRow) {
+    b.saveRow = el('div', { class: 'btn-row' },
+      el('button', { class: 'btn btn-primary btn-sm', type: 'button', 'data-testid': 'btn-bench-save',
+        onclick: () => {
+          startCapture('set', (_lines, err) => {
+            b.statusEl.textContent = !err
+              ? 'Saved to the device — it survives reboots and reflashes. Calibration done.'
+              : 'The device rejected that — check the console and try again.';
+            if (!err) bench = null; // leave the verdict on screen
+          }, 8000);
+          send(`set airtime_offset_s ${b.offset}`);
+        } }, 'Save to device'));
+    b.statusEl.after(b.saveRow);
+  }
+}
+
 function canvasToBlob(canvas) {
   return new Promise((res) => { try { canvas.toBlob((b) => res(b), 'image/png'); } catch (_e) { res(null); } });
 }
@@ -1255,6 +1385,11 @@ function onTransportClosed(t) {
     hideSyncProgress();
     showDumpStatus('Sync interrupted — the device disconnected. Reconnect and try again.');
   }
+  // A bench flow cut off mid-run must say so, not sit waiting forever.
+  if (bench) {
+    bench.statusEl.textContent = 'Device disconnected — reconnect and start the flow again.';
+    bench = null;
+  }
   // A self-test cut off mid-run must not sit on "Running…" forever.
   if (selftest.active) {
     selftest.active = false;
@@ -1425,6 +1560,8 @@ function initConnectTab() {
   $('btn-connect-ble').addEventListener('click', connectBle);
   $('btn-connect-usb').addEventListener('click', connectUsb);
   $('btn-selftest').addEventListener('click', () => { if (requireDevice()) send('selftest'); });
+  $('btn-bench-toss').addEventListener('click', () => benchStart('toss'));
+  $('btn-bench-drop').addEventListener('click', () => benchStart('drop'));
 }
 
 /** Wire up the demo transport so the Playwright test can drive the whole app. */

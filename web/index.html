@@ -104,6 +104,17 @@
       <p class="muted small">The same five-second wiring check the device runs at boot.</p>
       <div id="selftest-card" data-testid="selftest" class="card" hidden></div>
 
+      <div class="mt">
+        <h3>Bench: test &amp; calibrate</h3>
+        <p class="muted small">Phone-only — no computer, no cable. The toss test proves the
+        assembly; drop calibration tunes its timing and saves to the device.</p>
+        <div class="btn-row">
+          <button id="btn-bench-toss" data-testid="btn-bench-toss" class="btn btn-ghost" type="button">Toss test</button>
+          <button id="btn-bench-drop" data-testid="btn-bench-drop" class="btn btn-ghost" type="button">Calibrate drops</button>
+        </div>
+        <div id="bench-card" data-testid="bench-card" class="card" hidden></div>
+      </div>
+
       <!-- Install lives here, not in top-level navigation: flashing firmware is
            a once-per-device task, and navigation should be weighted by use. -->
       <div class="mt">

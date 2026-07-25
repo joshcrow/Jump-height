@@ -88,6 +88,13 @@ simulated device, end to end:
 ./tools/jump wizard --fake
 ```
 
+**Phone-only bench:** once firmware is on the board, the web app (Bluefy on
+iPhone) carries the same checks under *Connect → Bench: test & calibrate* —
+toss test and drop calibration over Bluetooth, with calibration saved into
+the device's own memory (survives reboots *and* reflashes). The cable's only
+remaining jobs: first-ever flash, firmware upgrades, charging, and the
+fastest bulk sync.
+
 **If anything ever gets stuck:**
 
 ```bash

@@ -122,9 +122,8 @@ Prerequisites potting forces (in order — each is useful on its own):
 1. **Deep sleep + wake-on-motion**: MPU-6050's low-power motion interrupt
    (tens of µA) wakes the ESP32 — needs the currently-unconnected **INT pin
    wired** to a GPIO (a 2-minute job later; the capsule stays openable).
-2. **Calibration out of the binary**: today `drop` bakes `airtime_offset_s`
-   in by *re-flashing* — impossible once potted. Params move to NVS-stored
-   settings writable over BLE.
+2. **Calibration out of the binary** *(✅ done 2026-07: `set` command +
+   NVS persistence + phone-only calibration flow in the web app)*.
 3. **OTA updates back in the partition map** (a potted board never sees USB
    again). Costs FS space on 4 MB (~0.8 MB trace) — or an 8/16 MB module on
    the Phase-4 PCB makes it free.

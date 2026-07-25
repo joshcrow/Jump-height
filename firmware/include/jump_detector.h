@@ -114,6 +114,12 @@ class Detector {
 
   State state() const { return state_; }
   const Params& params() const { return p_; }
+  // Runtime calibration hook: the two calibration terms are the only params
+  // that may change after compile (NVS `set` command / a phone over BLE).
+  void set_calibration(float airtime_offset_s, float height_scale) {
+    p_.airtime_offset_s = airtime_offset_s;
+    p_.height_scale     = height_scale;
+  }
   Reject last_reject() const { return last_reject_; }
   float  last_reject_airtime() const { return last_reject_airtime_; }
 

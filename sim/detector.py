@@ -82,6 +82,11 @@ class Detector:
         self.last_reject: str | None = None
         self.last_reject_airtime = 0.0
 
+    def set_calibration(self, airtime_offset_s: float, height_scale: float) -> None:
+        """Mirror of jump_detector.h: the two runtime-settable calibration terms."""
+        self.p.airtime_offset_s = airtime_offset_s
+        self.p.height_scale = height_scale
+
     def update(self, t_s: float, accel_mag_g: float) -> JumpEvent | None:
         p = self.p
         self.last_reject = None

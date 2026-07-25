@@ -37,6 +37,7 @@
 #include <Wire.h>
 #include <FS.h>
 #include <LittleFS.h>
+#include <Preferences.h>  // NVS: runtime calibration that survives reflashes
 #include <esp_timer.h>
 #include <stdarg.h>
 #include <string.h>
@@ -45,7 +46,7 @@
 #include "jump_detector.h"
 #include "ble_link.h"
 
-#define FW_VERSION "0.3.3"
+#define FW_VERSION "0.4.0"
 
 static const float    G                  = JH_G;
 static const uint32_t SAMPLE_INTERVAL_US = 1000000UL / JH_SAMPLE_HZ;
@@ -131,6 +132,26 @@ static void bleGreet() {
   static const char banner[] = "# JumpHeight fw v" FW_VERSION "\n";
   ble_link::write(banner, sizeof(banner) - 1);
   ble_link::write("READY\n", 6);
+}
+
+// ---------------- Runtime calibration (NVS) ----------------
+// `set airtime_offset_s 0.0153` persists in flash-backed NVS: it survives
+// reboot AND reflash, so calibration never requires a rebuild. That makes a
+// phone over BLE a complete calibration tool (and is the prerequisite for a
+// future potted, cable-less build). Compiled params.json values stay the
+// defaults; NVS overrides them when present.
+static Preferences cal_prefs;
+static bool cal_from_nvs = false;
+
+static void loadCalibration() {
+  const float off   = cal_prefs.getFloat("offset", JH_AIRTIME_OFFSET_S);
+  const float scale = cal_prefs.getFloat("scale",  JH_HEIGHT_SCALE);
+  cal_from_nvs = cal_prefs.isKey("offset") || cal_prefs.isKey("scale");
+  detector.set_calibration(off, scale);
+  if (cal_from_nvs) {
+    emitf("# calibration from device memory: airtime_offset_s=%.4f "
+          "height_scale=%.3f\n", off, scale);
+  }
 }
 
 // ---------------- Storage ----------------
@@ -270,6 +291,13 @@ static bool runSelfTest() {
       const float sd   = var > 0 ? sqrtf(var) : 0;
       if (mean > 0.8f && mean < 1.2f) {
         emitf("SELFTEST accel PASS detail=%.3fg\n", mean);
+      } else if (mean > 0.5f && mean < 1.5f) {
+        // A real field unit read 0.824 g: mis-scaled, not broken. The gravity
+        // baseline normalizes it, and heights come from airtime, not
+        // amplitude — so this is a warning, never a dead end.
+        emitf("SELFTEST accel WARN detail=%.3fg\n", mean);
+        emitLine("# hint: gravity reads off-scale on this unit — auto-normalized;");
+        emitLine("# hint: detection and heights are unaffected.");
       } else {
         emitf("SELFTEST accel FAIL detail=%.3fg\n", mean);
         emitLine("# hint: should read ~1.0g sitting still. Keep the device still on a");
@@ -339,6 +367,7 @@ static bool runSelfTest() {
 // ---------------- Commands ----------------
 static void printHelp() {
   emitLine("# commands: help | stats | jumps | trace | dump | clear | selftest | info");
+  emitLine("#           set <airtime_offset_s|height_scale> <value|default>");
 }
 
 // Handles one command line from EITHER transport (serial pollSerial() or BLE
@@ -380,11 +409,44 @@ static void handleCommand(const String& cmd) {
   } else if (cmd == "selftest") {
     runSelfTest();
     emitLine("OK selftest");
+  } else if (cmd.startsWith("set ")) {
+    // set <airtime_offset_s|height_scale> <value|default> — runtime
+    // calibration, persisted to NVS. Ranges are sanity rails, not tuning.
+    const int sp = cmd.indexOf(' ', 4);
+    String key = sp > 0 ? cmd.substring(4, sp) : "";
+    String val = sp > 0 ? cmd.substring(sp + 1) : "";
+    key.trim(); val.trim();
+    const bool is_off   = key == "airtime_offset_s";
+    const bool is_scale = key == "height_scale";
+    if (!is_off && !is_scale) {
+      emitLine("ERR set_unknown_key (airtime_offset_s | height_scale)");
+    } else if (val == "default") {
+      cal_prefs.remove(is_off ? "offset" : "scale");
+      loadCalibration();
+      emitLine("# reverted to the compiled default");
+      emitLine("OK set");
+    } else {
+      const float f = val.toFloat();
+      const bool sane = is_off ? (f >= -0.5f && f <= 0.5f)
+                               : (f >= 0.5f && f <= 2.0f);
+      if (!sane) {
+        emitf("ERR set_out_of_range %s=%s\n", key.c_str(), val.c_str());
+      } else {
+        cal_prefs.putFloat(is_off ? "offset" : "scale", f);
+        loadCalibration();
+        emitLine("# saved to device memory — survives reboot and reflash");
+        emitLine("OK set");
+      }
+    }
   } else if (cmd == "info") {
     // ble=1 advertises the capability (this firmware speaks BLE); the runtime
     // health of the radio is the self-test's `ble` row, not this flag.
     emitf("INFO fw=%s sample_hz=%d log_hz=%d ble=1\n", FW_VERSION, JH_SAMPLE_HZ, JH_LOG_HZ);
     emitLine("PARAMS " JH_PARAMS_SUMMARY);
+    // Effective calibration (PARAMS above shows compiled defaults).
+    emitf("CAL airtime_offset_s=%.4f height_scale=%.3f source=%s\n",
+          detector.params().airtime_offset_s, detector.params().height_scale,
+          cal_from_nvs ? "device" : "defaults");
     emitLine("OK info");
   } else {
     emitf("ERR unknown_command %s\n", cmd.c_str());
@@ -442,6 +504,8 @@ void setup() {
   // A failure is non-fatal: everything below (and jump detection) runs regardless.
   ble_ok = ble_link::begin("JumpHeight");
 
+  cal_prefs.begin("jumpcal", false);
+  loadCalibration();
   runSelfTest();
   scanStoredJumps();
   if (stored_jumps > 0) {

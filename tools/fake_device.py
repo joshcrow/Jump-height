@@ -43,7 +43,7 @@ from detector import Detector, load_params  # noqa: E402
 from generate import DEMO_JUMPS, synth_session  # noqa: E402
 import gen_params  # noqa: E402
 
-FW_VERSION = "0.3.3"
+FW_VERSION = "0.4.0"
 INJECTED_BIAS_S = 0.015  # pretend detection latency, for the drop scenario
 
 
@@ -66,6 +66,7 @@ class FakeDevice:
         self.trace_rows: list[str] = []
         self.rng = random.Random(args.seed)
         self.buf = b""
+        self.cal_from_nvs = False  # mirrors the firmware's `set` persistence flag
         # Scripted "physical" events. The CLI (in --fake mode) advances them
         # deterministically by sending `_sim next` at each point where a human
         # would act — no wall-clock races.
@@ -213,6 +214,31 @@ class FakeDevice:
         elif cmd == "selftest":
             self.send_selftest()
             self.send("OK selftest")
+        elif cmd.startswith("set "):
+            # Mirrors firmware: set <airtime_offset_s|height_scale> <value|default>
+            parts = cmd.split()
+            if len(parts) != 3 or parts[1] not in ("airtime_offset_s", "height_scale"):
+                self.send("ERR set_unknown_key (airtime_offset_s | height_scale)")
+            elif parts[2] == "default":
+                defaults = load_params()
+                setattr(self.params, parts[1], getattr(defaults, parts[1]))
+                self.cal_from_nvs = False
+                self.send("# reverted to the compiled default")
+                self.send("OK set")
+            else:
+                try:
+                    f = float(parts[2])
+                except ValueError:
+                    f = 0.0
+                sane = (-0.5 <= f <= 0.5) if parts[1] == "airtime_offset_s" \
+                    else (0.5 <= f <= 2.0)
+                if not sane:
+                    self.send(f"ERR set_out_of_range {parts[1]}={parts[2]}")
+                else:
+                    setattr(self.params, parts[1], f)
+                    self.cal_from_nvs = True
+                    self.send("# saved to device memory — survives reboot and reflash")
+                    self.send("OK set")
         elif cmd.startswith("_sim"):
             # Test hook: emit the next scripted "physical" event (the CLI in
             # --fake mode sends this where a human would shake/toss/drop).
@@ -230,6 +256,9 @@ class FakeDevice:
             self.send(f"INFO fw={FW_VERSION} sample_hz={fw_cfg['sample_hz']} "
                       f"log_hz={fw_cfg['log_hz']} ble=1")
             self.send("PARAMS " + summary)
+            self.send(f"CAL airtime_offset_s={self.params.airtime_offset_s:.4f} "
+                      f"height_scale={self.params.height_scale:.3f} "
+                      f"source={'device' if self.cal_from_nvs else 'defaults'}")
             self.send("OK info")
         else:
             self.send(f"ERR unknown_command {cmd}")
