@@ -330,6 +330,20 @@ class Device:
             if line.strip() == "READY":
                 break
 
+    def drain_pending(self) -> list[str]:
+        """Read whatever's already buffered, returning quickly once it's dry.
+
+        Guided steps use this to learn what the device did BETWEEN steps —
+        e.g. a STATE flip that fired while the human was reading a prompt —
+        instead of letting stale lines confuse (or satisfy) the next wait_for.
+        """
+        lines: list[str] = []
+        while True:
+            line = self.sp.read_line(0.15)
+            if line is None:
+                return lines
+            lines.append(line)
+
     def command(self, cmd: str, timeout: float = 20.0) -> list[str]:
         """Send a command, return all lines up to its OK/ERR terminator.
 
@@ -509,8 +523,36 @@ def cmd_desktest(args) -> int:
             return 1
 
         print("\n[2/3] Motion gate...")
-        _pause(args, dev, "Pick the device up and give it a shake.")
-        if dev.wait_for("STATE", timeout=30, value="recording") is None:
+        # A real board is often ALREADY recording at this point: the human
+        # just wired/flashed/moved it, and the gate stays active until 20
+        # still seconds pass — so a shake produces NO new "STATE recording"
+        # transition. (The fake device is scripted to be idle here, which is
+        # why rehearsals never caught this.) Be state-agnostic: learn the
+        # current state from the backlog, settle to idle if needed, and start
+        # listening BEFORE asking the human to move anything.
+        state = None
+        for line in dev.drain_pending():
+            kv = parse_kv(line)
+            if kv["_tag"] == "STATE" and kv["_args"]:
+                state = kv["_args"][0]
+        if state == "recording":
+            print("  It's already recording — it felt you handling it just now.")
+            print("  Set it on the table and take your hands off (~20 s)...")
+            if dev.wait_for("STATE", timeout=45, value="idle") is None:
+                print("❌ Never settled to idle. Wobbly table? Re-run when calm.")
+                return 1
+            print("  ✅ idle — now the wake-up:")
+        _pause(args, dev, "Press Enter, THEN pick it up and shake it.")
+        kv = dev.wait_for("STATE", timeout=(30 if state else 12), value="recording")
+        if kv is None and state is None:
+            # Unknown starting state and no transition: it was almost
+            # certainly recording all along. Settle it, then one retry.
+            print("  No transition seen — it was probably recording already.")
+            print("  Set it down and take your hands off (~20 s)...")
+            if dev.wait_for("STATE", timeout=45, value="idle") is not None:
+                _pause(args, dev, "It's idle. Press Enter, THEN shake it.")
+                kv = dev.wait_for("STATE", timeout=30, value="recording")
+        if kv is None:
             print("❌ Never saw motion. Is it wired and self-testing OK? Try again.")
             return 1
         print("  ✅ motion detected — recording")
@@ -520,7 +562,7 @@ def cmd_desktest(args) -> int:
         print("  let it land. (Drops under ~35 cm are ignored by design.)\n")
         heights = []
         for i in range(1, 4):
-            _pause(args, dev, f"Toss {i} of 3.")
+            _pause(args, dev, f"Toss {i} of 3 — press Enter, then toss.")
             ev = dev.wait_for("JUMP", timeout=60)
             if ev is None:
                 print(f"  ❌ toss {i}: nothing detected in 60s. Toss a little higher —")
