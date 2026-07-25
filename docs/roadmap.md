@@ -16,7 +16,7 @@ Validate the whole concept in software before spending a cent.
 **Done when:** `python3 sim/run.py` detects the synthetic jumps with small height
 error. *(It does — this is the starting point.)*
 
-## Phase 1 — Bench firmware ✅ *(written; validate on hardware via BUILD.md)*
+## Phase 1 — Bench firmware ✅ COMPLETE *(hardware-validated 2026-07-25)*
 
 Get the same algorithm running on real hardware on your desk. The firmware and
 tooling exist — the runbook for executing this phase is **[../BUILD.md](../BUILD.md)**.
@@ -26,8 +26,8 @@ tooling exist — the runbook for executing this phase is **[../BUILD.md](../BUI
 - [x] One-command flash + wiring check: `./tools/jump flash` / `selftest`
 - [x] Guided assembly verification: `./tools/jump desktest` (3 tosses)
 - [x] Trace logging to flash + offline replay: `./tools/jump sync` / `replay`
-- [ ] **On hardware:** desk test passes on the real assembly (BUILD.md Day 1)
-- [ ] **On hardware:** drop calibration run and baked in (`./tools/jump drop`, Day 2)
+- [x] **On hardware:** desk test passed on the real assembly (untethered tosses)
+- [x] **On hardware:** drop calibration run — correction stored in device memory (NVS)
 
 **Done when:** `./tools/jump desktest` passes on the real device and a measured
 drop reads correctly after calibration.
@@ -49,7 +49,7 @@ The real test — and where you get your answer.
 **Done when:** detected heights match video-derived heights within your accuracy
 goal (aim for ~10%). Now you actually know how high he jumps.
 
-## Phase 3 — App & live stats ✅ *(built; validate on hardware)*
+## Phase 3 — App & live stats ✅ COMPLETE *(hardware-validated 2026-07)*
 
 - [x] BLE in the firmware: the exact serial protocol mirrored over a Nordic
       UART Service (NimBLE; compiles clean, 42% of the new 1.5 MB partition)
@@ -60,10 +60,8 @@ goal (aim for ~10%). Now you actually know how high he jumps.
 - [x] **Zero-install browser flasher** (ESP Web Tools): Install button on the
       web app; binaries staged by `./tools/jump web` locally and built/published
       to GitHub Pages by CI (`.github/workflows/build.yml`)
-- [ ] **On hardware:** BLE advertises + a phone sees live jumps (first real
-      board is also the first real BLE radio test)
-- [ ] Enable GitHub Pages (Settings → Pages → GitHub Actions) and flash a board
-      from the hosted page
+- [x] **On hardware:** BLE validated end-to-end (Bluefy on iPhone, live jumps, sync, bench flows)
+- [x] GitHub Pages live at joshcrow.github.io/Jump-height; board flashed from tooling
 
 **Done when:** you can see jumps pop up live on a phone and review a session
 afterward. *(Software side is done and tested; the two unchecked boxes need the
