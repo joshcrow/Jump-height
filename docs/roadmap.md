@@ -131,6 +131,16 @@ foiling "feels like" to the sensor would be fiction.
 **Tier D — needs Phase 4 hardware**: GPS speed/distance/runs (the other half
 of the Woo/Surfr feature set); barometer stays rejected for jump height.
 
+**New output surface — Garmin watch data field** *(scoped 2026-07)*: a
+Connect IQ data field that connects to the device's existing Nordic UART
+service and paints the same `JUMP` lines on the wrist — last jump / best /
+count, updating within a second of landing, mid-session, no phone in the
+water. The one-protocol design makes it a third client (~few hundred lines
+of Monkey C), sideloadable for personal use without the app store. Gates:
+rider's watch must be Connect IQ 3.1+ (~2018+ Garmin); firmware should bump
+NimBLE to two concurrent connections so wrist + beach phone coexist; build
+after water validation. Precedent: Surfr ships a Garmin companion.
+
 ## Phase 4 — "Real" hardware
 
 - [ ] Custom PCB: ESP32 module + IMU + LiPo charger + fuel gauge
