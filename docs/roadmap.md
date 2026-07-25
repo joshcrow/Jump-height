@@ -95,6 +95,42 @@ can join a WiFi network). Zero new hardware; it's all firmware + serving.
 **Done when:** an iPhone with no special browser joins the board's network and
 syncs a session in seconds.
 
+## Backlog study — what else the same hardware can measure *(thought through 2026-07)*
+
+The pipeline (50 Hz trace → sync → offline analysis → report) makes most new
+metrics pure software over data already being recorded. Tune everything
+against the first real water-session trace + video — desk guesses about what
+foiling "feels like" to the sensor would be fiction.
+
+**Tier A — trace mining, zero firmware change** *(build after water session 1)*
+- **Time on foil**: classify 1 s windows by vibration signature (foil flight
+  is smooth, taxiing choppy, bobbing still) → % on foil, longest flight.
+- **Crash counter**: big spike with no preceding free-fall = impact; count,
+  rank ("gnarliest 6.2 g at 41 min").
+- **Landing quality**: smooth riding after the landing spike = stomped;
+  quiet/floaty = swam. Per-jump verdict.
+- **Session rhythm**: jumps per 10 min, rest gaps, intensity curve.
+- **Pop strength**: peak g in the ~0.3 s before free-fall (takeoff loading).
+
+**Tier B — small firmware additions, same sensor**
+- **"Clip that" gesture**: three deliberate board-slaps = device tags a
+  timestamp; marks sync out and line up with camera footage (self-indexing
+  highlight reel).
+- **Conditions fingerprint**: coarse chop-meter per session (glassy → rough)
+  so day-to-day comparisons normalize.
+
+**Tier C — wake the MPU-6050's unused gyroscope**
+- **Spin detection**: integrate |ω| during airtime → 180/360 labels per jump.
+- **Carve analytics**: jibe/tack count, hardest-carve g.
+- **Detector hardening**: rotation is exactly what hides free-fall from the
+  accel-only detector (bench toss 3 proved it); gyro-aware free-fall
+  detection removes the blind spot for spun jumps.
+- Cost note: gyro adds ~3.6 mA while on — enable during recording only;
+  revisit for the deep-sleep budget.
+
+**Tier D — needs Phase 4 hardware**: GPS speed/distance/runs (the other half
+of the Woo/Surfr feature set); barometer stays rejected for jump height.
+
 ## Phase 4 — "Real" hardware
 
 - [ ] Custom PCB: ESP32 module + IMU + LiPo charger + fuel gauge
