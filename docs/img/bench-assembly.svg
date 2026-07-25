@@ -1,0 +1,130 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840 1290" font-family="-apple-system, 'Helvetica Neue', Arial, sans-serif">
+  <!-- Jump Height — bench assembly diagram. Ink-on-white, color only where it
+       carries meaning (the four wires). Companion to BUILD.md. -->
+  <rect x="0" y="0" width="840" height="1290" fill="#ffffff"/>
+
+  <!-- Header -->
+  <text x="60" y="64" font-size="26" font-weight="700" fill="#0b0b0b">Bench assembly</text>
+  <text x="60" y="92" font-size="15" fill="#4a4a46">Wire the sensor, then pack the sandwich. Orientation never matters.</text>
+  <line x1="60" y1="112" x2="780" y2="112" stroke="#e4e4e1" stroke-width="1"/>
+
+  <!-- ================= Panel 1: WIRE IT ================= -->
+  <text x="60" y="152" font-size="18" font-weight="600" fill="#0b0b0b">1 · Wire it — match the printed labels, not positions</text>
+
+  <!-- GY-521 sensor -->
+  <text x="80" y="192" font-size="14" font-weight="600" fill="#0b0b0b">GY-521 sensor</text>
+  <rect x="80" y="204" width="160" height="340" fill="#ffffff" stroke="#0b0b0b" stroke-width="1.5"/>
+  <!-- pins on right edge -->
+  <g font-size="14" fill="#0b0b0b" text-anchor="end">
+    <circle cx="240" cy="232" r="5" fill="#0b0b0b"/><text x="222" y="237">VCC</text>
+    <circle cx="240" cy="272" r="5" fill="#0b0b0b"/><text x="222" y="277">GND</text>
+    <circle cx="240" cy="312" r="5" fill="#0b0b0b"/><text x="222" y="317">SCL</text>
+    <circle cx="240" cy="352" r="5" fill="#0b0b0b"/><text x="222" y="357">SDA</text>
+    <circle cx="240" cy="392" r="4" fill="none" stroke="#767672" stroke-width="1.5"/><text x="222" y="397" fill="#767672">XDA</text>
+    <circle cx="240" cy="432" r="4" fill="none" stroke="#767672" stroke-width="1.5"/><text x="222" y="437" fill="#767672">XCL</text>
+    <circle cx="240" cy="472" r="4" fill="none" stroke="#767672" stroke-width="1.5"/><text x="222" y="477" fill="#767672">AD0</text>
+    <circle cx="240" cy="512" r="4" fill="none" stroke="#767672" stroke-width="1.5"/><text x="222" y="517" fill="#767672">INT</text>
+  </g>
+  <!-- leave-empty note -->
+  <text x="272" y="452" font-size="13" fill="#4a4a46">these four stay</text>
+  <text x="272" y="470" font-size="13" fill="#4a4a46">empty — INT gets a</text>
+  <text x="272" y="488" font-size="13" fill="#4a4a46">wire in a later phase</text>
+
+  <!-- FireBeetle -->
+  <text x="560" y="192" font-size="14" font-weight="600" fill="#0b0b0b">FireBeetle 2 ESP32-E</text>
+  <rect x="560" y="204" width="220" height="340" fill="#ffffff" stroke="#0b0b0b" stroke-width="1.5"/>
+  <g font-size="14" fill="#0b0b0b" text-anchor="start">
+    <circle cx="560" cy="232" r="5" fill="#0b0b0b"/><text x="576" y="237">3V3</text>
+    <circle cx="560" cy="272" r="5" fill="#0b0b0b"/><text x="576" y="277">GND</text>
+    <circle cx="560" cy="312" r="5" fill="#0b0b0b"/><text x="576" y="317">SDA / 21</text>
+    <circle cx="560" cy="352" r="5" fill="#0b0b0b"/><text x="576" y="357">SCL / 22</text>
+  </g>
+  <text x="576" y="472" font-size="13" fill="#4a4a46">pin positions here are</text>
+  <text x="576" y="490" font-size="13" fill="#4a4a46">approximate — hunt the</text>
+  <text x="576" y="508" font-size="13" fill="#4a4a46">labels printed on the board</text>
+  <!-- danger pin -->
+  <text x="576" y="416" font-size="13" fill="#4a4a46">pin marked VCC = ~4.7 V:</text>
+  <text x="576" y="434" font-size="13" font-weight="600" fill="#0b0b0b">do not use it</text>
+
+  <!-- wires -->
+  <path d="M 246 232 C 380 232, 440 232, 554 232" fill="none" stroke="#c8321e" stroke-width="3"/>
+  <path d="M 246 272 C 380 272, 440 272, 554 272" fill="none" stroke="#0b0b0b" stroke-width="3"/>
+  <path d="M 246 312 C 380 312, 460 352, 554 352" fill="none" stroke="#b58900" stroke-width="3"/>
+  <path d="M 246 352 C 380 352, 460 312, 554 312" fill="none" stroke="#2a78d6" stroke-width="3"/>
+  <text x="400" y="220" font-size="13" text-anchor="middle" fill="#4a4a46">VCC → 3V3</text>
+  <text x="400" y="292" font-size="13" text-anchor="middle" fill="#4a4a46">GND → GND</text>
+  <text x="400" y="398" font-size="13" text-anchor="middle" fill="#4a4a46">the cross is correct —</text>
+  <text x="400" y="416" font-size="13" text-anchor="middle" fill="#4a4a46">follow names, not rows</text>
+
+  <!-- battery under FireBeetle -->
+  <rect x="560" y="576" width="220" height="64" fill="#ffffff" stroke="#0b0b0b" stroke-width="1.5"/>
+  <text x="670" y="602" font-size="14" font-weight="600" text-anchor="middle" fill="#0b0b0b">battery 2500 mAh</text>
+  <text x="670" y="622" font-size="13" text-anchor="middle" fill="#4a4a46">already plugged in — red wire to +</text>
+  <path d="M 620 576 L 620 544" fill="none" stroke="#c8321e" stroke-width="3"/>
+  <path d="M 640 576 L 640 544" fill="none" stroke="#0b0b0b" stroke-width="3"/>
+
+  <!-- conditional header note -->
+  <rect x="60" y="576" width="440" height="96" fill="#ffffff" stroke="#e4e4e1" stroke-width="1.5"/>
+  <text x="78" y="606" font-size="13.5" fill="#0b0b0b" font-weight="600">If the FireBeetle's holes have no pins sticking up:</text>
+  <text x="78" y="626" font-size="13.5" fill="#4a4a46">snap 4 pins off the spare header strip and solder them at</text>
+  <text x="78" y="644" font-size="13.5" fill="#4a4a46">these four labels first. Pins already there? Wire straight on.</text>
+  <text x="78" y="662" font-size="13.5" fill="#4a4a46">Wire with USB and battery both unplugged.</text>
+
+  <line x1="60" y1="712" x2="780" y2="712" stroke="#e4e4e1" stroke-width="1"/>
+
+  <!-- ================= Panel 2: PACK IT ================= -->
+  <text x="60" y="752" font-size="18" font-weight="600" fill="#0b0b0b">2 · Pack it — the foam sandwich (side view, bench box)</text>
+
+  <!-- lid with notch and cable -->
+  <rect x="90" y="790" width="530" height="18" fill="#ffffff" stroke="#0b0b0b" stroke-width="1.5"/>
+  <rect x="668" y="790" width="82" height="18" fill="#ffffff" stroke="#0b0b0b" stroke-width="1.5"/>
+  <text x="90" y="782" font-size="13" fill="#4a4a46">lid</text>
+  <text x="590" y="836" font-size="13" fill="#4a4a46" text-anchor="end">cable notch ↑</text>
+  <!-- usb cable path out through notch -->
+  <path d="M 442 948 C 520 946, 596 918, 622 868 C 640 834, 638 812, 646 792 C 656 764, 690 744, 716 752"
+        fill="none" stroke="#767672" stroke-width="3.5"/>
+  <text x="826" y="734" font-size="13" fill="#4a4a46" text-anchor="end">USB-C to Mac —</text>
+  <text x="826" y="752" font-size="13" fill="#4a4a46" text-anchor="end">slack loop</text>
+
+  <!-- box walls + floor -->
+  <path d="M 90 808 L 90 1176 L 750 1176 L 750 808" fill="none" stroke="#0b0b0b" stroke-width="2"/>
+  <text x="762" y="1170" font-size="13" fill="#4a4a46">hard-sided box</text>
+
+  <!-- top foam -->
+  <rect x="104" y="866" width="632" height="56" fill="#f1f1ee"/>
+  <text x="340" y="900" font-size="14" text-anchor="middle" fill="#4a4a46">more foam on top — until nothing can move</text>
+
+  <!-- boards row -->
+  <rect x="150" y="936" width="290" height="52" fill="#ffffff" stroke="#0b0b0b" stroke-width="1.5"/>
+  <text x="295" y="967" font-size="14" font-weight="600" text-anchor="middle" fill="#0b0b0b">FireBeetle</text>
+  <rect x="520" y="936" width="130" height="52" fill="#ffffff" stroke="#0b0b0b" stroke-width="1.5"/>
+  <text x="585" y="967" font-size="14" font-weight="600" text-anchor="middle" fill="#0b0b0b">GY-521</text>
+  <!-- jumper squiggle between them -->
+  <path d="M 440 962 C 470 950, 490 974, 520 962" fill="none" stroke="#767672" stroke-width="2.5"/>
+  <!-- pin stubs pointing down into barrier foam -->
+  <g stroke="#0b0b0b" stroke-width="2">
+    <line x1="180" y1="988" x2="180" y2="1002"/><line x1="210" y1="988" x2="210" y2="1002"/>
+    <line x1="240" y1="988" x2="240" y2="1002"/><line x1="270" y1="988" x2="270" y2="1002"/>
+    <line x1="545" y1="988" x2="545" y2="1002"/><line x1="570" y1="988" x2="570" y2="1002"/>
+    <line x1="595" y1="988" x2="595" y2="1002"/><line x1="620" y1="988" x2="620" y2="1002"/>
+  </g>
+  <text x="700" y="1000" font-size="13" fill="#4a4a46" text-anchor="middle">pin tips</text>
+
+  <!-- FOAM BARRIER -->
+  <rect x="104" y="1010" width="632" height="50" fill="#f1f1ee" stroke="#0b0b0b" stroke-width="2"/>
+  <text x="420" y="1032" font-size="14" font-weight="700" text-anchor="middle" fill="#0b0b0b">FOAM BARRIER — not optional</text>
+  <text x="420" y="1050" font-size="13" text-anchor="middle" fill="#4a4a46">pin tips must never reach the battery pouch below</text>
+
+  <!-- battery -->
+  <rect x="104" y="1068" width="632" height="48" fill="#ffffff" stroke="#0b0b0b" stroke-width="1.5"/>
+  <text x="420" y="1090" font-size="14" font-weight="600" text-anchor="middle" fill="#0b0b0b">battery — flat, the biggest item</text>
+  <text x="420" y="1108" font-size="13" text-anchor="middle" fill="#4a4a46">soft pouch: nothing sharp, nothing pressing</text>
+
+  <!-- bottom foam -->
+  <rect x="104" y="1124" width="632" height="44" fill="#f1f1ee"/>
+  <text x="420" y="1151" font-size="14" text-anchor="middle" fill="#4a4a46">foam</text>
+
+  <!-- footer -->
+  <line x1="60" y1="1216" x2="780" y2="1216" stroke="#e4e4e1" stroke-width="1"/>
+  <text x="60" y="1248" font-size="13.5" fill="#4a4a46">Close it and shake: silence = good data. Rattle = add foam. Details: BUILD.md</text>
+</svg>

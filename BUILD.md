@@ -114,6 +114,9 @@ wires to the FireBeetle — the other 4 header pins stay empty:
 | SCL | pin marked **SCL** (IO22) | |
 | XDA, XCL, AD0, INT | *not connected* | normal — they're unused here |
 
+One-page visual of the hookup **and** the foam packing:
+[`docs/img/bench-assembly.svg`](docs/img/bench-assembly.svg)
+
 No battery yet — run from USB. Sensor mounting orientation never matters. At
 this price these are likely clone chips: the firmware is built for that (an
 odd chip ID is a warning, not a failure — what matters is the gravity/noise
