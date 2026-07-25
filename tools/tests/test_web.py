@@ -498,7 +498,13 @@ class TestWebApp(unittest.TestCase):
         self._open()
         self.page.get_by_test_id("btn-bench-drop").click()
         card = self.page.get_by_test_id("bench-card")
-        self.page.locator(".bench-input").fill("100")
+        # The owner default unit is feet, so the height unit defaults to
+        # inches; switch to cm for round numbers.
+        unit = self.page.locator("select.bench-unit")
+        self.assertEqual(unit.input_value(), "in",
+                         "height unit should default from the app's ft preference")
+        unit.select_option("cm")
+        self.page.locator("input.bench-input").fill("100")
         self.page.get_by_role("button", name="Start drops").click()
         expect(card).to_contain_text("Waiting for the first drop")
         # True free-fall time from 100 cm is 0.4516 s; feed measurement errors
@@ -515,7 +521,7 @@ class TestWebApp(unittest.TestCase):
                                delta=0.0006)
         self._feed("# saved to device memory — survives reboot and reflash",
                    "OK set")
-        expect(card).to_contain_text("Saved to the device")
+        expect(card).to_contain_text("Saved into the device")
 
 
 if __name__ == "__main__":

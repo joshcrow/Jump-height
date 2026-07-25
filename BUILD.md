@@ -163,6 +163,13 @@ later, informed by what this rig teaches.
 
 ## Calibration notes (the wizard handles the mechanics)
 
+**Once per build, and it sticks:** calibration measures the device's fixed
+reaction time against gravity, and the result is stored in the device's own
+memory — surviving reboots, reflashes, and battery swaps. Redo it only if
+you swap the sensor board or change detection settings in
+`config/params.json`. (The separate `height_scale` knob gets set once from
+on-water slow-mo video — that's Phase 2's job, not the bench's.)
+
 Hold the puck with its **bottom** exactly at your measured height above a
 cushion and let go — don't throw. Don't drop from below ~50 cm (short falls
 are ignored by design, `min_airtime_s`). The slow-mo video check stays in the

@@ -1095,24 +1095,53 @@ function benchStart(mode) {
       bench.listEl, bench.hintEl, bench.statusEl, cancel);
     bench.statusEl.textContent = 'Waiting for the first toss…';
   } else {
-    const input = el('input', { type: 'number', value: '100', min: '40', max: '250',
-      inputmode: 'decimal', class: 'bench-input', 'aria-label': 'Drop height in centimeters' });
+    // A guided three-step flow. The copy carries what the buttons alone
+    // couldn't: what this measures, that it's once-per-build, and that the
+    // result lives in the device.
+    const inches = unitPref === 'ft';
+    const input = el('input', { type: 'number',
+      value: inches ? '39' : '100',
+      min: inches ? '16' : '40', max: inches ? '98' : '250',
+      inputmode: 'decimal', class: 'bench-input', 'aria-label': 'Drop height' });
+    const unitSel = el('select', { class: 'bench-input bench-unit', 'aria-label': 'Height unit' },
+      el('option', { value: 'cm', selected: inches ? null : true }, 'cm'),
+      el('option', { value: 'in', selected: inches ? true : null }, 'inches'));
+    unitSel.addEventListener('change', () => {
+      const toIn = unitSel.value === 'in';
+      input.min = toIn ? '16' : '40';
+      input.max = toIn ? '98' : '250';
+      input.value = toIn ? '39' : '100';
+    });
     const startBtn = el('button', { class: 'btn btn-primary btn-sm', type: 'button' }, 'Start drops');
-    const setupRow = el('div', { class: 'btn-row' }, input, el('span', { class: 'muted small', text: 'cm' }), startBtn);
+    const setupRow = el('div', { class: 'btn-row' }, input, unitSel, startBtn);
     startBtn.addEventListener('click', () => {
-      const cm = parseFloat(input.value);
-      if (!(cm >= 40 && cm <= 250)) { bench.statusEl.textContent = 'Height must be 40–250 cm.'; return; }
+      const v = parseFloat(input.value);
+      const cm = unitSel.value === 'in' ? v * 2.54 : v;
+      if (!(cm >= 40 && cm <= 250)) {
+        bench.statusEl.textContent = unitSel.value === 'in'
+          ? 'Height must be 16–98 inches.' : 'Height must be 40–250 cm.';
+        return;
+      }
       bench.heightCm = cm;
       bench.expected = Math.sqrt(2 * (cm / 100) / BENCH_G);
+      const shown = unitSel.value === 'in'
+        ? `${v} in (${cm.toFixed(0)} cm)` : `${cm.toFixed(0)} cm`;
       setupRow.replaceWith(el('p', { class: 'small', text:
-        `A clean drop from ${cm} cm free-falls for exactly ${bench.expected.toFixed(3)} s. ` +
-        'Unplug any cable, wake it with a shake, hold the box with its BOTTOM exactly at ' +
-        `${cm} cm, dead still for a second, then let go — don't throw. ` +
-        'Five drops is ideal; three is the minimum.' }));
+        `Step 2 of 3 — the drops. Physics says a clean drop from ${shown} ` +
+        `free-falls for exactly ${bench.expected.toFixed(3)} s; each drop is ` +
+        'scored against that. Unplug any cable, wake the box with a shake, ' +
+        `hold it with its BOTTOM exactly at ${shown}, dead still for a ` +
+        "second, then let go — don't throw. Let it land. " +
+        'Three clean drops minimum; five is better.' }));
       bench.statusEl.textContent = 'Waiting for the first drop…';
     });
     c.append(
-      el('p', { class: 'small', text: 'Pick a height you can measure exactly — tape measure to a table edge works.' }),
+      el('p', { class: 'small', text:
+        'Step 1 of 3 — measure a height. This teaches the device its own ' +
+        'reaction time by comparing it against gravity, which is exact. Pick ' +
+        'any height you can measure precisely — tape measure to a table ' +
+        "edge works. It's once per build: the result is stored in the " +
+        'device and survives reboots and reflashes.' }),
       setupRow, bench.listEl, bench.hintEl, bench.statusEl, cancel);
   }
 }
@@ -1166,17 +1195,27 @@ function benchOnJump(kv) {
 
 function benchOfferSave() {
   const b = bench;
-  b.offset = Math.round(-median(b.good.map((r) => r - b.expected)) * 10000) / 10000;
+  const errs = b.good.map((r) => r - b.expected);
+  b.offset = Math.round(-median(errs) * 10000) / 10000;
+  const biasMs = Math.round(median(errs) * 1000);
+  const mean = errs.reduce((s, x) => s + x, 0) / errs.length;
+  const sd = Math.sqrt(errs.reduce((s, x) => s + (x - mean) ** 2, 0) / errs.length);
+  const meaning = biasMs === 0 ? 'spot on'
+    : `announces landings ~${Math.abs(biasMs)} ms ${biasMs > 0 ? 'late' : 'early'}; the correction cancels it`;
   b.statusEl.textContent =
-    `Timing bias measured over ${b.good.length} drops: ${b.offset >= 0 ? '+' : ''}` +
-    `${(b.offset * 1000).toFixed(0)} ms correction. More drops sharpen it, or save now.`;
+    `Step 3 of 3 — Timing bias measured over ${b.good.length} drops: your device ` +
+    `${meaning}.` +
+    (sd > 0.03 ? ` Drops are scattered (±${Math.round(sd * 1000)} ms) — stiller, cleaner drops sharpen it.` : '') +
+    ' More drops refine the number, or save now.';
   if (!b.saveRow) {
     b.saveRow = el('div', { class: 'btn-row' },
       el('button', { class: 'btn btn-primary btn-sm', type: 'button', 'data-testid': 'btn-bench-save',
         onclick: () => {
           startCapture('set', (_lines, err) => {
             b.statusEl.textContent = !err
-              ? 'Saved to the device — it survives reboots and reflashes. Calibration done.'
+              ? 'Saved into the device’s memory — it survives reboots, reflashes, ' +
+                'and battery swaps. You’re done: redo this only if the sensor is ' +
+                'swapped or detection settings change.'
               : 'The device rejected that — check the console and try again.';
             if (!err) { bench = null; send('info'); } // refresh the CAL readout
           }, 8000);

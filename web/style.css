@@ -508,3 +508,4 @@ esp-web-install-button { display: inline-block; }
   text-align: right;
 }
 .bench-input:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }
+select.bench-input { width: auto; text-align: left; }
