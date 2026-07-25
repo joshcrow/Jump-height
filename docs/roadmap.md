@@ -131,6 +131,25 @@ foiling "feels like" to the sensor would be fiction.
 **Tier D — needs Phase 4 hardware**: GPS speed/distance/runs (the other half
 of the Woo/Surfr feature set); barometer stays rejected for jump height.
 
+**Prior-art check — WOO's "The WOO Way" whitepaper (v1.3, 2024)**: read and
+digested 2026-07. Their empirical data independently confirms our board
+mount (takeoff/landing detection fails from chest/wrist; chest reads ~60%
+different on inverted tricks; wrists are cheatable) and our rigid-packing
+rule ("any wiggle room leads to inaccurate results"). Their sensor arms
+race (±32 g, 32 kHz, timing crystal, 6-axis factory cal, Kalman fusion) is
+the price of DOUBLE-INTEGRATING height for kites, whose jumps are not
+ballistic (their data: 15.5 m at 5.9 s airtime — free-fall math would say
+42 m). Wing jumps are short and near-ballistic, and the airtime method
+never integrates — which is why a $2 mis-scaled sensor passes our bench.
+Adopted notes: (1) our ±8 g range clips landing PEAKS (detection at 2.5 g
+unaffected) — switch to ±16 g when crash-severity analytics land; (2) their
+users complain "reads too low" 95% of the time and WOO resolves doubt
+upward (wave-trough baselines) — when video-calibrating height_scale, keep
+the honest number; that pressure will arrive. Strategically: WOO retreated
+to kite-only in 2024 and concedes simpler tools suffice for personal
+measurement — wing foil is exactly the orphaned ground this project stands
+on.
+
 **New output surface — Garmin watch data field**: fully scoped with user
 stories, interaction design, architecture, milestones, and acceptance
 criteria in **[garmin-datafield.md](garmin-datafield.md)** — written to be
