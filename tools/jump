@@ -418,9 +418,24 @@ def open_device(args, fake_scenario: str = "ok", fake_extra: list[str] | None = 
         dev = Device(port)
         dev.drain_boot(timeout=3.0)
         return dev, proc
-    port = args.port or autodetect_port()
+    port = args.port or None
+    # A remembered port name (wizard state, --port) can go stale: macOS
+    # assigns a different suffix per USB socket/hub, so the same board can be
+    # ...1440 today and ...1430 tomorrow. Never trust a name that isn't
+    # currently present — re-scan instead of crashing into pyserial.
+    if port and port not in scan_ports():
+        print(f"(saved port {port} is gone — Macs shuffle these names; re-scanning)")
+        port = None
+    if not port:
+        port = autodetect_port()
     print(f"Connecting to {port} (the board resets when the port opens — normal)...")
-    dev = Device(port)
+    try:
+        dev = Device(port)
+    except OSError as e:  # pyserial's SerialException is an OSError too
+        print(f"❌ couldn't open {port}: {e}")
+        print("   Unplug/replug the USB cable, then re-run — wizards resume where")
+        print("   they left off. Still stuck? ./tools/jump report → send to Claude.")
+        raise SystemExit(1)
     dev.drain_boot()
     return dev, None
 
