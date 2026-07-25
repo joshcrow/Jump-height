@@ -194,9 +194,11 @@ One developer-data UUID (constant in FitOut.mc). Fields:
 
 - RECORD field written once per JUMP (sparse) → per-jump chart in Connect.
 - SESSION fields written continuously (cheap) → summary tiles in Connect.
-- Canonical unit: meters. Garmin Connect does not convert developer
-  fields; we accept metric charts (the wrist display is unit-aware, the
-  archive is canonical). Documented user-facing in the store description.
+- Units *(adversarial-review decision)*: write in the **rider's display
+  unit**, with the FIT units string set to match ("ft" or "m") — Garmin
+  Connect does not convert developer fields, and the person reading the
+  activity page is a human, not an archive. The canonical metric record is
+  the device's own CSVs, not the FIT file.
 
 ### 5.6 Memory & performance budget
 
@@ -231,21 +233,30 @@ outdoor glance test passed; memory within budget on smallest target.
 AC: Garmin Connect shows jumps count, best, and the per-jump chart on the
 saved activity.
 
-**M5 — distribution.** Store listing (name: "Jump Height — Wing Foil
-Jumps"; category Data Fields), screenshots from sim, description linking
-the open-hardware repo + Pages flasher, privacy: no accounts, no network,
-BLE only. AC: approved and installable from the store; README updated.
+**M5 — distribution.** Two channels, in order (full detail in §11):
+(a) *Sideload channel first*: local release build for the owner's model,
+published as a GitHub Release asset, linked from the website with the
+per-OS sideload guide; (b) *Connect IQ Store*: developer account, store
+checklist (§11.3), submit, respond to review. AC: owner's watch runs a
+Release-asset build installed per the guide; store listing approved; the
+website's watch section shows the store badge.
 
-**M6 — field trial.** One real water session wearing it. AC: US1-US6 each
-verified true on the water, or filed as issues.
+**M6 — field trial.** One real water session wearing it, with the beach
+phone connected at the same time (requires §7's two-central firmware).
+AC: US1-US6 each verified true on the water, or filed as issues.
 
-## 7. Optional firmware companions (small, OUR repo, not blockers)
+## 7. Firmware companions (OUR repo)
 
-- **Two concurrent BLE centrals** (watch + beach phone): NimBLE config
-  bump + re-test; today the second connector waits until the first leaves.
-- **Battery telemetry**: add `batt_pct=` to `INFO`/`STATS` once the
-  FireBeetle's battery-sense pin is wired/validated; the field would show
-  a puck-battery glyph. Needs its own small hardware validation.
+- **Two concurrent BLE centrals — PREREQUISITE for M6, not a nicety**
+  *(adversarial-review promotion)*: the most likely field trial is the
+  rider wearing the watch while the owner holds the phone. Today the puck
+  accepts one central AND stops advertising while connected — the second
+  client can't even see it. Work: NimBLE max-connections = 2, restart
+  advertising after each connect while a slot remains, test watch + phone
+  simultaneously live. Must land before M6.
+- **Battery telemetry** (optional): add `batt_pct=` to `INFO`/`STATS` once
+  the FireBeetle's battery-sense pin is wired/validated; the field would
+  show a puck-battery glyph. Needs its own small hardware validation.
 
 ## 8. Stretch: the "Wing Foil activity" device app — scope & verdict
 
@@ -281,8 +292,81 @@ lift unchanged; only the View/App layer is new.
    activities (charts render for most sports; confirm on a real save).
 7. Store review constraints on the word "Garmin" and on BLE scan duration
    in data fields (respect current guidelines at submit time).
+8. Whether the owner's watch mounts as USB mass storage or MTP-only on
+   macOS (decides which sideload guide applies — §11.1).
+9. BLE delegate callback delivery while the field's data page is not the
+   currently visible screen (must keep receiving jumps regardless).
+10. Current Connect IQ SDK license terms re: CI builds — until confirmed,
+    release artifacts are built locally, never in CI (§11.2).
 
-## 10. Out of scope (explicitly)
+## 10. Design constraint from sideload reality: DEFAULTS CARRY THE APP
+
+Sideloaded Connect IQ apps cannot receive app settings (settings flow
+through Garmin's store plumbing only). Therefore every setting in §3/US7
+is polish, never load-bearing: puck name defaults to `JumpHeight`, units
+follow the watch, vibration defaults on-if-permitted. A sideloaded field
+with zero configuration must satisfy US1-US6 completely.
+
+## 11. Distribution & website integration
+
+### 11.1 Sideloading — the honest per-OS guide (ships in garmin/README.md
+and, post-M2, as a short page linked from the web app)
+
+1. Download `JumpField-<device>.prg` for your watch model (Release asset;
+   .prg files are built PER DEVICE — installing the wrong model's file
+   fails silently. The website picker must make the model choice explicit).
+2. Connect the watch by USB.
+   - **Windows**: watch appears in Explorer → copy the file into
+     `GARMIN/APPS` → eject → restart the watch.
+   - **macOS, older watches (USB mass storage)**: same via Finder.
+   - **macOS, newer watches (MTP-only — most current models)**: macOS has
+     no native MTP; install OpenMTP (free) or Android File Transfer, then
+     copy into `GARMIN/APPS`. This friction is exactly why the store
+     channel is the real distribution (§11.3).
+3. Add the field to an activity screen on the watch: Settings → Activities
+   & Apps → (your sport) → Data Screens → add a field → Connect IQ →
+   Jump Height. This step gets its own illustrated 5-step guide — install
+   ≠ configured, and US1 silently fails without it.
+4. Uninstall = delete the file (or via Garmin Express/Connect for store
+   installs).
+
+There is NO wireless sideload on this platform; "slick" pre-store
+distribution means: one obvious download link per model + this guide.
+
+### 11.2 Release artifacts (pre-store channel)
+
+Built locally (`monkeyc` release build, signed with the project developer
+key — key kept out of the repo), attached to a GitHub Release, linked from
+the website. Not built in CI until §9.10 clears; never committed to the
+repo (same no-binaries rule as firmware).
+
+### 11.3 Connect IQ Store submission checklist
+
+- Developer account on the Connect IQ portal (free).
+- Release `.iq` bundle (all supported devices in one upload).
+- Listing: name ("Jump Height — Wing Foil Jumps"; must not lead with
+  "Garmin"), description linking the repo + web flasher ("works with an
+  open-hardware puck you build for ~$20"), what-BLE-is-used-for statement,
+  support URL (GitHub issues), privacy statement (no accounts, no network,
+  no data leaves the watch except the activity's own FIT file).
+- Assets: launcher icon (the wave glyph, per-family sizes), 3+ screenshots
+  (simulator captures of §4.1's three layouts).
+- Review turnaround is typically days; every update re-reviews. Expect one
+  round-trip of reviewer feedback the first time.
+- Post-approval: the website's watch section swaps the Release link for
+  the store badge; sideload guide remains for DIY forks.
+
+### 11.4 Website touchpoints (small, deliberate)
+
+- **Connect tab, "New device" area** gains a third card after firmware
+  install: "On a Garmin watch?" → pre-store: model picker + Release link +
+  sideload guide; post-store: the store badge. One card, no new page
+  structure.
+- The store listing links BACK to the website as the puck's home. The two
+  surfaces must agree on one sentence of positioning: *"An open-hardware
+  jump tracker for wing foiling — build the puck, wear the watch."*
+
+## 12. Out of scope (explicitly)
 
 - Sending calibration or commands from the watch (phone owns that).
 - Watch-side session storage/history (Garmin Connect is the archive).
