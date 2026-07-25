@@ -641,25 +641,34 @@ def _autopsy_trace(dev: "Device") -> None:
         # log undersamples a 10-30 ms landing spike, so we report the peak we
         # can SEE and judge against the threshold with honest wording.
         flights = []  # (t_start, dip_dur, landing_peak, airtime_to_peak)
-        i = 0
-        while i < len(rows):
-            if rows[i][1] < p.freefall_enter_g:
-                j = i
-                while j < len(rows) and rows[j][1] < p.freefall_enter_g:
-                    j += 1
-                dur = rows[j - 1][0] - rows[i][0]
-                if dur >= max(0.06, p.freefall_confirm_s - 0.02):
-                    peak, peak_t = 0.0, None
-                    k = j
-                    while k < len(rows) and rows[k][0] - rows[j - 1][0] <= 0.4:
-                        if rows[k][1] > peak:
-                            peak, peak_t = rows[k][1], rows[k][0]
-                        k += 1
-                    air = (peak_t - rows[i][0]) if peak_t is not None else None
-                    flights.append((rows[i][0], dur, peak, air))
-                i = j
-            else:
-                i += 1
+        # The stored trace stitches every power-on together and time restarts
+        # at each boot — analyze per segment, or a dip right before a reboot
+        # "lands" in the next boot's timeline and reports negative airtime
+        # (a real autopsy printed '-55.86s of air' exactly this way).
+        segments = split_segments(rows)
+        if len(segments) > 1:
+            print(f"  (recording spans {len(segments)} power-ons; "
+                  "times restart at each)")
+        for seg in segments:
+            i = 0
+            while i < len(seg):
+                if seg[i][1] < p.freefall_enter_g:
+                    j = i
+                    while j < len(seg) and seg[j][1] < p.freefall_enter_g:
+                        j += 1
+                    dur = seg[j - 1][0] - seg[i][0]
+                    if dur >= max(0.06, p.freefall_confirm_s - 0.02):
+                        peak, peak_t = 0.0, None
+                        k = j
+                        while k < len(seg) and seg[k][0] - seg[j - 1][0] <= 0.4:
+                            if seg[k][1] > peak:
+                                peak, peak_t = seg[k][1], seg[k][0]
+                            k += 1
+                        air = (peak_t - seg[i][0]) if peak_t is not None else None
+                        flights.append((seg[i][0], dur, peak, air))
+                    i = j
+                else:
+                    i += 1
 
         if not flights:
             print("  Autopsy: the recording shows NO free-fall at all. The usual")
