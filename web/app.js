@@ -515,6 +515,8 @@ function onParams(kv) {
 function onCal(kv) {
   // Effective calibration + where it lives — the phone-only rider's only way
   // to see whether a saved calibration is actually in force.
+  deviceInfo.calOffset = parseFloat(kv.airtime_offset_s || '0');
+  deviceInfo.calSource = kv.source || 'defaults';
   const offMs = Math.round(parseFloat(kv.airtime_offset_s || '0') * 1000);
   const scale = parseFloat(kv.height_scale || '1');
   deviceInfo.cal = (kv.source === 'device'
@@ -1206,6 +1208,11 @@ function benchOfferSave() {
     `Step 3 of 3 — Timing bias measured over ${b.good.length} drops: your device ` +
     `${meaning}.` +
     (sd > 0.03 ? ` Drops are scattered (±${Math.round(sd * 1000)} ms) — stiller, cleaner drops sharpen it.` : '') +
+    (deviceInfo.calSource === 'device' && deviceInfo.calOffset != null
+      ? (Math.abs(deviceInfo.calOffset - b.offset) <= 0.01
+        ? ' This matches the correction already saved — your calibration is confirmed.'
+        : ` (Currently saved: ${Math.round(deviceInfo.calOffset * 1000)} ms correction — saving replaces it.)`)
+      : '') +
     ' More drops refine the number, or save now.';
   if (!b.saveRow) {
     b.saveRow = el('div', { class: 'btn-row' },
