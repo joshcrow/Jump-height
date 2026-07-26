@@ -192,6 +192,10 @@ decision (§8 there). Precedent: Surfr ships a Garmin companion.
       µA idle, UF2 drag-drop first flash, mature Nordic DFU for OTA, and
       NUS is literally its native protocol — web app + Garmin field port
       unchanged). WiFi absent by design; ESP32 stays the v1/v2 workhorse.
+      Middle option if the WiFi decision revives: XIAO ESP32-C6 (same
+      thumbnail size, WiFi 6 + BLE, better efficiency than classic ESP32)
+      — but NO onboard IMU (external sensor + wiring stays), and it needs
+      the newer Arduino-core/NimBLE-2.x toolchain generation to port.
 - [ ] Better IMU (ICM-20948 / LSM6DSO); optional GPS for speed & distance
 - [ ] Deep-sleep power management for multi-session battery life
 - [ ] Potted, properly sealed, board-mountable enclosure
