@@ -49,7 +49,10 @@ needs two app slots + otadata. New map (4 MB):
     phy       4 KB
     ota_0    ~1.31 MB (0x150000)
     ota_1    ~1.31 MB (0x150000)
-    littlefs ~1.31 MB (≈ 29 min of moving-time trace; was ~45)
+    littlefs ~1.31 MB (≈ 3.5+ HOURS of moving-time trace — because the same
+                       epoch switches trace storage to binary, §4.5; today's
+                       CSV-on-flash format is what made 2.4 MB mean only
+                       ~45 min)
 
 Slot size is set by the REAL ceiling: measure the Phase 3.5 WiFi+BLE build
 first (today's BLE-only app is 672 KB; WiFi typically adds 400–500 KB) and
@@ -112,7 +115,31 @@ one-line changelog; Pages serves CORS-friendly same-origin anyway) →
 above). Disconnect mid-transfer → honest status + "start again" (no
 zombie states — same discipline as sync/bench flows).
 
-### 4.5 The WiFi doorway (arrives free with Phase 3.5)
+### 4.5 Binary trace v2 (ships in the same epoch — the capacity answer)
+
+Today the trace is stored on flash as literal text ("123.456,1.023\n",
+~15 bytes/sample) — the real reason 2.4 MB only held ~45 minutes. Real
+sessions are 1–2 h on the water, so the epoch fixes the format, not just
+the partition:
+
+- **Storage**: one-second blocks — u32 t0 (ms) + u8 count + count × u16
+  magnitude in milli-g. ≈ 2 bytes/sample ⇒ ~360 KB per hour of MOVING
+  time (idle costs nothing). 1.31 MB ⇒ ~3.6 h; a u8 variant (~31 mg
+  steps, still 10× finer than any threshold) doubles that to ~7 h if a
+  marathon ever demands it.
+- **Wire compatibility**: `trace`/`dump` stream the SAME CSV as today —
+  the device converts blocks to text on the fly (dumps already pause
+  sampling, so the CPU is free). CLI sync, web app, autopsy, replay:
+  zero changes. STATS keeps `trace_bytes` as stored bytes and gains
+  `trace_csv_est=` so clients still size downloads honestly.
+- **Fidelity**: milli-g resolution vs thresholds at 0.35 g / 2.5 g and
+  Tier A classifiers that operate on 1 s windows — nothing downstream
+  can tell the difference; the parity test (C++ vs Python on the same
+  data) still gates it.
+- Net vs today: OTA takes half the partition, the format gives back
+  ~8× — long-session capacity IMPROVES ~5× in the same release.
+
+### 4.6 The WiFi doorway (arrives free with Phase 3.5)
 
 Hotspot mode adds a plain HTTP `/update` upload endpoint behind the same
 esp_ota + rollback core. iPhone Safari on the device's own page fetches
@@ -145,8 +172,11 @@ ships.
 
 ## 6. Risks, stated
 
-- **Storage halves** (~45 → ~29 min of trace). Sync-after-session was
-  always the workflow; acceptable. Jump list unaffected.
+- **Storage capacity actually rises** (~45 min → ~3.5 h of moving time)
+  because binary trace (§4.5) ships in the same epoch — but that adds a
+  storage-format change to the epoch's blast radius; the CSV-on-the-wire
+  compatibility layer and the C++/Python parity suite are what contain it.
+  Jump list unaffected in every scenario.
 - **A bad release now reaches the board wirelessly.** Rollback (O1) and
   the soak (O4) exist precisely for this; the user's board is also the
   only test fleet, so O4 is not skippable.

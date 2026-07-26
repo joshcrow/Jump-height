@@ -99,8 +99,10 @@ update can never brick; the boot self-test is the validity gate), BLE
 transfer driven by the web app on iPhone via Bluefy, CI's Pages build as
 the update server, and a free HTTP-upload doorway once hotspot mode
 exists. Ships together with 3.5 as one partition epoch (one-time storage
-reformat; calibration in NVS survives). Trade: trace capacity ~45 → ~29
-min. Build after water validation.
+reformat; calibration in NVS survives) — and the same epoch moves trace
+storage to a binary format (ota.md §4.5), so recording capacity RISES
+from ~45 min to ~3.5 h of moving time even with half the partition.
+Build after water validation.
 
 ## Backlog study — what else the same hardware can measure *(thought through 2026-07)*
 
