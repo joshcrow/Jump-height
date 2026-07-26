@@ -172,7 +172,13 @@ decision (§8 there). Precedent: Surfr ships a Garmin companion.
 
 ## Phase 4 — "Real" hardware
 
-- [ ] Custom PCB: ESP32 module + IMU + LiPo charger + fuel gauge
+- [ ] Custom PCB: ESP32 module + IMU + LiPo charger + fuel gauge — OR the
+      off-the-shelf shortcut: integrated ESP32+IMU boards exist (M5StickC
+      Plus2 / AtomS3 / M5Capsule with MPU6886/BMI270-class 6-axis;
+      Waveshare S3 + QMI8658; and the non-ESP32 wildcard XIAO nRF52840
+      Sense with µA sleep for the solar/potted dream). Trade: tiny
+      built-in batteries vs our 2500 mAh. The detector doesn't care —
+      new board = one small driver file, same wizard.
 - [ ] Better IMU (ICM-20948 / LSM6DSO); optional GPS for speed & distance
 - [ ] Deep-sleep power management for multi-session battery life
 - [ ] Potted, properly sealed, board-mountable enclosure
