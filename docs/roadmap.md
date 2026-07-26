@@ -93,6 +93,15 @@ can join a WiFi network). Zero new hardware; it's all firmware + serving.
 **Done when:** an iPhone with no special browser joins the board's network and
 syncs a session in seconds.
 
+**Companion scope — over-the-air firmware updates ([ota.md](ota.md))**:
+fully scoped 2026-07 — two OTA slots + bootloader rollback (a failed
+update can never brick; the boot self-test is the validity gate), BLE
+transfer driven by the web app on iPhone via Bluefy, CI's Pages build as
+the update server, and a free HTTP-upload doorway once hotspot mode
+exists. Ships together with 3.5 as one partition epoch (one-time storage
+reformat; calibration in NVS survives). Trade: trace capacity ~45 → ~29
+min. Build after water validation.
+
 ## Backlog study — what else the same hardware can measure *(thought through 2026-07)*
 
 The pipeline (50 Hz trace → sync → offline analysis → report) makes most new
