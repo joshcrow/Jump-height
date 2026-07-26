@@ -67,7 +67,14 @@ goal (aim for ~10%). Now you actually know how high he jumps.
 afterward. *(Software side is done and tested; the two unchecked boxes need the
 physical board.)*
 
-## Phase 3.5 — WiFi sync mode *(scoped; build after the first water session)*
+## Phase 3.5 — WiFi sync mode *(scoped — DECISION PENDING, likely superseded)*
+
+> **Owner north star (2026-07): smallest + most efficient device, with the
+> Garmin data field as the live surface.** In that future WiFi's three
+> justifications dissolve: binary-WIRE BLE sync (ota.md §4.5 companion)
+> covers bulk speed, the watch + Garmin Connect FIT fields cover live +
+> auto-archive, and BLE is already OTA's primary doorway. Re-decide after
+> the Garmin field ships; the scope below is kept, not being built now.
 
 WiFi is the answer to BLE's two weaknesses — bulk-transfer speed (seconds vs
 minutes for a full trace) and iPhones (no Web Bluetooth on iOS, but every phone
@@ -179,6 +186,12 @@ decision (§8 there). Precedent: Surfr ships a Garmin companion.
       Sense with µA sleep for the solar/potted dream). Trade: tiny
       built-in batteries vs our 2500 mAh. The detector doesn't care —
       new board = one small driver file, same wizard.
+      **North star (owner, 2026-07): smallest + most efficient.** Leading
+      candidate: nRF52840-class (XIAO nRF52840 Sense — onboard 6-axis IMU,
+      2 MB flash ≈ 5 h binary trace, ~5-10 mA recording vs ESP32's ~50,
+      µA idle, UF2 drag-drop first flash, mature Nordic DFU for OTA, and
+      NUS is literally its native protocol — web app + Garmin field port
+      unchanged). WiFi absent by design; ESP32 stays the v1/v2 workhorse.
 - [ ] Better IMU (ICM-20948 / LSM6DSO); optional GPS for speed & distance
 - [ ] Deep-sleep power management for multi-session battery life
 - [ ] Potted, properly sealed, board-mountable enclosure

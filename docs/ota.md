@@ -141,6 +141,10 @@ the partition:
   data) still gates it.
 - Net vs today: OTA takes half the partition, the format gives back
   ~8× — long-session capacity IMPROVES ~5× in the same release.
+- Natural companion (same epoch or right after): a binary WIRE mode for
+  `trace`/`dump` — a full session over BLE in ~20-30 s, which removes
+  bulk-sync speed as a justification for WiFi entirely (see the Phase
+  3.5 decision note in roadmap.md).
 
 ### 4.6 The WiFi doorway (arrives free with Phase 3.5)
 
