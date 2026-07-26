@@ -124,9 +124,12 @@ the partition:
 
 - **Storage**: one-second blocks — u32 t0 (ms) + u8 count + count × u16
   magnitude in milli-g. ≈ 2 bytes/sample ⇒ ~360 KB per hour of MOVING
-  time (idle costs nothing). 1.31 MB ⇒ ~3.6 h; a u8 variant (~31 mg
-  steps, still 10× finer than any threshold) doubles that to ~7 h if a
-  marathon ever demands it.
+  time (idle costs nothing). 1.31 MB ⇒ ~3.6 h. A u8 variant (~31 mg
+  steps) doubles that to ~7 h, but is break-glass only: detection replay
+  wouldn't notice, yet the quiet-signal analytics would — time-on-foil
+  reads foil-flight smoothness in the tens of mg, exactly the margin u8
+  spends — and u8 couples the format to today's ±8 g range (u16 milli-g
+  already has headroom for a future ±16 g crash-severity upgrade).
 - **Wire compatibility**: `trace`/`dump` stream the SAME CSV as today —
   the device converts blocks to text on the fly (dumps already pause
   sampling, so the CPU is free). CLI sync, web app, autopsy, replay:
