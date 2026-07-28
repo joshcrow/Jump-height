@@ -1,4 +1,11 @@
-// ble_link.h
+// jh_link.cpp — ESP32 implementation of the jh_link seam
+// (firmware/include/platform/jh_link.h). See docs/sense.md §3.9.
+//
+// Formerly ble_link.h, moved here near-verbatim by the platform-seams
+// refactor (git history follows the move) — namespace renamed ble_link ->
+// jh_link and the 5 functions main.cpp calls given external linkage to match
+// the seam header; everything else, including every comment below, is
+// unchanged.
 //
 // Nordic UART Service (NUS) BLE link for the Jump Height firmware — a thin
 // wrapper over NimBLE-Arduino that carries the EXACT same newline-terminated
@@ -54,9 +61,11 @@
 //       One notify() call reaches every currently-subscribed central at once
 //       (see above), so main.cpp never needs to loop over clients itself.
 //
-// Only src/main.cpp includes this header, so the definitions live here inline
-// (matching jump_detector.h / mpu6050_min.h). It pulls in <NimBLEDevice.h>, so
-// it must never be included by the host-side detector parity test.
+// This file is compiled only for the ESP32 platform (see platformio.ini's
+// build_src_filter) and is never included by anything — main.cpp only sees
+// firmware/include/platform/jh_link.h. It pulls in <NimBLEDevice.h>, so it
+// must never be dragged into the host-side detector parity test (that test
+// only ever builds jump_detector.h, which stays dependency-free).
 //
 // API note: written against NimBLE-Arduino 1.4.x (this repo pins ^1.4.2; 1.4.3
 // is what's actually vendored under firmware/.pio/libdeps as of this writing).
@@ -66,12 +75,12 @@
 //
 // SPDX-License-Identifier: MIT
 
-#pragma once
+#include "platform/jh_link.h"
 
 #include <Arduino.h>
 #include <NimBLEDevice.h>
 
-namespace ble_link {
+namespace jh_link {
 
 // Nordic UART Service — the de-facto "serial port over BLE" profile.
 static const char* SVC_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E";
@@ -235,7 +244,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
 // Bring up the NUS server and start advertising as `name`. Returns false if any
 // step of the NimBLE init fails — the caller reports it in the self-test but
 // must keep running (BLE is optional; jump tracking works over USB regardless).
-static bool begin(const char* name) {
+bool begin(const char* name) {
   // Call init() in statement form and check getInitialized() rather than init()'s
   // return: across 1.4.x point releases init() has returned both void and bool,
   // and this form compiles against either.
@@ -271,7 +280,7 @@ static bool begin(const char* name) {
 }
 
 // True exactly once per subscribe: loop() uses it to send the banner + READY.
-static bool takeGreetPending() {
+bool takeGreetPending() {
   bool g = false;
   portENTER_CRITICAL(&s_mux);
   if (s_greet_pending) { s_greet_pending = false; g = true; }
@@ -320,7 +329,7 @@ static void sendOneChunk() {
 
 // Send one paced chunk if one is due. Called once per loop() pass; costs
 // microseconds when idle, so it never disturbs the 200 Hz sampling cadence.
-static void pump() {
+void pump() {
   if (s_sub_count == 0 || s_tx == nullptr) {
     s_txq_tail = s_txq_head;  // no listener: drop pending output
     return;
@@ -330,7 +339,7 @@ static void pump() {
   }
 }
 
-static void write(const char* data, size_t len) {
+void write(const char* data, size_t len) {
   if (s_sub_count == 0 || s_tx == nullptr) return;
   for (size_t i = 0; i < len; ++i) {
     size_t next = (s_txq_head + 1) % TX_CAP;
@@ -350,7 +359,7 @@ static void write(const char* data, size_t len) {
 // serial pollSerial() line assembly (trim, ignore blanks, cap at 64 chars).
 // This ring and the line buffer below are shared across BOTH connected
 // centrals (see the threading-model comment at the top of this file).
-static void poll(void (*handle)(const String&)) {
+void poll(void (*handle)(const String&)) {
   uint8_t c;
   while (rxPop(c)) {
     if (c == '\n' || c == '\r') {
@@ -363,4 +372,4 @@ static void poll(void (*handle)(const String&)) {
   }
 }
 
-}  // namespace ble_link
+}  // namespace jh_link

@@ -1,0 +1,61 @@
+// jh_link.h — BLE link platform seam (see docs/sense.md §3.9).
+//
+// The wireless transport: mirrors the EXACT SAME newline-terminated protocol
+// as the USB serial console over BLE, so a phone/laptop (Web Bluetooth) and
+// a Garmin watch (Connect IQ BLE central) can read jumps and send commands
+// wirelessly, the same way ./tools/jump does over USB — possibly with TWO
+// concurrently connected centrals at once (rider's watch + beach phone), per
+// docs/garmin-datafield.md §7.
+//
+// THE RULE, WRITTEN IN BLOOD (see the ESP32 implementation's TX-queue
+// comments for the full reasoning this was learned from): nothing in this
+// seam may block the sampling loop. write() only ever queues; pump() sends
+// at most one paced chunk per call and must return in microseconds when
+// idle. A synchronous send at a slow/negotiated-down MTU can stall sampling
+// tens of milliseconds — long enough to swallow a landing spike. The one
+// sanctioned exception is a bulk FILE dump from inside command handling,
+// where sampling is already paused — write() may drain/pace inline there.
+//
+// ESP32: NimBLE-Arduino, exposing a Nordic UART Service
+// (src/platform/esp32/jh_link.cpp — read its threading-model comment before
+// touching it; the two-central mechanics there took real debugging to get
+// right). A future platform's BLE stack (e.g. the Sense's Bluefruit
+// BLEUart, itself already the Nordic UART Service — see docs/sense.md §3.1)
+// must be RE-DERIVED against its own connection/subscribe/MTU semantics, not
+// assumed to port 1:1 — docs/sense.md §3.1 lists exactly what to VERIFY.
+//
+// SPDX-License-Identifier: MIT
+
+#pragma once
+
+#include <Arduino.h>
+
+namespace jh_link {
+
+// Bring up the link and start advertising as `name`. Returns false if any
+// init step fails; the caller reports it via the self-test's `ble` row but
+// keeps running regardless — BLE is optional, jump tracking works over USB
+// either way.
+bool begin(const char* name);
+
+// Drain any received command bytes, dispatching each completed line through
+// `handle` (the SAME dispatcher serial input uses, so a command is handled
+// identically regardless of which transport it arrived on). Call once per
+// loop() pass.
+void poll(void (*handle)(const String& line));
+
+// Send at most one paced output chunk if one is due. Call once per loop()
+// pass; costs microseconds when idle or when there is nothing queued, so it
+// never disturbs the sampling cadence.
+void pump();
+
+// Queue bytes for output, broadcast to every currently subscribed client in
+// one call (callers never loop over connections themselves). No-op if
+// nobody is subscribed. See the blocking rule above.
+void write(const char* data, size_t len);
+
+// True exactly once per new subscription: the caller sends a greet/banner so
+// a freshly-subscribed client learns the link is alive.
+bool takeGreetPending();
+
+}  // namespace jh_link

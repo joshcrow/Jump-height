@@ -1,10 +1,15 @@
-// Jump Height — ESP32 firmware (FireBeetle 2 ESP32-E field board)
+// Jump Height — chip-agnostic firmware core (see docs/sense.md §3.9: shared
+// core + platform/<chip> seams — jh_imu/jh_store/jh_link/jh_persist). Built
+// today for the FireBeetle 2 ESP32-E field board (platform/esp32); a second
+// platform is a build-time swap of the four seam implementations, no changes
+// to this file (except platformio.ini).
 //
 // What it does (see DECISIONS.md / BUILD.md):
-//   * Samples the MPU-6050 at JH_SAMPLE_HZ over I2C (raw register driver —
-//     tolerant of clone chips) and runs the airtime jump detector live.
+//   * Samples the IMU at JH_SAMPLE_HZ (raw register driver, tolerant of
+//     clone chips — see the jh_imu seam) and runs the airtime jump detector
+//     live.
 //   * Motion gate: only detects/logs while the board is actually moving.
-//   * Logs to built-in flash (LittleFS):
+//   * Logs to on-device storage (the jh_store seam):
 //       jumps.csv — one line per jump (n,takeoff_s,airtime_raw_s,airtime_s,height_m)
 //       trace.csv — JH_LOG_HZ "t,mag" trace while moving, for offline re-tuning
 //   * Power-on self-test with plain-English fix hints; a wiring failure does
@@ -30,37 +35,33 @@
 // and (when at least one BLE client is subscribed) the BLE TX characteristic,
 // via the emit layer below; a single notify() reaches every subscribed client,
 // so this file never has to loop over connections itself. The BLE stack lives
-// in include/ble_link.h. A BLE failure is reported by the self-test's `ble`
-// row but never blocks jump detection — v1 still reads over USB.
+// behind the jh_link seam (include/platform/jh_link.h; ESP32 implementation
+// in src/platform/esp32/jh_link.cpp). A BLE failure is reported by the
+// self-test's `ble` row but never blocks jump detection — v1 still reads over
+// USB.
 //
 // All tunables come from config/params.json via the generated params.gen.h.
 //
 // SPDX-License-Identifier: MIT
 
 #include <Arduino.h>
-#include <Wire.h>
-#include <FS.h>
-#include <LittleFS.h>
-#include <Preferences.h>  // NVS: runtime calibration that survives reflashes
-#include <esp_timer.h>
 #include <stdarg.h>
 #include <string.h>
 #include "params.gen.h"
-#include "mpu6050_min.h"
 #include "jump_detector.h"
-#include "ble_link.h"
+#include "platform/jh_clock.h"
+#include "platform/jh_imu.h"
+#include "platform/jh_link.h"
+#include "platform/jh_persist.h"
+#include "platform/jh_store.h"
 
-#define FW_VERSION "0.4.2"
+#define FW_VERSION "0.4.3"
 
 static const float    G                  = JH_G;
 static const uint32_t SAMPLE_INTERVAL_US = 1000000UL / JH_SAMPLE_HZ;
 static const int      LOG_DECIMATE       = JH_SAMPLE_HZ / JH_LOG_HZ;
 static const uint32_t IDLE_TIMEOUT_MS    = (uint32_t)JH_IDLE_TIMEOUT_S * 1000UL;
 
-static const char* TRACE_PATH = "/trace.csv";
-static const char* JUMPS_PATH = "/jumps.csv";
-
-Mpu6050Min     imu;
 jump::Detector detector;
 
 static bool sensor_ok = false;
@@ -74,7 +75,7 @@ static uint32_t stored_jumps  = 0;
 static float    stored_best   = 0.0f;
 // 64-bit microsecond timebase: 32-bit micros() wraps at ~71.6 min, which is
 // shorter than a wing session and would reset t mid-file (and could eat a
-// jump in flight at the wrap instant). esp_timer_get_time() never wraps.
+// jump in flight at the wrap instant). jh_clock::micros64() never wraps.
 static int64_t  t0_us         = 0;
 
 // Motion gate. motion_seen keeps the gate idle from power-on until the first
@@ -93,12 +94,9 @@ static bool     active         = false;
 // only when a self-test sees a plausible, quiet resting measurement.
 static float    g_baseline     = 1.0f;
 
-// Trace buffering (keeps slow flash writes off the sampling path)
+// Trace buffering (keeps slow flash writes off the sampling path). Byte
+// count, cap-full state, and the CSV headers now live behind jh_store.
 static String   trace_buf;
-static uint32_t trace_bytes   = 0;
-static bool     trace_full    = false;
-static bool     trace_header  = false;
-static bool     jumps_header  = false;
 static int      decimate_ctr  = 0;
 static uint32_t last_flush_ms = 0;
 
@@ -109,14 +107,14 @@ static String cmd_buf;
 // Single choke point for ALL protocol output. Every line goes to USB serial and,
 // when any BLE client is subscribed, to the Nordic UART TX characteristic — same
 // bytes on both transports, and the same bytes reach every subscribed BLE
-// client (ble_link::write()/notify() broadcast; see ble_link.h). Chatter (`#`),
+// client (jh_link::write()/notify() broadcast; see jh_link.h). Chatter (`#`),
 // hints, machine lines, and FILE dumps all pass through here. Nothing else in
 // this file should call Serial.print* directly. Only ever called from
-// loop()/setup() (never a NimBLE callback), so the BLE notify path has no
-// cross-task contention (see ble_link.h).
+// loop()/setup() (never a link-implementation callback), so the BLE notify
+// path has no cross-task contention (see jh_link.h).
 static void emitBytes(const char* data, size_t len) {
   Serial.write((const uint8_t*)data, len);
-  ble_link::write(data, len);
+  jh_link::write(data, len);
 }
 static void emit(const char* s)     { emitBytes(s, strlen(s)); }
 static void emitLine(const char* s) { emit(s); emitBytes("\n", 1); }  // like println
@@ -134,8 +132,8 @@ static void emitf(const char* fmt, ...) {                             // like pr
 // A newly-subscribed BLE client gets the banner + READY so it knows the link is
 // live. BLE-only on purpose (not through emit): it's a per-subscribe-event
 // greeting, and re-emitting READY onto USB could confuse a serial session
-// mid-command. Note for the two-central case: ble_link's notify() broadcasts
-// to every currently-subscribed connection (see ble_link.h), so if client A is
+// mid-command. Note for the two-central case: jh_link's notify() broadcasts
+// to every currently-subscribed connection (see jh_link.h), so if client A is
 // already live when client B subscribes, this second greet reaches BOTH — A
 // sees an extra "# JumpHeight..."/READY mid-stream. Both lines are designed to
 // be tolerated by a spec-compliant reader (`#` is chatter; docs/
@@ -143,23 +141,22 @@ static void emitf(const char* fmt, ...) {                             // like pr
 // this is treated as a harmless, acceptable side effect rather than a bug.
 static void bleGreet() {
   static const char banner[] = "# JumpHeight fw v" FW_VERSION "\n";
-  ble_link::write(banner, sizeof(banner) - 1);
-  ble_link::write("READY\n", 6);
+  jh_link::write(banner, sizeof(banner) - 1);
+  jh_link::write("READY\n", 6);
 }
 
-// ---------------- Runtime calibration (NVS) ----------------
-// `set airtime_offset_s 0.0153` persists in flash-backed NVS: it survives
-// reboot AND reflash, so calibration never requires a rebuild. That makes a
-// phone over BLE a complete calibration tool (and is the prerequisite for a
-// future potted, cable-less build). Compiled params.json values stay the
-// defaults; NVS overrides them when present.
-static Preferences cal_prefs;
+// ---------------- Runtime calibration (jh_persist) ----------------
+// `set airtime_offset_s 0.0153` persists via the jh_persist seam (ESP32:
+// flash-backed NVS): it survives reboot AND reflash, so calibration never
+// requires a rebuild. That makes a phone over BLE a complete calibration
+// tool (and is the prerequisite for a future potted, cable-less build).
+// Compiled params.json values stay the defaults; persisted values override
+// them when present.
 static bool cal_from_nvs = false;
 
 static void loadCalibration() {
-  const float off   = cal_prefs.getFloat("offset", JH_AIRTIME_OFFSET_S);
-  const float scale = cal_prefs.getFloat("scale",  JH_HEIGHT_SCALE);
-  cal_from_nvs = cal_prefs.isKey("offset") || cal_prefs.isKey("scale");
+  float off, scale;
+  cal_from_nvs = jh_persist::load(JH_AIRTIME_OFFSET_S, JH_HEIGHT_SCALE, off, scale);
   detector.set_calibration(off, scale);
   if (cal_from_nvs) {
     emitf("# calibration from device memory: airtime_offset_s=%.4f "
@@ -170,53 +167,33 @@ static void loadCalibration() {
 // ---------------- Storage ----------------
 static void flushTrace() {
   if (!fs_ok || trace_buf.length() == 0) return;
-  File f = LittleFS.open(TRACE_PATH, FILE_APPEND);
-  if (f) {
-    if (!trace_header) {
-      f.print("t,mag\n");
-      trace_header = true;
-      trace_bytes += 6;  // count the header too: STATS trace_bytes sizes the dump
-    }
-    f.print(trace_buf);
-    f.close();
-    // Account and enforce the cap here so every flush path (loop, idle
-    // transition, serial commands) counts — not just the loop's.
-    trace_bytes += trace_buf.length();
-    if (trace_bytes >= JH_TRACE_MAX_BYTES && !trace_full) {
-      trace_full = true;
-      emitLine("# trace log full — still counting jumps. `dump` then `clear` to reset.");
-    }
+  // jh_store accounts bytes and enforces the cap internally so every flush
+  // path (loop, idle transition, serial commands) counts — not just the
+  // loop's; it returns true exactly on the append that newly crosses the cap.
+  if (jh_store::trace_append(trace_buf.c_str(), trace_buf.length())) {
+    emitLine("# trace log full — still counting jumps. `dump` then `clear` to reset.");
   }
   trace_buf = "";
 }
 
 static void logJump(const jump::JumpEvent& ev) {
   if (!fs_ok) return;
-  File f = LittleFS.open(JUMPS_PATH, FILE_APPEND);
-  if (f) {
-    if (!jumps_header) { f.print("n,takeoff_s,airtime_raw_s,airtime_s,height_m\n"); jumps_header = true; }
-    f.printf("%lu,%.3f,%.3f,%.3f,%.3f\n", (unsigned long)stored_jumps,
-             ev.takeoff_time_s, ev.airtime_raw_s, ev.airtime_s, ev.height_m);
-    f.close();
-  }
+  jh_store::jumps_append(stored_jumps, ev.takeoff_time_s, ev.airtime_raw_s,
+                          ev.airtime_s, ev.height_m);
 }
 
-static void printFileFramed(const char* path, const char* name) {
+static void printFileFramed(jh_store::StoredFile which, const char* name) {
   emitf("FILE %s BEGIN\n", name);
-  if (fs_ok) {
-    File f = LittleFS.open(path, FILE_READ);
-    if (f) {
-      // Read in blocks (not byte-by-byte): far fewer BLE notifications, and the
-      // emit layer chunks each block to the MTU. Notify back-pressure/pacing is
-      // handled inside ble_link::write, so a long BLE dump self-throttles.
-      uint8_t block[240];
-      while (f.available()) {
-        size_t n = f.read(block, sizeof(block));
-        if (n == 0) break;
-        emitBytes((const char*)block, n);
-      }
-      f.close();
+  if (jh_store::open_read(which)) {
+    // Read in blocks (not byte-by-byte): far fewer BLE notifications, and the
+    // emit layer chunks each block to the MTU. Notify back-pressure/pacing is
+    // handled inside jh_link::write, so a long BLE dump self-throttles.
+    uint8_t block[240];
+    size_t n;
+    while ((n = jh_store::read_chunk(block, sizeof(block))) > 0) {
+      emitBytes((const char*)block, n);
     }
+    jh_store::close_read();
   }
   emitf("FILE %s END\n", name);
 }
@@ -225,20 +202,7 @@ static void scanStoredJumps() {
   stored_jumps = 0;
   stored_best  = 0.0f;
   if (!fs_ok) return;
-  File f = LittleFS.open(JUMPS_PATH, FILE_READ);
-  if (!f) return;
-  f.readStringUntil('\n');  // header
-  while (f.available()) {
-    String line = f.readStringUntil('\n');
-    line.trim();
-    if (line.length() == 0) continue;
-    int c = line.lastIndexOf(',');
-    if (c < 0) continue;
-    float h = line.substring(c + 1).toFloat();
-    stored_jumps++;
-    if (h > stored_best) stored_best = h;
-  }
-  f.close();
+  jh_store::jumps_scan(stored_jumps, stored_best);
 }
 
 // ---------------- Self-test ----------------
@@ -250,8 +214,8 @@ static bool runSelfTest() {
 
   // 1. Is anything answering on the I2C bus?
   uint8_t addr = 0;
-  if (Mpu6050Min::probe(Wire, Mpu6050Min::ADDR_PRIMARY))        addr = Mpu6050Min::ADDR_PRIMARY;
-  else if (Mpu6050Min::probe(Wire, Mpu6050Min::ADDR_SECONDARY)) addr = Mpu6050Min::ADDR_SECONDARY;
+  if (jh_imu::probe(jh_imu::ADDR_PRIMARY))        addr = jh_imu::ADDR_PRIMARY;
+  else if (jh_imu::probe(jh_imu::ADDR_SECONDARY)) addr = jh_imu::ADDR_SECONDARY;
 
   bool imu_up = false;
   if (addr == 0) {
@@ -262,14 +226,14 @@ static bool runSelfTest() {
     all_ok = false;
   } else {
     emitf("SELFTEST i2c PASS detail=0x%02X\n", addr);
-    imu_up = imu.begin(Wire, addr);
+    imu_up = jh_imu::begin(addr);
     if (!imu_up) {
       emitLine("SELFTEST config FAIL detail=write_error");
       emitLine("# hint: device answers but register writes fail — usually a flaky");
       emitLine("# hint: wire or bad solder joint. Re-check connections.");
       all_ok = false;
     } else {
-      const uint8_t who = imu.whoAmI();
+      const uint8_t who = jh_imu::who_am_i();
       if (who == 0x68) {
         emitf("SELFTEST whoami PASS detail=0x%02X\n", who);
       } else {
@@ -288,7 +252,7 @@ static bool runSelfTest() {
     const int N = 100;
     for (int i = 0; i < N; ++i) {
       float ax, ay, az;
-      if (imu.readAccelG(ax, ay, az)) {
+      if (jh_imu::read_accel_g(ax, ay, az)) {
         float m = sqrtf(ax * ax + ay * ay + az * az);
         sum += m; sumsq += m * m; good++;
       }
@@ -361,8 +325,7 @@ static bool runSelfTest() {
 
   // 4. Storage.
   if (fs_ok) {
-    emitf("SELFTEST flash PASS detail=%uB_free\n",
-          (unsigned)(LittleFS.totalBytes() - LittleFS.usedBytes()));
+    emitf("SELFTEST flash PASS detail=%uB_free\n", (unsigned)jh_store::free_bytes());
   } else {
     emitLine("SELFTEST flash FAIL detail=mount_failed");
     emitLine("# hint: flash storage didn't mount; jumps will print live but won't be");
@@ -384,7 +347,7 @@ static void printHelp() {
 }
 
 // Handles one command line from EITHER transport (serial pollSerial() or BLE
-// ble_link::poll()). Both run on the loop() task, one at a time, so a command is
+// jh_link::poll()). Both run on the loop() task, one at a time, so a command is
 // processed exactly once; its output goes to both transports via the emit layer.
 static void handleCommand(const String& cmd) {
   if (cmd == "help") {
@@ -394,28 +357,24 @@ static void handleCommand(const String& cmd) {
     flushTrace();  // so trace_bytes matches what a `dump` would actually deliver
     emitf("STATS session_jumps=%lu session_best_m=%.3f stored_jumps=%lu stored_best_m=%.3f trace_bytes=%lu\n",
           (unsigned long)session_jumps, session_best,
-          (unsigned long)stored_jumps, stored_best, (unsigned long)trace_bytes);
+          (unsigned long)stored_jumps, stored_best, (unsigned long)jh_store::trace_bytes());
     emitLine("OK stats");
   } else if (cmd == "jumps") {
     flushTrace();
-    printFileFramed(JUMPS_PATH, "jumps.csv");
+    printFileFramed(jh_store::StoredFile::JUMPS, "jumps.csv");
     emitLine("OK jumps");
   } else if (cmd == "trace") {
     flushTrace();
-    printFileFramed(TRACE_PATH, "trace.csv");
+    printFileFramed(jh_store::StoredFile::TRACE, "trace.csv");
     emitLine("OK trace");
   } else if (cmd == "dump") {
     flushTrace();
-    printFileFramed(JUMPS_PATH, "jumps.csv");
-    printFileFramed(TRACE_PATH, "trace.csv");
+    printFileFramed(jh_store::StoredFile::JUMPS, "jumps.csv");
+    printFileFramed(jh_store::StoredFile::TRACE, "trace.csv");
     emitLine("OK dump");
   } else if (cmd == "clear") {
-    if (fs_ok) {
-      LittleFS.remove(TRACE_PATH);
-      LittleFS.remove(JUMPS_PATH);
-    }
-    trace_buf = ""; trace_bytes = 0; trace_full = false;
-    trace_header = false; jumps_header = false;
+    jh_store::clear();  // internally gated on fs_ok; resets byte count/cap/headers
+    trace_buf = "";
     stored_jumps = 0; stored_best = 0.0f;
     emitLine("# cleared stored data");
     emitLine("OK clear");
@@ -434,7 +393,7 @@ static void handleCommand(const String& cmd) {
     if (!is_off && !is_scale) {
       emitLine("ERR set_unknown_key (airtime_offset_s | height_scale)");
     } else if (val == "default") {
-      cal_prefs.remove(is_off ? "offset" : "scale");
+      jh_persist::clear(is_off);
       loadCalibration();
       emitLine("# reverted to the compiled default");
       emitLine("OK set");
@@ -445,7 +404,7 @@ static void handleCommand(const String& cmd) {
       if (!sane) {
         emitf("ERR set_out_of_range %s=%s\n", key.c_str(), val.c_str());
       } else {
-        cal_prefs.putFloat(is_off ? "offset" : "scale", f);
+        jh_persist::save(is_off, f);
         loadCalibration();
         emitLine("# saved to device memory — survives reboot and reflash");
         emitLine("OK set");
@@ -491,38 +450,20 @@ void setup() {
   delay(300);
   emitLine("# JumpHeight fw v" FW_VERSION);  // serial-only here: BLE isn't up yet
 
-  Wire.begin(JH_I2C_SDA, JH_I2C_SCL);
-  Wire.setClock(400000);
+  jh_imu::init();
 
-  // Mount the data partition. Our table (partitions.csv) names it "littlefs",
-  // not the ESP32 default "spiffs", so the label must be passed explicitly or
-  // the mount silently fails. Other args are the library defaults.
-  // First boot ever formats the 2.4 MB partition — tens of seconds of silence
-  // that reads as a hang unless announced (a real builder sat through it):
-  // try the plain mount first, and only format (with a heads-up) if it fails.
-  fs_ok = LittleFS.begin(false, "/littlefs", 10, "littlefs");
-  if (!fs_ok) {
-    emitLine("# first boot: formatting storage — takes up to a minute, hang tight...");
-    fs_ok = LittleFS.begin(true, "/littlefs", 10, "littlefs");  // format + mount
-    emitLine(fs_ok ? "# storage ready" : "# storage format failed");
-  }
-  if (fs_ok) {
-    File f = LittleFS.open(TRACE_PATH, FILE_READ);
-    if (f) {
-      trace_bytes  = f.size();
-      trace_header = trace_bytes > 0;
-      if (trace_bytes >= JH_TRACE_MAX_BYTES) trace_full = true;
-      f.close();
-    }
-    File jf = LittleFS.open(JUMPS_PATH, FILE_READ);
-    if (jf) { jumps_header = jf.size() > 0; jf.close(); }
-  }
+  // Mount storage. jh_store handles format-on-fail internally and resumes any
+  // existing trace.csv/jumps.csv state (byte count, header-written flags, cap
+  // status); `emitLine` is passed through as the announce callback so the
+  // "first boot: formatting..." progress line still lands BEFORE the possible
+  // up-to-a-minute hang, exactly as before.
+  fs_ok = jh_store::init(emitLine);
 
   // Bring BLE up before the self-test so the `ble` row reflects the real result.
   // A failure is non-fatal: everything below (and jump detection) runs regardless.
-  ble_ok = ble_link::begin("JumpHeight");
+  ble_ok = jh_link::begin("JumpHeight");
 
-  cal_prefs.begin("jumpcal", false);
+  jh_persist::init();
   loadCalibration();
   runSelfTest();
   scanStoredJumps();
@@ -537,20 +478,20 @@ void setup() {
   emitLine("READY");
 
   trace_buf.reserve(2048);
-  t0_us         = esp_timer_get_time();
+  t0_us         = jh_clock::micros64();
   last_flush_ms = millis();
 }
 
 // ---------------- Loop ----------------
 void loop() {
   pollSerial();
-  ble_link::poll(handleCommand);  // BLE commands run through the same path as serial
-  ble_link::pump();               // send at most one paced BLE chunk — never blocks
-  if (ble_link::takeGreetPending()) bleGreet();  // greet a client that just subscribed
+  jh_link::poll(handleCommand);  // BLE commands run through the same path as serial
+  jh_link::pump();               // send at most one paced BLE chunk — never blocks
+  if (jh_link::takeGreetPending()) bleGreet();  // greet a client that just subscribed
   if (!sensor_ok) { delay(10); return; }  // command loop still runs; sampling paused
 
-  static int64_t next_us = esp_timer_get_time();
-  const int64_t  now_us  = esp_timer_get_time();
+  static int64_t next_us = jh_clock::micros64();
+  const int64_t  now_us  = jh_clock::micros64();
   if (now_us < next_us) return;  // pace to SAMPLE_HZ
   next_us += SAMPLE_INTERVAL_US;
   // After a long stall (e.g. a 100 s serial dump) don't "catch up" with a
@@ -558,7 +499,7 @@ void loop() {
   if (now_us - next_us > 20 * (int64_t)SAMPLE_INTERVAL_US) next_us = now_us;
 
   float ax, ay, az;
-  if (!imu.readAccelG(ax, ay, az)) return;  // transient I2C hiccup: skip sample
+  if (!jh_imu::read_accel_g(ax, ay, az)) return;  // transient I2C hiccup: skip sample
   const float t   = (now_us - t0_us) * 1e-6f;
   // Orientation-independent, normalized to this unit's own measured gravity.
   const float mag = sqrtf(ax * ax + ay * ay + az * az) / g_baseline;
@@ -599,7 +540,7 @@ void loop() {
   }
 
   // --- decimated trace logging, buffered; flushed ~once/second ---
-  if (fs_ok && !trace_full && ++decimate_ctr >= LOG_DECIMATE) {
+  if (fs_ok && !jh_store::trace_is_full() && ++decimate_ctr >= LOG_DECIMATE) {
     decimate_ctr = 0;
     trace_buf += String(t, 3);
     trace_buf += ',';
