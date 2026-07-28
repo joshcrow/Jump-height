@@ -71,6 +71,7 @@ void jumps_scan(uint32_t& count, float& best_m);
 // true exactly on the append that newly crosses the cap (main.cpp narrates
 // that transition once).
 bool trace_append(const char* data, size_t len);
+// Bytes a trace dump will stream (equals stored bytes on platforms that store CSV).
 uint32_t trace_bytes();
 bool trace_is_full();
 

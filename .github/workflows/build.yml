@@ -1,6 +1,10 @@
 # Builds the firmware and publishes the web app (with flasher binaries) to
 # GitHub Pages — this is what makes the zero-install story real: anyone can
 # open the Pages URL, click Install, and flash a board from the browser.
+# Also builds the Sense (nRF52) target and publishes a drag-and-drop `.uf2`
+# next to the ESP32 binaries (docs/sense.md §3.3/§3.9) — that board has no
+# ESP Web Tools-style browser flasher, so the .uf2 + the bootloader's own
+# double-tap-reset "XIAO-SENSE" USB drive is the whole flashing story for it.
 #
 # One-time repo setup for the Pages half: Settings → Pages → Source: "GitHub
 # Actions". Until then, the pages job fails harmlessly and the firmware
@@ -44,6 +48,11 @@ jobs:
           pip install platformio
           pio run -d firmware -e firebeetle32
 
+      - name: Build firmware (Sense / nRF52)
+        # A separate step (not folded into the one above) so a failure here
+        # is unambiguous in the Actions log about which target broke.
+        run: pio run -d firmware -e xiaoblesense_adafruit
+
       - name: Stage web app + flasher binaries
         run: |
           mkdir -p web/firmware
@@ -52,6 +61,18 @@ jobs:
           cp firmware/.pio/build/firebeetle32/firmware.bin   web/firmware/
           # No boot_app0.bin: the partition map is factory-only (no OTA), so the
           # manifest doesn't flash an OTA selector — same bytes as a USB flash.
+          ls -la web/firmware/
+
+      - name: Convert Sense firmware to .uf2
+        # tools/uf2conv.py is vendored from github.com/microsoft/uf2 (MIT —
+        # see that file's own header); 0xADA52840 is the nRF52840 family id,
+        # passed as a raw hex literal since we don't vendor the companion
+        # uf2families.json name table (see uf2conv.py's own comment on why).
+        run: |
+          FW_VERSION=$(grep -oP '(?<=#define FW_VERSION ")[^"]+' firmware/src/main.cpp)
+          python3 tools/uf2conv.py \
+            firmware/.pio/build/xiaoblesense_adafruit/firmware.hex \
+            -f 0xADA52840 -c -o "web/firmware/jumpheight-sense-${FW_VERSION}.uf2"
           ls -la web/firmware/
 
       - name: Upload firmware binaries (artifact)

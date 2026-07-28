@@ -1,0 +1,391 @@
+// jh_link.cpp — nRF52 (Seeed XIAO nRF52840 Sense) implementation of the
+// jh_link seam (firmware/include/platform/jh_link.h). See docs/sense.md
+// §3.1/§3.9 and this platform's binding handoff notes.
+//
+// Bluefruit (Adafruit's nRF52 BLE stack) + BLEUart — which the framework's
+// own package name states outright IS the Nordic UART Service (same UUIDs
+// as the ESP32's NimBLE implementation), so Bluefy/the web app/Garmin
+// connect unchanged. This file's threading-model reasoning was RE-DERIVED
+// against Bluefruit's real source (not assumed to port from the ESP32/
+// NimBLE version) by reading the INSTALLED framework package —
+// ~/.platformio/packages/framework-arduinoadafruitnrf52-seeed/libraries/
+// Bluefruit52Lib/ — which a byte-diff against the upstream
+// github.com/adafruit/Adafruit_nRF52_Arduino confirmed is an unmodified
+// mirror of BLEUart.cpp/.h (the two files this seam's semantics rest on
+// most) and only trivially different elsewhere (an unrelated indicate()
+// feature, LED-timer bookkeeping). Every claim below cites a file + line in
+// that installed copy.
+//
+// ===========================================================================
+// THE CARDINAL RULE (jh_link.h): write()/pump() must never block sampling.
+// What Bluefruit's own primitives actually do, established by reading them:
+//
+// 1. BLEUart::write(conn_hdl, data, len) — services/BLEUart.cpp:238-278.
+//    Constructed with `_tx_buffered = false` by default (BLEUart.cpp:75;
+//    nothing here ever calls bufferTXD(true) — see point 2) — so it
+//    forwards STRAIGHT to `_txd.notify(conn_hdl, content, len)`
+//    (BLEUart.cpp:254), synchronously, on whatever task calls it.
+//
+// 2. Why we do NOT use BLEUart's own opt-in TX buffering (bufferTXD(true)):
+//    its `_tx_fifo` is ONE fifo shared by the WHOLE BLEUart instance
+//    (BLEUart.h:107-108), and write(content,len) without an explicit
+//    conn_hdl always targets `Bluefruit.connHandle()` — i.e. whichever
+//    connection is "current" (BLEUart.cpp:230,240) — not a broadcast to
+//    every subscriber. With two independently-subscribed centrals (watch +
+//    phone, docs/garmin-datafield.md §7) that's wrong by construction: the
+//    same bytes need to reach BOTH, at each one's OWN MTU. The doc comment
+//    at BLEUart.cpp:259 references "the TXD timer handler" sending buffered
+//    data later, but no such timer exists anywhere in this library (grepped
+//    the whole Bluefruit52Lib tree) — so relying on it would risk data
+//    silently never flushing. We therefore re-implement the byte-queue +
+//    paced pump pattern from the ESP32 side (below), adapted to fan a
+//    single dequeued chunk out to every subscribed connection ourselves.
+//
+// 3. Does notify() block? BLECharacteristic::notify() — BLECharacteristic.cpp
+//    :707-760 — chunks by THAT connection's own MTU (line 722) and, per
+//    chunk, calls `conn->getHvnPacket()` (line 728) before the SoftDevice
+//    call `sd_ble_gatts_hvx()` (line 742). getHvnPacket() —
+//    BLEConnection.cpp:232-234 — is
+//        `xSemaphoreTake(_hvn_sem, ms2tick(BLE_GENERIC_TIMEOUT))`
+//    i.e. a REAL FreeRTOS blocking wait, bounded at
+//    `BLE_GENERIC_TIMEOUT = 100` (bluefruit_common.h:47) milliseconds. The
+//    semaphore is a counting one sized `hvn_qsize`, which defaults to
+//    `BLE_GATTS_HVN_TX_QUEUE_SIZE_DEFAULT = 1`
+//    (.../nordic/softdevice/s140_nrf52_7.3.0_API/include/ble_gatts.h:198) —
+//    only ONE notification may be in flight per connection at a time — and
+//    is only replenished when the SoftDevice reports the previous one
+//    actually left the radio, `BLE_GATTS_EVT_HVN_TX_COMPLETE`
+//    (BLEConnection.cpp:418-419). So: **yes, this can genuinely block, up
+//    to 100 ms, per connection, per call** — a materially different
+//    (worse, but honestly disclosed rather than assumed-safe) semantic than
+//    NimBLE's void-returning notify() on the ESP32 side. Under healthy link
+//    conditions the single HVN credit frees up well within a connection
+//    interval (typically single-digit-to-tens of ms), so in practice this
+//    should read as "occasionally a few ms of blocking", not "regularly
+//    100 ms" — but a stalled/out-of-range central makes the worst case
+//    real. VERIFY on the bench (firmware/SENSE_FIRST_BOOT.md): confirm the
+//    recorded trace has no multi-sample gaps during a `dump` with two
+//    centrals connected.
+//
+// 4. Given (3), we keep the EXACT SAME architecture the ESP32 side uses and
+//    for the same reason: write() only ever queues bytes into a small ring
+//    buffer; pump() (called once per loop() pass) sends AT MOST one paced
+//    chunk, fanned out to every subscribed connection, so any blocking is
+//    confined to pump()'s own call — never to write()'s caller (main.cpp's
+//    emit layer, called inline from loop()/setup()). The one sanctioned
+//    exception is the same as the ESP32's: a bulk FILE dump drains the
+//    queue inline (paced) from inside handleCommand(), where sampling is
+//    already paused.
+//
+// 5. No broadcast primitive exists here (unlike NimBLECharacteristic::
+//    notify(), which loops its own subscriber list in one call — see the
+//    ESP32 jh_link.cpp) — Bluefruit's notify()/write() always target ONE
+//    conn_hdl. So sendOneChunk() below loops over
+//    Bluefruit.getConnectedHandles() (bluefruit.h:167) itself, checking
+//    bleuart.notifyEnabled(hdl) (services/BLEUart.h:64) per connection, and
+//    calls bleuart.write(hdl, ...) once per subscriber — chunked to the
+//    SMALLEST currently-subscribed connection's own MTU
+//    (BLEConnection::getMtu(), BLEConnection.h:83, queried fresh each time —
+//    no cached-callback MTU tracking needed, unlike the ESP32/NimBLE side,
+//    because Bluefruit exposes it as a plain synchronous accessor).
+//
+// ===========================================================================
+// RX path — genuinely simpler than the ESP32/NimBLE version, and why:
+// BLEUart's own `_rx_fifo` (an Adafruit_FIFO) is ALREADY safe for the
+// producer (the BLE stack's callback, see below) and consumer (our
+// poll(), called from loop()) to be different tasks: Adafruit_FIFO guards
+// every read()/write() with its own FreeRTOS mutex
+// (cores/nRF5/utility/adafruit_fifo.h:53-57 — `_mutex_lock`/`_mutex_unlock`
+// via `xSemaphoreTake(_mutex, portMAX_DELAY)`/`xSemaphoreGive`, a short,
+// bounded hold — copying a few bytes — never a stall risk). BLEUart::begin()
+// wires the producer side itself (services/BLEUart.cpp:174-175:
+// `_rxd.setWriteCallback(BLEUart::bleuart_rxd_cb, true)`), so poll() below
+// just calls bleuart.available()/read() directly — no custom ring buffer,
+// no critical section, unlike jh_link.h's ESP32 sibling.
+//
+// Two centrals share this ONE rx_fifo and ONE line-assembly buffer below —
+// by the SAME design and for the SAME reason the ESP32 implementation
+// documents: both speak the identical protocol through the identical
+// dispatcher, and two clients writing multi-fragment commands in the same
+// instant could in principle interleave bytes. Accepted, narrow-window
+// risk, not something this port attempts to fix (see jh_link.h's ESP32
+// citation for the full reasoning — it applies here verbatim).
+//
+// ===========================================================================
+// Subscribe (CCCD write) callback threading: BLEUart::setNotifyCallback()
+// registers with `useAdaCallback=true` by default (services/BLEUart.h:68,
+// wired at services/BLEUart.cpp:129), meaning it is NOT called directly
+// from the BLE stack's own event context — it's deferred onto a SEPARATE
+// FreeRTOS task (BLECharacteristic.cpp:556-557's `ada_callback(...)` call;
+// the task itself is `adafruit_callback_task` in
+// cores/nRF5/utility/AdaCallback.c). So — like the ESP32's NimBLE host
+// task — our onNotify() callback runs on neither loop() nor an ISR, and
+// the greet-pending flag it sets needs to be handed off safely to
+// takeGreetPending() (called from loop()). Single core here (unlike the
+// ESP32's two), so a short `taskENTER_CRITICAL()/taskEXIT_CRITICAL()`
+// (FreeRTOS's own critical section, just interrupt masking on this target —
+// pulled in transitively via Arduino.h -> rtos.h) is the right-sized
+// primitive, playing the same role the ESP32 side's portMUX spinlock does.
+//
+// ===========================================================================
+// Advertising auto-restart while a slot remains — RE-DERIVED, not assumed:
+// BLEAdvertising::_eventHandler()'s BLE_GAP_EVT_CONNECTED case
+// (BLEAdvertising.cpp:406-417) never restarts advertising on its own. Its
+// BLE_GAP_EVT_DISCONNECTED case (BLEAdvertising.cpp:419-426) only restarts
+// when `Bluefruit.Periph.connected() == 0` — i.e. built-in
+// restartOnDisconnect(true) (the default, BLEAdvertising.cpp:255) handles
+// "everybody left", never "one of two left, one remains". Confirmed by a
+// SECOND, independent source: Adafruit's own official multi-peripheral
+// example (examples/Peripheral/bleuart_multi/bleuart_multi.ino) has its
+// connect_callback() explicitly call `Bluefruit.Advertising.start(0)` when
+// `connection_count < MAX_PRPH_CONNECTION` (lines ~144-148) — proving the
+// library itself doesn't do this — while its disconnect_callback() (lines
+// ~156-165) does NOT restart advertising at all, meaning even Adafruit's
+// own canonical two-peripheral example has exactly the gap this port needs
+// to close for real (a rider's watch staying connected while a beach
+// phone's earlier connection drops must not leave the puck deaf to a new
+// phone). Our onConnect()/onDisconnect() below both explicitly call
+// `Bluefruit.Advertising.start(0)` whenever `Bluefruit.Periph.connected() <
+// 2`, matching the ESP32 NimBLE side's own "stay discoverable" pattern.
+//
+// SPDX-License-Identifier: MIT
+
+#include "platform/jh_link.h"
+
+#include <Arduino.h>
+#include <bluefruit.h>
+
+namespace jh_link {
+
+namespace {
+
+BLEUart s_bleuart;
+
+const uint8_t kMaxPrphConnections = 2;
+
+volatile bool s_greet_pending = false;  // set on the AdaCallback task, taken
+                                        // on loop() — see file comment.
+
+// ---------------------------------------------------- RX line assembly
+// loop()-task only (poll() is only ever called from loop() — see
+// jh_link.h), so no locking needed here, unlike the shared rx_fifo above.
+String s_line;
+
+void onConnect(uint16_t conn_hdl) {
+  (void)conn_hdl;
+  if (Bluefruit.Periph.connected() < kMaxPrphConnections) {
+    Bluefruit.Advertising.start(0);  // keep the 2nd slot discoverable — see
+                                     // the file comment's advertising section
+  }
+}
+
+void onDisconnect(uint16_t conn_hdl, uint8_t reason) {
+  (void)conn_hdl;
+  (void)reason;
+  // Unconditionally re-arm advertising whenever a slot is free — covers
+  // BOTH "everybody left" (which the library's own restartOnDisconnect
+  // would also catch) AND "one of two left, one remains" (which it does
+  // NOT — see the file comment). Harmless/idempotent if advertising is
+  // already running.
+  if (Bluefruit.Periph.connected() < kMaxPrphConnections) {
+    Bluefruit.Advertising.start(0);
+  }
+}
+
+void onNotify(uint16_t conn_hdl, bool enabled) {
+  (void)conn_hdl;
+  if (!enabled) return;
+  taskENTER_CRITICAL();
+  s_greet_pending = true;
+  taskEXIT_CRITICAL();
+}
+
+// ------------------------------------------------------------- TX queue
+// loop()-task only (write()/pump() are only ever called from loop()/setup()
+// — see jh_link.h) — the SoftDevice/AdaCallback tasks never touch this
+// queue, so (unlike the RX side) no locking is needed here either.
+const size_t TX_CAP = 1024;
+uint8_t  s_txq[TX_CAP];
+size_t   s_txq_head = 0, s_txq_tail = 0;
+uint32_t s_last_chunk_us = 0;
+// Paced send interval. hvn_qsize defaults to 1 (see file comment) — only
+// one notification per connection may be in flight at a time — so pacing
+// slower than a typical negotiated BLE connection interval (commonly
+// low-tens of ms) gives the previous chunk a realistic chance to have
+// already been ACKed by the time we send the next one, keeping the
+// getHvnPacket() wait in the OFTEN-EMPTY case rather than the 100 ms worst
+// case. VERIFY the actual connection interval Bluefy/Garmin negotiate and
+// retune if the bench trace shows sample gaps (SENSE_FIRST_BOOT.md).
+const uint32_t CHUNK_GAP_US = 15000;
+
+size_t txqSize() { return (s_txq_head + TX_CAP - s_txq_tail) % TX_CAP; }
+
+// Currently connected AND subscribed handles (at most kMaxPrphConnections).
+uint8_t subscribedHandles(uint16_t* out) {
+  uint16_t conn_hdls[kMaxPrphConnections];
+  const uint8_t n = Bluefruit.getConnectedHandles(conn_hdls, kMaxPrphConnections);
+  uint8_t found = 0;
+  for (uint8_t i = 0; i < n; ++i) {
+    if (s_bleuart.notifyEnabled(conn_hdls[i])) out[found++] = conn_hdls[i];
+  }
+  return found;
+}
+
+void sendOneChunk() {
+  const size_t avail = txqSize();
+  if (avail == 0) return;
+
+  uint16_t subs[kMaxPrphConnections];
+  const uint8_t n_subs = subscribedHandles(subs);
+  if (n_subs == 0) { s_txq_tail = s_txq_head; return; }  // no listener: drop pending
+
+  // Chunk to the SMALLEST subscribed connection's own MTU (queried fresh —
+  // see file comment on why no cached MTU-change callback is needed here).
+  uint16_t min_mtu = 0xFFFF;
+  for (uint8_t i = 0; i < n_subs; ++i) {
+    BLEConnection* c = Bluefruit.Connection(subs[i]);
+    const uint16_t mtu = c ? c->getMtu() : 23;
+    if (mtu < min_mtu) min_mtu = mtu;
+  }
+  const size_t payload = (min_mtu > 3) ? (size_t)(min_mtu - 3) : 20;
+
+  uint8_t buf[244];
+  size_t n = (avail < payload) ? avail : payload;
+  if (n > sizeof(buf)) n = sizeof(buf);
+  for (size_t i = 0; i < n; ++i) buf[i] = s_txq[(s_txq_tail + i) % TX_CAP];
+
+  for (uint8_t i = 0; i < n_subs; ++i) s_bleuart.write(subs[i], buf, n);
+
+  s_txq_tail = (s_txq_tail + n) % TX_CAP;
+  s_last_chunk_us = micros();
+}
+
+// ------------------------------------------------------------- watchdog
+// nRF52840 WDT — direct register setup (design decision: no HAL wrapper
+// needed for 4 registers). Register names/offsets and the reload magic
+// value confirmed against the installed core's own Nordic device header
+// (not just remembered): ~/.platformio/packages/
+// framework-arduinoadafruitnrf52-seeed/cores/nRF5/nordic/nrfx/mdk/
+// nrf52840.h:2046-2062 (NRF_WDT_Type: TASKS_START @0x000, CRV @0x504,
+// RREN @0x508, CONFIG @0x50C, RR[8] @0x600) and
+// nrf52840_bitfields.h:17402 (`WDT_RR_RR_Reload = 0x6E524635`). These
+// match the nRF52840 Product Specification's own WDT chapter register map
+// (peripheral base 0x40010000, NRF_WDT_BASE above) — VERIFY the watchdog
+// actually resets the board on a deliberately-hung build, and that
+// reloading from pump() (a per-loop()-pass call, i.e. far more often than
+// needed) never itself gets starved by something else blocking loop()
+// (firmware/SENSE_FIRST_BOOT.md).
+void wdtInit() {
+  NRF_WDT->CONFIG = (1 << 0);  // bit0 SLEEP=Run (keep counting through CPU
+                               // sleep — this port doesn't yet use System
+                               // OFF sleep, docs/sense.md §3.5 is a later
+                               // milestone, so this is a forward-looking,
+                               // safe default); bit3 HALT=Pause (default 0:
+                               // don't fire while a debugger has the core
+                               // halted).
+  NRF_WDT->CRV   = (3500UL * 32768UL) / 1000UL - 1;  // ~3.5 s (32.768 kHz
+                                                     // LFCLK-driven counter)
+  NRF_WDT->RREN  = (1 << 0);   // enable reload channel RR[0]
+  NRF_WDT->TASKS_START = 1;
+}
+
+void wdtFeed() {
+  NRF_WDT->RR[0] = WDT_RR_RR_Reload;
+}
+
+}  // namespace
+
+bool begin(const char* name) {
+  wdtInit();  // see the file comment: begin()/pump() are the only two
+             // main.cpp call sites available to hook this from, since
+             // main.cpp itself is unchanged.
+
+  // Raise the MTU ceiling above the SoftDevice's own default of 23
+  // (bluefruit.cpp:161's `_sd_cfg.prph.mtu_max = BLE_GATT_ATT_MTU_DEFAULT`)
+  // before begin() — each client still negotiates its own real value
+  // (queried fresh per send — see sendOneChunk()), same intent as the
+  // ESP32 side's NimBLEDevice::setMTU(247).
+  Bluefruit.configPrphConn(247, BLE_GAP_EVENT_LENGTH_MIN,
+                          BLE_GATTS_HVN_TX_QUEUE_SIZE_DEFAULT,
+                          BLE_GATTC_WRITE_CMD_TX_QUEUE_SIZE_DEFAULT);
+
+  if (!Bluefruit.begin(kMaxPrphConnections, 0)) return false;
+  Bluefruit.setName(name);
+  Bluefruit.Periph.setConnectCallback(onConnect);
+  Bluefruit.Periph.setDisconnectCallback(onDisconnect);
+
+  if (s_bleuart.begin() != ERROR_NONE) return false;
+  s_bleuart.setNotifyCallback(onNotify);
+
+  Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE);
+  Bluefruit.Advertising.addTxPower();
+  Bluefruit.Advertising.addService(s_bleuart);  // 128-bit NUS UUID in the
+                                                // primary advertising packet
+                                                // (docs/sense.md §3.1)
+  Bluefruit.ScanResponse.addName();             // name in the scan response —
+                                                // no room left in the primary
+                                                // packet once the 128-bit
+                                                // service UUID is in it
+                                                // (same reasoning Adafruit's
+                                                // own bleuart_multi.ino uses)
+  Bluefruit.Advertising.restartOnDisconnect(true);  // default already true;
+                                                    // explicit for clarity —
+                                                    // see the file comment
+                                                    // for why we ALSO handle
+                                                    // restart ourselves
+  Bluefruit.Advertising.setInterval(32, 244);   // fast 20 ms / slow 152.5 ms
+  Bluefruit.Advertising.setFastTimeout(30);
+  return Bluefruit.Advertising.start(0);        // 0 = advertise forever
+}
+
+bool takeGreetPending() {
+  bool g = false;
+  taskENTER_CRITICAL();
+  if (s_greet_pending) { s_greet_pending = false; g = true; }
+  taskEXIT_CRITICAL();
+  return g;
+}
+
+void pump() {
+  wdtFeed();  // see wdtInit()'s comment: fed every loop() pass, i.e. far
+             // more often than the ~3.5 s timeout, so this only matters if
+             // something else actually hangs loop() itself.
+  if (txqSize() > 0 && (uint32_t)(micros() - s_last_chunk_us) >= CHUNK_GAP_US) {
+    sendOneChunk();
+  }
+}
+
+void write(const char* data, size_t len) {
+  uint16_t subs[kMaxPrphConnections];
+  if (subscribedHandles(subs) == 0) return;  // no-op if nobody is subscribed
+  for (size_t i = 0; i < len; ++i) {
+    size_t next = (s_txq_head + 1) % TX_CAP;
+    while (next == s_txq_tail) {
+      // Queue full: bulk output (a FILE dump) from inside handleCommand —
+      // sampling is paused there anyway, so drain inline, paced — the ONE
+      // sanctioned exception to "write() only ever queues" (jh_link.h).
+      while ((uint32_t)(micros() - s_last_chunk_us) < CHUNK_GAP_US) delay(1);
+      sendOneChunk();
+    }
+    s_txq[s_txq_head] = data[i];
+    s_txq_head = next;
+  }
+}
+
+void poll(void (*handle)(const String&)) {
+  // Reads straight from BLEUart's own (already thread-safe — see file
+  // comment) rx_fifo; both connected centrals share this ONE line-assembly
+  // buffer, mirroring the ESP32 side's own accepted trade-off exactly.
+  while (s_bleuart.available()) {
+    const char c = (char)s_bleuart.read();
+    if (c == '\n' || c == '\r') {
+      s_line.trim();
+      if (s_line.length() > 0) handle(s_line);
+      s_line = "";
+    } else if (s_line.length() < 64) {
+      s_line += c;
+    }
+  }
+}
+
+}  // namespace jh_link
