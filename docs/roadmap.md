@@ -201,6 +201,9 @@ decision (§8 there). Precedent: Surfr ships a Garmin companion.
       System OFF sleep, metrics-layering architecture feeding the
       Garmin field). The FireBeetle stays the water-day rig until the
       Sense passes the same bench → bucket → water gauntlet.
+      *Build-ahead (2026-07-28): done — 0.4.3 platform seams + the full
+      nRF52 layer compile for the Sense; CI publishes the `.uf2`; bench
+      unknowns numbered in firmware/SENSE_FIRST_BOOT.md.*
       Middle option if the WiFi decision ever revives: XIAO ESP32-C6
       (same thumbnail size, WiFi 6 + BLE, better efficiency than classic
       ESP32) — but NO onboard IMU (external sensor + wiring stays), and

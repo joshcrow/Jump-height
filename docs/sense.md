@@ -5,6 +5,16 @@ arriving within days. Written before first power-on: this is the honest
 list of what the plan had NOT covered, plus the bring-up sequence. Items
 marked **VERIFY** get answered on the bench and this doc gets edited.
 
+> **Build-ahead status (2026-07-28, same day):** the pre-arrival software
+> is DONE — firmware 0.4.3 split the core behind platform seams (§3.9),
+> and the complete nRF52 layer now compiles clean (Bluefruit link with
+> library-source citations, LSM6DS3 driver, raw QSPI store with binary
+> trace v2 + codec parity tests, watchdog); CI publishes a drag-and-drop
+> `.uf2`. Every runtime assumption that only hardware can prove is
+> numbered in **[../firmware/SENSE_FIRST_BOOT.md](../firmware/SENSE_FIRST_BOOT.md)**
+> (19 items). Day one = flash + work down that list, i.e. milestone S0
+> and most of S1 have prebuilt answers waiting.
+
 **Product statement.** The Sense puck is a **tiny Garmin data-field
 adder**: it rides the board, measures, and feeds the watch live — phone
 (Bluefy) as the second screen — with new data points (time on foil,
