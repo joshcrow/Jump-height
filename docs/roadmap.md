@@ -75,6 +75,9 @@ physical board.)*
 > covers bulk speed, the watch + Garmin Connect FIT fields cover live +
 > auto-archive, and BLE is already OTA's primary doorway. Re-decide after
 > the Garmin field ships; the scope below is kept, not being built now.
+> *(2026-07-28: the owner went all-in on the Sense — see
+> [sense.md](sense.md) — which has no WiFi at all; this phase now applies
+> only if the ESP32 era extends.)*
 
 WiFi is the answer to BLE's two weaknesses — bulk-transfer speed (seconds vs
 minutes for a full trace) and iPhones (no Web Bluetooth on iOS, but every phone
@@ -109,7 +112,10 @@ exists. Ships together with 3.5 as one partition epoch (one-time storage
 reformat; calibration in NVS survives) — and the same epoch moves trace
 storage to a binary format (ota.md §4.5), so recording capacity RISES
 from ~45 min to ~3.5 h of moving time even with half the partition.
-Build after water validation.
+Build after water validation. *(2026-07-28: the esp_ota/partition parts
+are ESP32-specific and are superseded on the v2 board by Nordic DFU —
+[sense.md](sense.md) §3.3; §4.5's binary trace format transfers and is
+launch-blocking there.)*
 
 ## Backlog study — what else the same hardware can measure *(thought through 2026-07)*
 
@@ -186,16 +192,19 @@ decision (§8 there). Precedent: Surfr ships a Garmin companion.
       Sense with µA sleep for the solar/potted dream). Trade: tiny
       built-in batteries vs our 2500 mAh. The detector doesn't care —
       new board = one small driver file, same wizard.
-      **North star (owner, 2026-07): smallest + most efficient.** Leading
-      candidate: nRF52840-class (XIAO nRF52840 Sense — onboard 6-axis IMU,
-      2 MB flash ≈ 5 h binary trace, ~5-10 mA recording vs ESP32's ~50,
-      µA idle, UF2 drag-drop first flash, mature Nordic DFU for OTA, and
-      NUS is literally its native protocol — web app + Garmin field port
-      unchanged). WiFi absent by design; ESP32 stays the v1/v2 workhorse.
-      Middle option if the WiFi decision revives: XIAO ESP32-C6 (same
-      thumbnail size, WiFi 6 + BLE, better efficiency than classic ESP32)
-      — but NO onboard IMU (external sensor + wiring stays), and it needs
-      the newer Arduino-core/NimBLE-2.x toolchain generation to port.
+      **North star (owner, 2026-07): smallest + most efficient.**
+      **ALL-IN (owner, 2026-07-28): the XIAO nRF52840 Sense IS the v2
+      board** — hardware + 500 mAh cell ordered. Full port spec, gap
+      analysis, and bring-up plan: **[sense.md](sense.md)** (BLE layer
+      rewrite NimBLE→Bluefruit, binary trace v2 now launch-blocking,
+      Nordic DFU replaces the ESP32 OTA plan, battery telemetry +
+      System OFF sleep, metrics-layering architecture feeding the
+      Garmin field). The FireBeetle stays the water-day rig until the
+      Sense passes the same bench → bucket → water gauntlet.
+      Middle option if the WiFi decision ever revives: XIAO ESP32-C6
+      (same thumbnail size, WiFi 6 + BLE, better efficiency than classic
+      ESP32) — but NO onboard IMU (external sensor + wiring stays), and
+      it needs the newer Arduino-core/NimBLE-2.x toolchain generation.
 - [ ] Better IMU (ICM-20948 / LSM6DSO); optional GPS for speed & distance
 - [ ] Deep-sleep power management for multi-session battery life
 - [ ] Potted, properly sealed, board-mountable enclosure

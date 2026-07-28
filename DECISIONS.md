@@ -44,6 +44,12 @@ building this) knows what was chosen on purpose vs. what's just incidental.
 | 22 | **Calibrate to the unit, at runtime** | Every boot, the self-test measures resting gravity and normalizes all motion math to it. The two calibration terms (`airtime_offset_s`, `height_scale`) live in device memory (NVS), settable over BLE/serial (`set airtime_offset_s …`), surviving reboot *and* reflash. | A real field sensor read 0.824 g at rest — mis-scaled, not broken; normalization makes any unit usable. Device-resident calibration makes a phone a complete calibration tool (no reflash), and is the stated prerequisite for the future sealed/potted build. |
 | 23 | **Test it untethered, the way it's used** | Desk test and drop calibration run with the cable unplugged: baseline the stored jump list → act → replug → read the results back. The web app carries phone-only versions (toss test + drop calibration) over BLE, saving calibration straight to the device. | Yanked USB plugs killed test after test — the device is a logger, so its tests should be too. The phone-only flows are the beach workflow: the cable's remaining jobs are first flash, upgrades, charging, and fastest bulk sync. |
 
+## The v2 pivot
+
+| # | Decision | Choice | Why |
+|---|----------|--------|-----|
+| 24 | **All-in on the XIAO nRF52840 Sense as the v2 board** *(2026-07-28)* | v2 targets the thumb-sized Sense (onboard LSM6DS3TR-C IMU, 2 MB flash, BLE-only, 500 mAh cell): a tiny "Garmin data-field adder" that streams live to watch + phone, with new measurements layered on as new protocol keys. Port spec + gap analysis: [docs/sense.md](docs/sense.md) — headline consequences: BLE layer rewrite (NimBLE→Bluefruit), binary trace v2 becomes launch-blocking (2 MB CSV ≈ 45 min; binary ≈ 5 h), Nordic DFU replaces the ESP32 OTA plan, battery telemetry + System OFF sleep get built for the first time. | Smallest + most efficient is the owner's stated north star, and every client already speaks the chip-neutral protocol (NUS is *native* on nRF52 — Bluefy, web app, Garmin field connect unchanged). The FireBeetle rig keeps water-day duty until the Sense passes the identical bench → bucket → water gauntlet: measurement continuity over novelty. |
+
 ## Deliberately deferred to later phases
 
 - **Real deep-sleep** power management (multi-session battery life). v1 charges after each outing. *(Also the gate for the potted-puck + solar idea — energy math and prerequisites studied in the roadmap's Phase 4 backlog note.)*
