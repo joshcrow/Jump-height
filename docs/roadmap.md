@@ -67,55 +67,21 @@ from the tooling.
 **Done when:** you can see jumps pop up live on a phone and review a session
 afterward — done, on both software and hardware.
 
-## Phase 3.5 — WiFi sync mode *(scoped — DECISION PENDING, likely superseded)*
+## Phase 3.5 — WiFi sync mode *(RETIRED 2026-07-29, unbuilt)*
 
-> **Owner north star (2026-07): smallest + most efficient device, with the
-> Garmin data field as the live surface.** In that future WiFi's three
-> justifications dissolve: binary-WIRE BLE sync (ota.md §4.5 companion)
-> covers bulk speed, the watch + Garmin Connect FIT fields cover live +
-> auto-archive, and BLE is already OTA's primary doorway. Re-decide after
-> the Garmin field ships. As of 2026-07-28 the owner went all-in on the
-> Sense (see [sense.md](sense.md)), which has no WiFi at all — so this
-> phase now applies only if the ESP32 era extends, and the scope below is
-> kept for that case, not being built now.
+Fully scoped in 2026-07 (hotspot "beach sync" mode, WebSocket bridge,
+station mode) as the answer to BLE's bulk-speed and iOS weaknesses.
+Retired without building: the owner went all-in on the Sense
+([sense.md](sense.md)), which has no WiFi at all, and every WiFi
+justification dissolved on that path — binary trace + BLE cover sync
+speed, the Garmin field + FIT cover live/auto-archive, and Nordic DFU
+covers updates. The full scope lives in git history (any commit up to
+`bf4d2aa`); revive only if an ESP32-class board ever returns.
 
-WiFi is the answer to BLE's two weaknesses — bulk-transfer speed (seconds vs
-minutes for a full trace) and iPhones (no Web Bluetooth on iOS, but every phone
-can join a WiFi network). Zero new hardware; it's all firmware + serving.
-
-- [ ] **Hotspot ("beach sync") mode:** device broadcasts a `JumpHeight` WPA2
-      network on demand and serves the web app itself from LittleFS at
-      `http://jump.local` — live stats + sync on ANY phone, no internet, no
-      app store. (The device must serve its own app here: an https-hosted page
-      isn't allowed to talk to a local http device.)
-- [ ] Entered with one tap from the app (BLE/USB command) or automatically
-      after N minutes still on land; strictly time-boxed auto-off — WiFi draws
-      ~10× BLE's power, so it's a sync window, not an all-day mode.
-- [ ] Radio **modes**, not coexistence: BLE by default, WiFi while syncing.
-      (Classic-ESP32 BLE+WiFi concurrency is possible but flaky and RAM-hungry;
-      sequential modes sidestep it.)
-- [ ] WebSocket bridge carrying the same line protocol (the app's transport
-      abstraction gets a third implementation next to BLE/Serial/Mock).
-- [ ] Phase 4 follow-on: **station mode** — device joins home WiFi (provisioned
-      via the app over USB/BLE), announces itself via mDNS, and sessions
-      auto-archive to the laptop: the board syncs itself from the garage.
-
-**Done when:** an iPhone with no special browser joins the board's network and
-syncs a session in seconds.
-
-**Companion scope — over-the-air firmware updates ([ota.md](ota.md))**:
-fully scoped 2026-07 — two OTA slots + bootloader rollback (a failed
-update can never brick; the boot self-test is the validity gate), BLE
-transfer driven by the web app on iPhone via Bluefy, CI's Pages build as
-the update server, and a free HTTP-upload doorway once hotspot mode
-exists. Ships together with 3.5 as one partition epoch (one-time storage
-reformat; calibration in NVS survives) — and the same epoch moves trace
-storage to a binary format (ota.md §4.5), so recording capacity RISES
-from ~45 min to ~3.5 h of moving time even with half the partition.
-Build after water validation — though as of 2026-07-28 the esp_ota and
-partition parts (§§4.1–4.4, 4.6) are ESP32-specific and are superseded on
-the v2 board by Nordic DFU ([sense.md](sense.md) §3.3); §4.5's binary
-trace format transfers unchanged and is launch-blocking there regardless.
+**Companion — ESP32 OTA scope ([ota.md](ota.md))**: likewise retired to a
+tombstone; its one shipped survivor is the §4.5 binary trace format, live
+on the Sense (`trace_codec.h`, DECISIONS #24). Updates on the v2 board are
+Nordic DFU ([sense.md](sense.md) §3.3).
 
 ## Backlog study — what else the same hardware can measure *(thought through 2026-07)*
 
