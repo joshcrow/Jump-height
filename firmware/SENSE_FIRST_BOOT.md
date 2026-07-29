@@ -375,6 +375,21 @@ wrapping or erroring loudly.
 jumps; confirm `stored_jumps` in `STATS` keeps climbing sanely and doesn't
 silently plateau well under a real session's jump count.
 
+## 20. Accel range is ±16 g on this platform (ESP32 build stays ±8 g)
+
+**File:** `firmware/src/platform/nrf52/lsm6ds3_min.h` (`CTRL1_XL = 0x54`,
+`g_per_lsb = 0.000488`).
+
+Deliberate divergence, research-backed (docs/research.md §2/§6): real
+landings peak 4.2–5.5+ g and marine impact literature runs 7–10 g+, so
+±8 g clips landing peaks; detection thresholds (0.35 g / 2.5 g) are
+unaffected and the binary trace's u16 milli-g format has ±16 g headroom
+by design. **Bench check:** the boot self-test's resting-gravity reading
+is itself the scale-factor verification — if the range/sensitivity pair
+were mismatched (e.g. 0x54 with the ±8 g LSB), rest would read ~0.5 g or
+~2 g and the self-test would WARN/FAIL immediately. Confirm rest reads
+≈1.0 g and a hard table slap exceeds 8 g in the trace.
+
 ---
 
 ## Explicitly out of scope for this pass (not bugs, not forgotten)

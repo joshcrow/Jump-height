@@ -26,8 +26,19 @@
 //                     (ST's lsm6ds3tr_c_ctrl1_xl_t): [7:4] ODR_XL, [3:2]
 //                     FS_XL, [1] LPF1_BW_SEL, [0] BW0_XL. We use
 //                     ODR_XL=0101 (208 Hz, LSM6DS3TR_C_XL_ODR_208Hz=5) and
-//                     FS_XL=11 (±8 g, LSM6DS3TR_C_8g=3), BW bits left at
-//                     the default (0b00) => CTRL1_XL = 0x5C.
+//                     FS_XL=01 (±16 g, LSM6DS3TR_C_16g=1 — ST's encoding
+//                     is non-monotonic: 00=2g, 01=16g, 10=4g, 11=8g), BW
+//                     bits left at the default (0b00) => CTRL1_XL = 0x54.
+//                     ±16 g (vs the ESP32 build's ±8 g) is deliberate,
+//                     research-backed (docs/research.md §2/§6): real
+//                     board-sport landings peak 4.2-5.5+ g and marine
+//                     impact literature runs 7-10 g+, so ±8 g clips the
+//                     landing PEAKS our crash-severity analytics want.
+//                     Detection is unaffected (thresholds live at 0.35 g
+//                     and 2.5 g), and the binary trace's u16 milli-g
+//                     format was given ±16 g headroom by design
+//                     (ota.md §4.5). Resolution cost: 0.488 vs 0.244
+//                     mg/LSB — noise floor, not signal, at our scales.
 //   0x11 CTRL2_G      gyro ODR + full-scale. Gyro stays OFF (power — see
 //                     docs/sense.md §3.7's gyro policy: carve-G is
 //                     accel-only, gyro is duty-cycled in later only when a
@@ -47,7 +58,7 @@
 //                     backwards silently halves-or-doubles readings in a
 //                     way that can look plausible — called out here on
 //                     purpose.
-//   Sensitivity @ ±8 g: 0.244 mg/LSB (ST's lsm6ds3tr_c_from_fs8g_to_mg()).
+//   Sensitivity @ ±16 g: 0.488 mg/LSB (ST's lsm6ds3tr_c_from_fs16g_to_mg()).
 //
 // SPDX-License-Identifier: MIT
 
@@ -66,7 +77,7 @@ class Lsm6ds3Min {
     return wire.endTransmission() == 0;
   }
 
-  // Configure ±8 g accel @ 208 Hz, BDU+auto-increment on, gyro powered down.
+  // Configure ±16 g accel @ 208 Hz, BDU+auto-increment on, gyro powered down.
   // Returns false only if an I2C write fails (wiring problem).
   bool begin(TwoWire& wire, uint8_t addr) {
     wire_ = &wire;
@@ -74,7 +85,7 @@ class Lsm6ds3Min {
     bool ok = true;
     ok &= writeReg(0x12, 0x44);  // CTRL3_C:  BDU=1, IF_INC=1
     ok &= writeReg(0x11, 0x00);  // CTRL2_G:  gyro power-down (policy: off)
-    ok &= writeReg(0x10, 0x5C);  // CTRL1_XL: 208 Hz, ±8 g, default BW
+    ok &= writeReg(0x10, 0x54);  // CTRL1_XL: 208 Hz, ±16 g (see file comment)
     return ok;
   }
 
@@ -97,7 +108,7 @@ class Lsm6ds3Min {
     const int16_t x = (int16_t)((b[1] << 8) | b[0]);
     const int16_t y = (int16_t)((b[3] << 8) | b[2]);
     const int16_t z = (int16_t)((b[5] << 8) | b[4]);
-    const float g_per_lsb = 0.000244f;  // ±8 g range, 0.244 mg/LSB
+    const float g_per_lsb = 0.000488f;  // ±16 g range, 0.488 mg/LSB
     ax = x * g_per_lsb;
     ay = y * g_per_lsb;
     az = z * g_per_lsb;
