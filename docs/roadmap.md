@@ -167,9 +167,11 @@ factory cal, Kalman fusion) is the price of DOUBLE-INTEGRATING height for
 kites, whose jumps are not ballistic (their data: 15.5 m at 5.9 s airtime
 — free-fall math would say 42 m). Wing jumps are short and near-ballistic,
 and the airtime method never integrates — which is why a $2 mis-scaled
-sensor passes our bench. Adopted notes: (1) our ±8 g range clips landing
-PEAKS (detection at 2.5 g unaffected) — switch to ±16 g when
-crash-severity analytics land; (2) their users complain "reads too low"
+sensor passes our bench. Adopted notes: (1) the ESP32 build's ±8 g range
+clips landing PEAKS (detection at 2.5 g unaffected) — the Sense already
+ships ±16 g from day one, research-backed ([research.md](research.md)
+§2/§6); crash-severity analytics remain future work on both platforms,
+independent of range; (2) their users complain "reads too low"
 95% of the time and WOO resolves doubt upward (wave-trough baselines) —
 when video-calibrating height_scale, keep the honest number; that
 pressure will arrive. Strategically, the whitepaper read as a kite-only

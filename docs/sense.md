@@ -11,7 +11,7 @@ LSM6DS3 driver, raw QSPI store with binary trace v2 + codec parity tests,
 watchdog); CI publishes a drag-and-drop `.uf2`. Every runtime assumption
 that only hardware can prove is numbered in
 **[../firmware/SENSE_FIRST_BOOT.md](../firmware/SENSE_FIRST_BOOT.md)**
-(19 items) — day one is flash + work down that list, i.e. milestone S0
+(20 items) — day one is flash + work down that list, i.e. milestone S0
 and most of S1 already have prebuilt answers waiting.
 
 **Product statement.** The Sense puck is a **tiny Garmin data-field
@@ -31,7 +31,7 @@ over. Nothing here blocks Phase 2.
 |---|---|---|
 | MCU | nRF52840 — 64 MHz Cortex-M4F, 256 KB RAM, 1 MB internal flash | app shares the 1 MB with the BLE stack (SoftDevice S140) + bootloader |
 | Data storage | 2 MB external QSPI flash (P25Q16H) | sessions live here, not in internal flash |
-| IMU | LSM6DS3TR-C 6-axis accel+gyro, onboard | ±2/4/8/16 g — our ±8 g carries; power-gated by pin P1.08 |
+| IMU | LSM6DS3TR-C 6-axis accel+gyro, onboard | ±2/4/8/16 g — ships at ±16 g (0.488 mg/LSB; research.md §2/§6 — the ESP32 build stays ±8 g); power-gated by pin P1.08 |
 | Battery | **NO connector — bare BAT +/− solder pads (underside)** | solder the JST pigtail (already ordered) to them |
 | Charger | BQ25101: **50 mA default, 100 mA** with P0.13 driven low | 500 mAh ⇒ ~11 h vs ~5–6 h full charge |
 | Battery readout | divider on P0.31 (AIN7), enabled by driving P0.14 low | disabled by default — no silent drain |
@@ -66,7 +66,8 @@ Ordered by how much they change the plan.
 
 ### 3.1 The BLE layer is a rewrite (the one real one)
 
-`ble_link.h` is written against NimBLE (ESP32-only). The Seeed/Adafruit
+`firmware/src/platform/esp32/jh_link.cpp` (formerly `ble_link.h`) is
+written against NimBLE (ESP32-only). The Seeed/Adafruit
 nRF52 core uses **Bluefruit**, whose `BLEUart` service IS the Nordic
 UART Service — likely *less* code than we have now, but different
 semantics: connection callbacks, per-connection MTU, TX buffering, and
@@ -153,7 +154,8 @@ meter the delta at S2.
 - `lsm6ds3_min.h`, sibling of `mpu6050_min.h`: internal I2C bus
   (VERIFY pins — community says ~P0.07/P0.27 — and which `Wire`
   instance the Seeed variant maps there), address 0x6A, WHO_AM_I check,
-  ±8 g, output rate ≥ our 200 Hz, plus the P1.08 power rail (cut in
+  ±16 g (0.488 mg/LSB; research.md §2/§6 — the ESP32 build stays ±8 g),
+  output rate ≥ our 200 Hz, plus the P1.08 power rail (cut in
   deep standby).
 - The self-test carries, but its thresholds get re-validated on the new
   part, and **drop calibration must be redone on the Sense build** —

@@ -137,6 +137,9 @@ the partition:
   reads foil-flight smoothness in the tens of mg, exactly the margin u8
   spends — and u8 couples the format to today's ±8 g range (u16 milli-g
   already has headroom for a future ±16 g crash-severity upgrade).
+  *(ESP32-era framing: the Sense build already ships this exact u16
+  format at ±16 g from day one — [sense.md](sense.md) §3.7,
+  [research.md](research.md) §2/§6.)*
 - **Wire compatibility**: `trace`/`dump` stream the SAME CSV as today —
   the device converts blocks to text on the fly (dumps already pause
   sampling, so the CPU is free). CLI sync, web app, autopsy, replay:

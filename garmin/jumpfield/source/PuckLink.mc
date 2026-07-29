@@ -30,8 +30,11 @@ using Toybox.Lang;
 
 class PuckLink extends Ble.BleDelegate {
 
-    // NUS — Nordic UART Service (spec §5.1; identical to firmware/include/ble_link.h
-    // and web/app.js's NUS_SERVICE/NUS_RX/NUS_TX).
+    // NUS — Nordic UART Service (spec §5.1; identical to
+    // firmware/src/platform/esp32/jh_link.cpp — formerly ble_link.h — and
+    // web/app.js's NUS_SERVICE/NUS_RX/NUS_TX; the Sense sibling,
+    // firmware/src/platform/nrf52/jh_link.cpp, implements the same NUS
+    // surface via Bluefruit's BLEUart).
     const NUS_SERVICE = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
     const NUS_RX = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";   // watch writes commands
     const NUS_TX = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";   // puck notifies output

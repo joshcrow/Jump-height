@@ -5,22 +5,27 @@ to the [Woo](https://www.woosports.com/). Stick a small waterproof sensor on the
 board, go send it, and find out **how high you jumped** and **how long you were in
 the air**.
 
-> Status: **v1 ready to assemble, Phase 3 built.** Building it is wires-and-glue
-> only — every software step is one command via `./tools/jump` (guided wizard,
-> flash, wiring self-test, desk test, drop-test calibration, session sync), all
+> Status: **Phases 0/1/3 complete; Phase 2 (the water day) is next.** Building
+> it is wires-and-glue only — every software step is one command via
+> `./tools/jump` (guided wizard, flash, wiring self-test, desk test, drop-test
+> calibration, session sync, video-ground-truth validation), all
 > **rehearsable with zero hardware** against a simulated device. The firmware
-> compiles clean on the real ESP32 toolchain, speaks its protocol over **Bluetooth**
-> too, and there's a **browser app** (`./tools/jump web`) built sunlight-first for
-> the beach: live jump stats via Web Bluetooth (feet-or-meters, glare-readable),
-> one-tap **Sync** with real progress, per-session charts, a shareable session
-> card, backup/restore, and in-browser flashing via ESP Web Tools. Start with
-> **[BUILD.md](BUILD.md)** (the runbook) and **[DECISIONS.md](DECISIONS.md)**
-> (what was chosen and why).
+> — a shared core plus thin per-platform seams — compiles clean for the ESP32
+> (shipping) and the tiny XIAO nRF52840 Sense (v2, all-in; see
+> [`docs/sense.md`](docs/sense.md)), and speaks its protocol over **Bluetooth**
+> to a phone, a Garmin watch ([`garmin/`](garmin/)), or the **browser app**
+> (`./tools/jump web`) built sunlight-first for the beach: live jump stats via
+> Web Bluetooth (feet-or-meters, glare-readable), one-tap **Sync** with real
+> progress, per-session charts, a shareable session card, backup/restore, and
+> in-browser flashing via ESP Web Tools. Start with **[BUILD.md](BUILD.md)**
+> (the runbook) and **[DECISIONS.md](DECISIONS.md)** (what was chosen and why).
 >
 > ```bash
 > ./tools/jump wizard           # plug in and follow along: setup → flash →
 >                               # wiring check → desk test → calibration
 > ./tools/jump wizard --fake    # rehearse the exact same flow today, no hardware
+> ./tools/jump validate         # on the water: video ground-truth calibration +
+>                               # a publishable error-bar report
 > ./tools/jump report           # stuck? one file with everything Claude needs
 >                               # to troubleshoot remotely (logs, config, self-test)
 > ```
@@ -66,17 +71,29 @@ and edge cases.
 
 ```mermaid
 flowchart LR
-    IMU["IMU (accel+gyro)\nMPU-6050 / ICM-20948"] -->|I²C ~200 Hz| ESP32
+    IMU1["IMU (accel+gyro)\nMPU-6050"] -->|I²C ~200 Hz| ESP32
     ESP32 -->|jump-detection\nstate machine| ESP32
-    ESP32 -->|BLE notify| Phone["Phone / laptop\n(Web Bluetooth app)"]
-    ESP32 -->|CSV log| Flash["On-board flash\n/ SD card"]
-    Bat["LiPo + charger"] --> ESP32
+    ESP32 -->|BLE notify — NUS| Phone["Phone / laptop\n(Web Bluetooth app / Bluefy)"]
+    ESP32 -->|BLE notify — NUS| Watch["Garmin watch\n(jumpfield data field)"]
+    ESP32 -->|CSV log| Flash["On-board flash"]
+    Bat1["LiPo + charger"] --> ESP32
+
+    IMU2["IMU (accel+gyro)\nLSM6DS3TR-C"] -->|I²C ~200 Hz| Sense["XIAO nRF52840\nSense (v2)"]
+    Sense -->|jump-detection\nstate machine| Sense
+    Sense -->|BLE notify — NUS/Bluefruit| Phone
+    Sense -->|BLE notify — NUS/Bluefruit| Watch
+    Sense -->|binary trace| QSPI["External QSPI flash"]
+    Bat2["500 mAh LiPo"] --> Sense
 ```
 
 The same detection algorithm runs in two places, kept intentionally in sync:
 
-- **[`firmware/`](firmware/)** — C++ for the ESP32 (`jump_detector.h`), runs on the
-  board in real time.
+- **[`firmware/`](firmware/)** — the shared C++ detector
+  (`include/jump_detector.h`) runs unmodified on every board; a thin platform
+  seam (`src/platform/{esp32,nrf52,host}/`) supplies the IMU/BLE/storage glue
+  per chip — ESP32 (FireBeetle 2 + MPU-6050, shipping) and nRF52 (XIAO Sense +
+  LSM6DS3TR-C, v2 build-ahead); `host` compiles the real firmware core
+  natively for the test suite, no board required.
 - **[`sim/`](sim/)** — a pure-Python mirror (`detector.py`) plus a synthetic-data
   generator, so you can develop and tune the algorithm **without hardware** and
   replay real captured sessions offline.
@@ -92,24 +109,29 @@ Jump-height/
 ├── DECISIONS.md         ← the v1 design decisions and why
 ├── config/params.json   ← ALL tunable settings — one file feeds firmware + sim + analysis
 ├── tools/
-│   ├── jump             ← the one-command interface: wizard/flash/selftest/desktest/drop/sync/web/report
+│   ├── jump             ← the one-command interface: wizard/flash/selftest/desktest/drop/sync/validate/web/report
 │   ├── fake_device.py   ← simulated device (rehearse + test everything with no hardware)
 │   └── gen_params.py    ← bakes config/params.json into a firmware header
 ├── web/                 ← browser app: live BLE stats, sessions/CSV over USB, in-browser flasher
-├── .github/workflows/   ← CI: builds firmware, publishes app + flasher binaries to Pages
+├── .github/workflows/   ← CI: full test suite + firmware build, publishes ESP32 binaries + the Sense .uf2 to Pages
 ├── docs/
-│   ├── algorithm.md     ← the physics + detection state machine, in detail
-│   ├── hardware.md      ← bill of materials, wiring, power, waterproofing
-│   └── roadmap.md       ← phased build plan (bench → firmware → water → app)
-├── firmware/            ← ESP32 firmware (PlatformIO)
+│   ├── algorithm.md          ← the physics + detection state machine, in detail
+│   ├── garmin-datafield.md   ← the Garmin watch data-field spec
+│   ├── hardware.md           ← bill of materials, wiring, power, waterproofing
+│   ├── ota.md                ← over-the-air update scope (ESP32 OTA; Sense uses Nordic DFU)
+│   ├── research.md           ← literature/market synthesis backing the design choices
+│   ├── roadmap.md            ← phased build plan (bench → firmware → water → app → v2)
+│   └── sense.md              ← v2 (XIAO nRF52840 Sense) port spec + gap analysis
+├── firmware/            ← shared core + per-platform seams (PlatformIO)
 │   ├── platformio.ini
-│   ├── include/jump_detector.h   ← portable detection state machine
-│   └── src/main.cpp              ← read IMU, run detector, log + BLE
-├── sim/                 ← develop & test the algorithm with no hardware
+│   ├── include/jump_detector.h          ← portable detection state machine
+│   └── src/platform/{esp32,nrf52,host}/ ← IMU/BLE/storage glue per board (host = tests, no board)
+├── garmin/               ← Connect IQ data field (jumpfield/) — the watch as a display surface
+├── sim/                  ← develop & test the algorithm with no hardware
 │   ├── detector.py      ← Python mirror of the firmware detector
 │   ├── generate.py      ← synthesize IMU sessions with known jumps
 │   └── run.py           ← run detector on synthetic or captured data
-└── data/                ← captured/example session CSVs
+└── data/                 ← captured/example session CSVs
 ```
 
 ---
@@ -156,14 +178,18 @@ actually kills these projects) are in [`docs/hardware.md`](docs/hardware.md).
 
 ## Roadmap
 
-- **Phase 0 — Prove the algorithm (no hardware):** run the simulator. ✅ *available now*
-- **Phase 1 — Bench firmware:** ESP32 + IMU on a breadboard, print jumps over serial,
-  validate with hand "jumps" and drop tests.
+- **Phase 0 — Prove the algorithm (no hardware):** run the simulator. ✅ **complete**
+- **Phase 1 — Bench firmware:** ESP32 + IMU on a breadboard, self-test, desk test,
+  drop calibration. ✅ **complete**, hardware-validated.
 - **Phase 2 — On the water:** waterproof it, log raw CSV, capture real sessions,
-  tune thresholds offline against video ground truth.
-- **Phase 3 — App:** Web Bluetooth / mobile app for live stats and session history.
-- **Phase 4 — Real hardware:** custom PCB, better IMU, GPS for speed/distance, sleep
-  modes, potted enclosure.
+  tune thresholds offline against video ground truth. 🌊 **next** — the water day.
+- **Phase 3 — App:** BLE + a browser app for live stats, session history, and
+  in-browser flashing. ✅ **complete**, hardware-validated.
+- **Phase 4 — Real hardware:** custom PCB or an off-the-shelf shortcut, better IMU,
+  GPS for speed/distance, sleep modes, potted enclosure. **ALL-IN** on the XIAO
+  nRF52840 Sense as the v2 board — the software build-ahead is done
+  ([`docs/sense.md`](docs/sense.md)); it takes over water-day duty once it
+  passes the same bench → bucket → water gauntlet the ESP32 rig already did.
 
 Details and acceptance criteria per phase: [`docs/roadmap.md`](docs/roadmap.md).
 
