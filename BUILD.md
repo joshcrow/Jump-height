@@ -205,6 +205,44 @@ kept forever, so any session can be re-scored later with improved settings:
 is consistently off by a percentage, set `height_scale` in
 `config/params.json` and re-flash. After that, you trust the number.
 
+## Validate against video — the honest number
+
+The manual video check above works by hand; `./tools/jump validate`
+automates it and writes the honest error-bar report no commercial tracker
+publishes. Two commands, done at different times:
+
+```bash
+# 1. On the water: film a handful of jumps in slow-mo (120-240 fps).
+# 2. Back on land, after typing up what the video shows into pairs.csv:
+./tools/jump validate --pairs pairs.csv
+```
+
+`pairs.csv` has one row per filmed jump — jump number, video fps, frames
+airborne:
+
+```
+jump_n,fps,frames
+3,120,74
+7,240,168
+```
+
+`jump_n` matches the jump's number in the device's stored list (or a synced
+session — add `--session data/sessions/<date>/jumps.csv` to validate one of
+those instead). Count `frames` the same way every time: from the first frame
+the board has fully left the water to the first frame it touches back
+down — consistency beats philosophy. No `pairs.csv` yet? Run the command
+without `--pairs` from a real terminal and it prompts you jump by jump
+instead (fps, then either a frame count or takeoff/landing frame numbers).
+
+The tool computes the true airtime and height from your frame counts,
+compares them against what the device measured, and prints a plain-English
+verdict: leave calibration alone, correct `airtime_offset_s` (a timing
+bias), or — only if a height error survives that timing fix —
+correct `height_scale` too. Nothing is written to the device unless you
+pass `--apply` or answer yes at the prompt. Every run writes
+`data/validation/validate-<date>.md`, a self-contained report you can hand
+to anyone skeptical of the number, plus a `.csv` of the same data.
+
 ---
 
 ## Phase 3: live stats in a browser + zero-install flashing

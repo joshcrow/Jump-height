@@ -25,8 +25,25 @@ def run_cli(args, env_extra=None, timeout=90):
 
     env = dict(os.environ)
     env.update(env_extra or {})
+    # stdin=DEVNULL: never let a subprocess inherit a real TTY from whatever
+    # is running the test suite — non-interactive behavior must be
+    # deterministic, not an accident of how pytest happened to be launched.
     return subprocess.run([sys.executable, JUMP] + args, capture_output=True,
-                          text=True, timeout=timeout, env=env, cwd=str(REPO))
+                          text=True, timeout=timeout, env=env, cwd=str(REPO),
+                          stdin=subprocess.DEVNULL)
+
+
+def _load_jump_module():
+    """Load tools/jump (no .py extension) as an importable module, for
+    direct unit-level access to its pure functions/helpers."""
+    import importlib.machinery
+    import types
+
+    loader = importlib.machinery.SourceFileLoader("jumpcli_ut", JUMP)
+    mod = types.ModuleType("jumpcli_ut")
+    mod.__file__ = JUMP
+    loader.exec_module(mod)
+    return mod
 
 
 class TestSelftest(unittest.TestCase):
@@ -120,14 +137,7 @@ class TestUntetheredHelpers(unittest.TestCase):
 
     @staticmethod
     def _mod():
-        import importlib.machinery
-        import types
-
-        loader = importlib.machinery.SourceFileLoader("jumpcli_ut", JUMP)
-        mod = types.ModuleType("jumpcli_ut")
-        mod.__file__ = JUMP
-        loader.exec_module(mod)
-        return mod
+        return _load_jump_module()
 
     def test_stored_rows_parses_the_fake_session(self):
         mod = self._mod()
@@ -183,6 +193,259 @@ class TestSync(unittest.TestCase):
             self.assertIn("agree", report)
             self.assertTrue((sessions[0] / "trace.csv").read_text().startswith("t,mag"))
             self.assertIn("best", r.stdout.lower())
+
+
+class TestValidateMath(unittest.TestCase):
+    """Pure math-core tests for `validate` — no device, no subprocess:
+    fabricate measured rows directly and check the recommendations exactly,
+    per the composition convention _validate_stats documents."""
+
+    G = 9.80665
+
+    def _rows(self, true_airtimes, bias=0.0, existing_offset=0.0,
+              existing_scale=1.0, target_scale=1.0, fps=1000.0):
+        """Fabricate matched rows shaped like real device/session data:
+        raw = true_airtime + bias (a pure additive timing bias, independent
+        of whatever offset the device already has — exactly like the real
+        firmware's airtime_raw_s), adj = raw + existing_offset (what the
+        device currently reports as its calibrated airtime), and `h`
+        rescaled so that — once the bias is corrected — `target_scale` is
+        exactly the height_scale this tool should recommend, regardless of
+        existing_scale. That independence from existing_scale/existing_offset
+        is the composition property under test.
+        """
+        rows = []
+        for i, ta in enumerate(true_airtimes, start=1):
+            raw = ta + bias
+            adj = raw + existing_offset
+            true_h = self.G * ta * ta / 8.0
+            h = (existing_scale / target_scale) * true_h * (adj / ta) ** 2
+            rows.append({"n": i, "fps": fps, "frames": ta * fps,
+                        "raw": raw, "adj": adj, "h": h})
+        return rows
+
+    def test_recovers_injected_bias_and_scale(self):
+        # The task's own worked example: bias=+0.045s, scale=0.93.
+        mod = _load_jump_module()
+        rows = self._rows([0.6, 1.0, 1.5, 2.0], bias=0.045, target_scale=0.93)
+        stats = mod._validate_stats(rows, self.G)
+        self.assertAlmostEqual(stats["median_bias_s"], 0.045, places=6)
+        self.assertAlmostEqual(stats["recommended_airtime_offset_s"], -0.045, places=6)
+        self.assertAlmostEqual(stats["recommended_height_scale"], 0.93, places=6)
+        decide = mod._validate_decide(stats)
+        self.assertTrue(decide["recommend_offset"])
+        self.assertTrue(decide["recommend_scale"])
+
+    def test_offset_recommendation_ignores_existing_device_offset(self):
+        """The most important correctness detail: airtime_offset_s is
+        derived from RAW airtime, which the firmware never applies an
+        offset to — so the recommendation must be identical no matter what
+        offset the device already has applied (composing, not double-
+        correcting)."""
+        mod = _load_jump_module()
+        rows_a = self._rows([0.6, 1.0, 1.5, 2.0], bias=0.045, existing_offset=-0.02)
+        rows_b = self._rows([0.6, 1.0, 1.5, 2.0], bias=0.045, existing_offset=-0.30)
+        stats_a = mod._validate_stats(rows_a, self.G, existing_offset=-0.02)
+        stats_b = mod._validate_stats(rows_b, self.G, existing_offset=-0.30)
+        self.assertAlmostEqual(stats_a["recommended_airtime_offset_s"],
+                               stats_b["recommended_airtime_offset_s"], places=9)
+        self.assertAlmostEqual(stats_a["recommended_airtime_offset_s"], -0.045, places=6)
+
+    def test_height_scale_composes_with_existing_device_scale(self):
+        """height_scale composes the other way round from offset: the
+        device's reported height DOES carry the current height_scale, so the
+        residual must be multiplied back onto it — not treated as the total.
+        A device already running a wrong existing_scale=1.075 with a real
+        0.93 residual anomaly must still recover a clean 0.93 recommendation."""
+        mod = _load_jump_module()
+        rows = self._rows([0.6, 1.0, 1.5, 2.0], bias=0.045, existing_offset=-0.02,
+                          existing_scale=1.075, target_scale=0.93)
+        stats = mod._validate_stats(rows, self.G, existing_offset=-0.02,
+                                    existing_scale=1.075)
+        self.assertAlmostEqual(stats["recommended_airtime_offset_s"], -0.045, places=6)
+        self.assertAlmostEqual(stats["recommended_height_scale"], 0.93, places=6)
+        self.assertLess(abs(stats["residual_pct_after_both"]), 0.01)
+
+    def test_rails_refusal(self):
+        mod = _load_jump_module()
+        rows = self._rows([0.6, 1.0, 1.5, 2.0], bias=0.6)  # absurd 600 ms bias
+        stats = mod._validate_stats(rows, self.G)
+        decide = mod._validate_decide(stats)
+        self.assertLess(stats["recommended_airtime_offset_s"], mod.OFFSET_MIN)
+        self.assertIsNotNone(decide["offset_rail_refusal"])
+        self.assertIn("outside the firmware's sane range", decide["offset_rail_refusal"])
+        self.assertFalse(decide["recommend_offset"])
+
+    def test_good_calibration_recommends_nothing(self):
+        mod = _load_jump_module()
+        rows = self._rows([0.6, 1.0, 1.5, 2.0], bias=0.003)  # 3 ms, under the 15 ms bar
+        stats = mod._validate_stats(rows, self.G)
+        decide = mod._validate_decide(stats)
+        self.assertEqual(decide["verdict"], "good")
+        self.assertFalse(decide["recommend_offset"])
+        self.assertFalse(decide["recommend_scale"])
+
+
+class TestValidatePairsFile(unittest.TestCase):
+    """--pairs is typed up at home from a phone's frame stepper — every
+    parsing failure must be friendly and name the problem."""
+
+    def test_bad_header_is_a_friendly_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            bad = Path(td) / "pairs.csv"
+            bad.write_text("n,fps,frame\n1,120,60\n")
+            r = run_cli(["validate", "--fake", "--fast", "--pairs", str(bad)])
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("header", r.stdout.lower())
+            self.assertIn("jump_n,fps,frames", r.stdout)
+
+    def test_garbage_row_is_a_friendly_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            bad = Path(td) / "pairs.csv"
+            bad.write_text("jump_n,fps,frames\n1,not-a-number,60\n")
+            r = run_cli(["validate", "--fake", "--fast", "--pairs", str(bad)])
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("line 2", r.stdout)
+
+    def test_out_of_range_fps_is_a_friendly_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            bad = Path(td) / "pairs.csv"
+            bad.write_text("jump_n,fps,frames\n1,5,60\n")
+            r = run_cli(["validate", "--fake", "--fast", "--pairs", str(bad)])
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("24-1000", r.stdout)
+
+    def test_valid_pairs_file_parses_and_runs(self):
+        with tempfile.TemporaryDirectory() as td:
+            pairs = Path(td) / "pairs.csv"
+            pairs.write_text("jump_n,fps,frames\n1,120,72\n2,120,120\n"
+                            "3,120,180\n4,120,240\n")
+            env = {"JH_DATA_DIR": str(Path(td) / "data")}
+            r = run_cli(["validate", "--fake", "--fast", "--pairs", str(pairs)],
+                       env_extra=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+
+class TestValidateEndToEnd(unittest.TestCase):
+    def test_fake_pairs_run_writes_report_with_pairs_table(self):
+        with tempfile.TemporaryDirectory() as td:
+            pairs = Path(td) / "pairs.csv"
+            pairs.write_text("jump_n,fps,frames\n1,120,72\n2,120,120\n"
+                            "3,120,180\n4,120,240\n")
+            data_dir = Path(td) / "data"
+            r = run_cli(["validate", "--fake", "--fast", "--pairs", str(pairs)],
+                       env_extra={"JH_DATA_DIR": str(data_dir)})
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            reports = list((data_dir / "validation").glob("validate-*.md"))
+            csvs = list((data_dir / "validation").glob("validate-*.csv"))
+            self.assertEqual(len(reports), 1)
+            self.assertEqual(len(csvs), 1)
+            body = reports[0].read_text()
+            self.assertIn("## Pairs", body)
+            self.assertIn("| n | fps | frames |", body)
+            self.assertIn("## Aggregate", body)
+            self.assertIn("## Recommendation", body)
+            self.assertIn("Pueo 2023", body)
+            csv_body = csvs[0].read_text().strip().splitlines()
+            self.assertEqual(csv_body[0].split(",")[:3], ["jump_n", "fps", "frames"])
+            self.assertEqual(len(csv_body), 5)  # header + 4 jump rows
+
+    def test_apply_writes_calibration_to_fake_device(self):
+        with tempfile.TemporaryDirectory() as td:
+            # An injected +45 ms bias so there's something to apply.
+            pairs = Path(td) / "pairs.csv"
+            pairs.write_text(
+                "jump_n,fps,frames\n1,1000,555\n2,1000,955\n3,1000,1455\n4,1000,1955\n")
+            data_dir = Path(td) / "data"
+            r = run_cli(["validate", "--fake", "--fast", "--apply",
+                        "--pairs", str(pairs)],
+                       env_extra={"JH_DATA_DIR": str(data_dir)})
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("applied airtime_offset_s = -0.0450", r.stdout)
+            body = (list((data_dir / "validation").glob("validate-*.md"))[0]).read_text()
+            self.assertIn("**Applied:** applied", body)
+
+
+class TestValidateNonTTY(unittest.TestCase):
+    def test_interactive_mode_without_tty_instructs_pairs(self):
+        # No --pairs and no TTY: must fail fast with a friendly instruction,
+        # never call input() (the wizard-era crash this guards against).
+        r = run_cli(["validate", "--fake", "--fast"])
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("--pairs", r.stdout)
+        self.assertIn("terminal", r.stdout.lower())
+
+
+class TestValidateSessionMode(unittest.TestCase):
+    """--session reads the exact jumps.csv format `sync` writes, and (unlike
+    the connected-device path) works fully offline unless --apply is given."""
+
+    @staticmethod
+    def _session_csv(td, rows):
+        p = Path(td) / "jumps.csv"
+        lines = ["n,takeoff_s,airtime_raw_s,airtime_s,height_m"]
+        for n, raw, adj, h in rows:
+            lines.append(f"{n},{10 + 5 * n:.3f},{raw:.4f},{adj:.4f},{h:.4f}")
+        p.write_text("\n".join(lines) + "\n")
+        return p
+
+    def test_session_mode_composes_with_existing_config_calibration(self):
+        """Device-offset composition, exercised through the full CLI: the
+        LOCAL config (standing in for 'the device's last-known calibration')
+        already carries a non-zero airtime_offset_s AND height_scale, the
+        session file's raw/adj/h reflect that plus a genuine +45 ms residual
+        bias and a genuine 0.93 residual scale anomaly, and the recommended
+        values must still land on the clean, composed replacement values —
+        not double-corrected relative to what's already configured."""
+        g = 9.80665
+        true_airtimes = [0.6, 1.0, 1.5, 2.0]
+        existing_offset, existing_scale = -0.02, 1.075
+        bias, target_scale = 0.045, 0.93
+        with tempfile.TemporaryDirectory() as td:
+            rows = []
+            for i, ta in enumerate(true_airtimes, start=1):
+                raw = ta + bias
+                adj = raw + existing_offset
+                true_h = g * ta * ta / 8.0
+                h = (existing_scale / target_scale) * true_h * (adj / ta) ** 2
+                rows.append((i, raw, adj, h))
+            session_csv = self._session_csv(td, rows)
+
+            pairs = Path(td) / "pairs.csv"
+            pairs_lines = ["jump_n,fps,frames"]
+            for i, ta in enumerate(true_airtimes, start=1):
+                pairs_lines.append(f"{i},1000,{ta * 1000:.0f}")
+            pairs.write_text("\n".join(pairs_lines) + "\n")
+
+            cfg_path = Path(td) / "params.json"
+            cfg = json.loads((REPO / "config" / "params.json").read_text())
+            cfg["detector"]["airtime_offset_s"] = existing_offset
+            cfg["detector"]["height_scale"] = existing_scale
+            cfg_path.write_text(json.dumps(cfg))
+
+            env = {"JH_CONFIG": str(cfg_path), "JH_DATA_DIR": str(Path(td) / "data")}
+            r = run_cli(["validate", "--session", str(session_csv),
+                        "--pairs", str(pairs)], env_extra=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("airtime_offset_s = -0.0450", r.stdout)
+            self.assertIn("height_scale = 0.930", r.stdout)
+            # Pure --session analysis (no --apply) must never open a device.
+            self.assertNotIn("Connecting to", r.stdout)
+
+    def test_session_directory_path_also_works(self):
+        with tempfile.TemporaryDirectory() as td:
+            g = 9.80665
+            rows = [(i, ta, ta, g * ta * ta / 8.0)
+                    for i, ta in enumerate([0.6, 1.0, 1.5, 2.0], start=1)]
+            self._session_csv(td, rows)  # writes td/jumps.csv
+            pairs = Path(td) / "pairs.csv"
+            pairs.write_text("jump_n,fps,frames\n1,1000,600\n2,1000,1000\n"
+                            "3,1000,1500\n4,1000,2000\n")
+            env = {"JH_DATA_DIR": str(Path(td) / "data")}
+            r = run_cli(["validate", "--session", td, "--pairs", str(pairs)],
+                       env_extra=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("Recommend changing nothing", r.stdout)
 
 
 if __name__ == "__main__":

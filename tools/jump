@@ -19,15 +19,18 @@ Individual steps, if you'd rather drive manually:
     ./tools/jump desktest    guided assembly check (3 tosses onto a cushion)
     ./tools/jump drop        guided calibration from measured drops
     ./tools/jump sync        download a session, analyze it, write a report
+    ./tools/jump validate    video ground-truth calibration + a publishable
+                               error-bar report (film jumps, --pairs a CSV
+                               of jump_n,fps,frames)
     ./tools/jump replay      re-run the detector over a saved capture CSV
     ./tools/jump web         serve the phone/laptop app locally (Web Bluetooth)
     ./tools/jump monitor     raw serial console
     ./tools/jump gen         regenerate firmware params from config/params.json
 
-wizard / desktest / drop / selftest / sync / report accept --fake to run
-against a simulated device (tools/fake_device.py) — rehearse everything with
-zero hardware. Every run also writes a full session log (terminal output +
-raw serial traffic) under data/logs/.
+wizard / desktest / drop / selftest / sync / validate / report accept --fake
+to run against a simulated device (tools/fake_device.py) — rehearse
+everything with zero hardware. Every run also writes a full session log
+(terminal output + raw serial traffic) under data/logs/.
 
 Requires Python 3.8+. Serial I/O uses pyserial if installed, else a built-in
 POSIX fallback (Linux/macOS). Windows users: `setup` installs pyserial.
@@ -46,7 +49,7 @@ import statistics
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -733,8 +736,22 @@ def _replug_pause() -> None:
         print("\n>> (non-interactive: continuing)")
 
 
+def _parse_jump_row(parts: list[str]) -> dict | None:
+    """One data row of the jumps.csv format — shared by the device's live
+    `jumps`/`dump` output and a synced session file on disk, since both are
+    exactly 'n,takeoff_s,airtime_raw_s,airtime_s,height_m'. `adj` is the
+    airtime AFTER whatever airtime_offset_s was active when it was recorded."""
+    if len(parts) < 5:
+        return None
+    try:
+        return {"n": int(parts[0]), "raw": float(parts[2]),
+                "adj": float(parts[3]), "h": float(parts[4])}
+    except ValueError:
+        return None
+
+
 def _stored_rows(dev: "Device") -> list[dict]:
-    """The device's jumps.csv, parsed: [{'n':…, 'raw':…, 'h':…}, …]."""
+    """The device's jumps.csv, parsed: [{'n':…, 'raw':…, 'adj':…, 'h':…}, …]."""
     rows: list[dict] = []
     in_f = False
     for ln in dev.command("jumps", timeout=20):
@@ -743,13 +760,9 @@ def _stored_rows(dev: "Device") -> list[dict]:
         elif ln.startswith("FILE jumps.csv END"):
             break
         elif in_f and "," in ln and not ln.startswith(("n,", "#")):
-            parts = ln.split(",")
-            if len(parts) >= 5:
-                try:
-                    rows.append({"n": int(parts[0]),
-                                 "raw": float(parts[2]), "h": float(parts[4])})
-                except ValueError:
-                    pass
+            row = _parse_jump_row(ln.split(","))
+            if row:
+                rows.append(row)
     return rows
 
 
@@ -1214,6 +1227,660 @@ def cmd_sync(args) -> int:
         return 0
     finally:
         dev.close()
+        if proc:
+            proc.terminate()
+
+
+# ------------------------------------------------------------------ validate
+
+# Decision thresholds + the firmware's own sanity rails (mirrored here so a
+# bad --pairs entry is caught before it ever reaches a `set` command).
+BIAS_OK_S = 0.015          # ~15 ms: the published IMU-bias scale (research.md §2)
+HEIGHT_ERR_OK_PCT = 5.0    # residual height error under this = "trust it"
+OFFSET_MIN, OFFSET_MAX = -0.5, 0.5   # matches firmware's `set airtime_offset_s` range
+SCALE_MIN, SCALE_MAX = 0.5, 2.0      # matches firmware's `set height_scale` range
+PAIRS_HEADER = "jump_n,fps,frames"
+
+
+def _read_device_cal(dev: "Device") -> dict:
+    """Best-effort firmware version + CAL line, in the spirit of
+    check_device_params() — never raises, missing fields stay None."""
+    info: dict = {"fw": None, "airtime_offset_s": None, "height_scale": None,
+                 "source": None}
+    try:
+        lines = dev.command("info", timeout=8)
+    except TimeoutError:
+        return info
+    for ln in lines:
+        if ln.startswith("INFO "):
+            info["fw"] = parse_kv(ln).get("fw")
+        elif ln.startswith("CAL "):
+            kv = parse_kv(ln)
+            try:
+                info["airtime_offset_s"] = float(kv["airtime_offset_s"])
+                info["height_scale"] = float(kv["height_scale"])
+            except (KeyError, ValueError):
+                pass
+            info["source"] = kv.get("source")
+    return info
+
+
+def _load_session_jumps(path: str) -> list[dict] | None:
+    """Parse a synced session's jumps.csv — the exact format `sync` writes.
+    `path` may point straight at the file or at the session directory."""
+    p = Path(path)
+    if p.is_dir():
+        p = p / "jumps.csv"
+    try:
+        lines = p.read_text().splitlines()
+    except OSError as e:
+        print(f"can't read --session file {p}: {e}")
+        return None
+    rows = []
+    for ln in lines:
+        if not ln.strip() or ln.startswith(("n,", "#")):
+            continue
+        row = _parse_jump_row(ln.split(","))
+        if row:
+            rows.append(row)
+    if not rows:
+        print(f"--session file {p}: no jump rows found. Expected the header "
+              "'n,takeoff_s,airtime_raw_s,airtime_s,height_m' then one row per "
+              "jump — the exact jumps.csv format `./tools/jump sync` writes.")
+        return None
+    return rows
+
+
+def _load_pairs_csv(path: str) -> list[dict] | None:
+    """Parse a --pairs file: header 'jump_n,fps,frames' then one row per
+    filmed jump. This gets typed up at home from a phone's frame stepper, so
+    mistakes are common — every failure names the exact line and what's wrong."""
+    p = Path(path)
+    try:
+        lines = p.read_text().splitlines()
+    except OSError as e:
+        print(f"can't read --pairs file {p}: {e}")
+        return None
+    lines = [ln for ln in lines if ln.strip()]
+    if not lines:
+        print(f"--pairs file {p} is empty — expected a header line "
+              f"'{PAIRS_HEADER}' then one row per jump.")
+        return None
+    header = ",".join(c.strip() for c in lines[0].split(","))
+    if header != PAIRS_HEADER:
+        print(f"--pairs file {p}: the first line must be the header "
+              f"'{PAIRS_HEADER}' (got {lines[0]!r}).")
+        return None
+    pairs: list[dict] = []
+    for i, ln in enumerate(lines[1:], start=2):
+        cells = [c.strip() for c in ln.split(",")]
+        if len(cells) != 3:
+            print(f"--pairs file {p}, line {i}: expected 3 columns "
+                  f"({PAIRS_HEADER}), got {len(cells)}: {ln!r}")
+            return None
+        try:
+            n, fps, frames = int(cells[0]), float(cells[1]), float(cells[2])
+        except ValueError:
+            print(f"--pairs file {p}, line {i}: expected numbers "
+                  f"({PAIRS_HEADER}), got {ln!r}")
+            return None
+        if not (24.0 <= fps <= 1000.0):
+            print(f"--pairs file {p}, line {i}: fps {fps:g} outside the "
+                  "plausible 24-1000 range")
+            return None
+        if frames <= 0:
+            print(f"--pairs file {p}, line {i}: frames must be positive, "
+                  f"got {frames:g}")
+            return None
+        pairs.append({"n": n, "fps": fps, "frames": frames})
+    return pairs
+
+
+def _interactive_pairs(measured: list[dict]) -> list[dict] | None:
+    """Prompt on a TTY for video ground truth, jump by jump. Same return
+    shape as _load_pairs_csv: None on a hard stop (no TTY), [] if the human
+    picks nothing.
+
+    Non-TTY safety: cmd_validate already checks sys.stdin.isatty() before
+    calling this, but the check is repeated here too — the wizard-era
+    `input()` crash (see _replug_pause) is exactly the scar tissue this
+    guards against for any other caller.
+    """
+    if not sys.stdin.isatty():
+        print("Interactive ground-truth entry needs a terminal to type into "
+              "— this isn't one. Use --pairs <csv> instead (header "
+              f"'{PAIRS_HEADER}', one row per filmed jump).")
+        return None
+    print("\nMeasured jumps available:")
+    print("   n | raw airtime | height")
+    for r in measured:
+        print(f"  {r['n']:>3} | {r['raw']:>9.2f} s | {r['h']:>6.2f} m")
+    print("\nFor each jump you filmed: count frames from the first frame the")
+    print("board has FULLY left the water to the first frame it touches back")
+    print("down. Use the same rule every time — consistency beats philosophy.")
+    raw_sel = input("\nWhich jump numbers did you film? (space/comma "
+                    "separated, e.g. '2 5 7', blank = none): ").strip()
+    if not raw_sel:
+        return []
+    wanted: list[int] = []
+    for tok in raw_sel.replace(",", " ").split():
+        try:
+            wanted.append(int(tok))
+        except ValueError:
+            print(f"  (ignoring '{tok}' — not a number)")
+    by_n = {r["n"]: r for r in measured}
+    pairs: list[dict] = []
+    for n in wanted:
+        r = by_n.get(n)
+        if r is None:
+            print(f"  (jump #{n} isn't in the measured list — skipping)")
+            continue
+        print(f"\nJump #{n}: raw airtime {r['raw']:.2f}s, height {r['h']:.2f} m")
+        fps = None
+        while fps is None:
+            raw_fps = input("  Video fps (120, 240, or anything 24-1000): ").strip()
+            try:
+                f = float(raw_fps)
+            except ValueError:
+                print("  not a number — try again.")
+                continue
+            fps = f if 24.0 <= f <= 1000.0 else None
+            if fps is None:
+                print("  fps must be 24-1000 — try again.")
+        frames = None
+        while frames is None:
+            raw_frames = input(
+                "  Frames airborne (or 't' to enter takeoff/landing frame "
+                "numbers instead): ").strip()
+            if raw_frames.lower() == "t":
+                try:
+                    t0 = float(input("    Takeoff frame #: ").strip())
+                    t1 = float(input("    Landing frame #: ").strip())
+                except ValueError:
+                    print("    not a number — try again.")
+                    continue
+                frames = (t1 - t0) if t1 > t0 else None
+                if frames is None:
+                    print("    landing frame must be after takeoff — try again.")
+            else:
+                try:
+                    f = float(raw_frames)
+                except ValueError:
+                    print("  not a number — try again.")
+                    continue
+                frames = f if f > 0 else None
+                if frames is None:
+                    print("  frames must be positive — try again.")
+        pairs.append({"n": n, "fps": fps, "frames": frames})
+    return pairs
+
+
+def _match_pairs(measured: list[dict], pairs: list[dict]) -> "tuple[list[dict], list[int]]":
+    """Join ground-truth pairs onto their measured jump by n. Returns
+    (matched rows ready for _validate_stats, jump numbers with no match)."""
+    by_n = {m["n"]: m for m in measured}
+    matched: list[dict] = []
+    unmatched: list[int] = []
+    for pr in pairs:
+        m = by_n.get(pr["n"])
+        if m is None:
+            unmatched.append(pr["n"])
+            continue
+        matched.append({**m, "fps": pr["fps"], "frames": pr["frames"]})
+    return matched, unmatched
+
+
+def _rail_check(value: float, lo: float, hi: float, name: str) -> str | None:
+    """None if `value` is inside the firmware's sane range for `name`, else a
+    plain-English refusal explaining why it isn't being recommended."""
+    if lo <= value <= hi:
+        return None
+    return (f"computed {name} = {value:+.4f} is outside the firmware's sane "
+            f"range [{lo:g}, {hi:g}] — refusing to recommend it. That's "
+            "usually a data-entry slip in --pairs (wrong fps, miscounted "
+            "frames, or a jump_n from a different clip) rather than a real "
+            "device fault; check the pairs and re-run.")
+
+
+def _validate_stats(rows: list[dict], g: float, existing_offset: float = 0.0,
+                    existing_scale: float = 1.0) -> dict:
+    """The math core — pure (no I/O), so it's directly unit-testable.
+
+    `rows`: matched measured+truth dicts (n, fps, frames, raw, adj, h — `adj`
+    and `h` already carry whatever calibration was active when they were
+    recorded).
+
+    Composition convention (the most important correctness detail in this
+    tool — see docs/algorithm.md: `h = height_scale * g * (airtime+offset)^2/8`):
+
+      * `airtime_bias` is measured against RAW airtime, which the firmware
+        NEVER applies airtime_offset_s to (sim/detector.py: airtime_raw_s is
+        always pre-offset, airtime_s is post-offset). So `-median(bias)` is
+        already a complete REPLACEMENT value for airtime_offset_s — adding
+        the device's current offset back in would double-correct. This is
+        exactly how _drop_analyze works too: fresh raw airtimes in, a
+        replacement offset out, never a delta on top of the old one.
+
+      * `height_scale` composes the other way round. The device's reported
+        height DOES carry whatever height_scale is already active (it's
+        `existing_scale * g * adj^2 / 8`), so we rescale that reported
+        height from its old adjusted airtime to the new corrected one
+        (height ~ airtime^2) rather than recomputing from scratch — this
+        keeps whatever real height_scale is baked into `h` intact while
+        swapping in the corrected timing. The resulting ratio is a
+        correction RELATIVE TO the existing height_scale, so it must be
+        multiplied by it to get the correct replacement value. Order
+        matters: the airtime correction is notionally applied FIRST, and
+        the residual scale is derived only afterward — doing it the other
+        way round would conflate the two (height depends on airtime squared,
+        so an uncorrected timing bias also shows up as an apparent scale
+        error).
+    """
+    enriched = []
+    for r in rows:
+        true_airtime = r["frames"] / r["fps"]
+        true_height = g * true_airtime * true_airtime / 8.0
+        bias = r["raw"] - true_airtime  # additive evidence
+        height_ratio = (true_height / r["h"]) if r["h"] > 0 else float("nan")
+        pct_error = ((r["h"] - true_height) / true_height * 100.0
+                    if true_height > 0 else float("nan"))
+        enriched.append({**r, "true_airtime": true_airtime, "true_height": true_height,
+                         "bias": bias, "height_ratio": height_ratio,
+                         "pct_error": pct_error})
+
+    biases = [e["bias"] for e in enriched]
+    median_bias = statistics.median(biases)
+    mean_bias = statistics.mean(biases)
+    sd_bias = statistics.pstdev(biases) if len(biases) > 1 else 0.0
+    rmse_height = math.sqrt(statistics.mean(
+        (e["h"] - e["true_height"]) ** 2 for e in enriched))
+    current_mean_abs_pct = statistics.mean(abs(e["pct_error"]) for e in enriched)
+
+    recommended_offset = -median_bias
+
+    residual_ratios = []
+    for e in enriched:
+        corrected_airtime = max(0.0, e["raw"] + recommended_offset)
+        if e["adj"] > 0:
+            corrected_height = e["h"] * (corrected_airtime / e["adj"]) ** 2
+        else:
+            corrected_height = g * corrected_airtime ** 2 / 8.0
+        e["corrected_airtime"] = corrected_airtime
+        e["corrected_height"] = corrected_height
+        residual_ratios.append(
+            (e["true_height"] / corrected_height) if corrected_height > 0 else float("nan"))
+
+    scale_residual_factor = statistics.median(residual_ratios)
+    recommended_scale = existing_scale * scale_residual_factor
+
+    residual_pct_offset_only = statistics.mean(
+        abs((e["corrected_height"] - e["true_height"]) / e["true_height"] * 100.0)
+        for e in enriched)
+    residual_pct_both = statistics.mean(
+        abs((e["corrected_height"] * scale_residual_factor - e["true_height"])
+            / e["true_height"] * 100.0)
+        for e in enriched)
+
+    return {
+        "rows": enriched, "n": len(enriched),
+        "median_bias_s": median_bias, "mean_bias_s": mean_bias, "sd_bias_s": sd_bias,
+        "rmse_height_m": rmse_height, "current_mean_abs_pct_error": current_mean_abs_pct,
+        "existing_offset": existing_offset, "existing_scale": existing_scale,
+        "recommended_airtime_offset_s": recommended_offset,
+        "recommended_height_scale": recommended_scale,
+        "residual_pct_after_offset_only": residual_pct_offset_only,
+        "residual_pct_after_both": residual_pct_both,
+    }
+
+
+def _validate_decide(stats: dict) -> dict:
+    """Plain-English decision guidance (docs/algorithm.md, research.md §2)."""
+    bias_ok = abs(stats["median_bias_s"]) < BIAS_OK_S
+    height_ok = stats["current_mean_abs_pct_error"] < HEIGHT_ERR_OK_PCT
+    offset_rail = _rail_check(stats["recommended_airtime_offset_s"],
+                              OFFSET_MIN, OFFSET_MAX, "airtime_offset_s")
+    scale_rail = _rail_check(stats["recommended_height_scale"],
+                             SCALE_MIN, SCALE_MAX, "height_scale")
+    want_offset = not bias_ok
+    want_scale = stats["residual_pct_after_offset_only"] >= HEIGHT_ERR_OK_PCT
+    if bias_ok and height_ok:
+        verdict = "good"
+    elif want_offset and want_scale:
+        verdict = "offset_and_scale"
+    elif want_offset:
+        verdict = "offset_only"
+    elif want_scale:
+        verdict = "scale_only"
+    else:
+        verdict = "good"
+    return {
+        "bias_ok": bias_ok, "height_ok": height_ok,
+        "want_offset": want_offset, "want_scale": want_scale,
+        "recommend_offset": want_offset and offset_rail is None,
+        "recommend_scale": want_scale and scale_rail is None,
+        "offset_rail_refusal": offset_rail, "scale_rail_refusal": scale_rail,
+        "verdict": verdict,
+    }
+
+
+def _validate_apply(dev: "Device", decide: dict, stats: dict) -> "tuple[bool, list[str]]":
+    """Push accepted recommendations to a connected device via `set`, using
+    the exact ERR-checking pattern _drop_analyze uses: a `set` that returns
+    ERR is a hard failure — stop immediately rather than apply a partial or
+    silently-wrong calibration."""
+    msgs: list[str] = []
+    if decide["recommend_offset"]:
+        val = round(stats["recommended_airtime_offset_s"], 4)
+        try:
+            resp = dev.command(f"set airtime_offset_s {val}", timeout=8)
+        except Exception as e:
+            msgs.append(f"couldn't apply airtime_offset_s: {e}")
+            return False, msgs
+        if any(ln.startswith("ERR") for ln in resp):
+            msgs.append(f"device REJECTED airtime_offset_s={val}:")
+            msgs.extend(f"  {ln}" for ln in resp)
+            return False, msgs
+        msgs.append(f"applied airtime_offset_s = {val:+.4f}")
+    if decide["recommend_scale"]:
+        val = round(stats["recommended_height_scale"], 3)
+        try:
+            resp = dev.command(f"set height_scale {val}", timeout=8)
+        except Exception as e:
+            msgs.append(f"couldn't apply height_scale: {e}")
+            return False, msgs
+        if any(ln.startswith("ERR") for ln in resp):
+            msgs.append(f"device REJECTED height_scale={val}:")
+            msgs.extend(f"  {ln}" for ln in resp)
+            return False, msgs
+        msgs.append(f"applied height_scale = {val:.3f}")
+    return True, msgs
+
+
+def _fmt_cal_line(cal: dict) -> str:
+    if cal.get("airtime_offset_s") is None:
+        return cal.get("source") or "unknown"
+    return (f"airtime_offset_s={cal['airtime_offset_s']:+.4f} "
+            f"height_scale={cal['height_scale']:.3f} "
+            f"(source: {cal.get('source', '?')})")
+
+
+def _write_validate_report(md_path: Path, csv_path: Path, stats: dict, decide: dict,
+                           cal: dict, args, apply_result: str,
+                           applied_msgs: list[str]) -> None:
+    utc_now = datetime.now(timezone.utc)
+    lines = [
+        f"# Video ground-truth validation — {utc_now.strftime('%Y-%m-%d')}", "",
+        f"**Generated (UTC):** {utc_now.isoformat(timespec='seconds')}",
+        f"**Firmware:** {cal.get('fw') or 'not connected'}",
+        f"**Device calibration (CAL line):** {_fmt_cal_line(cal)}",
+        "**Source of measured jumps:** "
+        + (f"session file `{args.session}`" if args.session else "connected device"),
+        "", "## Pairs", "",
+        "| n | fps | frames | true airtime (s) | measured raw (s) | "
+        "measured adj (s) | true height (m) | measured height (m) | error % |",
+        "|---|-----|--------|-------------------|-------------------|"
+        "-------------------|------------------|----------------------|---------|",
+    ]
+    for e in stats["rows"]:
+        lines.append(
+            f"| {e['n']} | {e['fps']:g} | {e['frames']:g} | {e['true_airtime']:.3f} | "
+            f"{e['raw']:.3f} | {e['adj']:.3f} | {e['true_height']:.3f} | "
+            f"{e['h']:.3f} | {e['pct_error']:+.1f}% |")
+    lines += [
+        "", "## Aggregate", "",
+        f"- Jumps validated: {stats['n']}",
+        f"- Airtime bias: median {stats['median_bias_s'] * 1000:+.0f} ms, "
+        f"mean {stats['mean_bias_s'] * 1000:+.0f} ms, "
+        f"sd {stats['sd_bias_s'] * 1000:.0f} ms",
+        f"- Height RMSE: {stats['rmse_height_m']:.3f} m",
+        f"- Mean |per-jump % error|, as currently configured: "
+        f"{stats['current_mean_abs_pct_error']:.1f}%",
+        "", "## Recommendation", "",
+    ]
+    if decide["verdict"] == "good":
+        lines.append(
+            f"Calibration already looks good: median bias "
+            f"{stats['median_bias_s'] * 1000:+.0f} ms is under the "
+            f"~{BIAS_OK_S * 1000:.0f} ms published IMU-bias scale (research.md §2), "
+            f"and height error ({stats['current_mean_abs_pct_error']:.1f}%) is under "
+            f"{HEIGHT_ERR_OK_PCT:.0f}%. **Recommend changing nothing.**")
+    else:
+        if decide["want_offset"]:
+            if decide["offset_rail_refusal"]:
+                lines.append(f"- airtime_offset_s: {decide['offset_rail_refusal']}")
+            else:
+                lines.append(
+                    f"- **airtime_offset_s = {stats['recommended_airtime_offset_s']:+.4f}** "
+                    f"— bias ({stats['median_bias_s'] * 1000:+.0f} ms) exceeds the "
+                    f"~{BIAS_OK_S * 1000:.0f} ms IMU-bias scale (research.md §2). This is "
+                    "a REPLACEMENT value for the device's current airtime_offset_s, not "
+                    "added on top of it (see the method note below).")
+        else:
+            lines.append(
+                f"- airtime_offset_s: no change — bias "
+                f"({stats['median_bias_s'] * 1000:+.0f} ms) is already under "
+                f"~{BIAS_OK_S * 1000:.0f} ms.")
+        if decide["want_scale"]:
+            if decide["scale_rail_refusal"]:
+                lines.append(f"- height_scale: {decide['scale_rail_refusal']}")
+            else:
+                lines.append(
+                    f"- **height_scale = {stats['recommended_height_scale']:.3f}** — a "
+                    "residual height error of "
+                    f"{stats['residual_pct_after_offset_only']:.1f}% survives the airtime "
+                    f"correction (above the {HEIGHT_ERR_OK_PCT:.0f}% bar). algorithm.md's "
+                    "open wing-lift question — whether an aggressively-flown wing adds "
+                    "measurable mid-air lift — is the physical reason a scale residual "
+                    "might exist (research.md §2).")
+                lines.append(
+                    "- With both corrections applied, residual height error drops to "
+                    f"{stats['residual_pct_after_both']:.1f}%.")
+        else:
+            lines.append(
+                "- height_scale: no change — after the airtime correction, residual "
+                f"height error is {stats['residual_pct_after_offset_only']:.1f}%, under "
+                f"{HEIGHT_ERR_OK_PCT:.0f}%.")
+    lines += ["", f"**Applied:** {apply_result}"]
+    if applied_msgs:
+        lines += ["```"] + applied_msgs + ["```"]
+    lines += [
+        "",
+        "## Method note: composing with an existing device calibration",
+        "",
+        "`airtime_offset_s` is derived from the RAW (pre-offset) airtime the "
+        "firmware reports, which is never affected by whatever offset is "
+        "already active on the device — so the recommendation above is "
+        "already the complete replacement value (mirrors how `./tools/jump "
+        "drop`'s `_drop_analyze` computes its recommendation from fresh raw "
+        "airtimes and writes it as a replacement, never a delta). "
+        "`height_scale` is derived from the device's REPORTED height, which "
+        "*does* carry the current height_scale, so the residual ratio found "
+        "after notionally re-applying the new airtime correction is "
+        "multiplied by the existing height_scale to get the replacement "
+        "value. Order matters: the airtime correction is applied first, and "
+        "the residual scale is derived only afterward — reversing the order "
+        "would conflate the two, since height depends on airtime squared.",
+        "",
+        f"Device calibration read at analysis time: {_fmt_cal_line(cal)}.",
+        "",
+        "## Method",
+        "",
+        "Flight-time from high-speed video frame counting, 120-240 fps, per "
+        "Pueo 2023; see docs/research.md.",
+        "",
+    ]
+    md_path.write_text("\n".join(lines) + "\n")
+
+    csv_lines = [
+        "jump_n,fps,frames,true_airtime_s,true_height_m,measured_raw_airtime_s,"
+        "measured_adjusted_airtime_s,measured_height_m,airtime_bias_s,"
+        "height_ratio,pct_error"
+    ]
+    for e in stats["rows"]:
+        csv_lines.append(
+            f"{e['n']},{e['fps']:g},{e['frames']:g},{e['true_airtime']:.4f},"
+            f"{e['true_height']:.4f},{e['raw']:.4f},{e['adj']:.4f},{e['h']:.4f},"
+            f"{e['bias']:.4f},{e['height_ratio']:.4f},{e['pct_error']:.2f}")
+    csv_path.write_text("\n".join(csv_lines) + "\n")
+
+
+def cmd_validate(args) -> int:
+    from detector import load_params
+
+    if not args.pairs and not sys.stdin.isatty():
+        print("Interactive ground-truth entry needs a terminal to type into "
+              "— this isn't one. Use --pairs <csv> instead (header "
+              f"'{PAIRS_HEADER}', one row per filmed jump).")
+        return 1
+
+    p = load_params(CONFIG_PATH)
+    need_device = (not args.session) or args.apply
+    dev = proc = None
+    cal = {"fw": None, "airtime_offset_s": p.airtime_offset_s,
+          "height_scale": p.height_scale,
+          "source": "config/params.json (no device connected)"}
+    try:
+        if need_device:
+            dev, proc = open_device(args, fake_scenario="session")
+            live = _read_device_cal(dev)
+            if live["airtime_offset_s"] is not None:
+                cal = live
+
+        if args.session:
+            measured = _load_session_jumps(args.session)
+            if measured is None:
+                return 1
+            print(f"=== Video ground-truth validation — {len(measured)} jump(s) "
+                  f"from {args.session} ===\n")
+        else:
+            measured = _stored_rows(dev)
+            if not measured:
+                print("The device has no stored jumps to validate against — "
+                      "ride first, or pass --session <path> to validate a "
+                      "previously synced session.")
+                return 1
+            print(f"=== Video ground-truth validation — {len(measured)} stored "
+                  "jump(s) on the device ===\n")
+
+        if args.pairs:
+            pairs = _load_pairs_csv(args.pairs)
+            if pairs is None:
+                return 1
+        else:
+            pairs = _interactive_pairs(measured)
+            if pairs is None:
+                return 1
+            if not pairs:
+                print("No jumps selected — nothing to validate.")
+                return 1
+
+        matched, unmatched = _match_pairs(measured, pairs)
+        for n in unmatched:
+            print(f"  (jump #{n} from --pairs isn't in the measured list — skipping)")
+        if not matched:
+            print("None of the --pairs jump numbers matched a measured jump — "
+                  "nothing to validate.")
+            return 1
+
+        stats = _validate_stats(matched, p.g, cal["airtime_offset_s"], cal["height_scale"])
+        decide = _validate_decide(stats)
+
+        print(f"{'n':>3}  {'fps':>5}  {'frames':>6}  {'true air':>9}  "
+              f"{'meas raw':>9}  {'true h':>7}  {'meas h':>7}  {'err%':>7}")
+        for e in stats["rows"]:
+            print(f"{e['n']:>3}  {e['fps']:>5.0f}  {e['frames']:>6.0f}  "
+                  f"{e['true_airtime']:>8.3f}s  {e['raw']:>8.3f}s  "
+                  f"{e['true_height']:>6.2f}m  {e['h']:>6.2f}m  "
+                  f"{e['pct_error']:>+6.1f}%")
+
+        print(f"\nAirtime bias: median {stats['median_bias_s'] * 1000:+.0f} ms, "
+              f"mean {stats['mean_bias_s'] * 1000:+.0f} ms, "
+              f"sd {stats['sd_bias_s'] * 1000:.0f} ms  ({stats['n']} jumps)")
+        print(f"Height RMSE: {stats['rmse_height_m']:.3f} m   "
+              "(mean |error| as currently configured: "
+              f"{stats['current_mean_abs_pct_error']:.1f}%)")
+        print(f"Device calibration read: {_fmt_cal_line(cal)}")
+
+        print()
+        if decide["verdict"] == "good":
+            print("Verdict: calibration already looks good — median bias is "
+                  f"under {BIAS_OK_S * 1000:.0f} ms and height error is under "
+                  f"{HEIGHT_ERR_OK_PCT:.0f}%. Recommend changing nothing.")
+        else:
+            if decide["want_offset"]:
+                if decide["offset_rail_refusal"]:
+                    print("⚠️  " + decide["offset_rail_refusal"])
+                else:
+                    print(
+                        f"Bias ({stats['median_bias_s'] * 1000:+.0f} ms) is above the "
+                        f"~{BIAS_OK_S * 1000:.0f} ms IMU-bias scale (research.md §2) — "
+                        "timing is the dominant error. Recommend: airtime_offset_s = "
+                        f"{stats['recommended_airtime_offset_s']:+.4f} (a replacement "
+                        "value for the current setting, not added to it).")
+            else:
+                print(f"Bias is small ({stats['median_bias_s'] * 1000:+.0f} ms, under "
+                      f"~{BIAS_OK_S * 1000:.0f} ms) — timing isn't the problem.")
+            if decide["want_scale"]:
+                if decide["scale_rail_refusal"]:
+                    print("⚠️  " + decide["scale_rail_refusal"])
+                else:
+                    print(
+                        "A residual height error survives the airtime correction "
+                        f"({stats['residual_pct_after_offset_only']:.1f}%, above the "
+                        f"{HEIGHT_ERR_OK_PCT:.0f}% bar) — recommend: height_scale = "
+                        f"{stats['recommended_height_scale']:.3f}. (algorithm.md's open "
+                        "wing-lift question — whether an aggressively-flown wing adds "
+                        "measurable mid-air lift — is the physical reason a scale "
+                        "residual might exist; research.md §2.)")
+                    print(f"With both corrections applied, residual height error drops "
+                          f"to {stats['residual_pct_after_both']:.1f}%.")
+            elif decide["want_offset"]:
+                print(
+                    "After that correction, residual height error is "
+                    f"{stats['residual_pct_after_offset_only']:.1f}% — under "
+                    f"{HEIGHT_ERR_OK_PCT:.0f}%, so no height_scale change is recommended.")
+
+        out_dir = DATA_DIR / "validation"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        utc_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        md_path = out_dir / f"validate-{utc_date}.md"
+        csv_path = out_dir / f"validate-{utc_date}.csv"
+
+        do_apply = args.apply
+        can_apply = decide["recommend_offset"] or decide["recommend_scale"]
+        if not do_apply and can_apply and dev is not None and sys.stdin.isatty() \
+                and not getattr(args, "fake", False):
+            do_apply = input(
+                "\nApply the recommendation(s) to the connected device now? "
+                "[y/N] ").strip().lower() == "y"
+
+        applied_msgs: list[str] = []
+        apply_result = "not requested"
+        if do_apply:
+            if not can_apply:
+                apply_result = "nothing to apply (no recommendation cleared the rails)"
+                print(f"\n({apply_result})")
+            else:
+                ok, applied_msgs = _validate_apply(dev, decide, stats)
+                for m in applied_msgs:
+                    print(("✅ " if ok else "❌ ") + m)
+                if not ok:
+                    apply_result = "FAILED (see messages above)"
+                    _write_validate_report(md_path, csv_path, stats, decide, cal,
+                                          args, apply_result, applied_msgs)
+                    print(f"\nReport written anyway: {md_path}")
+                    return 1
+                apply_result = "applied"
+        elif can_apply:
+            apply_result = "not applied (pass --apply, or confirm at the prompt)"
+
+        _write_validate_report(md_path, csv_path, stats, decide, cal, args,
+                              apply_result, applied_msgs)
+        print(f"\nReport: {md_path}\nData:   {csv_path}")
+        return 0
+    finally:
+        if dev is not None:
+            dev.close()
         if proc:
             proc.terminate()
 
@@ -1918,6 +2585,21 @@ def main() -> int:
     p.add_argument("--fake", action="store_true", help="rehearse with a simulated device")
     p.add_argument("--fast", action="store_true", help=argparse.SUPPRESS)
 
+    p = add("validate", cmd_validate,
+            help="video ground-truth calibration: compare stored jumps to filmed "
+                 "airtimes, recommend airtime_offset_s/height_scale, write a report")
+    p.add_argument("--session",
+                   help="a synced session's jumps.csv (file or its directory) instead "
+                        "of the connected device's stored jump list")
+    p.add_argument("--pairs",
+                   help="CSV of video ground truth: header 'jump_n,fps,frames' then "
+                        "one row per filmed jump — skips the interactive prompts")
+    p.add_argument("--apply", action="store_true",
+                   help="write the recommendation(s) to the connected device "
+                        "(else asks on a TTY, or use --apply non-interactively)")
+    p.add_argument("--fake", action="store_true", help="rehearse with a simulated device")
+    p.add_argument("--fast", action="store_true", help=argparse.SUPPRESS)
+
     add("monitor", cmd_monitor, help="raw serial console")
 
     p = add("replay", cmd_replay, help="re-run detector over a capture CSV")
@@ -1938,7 +2620,7 @@ def main() -> int:
     try:
         rc = args.fn(args)
         if LOG.path and args.cmd in ("flash", "selftest", "desktest", "drop",
-                                     "sync", "monitor"):
+                                     "sync", "validate", "monitor"):
             print(f"(session log: {LOG.path})")
         return rc
     except TimeoutError as e:
