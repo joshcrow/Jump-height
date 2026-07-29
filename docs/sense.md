@@ -11,7 +11,7 @@ LSM6DS3 driver, raw QSPI store with binary trace v2 + codec parity tests,
 watchdog); CI publishes a drag-and-drop `.uf2`. Every runtime assumption
 that only hardware can prove is numbered in
 **[../firmware/SENSE_FIRST_BOOT.md](../firmware/SENSE_FIRST_BOOT.md)**
-(20 items) — day one is flash + work down that list, i.e. milestone S0
+(21 items) — day one is flash + work down that list, i.e. milestone S0
 and most of S1 already have prebuilt answers waiting.
 
 **Product statement.** The Sense puck is a **tiny Garmin data-field

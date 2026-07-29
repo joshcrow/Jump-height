@@ -20,7 +20,10 @@
 //                         Encoder::finish())
 //   5       2*N   samples N=count little-endian u16 values, magnitude in
 //                         milli-g (1 count == 0.001 g; 0..65535 => 0..65.535 g,
-//                         comfortably covers our ±8 g range plus landing spikes)
+//                         comfortably covers either platform's accel range —
+//                         the ESP32 build's ±8 g and the Sense's ±16 g
+//                         (SENSE_FIRST_BOOT.md item 20) both fit, with room
+//                         to spare for landing spikes beyond either)
 //   5+2*N   1     crc8    CRC-8 (poly 0x07, init 0x00, no input/output
 //                         reflection, no final XOR — see crc8() below) over
 //                         every preceding byte of THIS block (header+payload,
@@ -47,6 +50,29 @@
 // synthetic samples: that is the format's actual operating assumption, not
 // a test artifact.
 //
+// Double precision, both directions (review-store.md finding #2 —
+// CONFIRMED BY TEST, not theoretical): the encode-side t_s->t0_ms
+// conversion (t0_ms_from_t_s() below — the ONE arithmetic path both
+// jh_store.cpp's real encode site and firmware/test/trace_codec_harness.cpp's
+// host harness call, rather than two independently-written copies that
+// could drift apart) and the decode-side reconstruction (decode_one_block()
+// below) both compute in double, and on_sample()'s t_s parameter is itself
+// a double, all the way out to the final "%.3f" formatting. Doing this in
+// float32 throughout used to diverge from Python's native-double math
+// (sim/trace_codec.py) at multi-hour timestamps: float32's ~7-decimal-digit
+// mantissa can no longer resolve 0.001 s steps once t exceeds ~8300 s (its
+// ULP there already exceeds 1 ms) — measured divergence at t=8192.021s on
+// the encode side, ~4.55h on the decode side, both comfortably inside this
+// format's real, multi-hour operating range (docs/sense.md §3.2's ~5h
+// capacity estimate). Computing the same expression in double and then
+// narrowing the RESULT back to float32 for on_sample() does NOT fix this
+// (verified): a single double-to-float32 rounding at these magnitudes can
+// itself land on the wrong side of a "%.3f" rounding boundary regardless of
+// how precisely the intermediate arithmetic was done — the fix has to keep
+// t_s a double all the way to the formatted string, matching Python (whose
+// floats are natively double everywhere), not merely during the arithmetic
+// in between.
+//
 // Block boundaries are a POLICY decision that belongs to the caller (nominally
 // once per second of wall-clock t, or immediately once a block is full, or
 // on a natural discontinuity like an idle-gate transition) — this header has
@@ -72,6 +98,7 @@
 
 #pragma once
 
+#include <math.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -107,13 +134,44 @@ inline uint8_t crc8(const uint8_t* data, size_t len) {
 // >= 0: it's a vector magnitude) and clamps to the u16 range — both ends
 // exposed so the host test harness and jh_store.cpp share one rounding rule
 // rather than risking two subtly different ones.
+//
+// Non-finite guard (review-store.md finding #3): a NaN mag_g reaching the
+// cast below is undefined behavior in C++ (observed: 0 on this project's
+// host test compiler, but ARM is UNSPECIFIED, not merely "also 0" — a real
+// correctness gap, not a style nit). +-inf would otherwise sail through the
+// clamps below in an inconsistent way (an inf fails `< 0.0f`, but a
+// subsequent inf*1000+0.5 is still inf, which DOES trip the `v > 65535.0f`
+// clamp — so +inf was accidentally survivable already, -inf was not) — the
+// simpler, deliberate contract here is that ANY non-finite input, NaN or
+// +-inf alike, maps to 0, not "0 for NaN/-inf, 65535 for +inf" as an
+// accident of clamp ordering. Reachable via a garbled trace_append() line
+// parsing to atof("nan")/atof("inf") — see jh_store.cpp's feedSample(),
+// which now also screens the parsed value at the source (belt+suspenders,
+// not the only guard). Must match sim/trace_codec.py::milli_g_from_g() bit
+// for bit.
 inline uint16_t milli_g_from_g(float mag_g) {
+  if (!isfinite(mag_g)) return 0;
   if (mag_g < 0.0f) mag_g = 0.0f;
   float v = mag_g * 1000.0f + 0.5f;
   if (v > 65535.0f) v = 65535.0f;
   return (uint16_t)v;
 }
 inline float g_from_milli_g(uint16_t milli_g) { return (float)milli_g / 1000.0f; }
+
+// Millisecond timestamp for a block's t0, from the (float) seconds value
+// jh_store.cpp's sampling path hands us — the ONE arithmetic path both
+// jh_store.cpp's feedSample() (the real, device-side encode site) and
+// firmware/test/trace_codec_harness.cpp's host harness call (see this
+// file's "Double precision, both directions" note above for why sharing
+// this matters, not just computing it identically in two places).
+// Promoting t_s to double BEFORE the *1000 multiply — rather than
+// multiplying in float32 first, as jh_store.cpp used to — avoids a
+// double-rounding defect (one rounding from the float32 multiply itself, a
+// second from lround()'s own round-to-integer) that measurably diverged
+// from Python's (always-double) math at t=8192.021s and beyond.
+inline uint32_t t0_ms_from_t_s(float t_s) {
+  return (uint32_t)lround((double)t_s * 1000.0);
+}
 
 // ---------------------------------------------------------------- Encoder
 // Builds one block at a time into caller-owned memory — no dynamic
@@ -194,7 +252,7 @@ struct BlockResult {
 // The caller's job is simply to stop at the first !ok block — this mirrors
 // the append-only, partial-last-page-ignored power-loss stance.
 inline BlockResult decode_one_block(const uint8_t* data, size_t len, uint32_t log_hz,
-                                     void (*on_sample)(void* ctx, float t_s, float mag_g),
+                                     void (*on_sample)(void* ctx, double t_s, float mag_g),
                                      void* ctx) {
   BlockResult r = {false, 0, 0, 0};
   if (len < HEADER_BYTES) return r;
@@ -215,8 +273,13 @@ inline BlockResult decode_one_block(const uint8_t* data, size_t len, uint32_t lo
     for (uint32_t i = 0; i < count; ++i) {
       const uint16_t milli_g = (uint16_t)data[5 + 2 * i] |
                                 ((uint16_t)data[5 + 2 * i + 1] << 8);
-      const float t_s   = (t0_ms / 1000.0f) + (float)i / (float)log_hz;
-      const float mag_g = g_from_milli_g(milli_g);
+      // Double precision throughout (see this file's "Double precision,
+      // both directions" note) — NOT (double)((t0_ms/1000.0f) + (float)i /
+      // (float)log_hz): narrowing to float32 anywhere in this expression
+      // before handing t_s onward reintroduces exactly the multi-hour
+      // divergence from Python this fixes.
+      const double t_s   = (double)t0_ms / 1000.0 + (double)i / (double)log_hz;
+      const float  mag_g = g_from_milli_g(milli_g);
       on_sample(ctx, t_s, mag_g);
     }
   }
@@ -231,7 +294,7 @@ inline BlockResult decode_one_block(const uint8_t* data, size_t len, uint32_t lo
 // never reading past) the first incomplete/corrupt one. Returns total bytes
 // consumed — == len iff every block in `data` was whole and valid.
 inline size_t decode(const uint8_t* data, size_t len, uint32_t log_hz,
-                     void (*on_sample)(void* ctx, float t_s, float mag_g), void* ctx) {
+                     void (*on_sample)(void* ctx, double t_s, float mag_g), void* ctx) {
   size_t off = 0;
   while (off < len) {
     const BlockResult r = decode_one_block(data + off, len - off, log_hz, on_sample, ctx);
@@ -246,14 +309,18 @@ struct CsvAdapter {
   void (*on_line)(void* ctx, const char* line, size_t n);
   void* user_ctx;
 };
-inline void emit_csv_sample(void* ctx, float t_s, float mag_g) {
+inline void emit_csv_sample(void* ctx, double t_s, float mag_g) {
   CsvAdapter* a = (CsvAdapter*)ctx;
   char buf[32];
   // Matches main.cpp's emit layer exactly: trace_buf += String(t,3) + ","
   // + String(mag,3) + "\n" — i.e. fixed 3-decimal-place text, one row per
   // sample. This equality (not just "close enough") is the acceptance bar
-  // (see the file's top comment and tools/tests/test_trace_codec.py).
-  int n = snprintf(buf, sizeof(buf), "%.3f,%.3f\n", (double)t_s, (double)mag_g);
+  // (see the file's top comment and tools/tests/test_trace_codec.py). t_s
+  // is a double all the way to this snprintf (see the file's "Double
+  // precision, both directions" note) — mag_g stays float, unaffected by
+  // that finding (magnitudes never grow unboundedly the way a session's
+  // elapsed time does).
+  int n = snprintf(buf, sizeof(buf), "%.3f,%.3f\n", t_s, (double)mag_g);
   if (n <= 0) return;
   if (n > (int)sizeof(buf) - 1) n = (int)sizeof(buf) - 1;  // never happens at 3dp, belt+suspenders
   a->on_line(a->user_ctx, buf, (size_t)n);

@@ -155,6 +155,8 @@
 #include <Arduino.h>
 #include <bluefruit.h>
 
+#include "platform/jh_clock.h"
+
 namespace jh_link {
 
 namespace {
@@ -341,7 +343,22 @@ bool begin(const char* name) {
                                                     // restart ourselves
   Bluefruit.Advertising.setInterval(32, 244);   // fast 20 ms / slow 152.5 ms
   Bluefruit.Advertising.setFastTimeout(30);
-  return Bluefruit.Advertising.start(0);        // 0 = advertise forever
+  const bool started = Bluefruit.Advertising.start(0);  // 0 = advertise forever
+
+  // Feed right before handing control back to main.cpp's setup() (review-
+  // nrf52.md finding #4): wdtInit() above starts the ~3.5s countdown, but
+  // from here until loop() first runs pump() (its own feed), setup() still
+  // has to run jh_persist::init()/loadCalibration()/runSelfTest() (>=500ms
+  // just for the accel self-test's own 100x delay(5) loop) /
+  // scanStoredJumps() — all feed-less against that budget. Comfortably
+  // fits today (fragile, per the review), but feeding exactly here — rather
+  // than relying on whatever's left over from wdtInit()'s own reload above —
+  // is what keeps it that way as those calls grow. See SENSE_FIRST_BOOT.md
+  // for the matching QSPI-hang-before-READY diagnostic this same finding
+  // also identified (a hang in jh_store::init(), called BEFORE this
+  // function and its wdtInit(), has no watchdog protection at all).
+  wdtFeed();
+  return started;
 }
 
 bool takeGreetPending() {
@@ -356,6 +373,25 @@ void pump() {
   wdtFeed();  // see wdtInit()'s comment: fed every loop() pass, i.e. far
              // more often than the ~3.5 s timeout, so this only matters if
              // something else actually hangs loop() itself.
+
+  // Keep jh_clock's wrap-tracker alive even while sampling is paused
+  // (review-nrf52.md finding #3): main.cpp's loop() calls jh_clock::
+  // micros64() itself, but only AFTER an `if (!sensor_ok) { delay(10);
+  // return; }` early return — so if the IMU is ever down (a wiring fault,
+  // recovered later via `selftest`) for more than the underlying 32-bit
+  // micros()'s ~71.6-minute wrap period, the wrap tracker misses a wrap
+  // entirely and every subsequent timestamp this boot is off by ~71.6
+  // minutes. pump() is called unconditionally, every loop() pass, BEFORE
+  // that early return (verified against firmware/src/main.cpp's loop():
+  // jh_link::pump() runs at line ~489, the `!sensor_ok` return at ~491) —
+  // so calling it here keeps the tracker fed regardless of sensor_ok. The
+  // return value is discarded: this call exists purely for its side effect
+  // (advancing s_wraps in jh_clock.cpp's own statics), not to read the
+  // time. nRF52-only fix (this platform's pump() only) — see the ESP32
+  // sibling's jh_link.cpp, unaffected, since docs/sense.md's own refactor
+  // notes already flagged 32-bit micros() wrap-tracking as chip-specific.
+  (void)jh_clock::micros64();
+
   if (txqSize() > 0 && (uint32_t)(micros() - s_last_chunk_us) >= CHUNK_GAP_US) {
     sendOneChunk();
   }
@@ -370,6 +406,18 @@ void write(const char* data, size_t len) {
       // Queue full: bulk output (a FILE dump) from inside handleCommand —
       // sampling is paused there anyway, so drain inline, paced — the ONE
       // sanctioned exception to "write() only ever queues" (jh_link.h).
+      //
+      // CRITICAL (review-nrf52.md finding #1): this loop runs entirely
+      // outside loop()'s own per-pass wdtFeed() — pump() isn't called again
+      // until this whole write() returns — and a big FILE dump (jumps.csv +
+      // trace.csv, the `dump` command) can spend well over the ~3.5s WDT
+      // window right here: measured budget exhaustion from ~4.6KB (23-B
+      // MTU, worst case) to ~55KB (247-B MTU) of queued output, i.e. any
+      // real session sync with a subscribed central. Feed every iteration
+      // of this loop (each iteration paces ~CHUNK_GAP_US = 15ms, so this is
+      // a cheap, frequent reload, not a rate-limited one) so a dump-over-
+      // BLE never watchdog-resets mid-transfer.
+      wdtFeed();
       while ((uint32_t)(micros() - s_last_chunk_us) < CHUNK_GAP_US) delay(1);
       sendOneChunk();
     }

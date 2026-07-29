@@ -76,7 +76,13 @@ int main() {
 
     if (!block_open || this_sec != cur_sec || enc.full()) {
       flush_block();
-      enc.begin((uint32_t)std::lround((double)t_s * 1000.0));
+      // review-store.md finding #2: call the SAME t_s->t0_ms arithmetic
+      // jh_store.cpp's real encode site uses (trace_codec::t0_ms_from_t_s())
+      // rather than a separately-written double-precision expression that
+      // merely happened to agree with it — one arithmetic path, shared, so
+      // a parity test against this harness genuinely tests the firmware's
+      // own encode behavior.
+      enc.begin(trace_codec::t0_ms_from_t_s(t_s));
       block_open = true;
       cur_sec = this_sec;
     }

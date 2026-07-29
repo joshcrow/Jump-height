@@ -72,7 +72,19 @@ void init() {
   // Power the sensor rail, then let it settle before the bus is touched.
   pinMode(PIN_LSM6DS3TR_C_POWER, OUTPUT);
   digitalWrite(PIN_LSM6DS3TR_C_POWER, HIGH);
-  delay(20);  // boot-settle margin — VERIFY (SENSE_FIRST_BOOT.md)
+  // Boot-settle margin (review-nrf52.md finding #5 / SENSE_FIRST_BOOT.md
+  // item 7, now RESOLVED-BY-DATASHEET): the real LSM6DS3TR-C datasheet's
+  // electrical characteristics table gives Ton (turn-on time, power-up to
+  // first valid output) as 35 ms — this project's own authoring environment
+  // couldn't fetch the datasheet PDF directly (see this platform's other
+  // comments on that), but the figure was extracted from it directly for
+  // this fix. The previous 20 ms was a conservative-sounding guess, not a
+  // cited spec number, and sat BELOW the real 35 ms figure — masked so far
+  // only by incidental boot ordering (other setup work already burning
+  // enough wall-clock time before the bus gets touched). 40 ms restores a
+  // deliberate margin above the datasheet number rather than trusting
+  // "worked in practice" to keep holding as that ordering shifts.
+  delay(40);
 
   Wire1.begin();
   Wire1.setClock(400000);

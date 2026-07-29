@@ -16,9 +16,9 @@
 //
 // ESP32: MPU-6050 over I2C (src/platform/esp32/jh_imu.cpp, wrapping the
 // register-level driver in mpu6050_min.h — read that file for the exact
-// register map). A future platform's sensor (e.g. the Sense's LSM6DS3TR-C,
-// see docs/sense.md §3.7) implements this same
-// probe-by-address/begin/who_am_i/read_accel_g shape.
+// register map). The Sense's LSM6DS3TR-C now implements this same
+// probe-by-address/begin/who_am_i/read_accel_g shape (src/platform/nrf52/
+// jh_imu.cpp, wrapping lsm6ds3_min.h — see docs/sense.md §3.7).
 //
 // SPDX-License-Identifier: MIT
 

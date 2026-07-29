@@ -32,9 +32,23 @@
 //     realistic timing/current draw (that's the bench's job per
 //     SENSE_FIRST_BOOT.md items 8/11/13 — this harness reports wall-clock
 //     durations for order-of-magnitude sanity only, never asserts on them
-//     as a hardware timing proxy), and interrupted ERASE operations (see
-//     the fault-injection comment on writeBuffer() below — only writes are
-//     interruptible, matching what was actually asked for).
+//     as a hardware timing proxy), and interrupted ERASE operations across a
+//     PROCESS BOUNDARY — i.e. a genuine power cut landing mid-erase (see the
+//     "Untested class remaining" note in review-store.md and the matching
+//     SENSE_FIRST_BOOT.md bench-awareness item: this corruption shape is
+//     deliberately left undesigned-for). A same-process, non-fatal ERASE
+//     FAILURE (a transient bus glitch, chip keeps running) is a DIFFERENT
+//     shape and IS modeled — see arm_erase_failure() below.
+//   - OUT-OF-BOUNDS address+len is asserted/aborted on, deliberately
+//     STRICTER than real hardware (review-store.md finding #4): the real
+//     library's OOB behavior is chip-specific and unspecified by this
+//     mock's own contract, so silently clipping (as this mock used to)
+//     would let a future off-by-one in jh_store.cpp's own address/length
+//     arithmetic pass every host test cleanly and only fail on real
+//     silicon, in whatever chip-specific way THAT turns out to behave.
+//     Every current call site is already correctly pre-bounded (verified
+//     empirically, including the exact-last-slot torn-write case), so this
+//     should never actually fire against the real, unmodified jh_store.cpp.
 //   - Deliberately NOT a base-class hierarchy: the real library has an
 //     abstract Adafruit_FlashTransport so Adafruit_SPIFlashBase can sit on
 //     top of either a QSPI or plain-SPI transport. jh_store.cpp only ever
@@ -72,6 +86,20 @@
 // (jh_store.cpp) believed about that write having succeeded is simply never
 // seen again by anyone; only the next fresh process's boot-time scan of the
 // resulting bytes decides what was really and validly stored.
+//
+// NON-FATAL FAILURE INJECTION (review-store.md finding #1's OTHER real
+// failure shape besides a power cut): "real lib returns short/false on
+// transient bus failure WITHOUT reset" — the MCU keeps running; only the
+// calling code's own handling of a short/false return matters, and it can
+// keep issuing further commands in the SAME process afterward, unlike
+// arm_fault_after_bytes() above. Two independent, one-shot hooks:
+//   - arm_write_short_return(n): the NEXT writeBuffer() call applies (and,
+//     if a backing file is set, persists) at most n of its requested bytes
+//     and returns that same short count, cleanly, no _Exit().
+//   - arm_erase_failure(): the NEXT eraseSector() OR eraseChip() call
+//     (whichever comes first) leaves its target completely untouched and
+//     returns false, cleanly, no _Exit().
+// Both disarm themselves after firing once.
 //
 // SPDX-License-Identifier: MIT
 
@@ -204,5 +232,24 @@ void arm_fault_after_bytes(uint32_t n);
 // fault to fire but the countdown never reached zero because the write it
 // was armed for turned out shorter than expected).
 bool fault_is_armed();
+
+// Arms a ONE-SHOT non-fatal short write (see the file header comment's
+// "NON-FATAL FAILURE INJECTION" section): the NEXT writeBuffer() call
+// (chip-wide, first one only) applies at most `n` of its requested bytes
+// (still AND-merged into the backing bytes and persisted exactly like a
+// real partial program op — this mock has no way to apply fewer bytes than
+// requested without doing so physically) and returns that same short count
+// instead of the full requested length, WITHOUT exiting the process. n=0 is
+// a legitimate "nothing at all was written" short-return. Disarms itself
+// after firing once; a call with nothing yet written (e.g. no writeBuffer()
+// call at all before the next arm) simply never fires.
+void arm_write_short_return(uint32_t n);
+
+// Arms a ONE-SHOT erase failure: the NEXT eraseSector() OR eraseChip() call
+// (whichever comes first) leaves the bytes it targeted completely untouched
+// (no partial erase modeled — real NOR erase is a whole-sector/whole-chip
+// operation; a failure means it simply didn't happen) and returns false,
+// WITHOUT exiting the process. Disarms itself after firing once.
+void arm_erase_failure();
 
 }  // namespace mock_flash_test

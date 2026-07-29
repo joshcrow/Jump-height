@@ -221,6 +221,62 @@ class TestTraceCodecParity(unittest.TestCase):
         body, stored_crc = encoded[:-1], encoded[-1]
         self.assertEqual(trace_codec.crc8(body), stored_crc)
 
+    # ------------------------------------------------- double-precision (G)
+
+    def test_multi_hour_timestamps_match_python_double_precision(self) -> None:
+        """FIX (review-store.md finding #2 — CONFIRMED BY TEST, not
+        theoretical): both the encode-side t_s->t0_ms conversion
+        (trace_codec_harness.cpp now calls trace_codec::t0_ms_from_t_s(),
+        THE SAME arithmetic jh_store.cpp's real encode site uses — no
+        separate double math of its own) and the decode-side per-sample
+        reconstruction (trace_codec.h's decode_one_block(), now double
+        throughout, all the way to on_sample()'s t_s parameter) used to be
+        done in float32, which diverges from Python's native-double math
+        (sim/trace_codec.py) at multi-hour timestamps: float32's ~7-decimal-
+        digit mantissa can no longer resolve 0.001 s steps once t exceeds
+        ~8300 s. Measured divergence: t=8192.021s (2.28h) on the encode
+        side, ~4.55h on the decode side — BOTH inside this format's real,
+        multi-hour operating envelope (docs/sense.md §3.2's ~5-7h estimate),
+        meaning the OLD parity test suite was silently testing a different
+        implementation than what actually shipped. This test anchors
+        samples at ~8200s and ~16400s (straddling both measured divergence
+        points) and requires the SAME byte-identical round-trip bar every
+        other test in this file holds at t=0."""
+        for t0 in (8200.0, 16400.0):
+            samples = _evenly_spaced(t0, LOG_HZ * 3, mag_fn=lambda i: 1.0 + 0.001 * (i % 5))
+            self._roundtrip(samples)
+
+    # -------------------------------------------------- non-finite guard (H)
+
+    def test_nan_inf_magnitude_encodes_to_zero_same_in_cpp_and_python(self) -> None:
+        """FIX (review-store.md finding #3): a NaN magnitude reaching
+        trace_codec::milli_g_from_g()'s cast to uint16_t used to be
+        undefined behavior in C++ (0 on this host's compiler, but ARM is
+        UNSPECIFIED — not merely "also 0"); Python's bare
+        `int(nan*1000+0.5)` used to RAISE instead (int(inf) raises
+        OverflowError too — see sim/trace_codec.py's own comment). Both
+        languages now treat ANY non-finite magnitude — NaN, +inf, -inf
+        alike — as 0 milli-g, deliberately and identically. This drives the
+        literal 'nan'/'inf' TEXT TOKENS (never produced by main.cpp's own
+        emit layer, but reachable via a garbled/corrupted line) through the
+        REAL C++ encoder (this harness) and confirms the result decodes to
+        0.000 g — matching what Python's OWN milli_g_from_g() independently
+        computes for the same inputs. No crash (subprocess exit 0 — see
+        _encode()'s own assert), no UB."""
+        samples = [(0.000, 1.0), (0.020, float("nan")), (0.040, float("inf")),
+                  (0.060, float("-inf")), (0.080, 1.5)]
+        encoded = _encode(self.harness, samples)
+        decoded_csv = trace_codec.decode_to_csv(encoded, log_hz=LOG_HZ)
+
+        expected_mags = [trace_codec.g_from_milli_g(trace_codec.milli_g_from_g(m))
+                         for _, m in samples]
+        self.assertEqual(expected_mags[1], 0.0, "nan -> 0 in Python too")
+        self.assertEqual(expected_mags[2], 0.0, "inf -> 0 in Python too")
+        self.assertEqual(expected_mags[3], 0.0, "-inf -> 0 in Python too")
+        expected_csv = "".join(f"{t:.3f},{m:.3f}\n"
+                               for (t, _), m in zip(samples, expected_mags))
+        self.assertEqual(decoded_csv, expected_csv)
+
 
 if __name__ == "__main__":
     unittest.main()

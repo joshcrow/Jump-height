@@ -833,6 +833,124 @@ class TestStoreHost(unittest.TestCase):
         rows4 = [ln for ln in r4.read_alls[0].splitlines() if ln and not ln.startswith("n,")]
         self.assertEqual(rows4, rows)
 
+    # ------------------------------------------ non-fatal failure injection (F)
+    # The tests above all model a POWER CUT (FAULT_AFTER — the process is torn
+    # down via _Exit(), and the fix is only visible across a REBOOT). The two
+    # tests below model the OTHER real failure shape review-store.md finding
+    # #1 calls out: writeBuffer()/eraseSector()/eraseChip() returning short/
+    # false on a transient bus failure WITHOUT resetting the MCU — the mock's
+    # NEW FAIL_NEXT_WRITE/FAIL_NEXT_ERASE (mock_flash_test::
+    # arm_write_short_return()/arm_erase_failure(), distinct from
+    # arm_fault_after_bytes()'s process-ending _Exit()). Because the process
+    # keeps running, these bugs were visible WITHIN THE SAME power cycle —
+    # no reboot needed to see count/dump drift or resurrected data.
+
+    def test_failed_jump_write_same_cycle_count_and_dump_agree(self) -> None:
+        """FIX (review-store.md finding #1, the 'no reboot needed' half): a
+        transient bus failure — writeBuffer() returning short WITHOUT a
+        power cut — used to still advance jumps_append()'s offset/count
+        unconditionally, so JUMPS_SCAN and an actual dump could disagree
+        about the failed record WITHIN THE SAME power cycle. jh_store.cpp
+        now checks writeBuffer()'s return value and, on a short/failed
+        write, treats it exactly like a torn write found during a boot scan
+        (skips the append offset past it via skipPastTornWrite(), does not
+        count it) — entirely in-process, immediately, not waiting for a
+        reboot's rescan to notice."""
+        backing = self._backing("failed_write.bin")
+        r = run_harness(self.harness, [
+            "INIT",
+            "JUMPS_APPEND 1 1.000 0.300 0.280 0.550",
+            "FAIL_NEXT_WRITE 12",  # next writeBuffer applies 12 of 32 bytes, returns cleanly
+            "JUMPS_APPEND 2 2.000 0.300 0.280 0.999",  # this write is the injected short one
+            "JUMPS_SCAN",
+            "OPEN_READ JUMPS", "READ_ALL", "CLOSE_READ",
+            # Still the SAME process/power-cycle: a further, ordinary append
+            # must land cleanly after the skipped-past damage.
+            "JUMPS_APPEND 99 3.000 0.300 0.280 0.650",
+            "JUMPS_SCAN",
+            "OPEN_READ JUMPS", "READ_ALL", "CLOSE_READ",
+        ], backing=backing)
+        self.assertEqual(r.returncode, 0, "a short/failed write must NOT end the process "
+                         "(that's FAULT_AFTER's job) — the MCU keeps running")
+
+        scans = all_of(r.events, "JUMPS_SCAN")
+        self.assertEqual(int(scans[0]["count"]), 1,
+                         "the failed record must not be counted, in THIS SAME process, "
+                         "with no reboot needed to notice")
+        rows_before = [ln for ln in r.read_alls[0].splitlines() if ln and not ln.startswith("n,")]
+        self.assertEqual(len(rows_before), 1, "and a dump must agree with that count exactly — "
+                         "the bug this fix closes is count/dump drift WITHIN one power cycle")
+        self.assertTrue(rows_before[0].startswith("1,1.000,"))
+
+        self.assertEqual(int(scans[1]["count"]), 2, "a further append recovers, landing past "
+                         "the skipped-over damaged slot")
+        rows_after = [ln for ln in r.read_alls[1].splitlines() if ln and not ln.startswith("n,")]
+        self.assertEqual(len(rows_after), 2)
+        self.assertTrue(rows_after[1].startswith("99,3.000,"))
+
+        # And durable across an actual reboot too, for good measure.
+        r2 = run_harness(self.harness, ["INIT", "JUMPS_SCAN", "OPEN_READ JUMPS", "READ_ALL",
+                                        "CLOSE_READ"], backing=backing)
+        self.assertEqual(int(last(r2.events, "JUMPS_SCAN")["count"]), 2)
+        rows2 = [ln for ln in r2.read_alls[0].splitlines() if ln and not ln.startswith("n,")]
+        self.assertEqual(rows2, rows_after)
+
+    def test_failed_clear_leaves_not_ok_and_no_resurrection(self) -> None:
+        """FIX (review-store.md finding #1's clear() half): an erase
+        failure during clear() (a transient bus failure, not a power cut —
+        the mock's NEW arm_erase_failure()) used to be ignored, so clear()
+        would happily rewrite the superblock and zero every counter as if
+        the erase had genuinely happened, even though the OLD data was
+        still physically sitting on flash underneath a now out-of-sync
+        superblock. jh_store.cpp now tracks whether every erase (+ the
+        final superblock rewrite) actually succeeded and, if not, leaves
+        storage marked not-ok (jh_store::ok()) — jh_store.h's clear()
+        contract is void, so this is the only channel available to report
+        it — so jumps_append()/trace_append() both go silent (no-op) rather
+        than writing on top of a region whose true state is now uncertain,
+        and the RAM-side counters do not keep showing the pre-clear data as
+        though clear() had silently succeeded."""
+        backing = self._backing("failed_clear.bin")
+        r = run_harness(self.harness, [
+            "INIT",
+            "JUMPS_APPEND 1 1.000 0.300 0.280 0.550",
+            "JUMPS_APPEND 2 2.000 0.300 0.280 0.900",
+            "TRACE_APPEND 0.020,1.001;0.040,1.002",
+            "OPEN_READ TRACE", "CLOSE_READ",
+            "JUMPS_SCAN", "TRACE_BYTES", "OK",
+            "FAIL_NEXT_ERASE",
+            "CLEAR",
+            "OK",
+            "JUMPS_SCAN",
+            "TRACE_BYTES",
+            # These must be no-ops: storage is no longer ok(), matching
+            # jumps_append()/trace_append()'s own !s_fs_ok guard.
+            "JUMPS_APPEND 3 3.000 0.300 0.280 0.700",
+            "TRACE_APPEND 9.000,3.000",
+            "JUMPS_SCAN",
+            "TRACE_BYTES",
+        ], backing=backing)
+        self.assertEqual(r.returncode, 0, "an erase failure must NOT end the process — "
+                         "the MCU keeps running, just no longer 'ok'")
+
+        oks = all_of(r.events, "OK")
+        self.assertEqual(oks[0]["ok"], "1", "storage was fine before the injected failure")
+        self.assertEqual(oks[1]["ok"], "0", "the fix: a failed clear() leaves storage not-ok "
+                         "— the only channel jh_store.h's void clear() contract allows")
+
+        scans = all_of(r.events, "JUMPS_SCAN")
+        bytes_events = all_of(r.events, "TRACE_BYTES")
+        self.assertEqual(int(scans[0]["count"]), 2, "pre-clear state, for reference")
+        self.assertGreater(int(bytes_events[0]["n"]), 0)
+
+        self.assertEqual(int(scans[1]["count"]), 0, "no resurrection: the pre-clear jump "
+                         "count must not keep reading as if clear() had silently failed AND "
+                         "the old data were still normally readable")
+        self.assertEqual(int(bytes_events[1]["n"]), 0)
+
+        self.assertEqual(int(scans[2]["count"]), 0, "jumps_append() must no-op once not-ok")
+        self.assertEqual(int(bytes_events[2]["n"]), 0, "trace_append() must no-op once not-ok")
+
     # --------------------------------------------------------- corruption
 
     def test_crc_corrupted_trace_block_skipped_without_derailing_scan(self) -> None:
@@ -932,3 +1050,90 @@ class TestStoreHost(unittest.TestCase):
                          backing=backing)
         dumped = r2.read_alls[0]
         self.assertEqual(dumped, "t,mag\n" + csv)
+
+    def test_multi_hour_timestamps_match_python_decode(self) -> None:
+        """FIX (review-store.md finding #2 — CONFIRMED BY TEST): jh_store.cpp's
+        encode-site arithmetic (feedSample()'s t_s->t0_ms conversion) used to
+        be done in float32 (lroundf(t_s*1000.0f)), diverging from Python's
+        native-double math (sim/trace_codec.py) once t grows large enough
+        that float32's ~7-decimal-digit precision can no longer resolve
+        0.001 s steps (measured divergence at t=8192.021s). Now shared via
+        trace_codec::t0_ms_from_t_s(), computed in double. This test drives
+        the REAL on-device encode path (trace_append()/feedSample(), not
+        just the trace_codec_harness one layer down in
+        tools/tests/test_trace_codec.py) with samples anchored at ~8200s and
+        ~16400s — straddling both the encode-side's measured 8192.021s
+        divergence and the decode-side's later ~16380s one — and checks the
+        raw stored bytes decode, via the independent Python mirror, to an
+        EXACT byte-for-byte match of the input CSV: the same cross-language
+        bar test_trace_bytes_matches_python_decode_of_raw_region already
+        holds at t=0, extended here to where the bug actually bit."""
+        for t0 in (8200.0, 16400.0):
+            backing = self._backing(f"multihour_{int(t0)}.bin")
+            samples = [(t0 + i / LOG_HZ, 1.0 + 0.001 * (i % 5)) for i in range(LOG_HZ * 3)]
+            seconds = sorted(set(int(t) for t, _ in samples))
+            commands = ["INIT"]
+            for sec in seconds:
+                tokens = ";".join(f"{t:.3f},{m:.3f}" for t, m in samples if int(t) == sec)
+                commands.append(f"TRACE_APPEND {tokens}")
+            commands += ["OPEN_READ TRACE", "CLOSE_READ"]
+            r = run_harness(self.harness, commands, backing=backing)
+            self.assertEqual(r.returncode, 0)
+
+            raw = backing.read_bytes()
+            raw_trace_region = raw[TRACE_REGION_START:]
+            csv = trace_codec.decode_to_csv(raw_trace_region, log_hz=LOG_HZ)
+            expected = "".join(f"{t:.3f},{m:.3f}\n" for t, m in samples)
+            self.assertEqual(csv, expected, f"multi-hour parity failed at t0={t0}")
+
+    # ---------------------------------------------------- non-finite guard (H)
+
+    def test_nan_inf_sample_skipped_without_crash(self) -> None:
+        """FIX (review-store.md finding #3): jh_store.cpp's feedSample() now
+        rejects a non-finite PARSED value (atof("nan")/atof("inf") both
+        parse successfully per the C standard — this is not the existing
+        malformed-line/memchr tolerance) before it can reach
+        t0_ms_from_t_s()/Encoder::add_sample() — t0_ms_from_t_s() has no
+        guard of its own (lround(NaN) is unspecified, not merely "also maps
+        to 0"), and trace_codec.h's own milli_g_from_g() guards the
+        magnitude column independently (see tools/tests/test_trace_codec.py's
+        own NaN/inf test, one layer down). A 'nan'/'inf' token in EITHER
+        column must be silently skipped — no crash (subprocess exit 0), no
+        garbage sample surfacing in count or dump — while well-formed
+        samples on either side of it still come through, in order.
+
+        Expected rows below are NOT the input timestamps verbatim — that's
+        deliberate, not a mistake: a skipped sample is dropped before it's
+        ever added to the block, so the survivors simply become the block's
+        2nd/3rd/4th stored sample and are RECONSTRUCTED at that index's
+        evenly-spaced offset from the block's t0 (trace_codec.h's own
+        documented format property — a block has no way to represent "a
+        gap", only "how many samples, evenly spaced, from this anchor").
+        The two non-finite lines land in the same nominal second as the
+        still-open block (a skipped sample can't itself trigger a new
+        block, since feedSample() returns before ever checking floor(t_s)),
+        so all four survivors end up packed into ONE block."""
+        backing = self._backing("nan_inf.bin")
+        r = run_harness(self.harness, [
+            "INIT",
+            "TRACE_APPEND 0.020,1.001;0.040,nan;0.060,1.002;0.080,inf;0.100,1.003",
+            "TRACE_APPEND nan,1.500;0.120,1.004",
+            "OPEN_READ TRACE", "CLOSE_READ",
+            "TRACE_BYTES",
+            "OPEN_READ TRACE", "READ_ALL", "CLOSE_READ",
+        ], backing=backing)
+        self.assertEqual(r.returncode, 0, "a non-finite sample must never crash the process")
+
+        rows = [ln for ln in r.read_alls[0].splitlines() if ln and ln != "t,mag"]
+        self.assertEqual(rows, ["0.020,1.001", "0.040,1.002", "0.060,1.003", "0.080,1.004"],
+                         "the 3 non-finite lines (mag=nan, mag=inf, t=nan) are dropped; "
+                         "the 4 well-formed magnitudes (1.001/1.002/1.003/1.004) all "
+                         "survive, in order, packed densely from the block's t0")
+
+        # And a reboot's re-scan agrees exactly — the skip happens at parse
+        # time, not as some read-side patch-up that could disagree with what
+        # was actually, durably stored.
+        r2 = run_harness(self.harness, ["INIT", "OPEN_READ TRACE", "READ_ALL", "CLOSE_READ"],
+                         backing=backing)
+        rows2 = [ln for ln in r2.read_alls[0].splitlines() if ln and ln != "t,mag"]
+        self.assertEqual(rows2, rows)

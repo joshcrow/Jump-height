@@ -85,6 +85,26 @@
 //                                            — simulated power loss. Any
 //                                            commands after the one that
 //                                            faults never run.
+//   FAIL_NEXT_WRITE n                        arms mock_flash_test::
+//                                            arm_write_short_return(n) — the
+//                                            VERY NEXT writeBuffer() call
+//                                            (one-shot) applies/returns at
+//                                            most n of its requested bytes,
+//                                            WITHOUT ending this process —
+//                                            the OTHER real failure shape
+//                                            besides FAULT_AFTER's abrupt
+//                                            power cut: a transient bus
+//                                            glitch the MCU survives, so
+//                                            later commands in this SAME
+//                                            script still run normally.
+//   FAIL_NEXT_ERASE                          arms mock_flash_test::
+//                                            arm_erase_failure() — the VERY
+//                                            NEXT eraseSector() or
+//                                            eraseChip() call (one-shot,
+//                                            whichever comes first) leaves
+//                                            its target untouched and
+//                                            returns false, WITHOUT ending
+//                                            this process.
 //
 // READ_ALL framing contract (for the Python side): the payload is exactly
 // the bytes between the END of the "===READ_ALL_BEGIN===\n" line and the
@@ -265,6 +285,14 @@ int main() {
       iss >> n;
       mock_flash_test::arm_fault_after_bytes((uint32_t)n);
       std::printf("FAULT_AFTER armed=%lu\n", n);
+    } else if (cmd == "FAIL_NEXT_WRITE") {
+      unsigned long n = 0;
+      iss >> n;
+      mock_flash_test::arm_write_short_return((uint32_t)n);
+      std::printf("FAIL_NEXT_WRITE armed=%lu\n", n);
+    } else if (cmd == "FAIL_NEXT_ERASE") {
+      mock_flash_test::arm_erase_failure();
+      std::printf("FAIL_NEXT_ERASE armed=1\n");
     } else {
       std::printf("ERROR unknown_command=%s\n", cmd.c_str());
     }

@@ -29,6 +29,14 @@ std::FILE* g_backing_file   = nullptr;  // nullptr => transient, no persistence
 bool     g_fault_armed      = false;
 uint32_t g_fault_remaining  = 0;
 
+// Non-fatal failure injection (review-store.md finding #1 — see mock_flash.h's
+// "NON-FATAL FAILURE INJECTION" note): distinct from g_fault_armed above,
+// which tears the whole process down; these two return cleanly instead, so
+// the SAME process/power-cycle can keep issuing commands afterward.
+bool     g_write_short_armed = false;
+uint32_t g_write_short_n     = 0;
+bool     g_erase_fail_armed  = false;
+
 // Writes through [addr, addr+len) to the backing file, if one is open, and
 // flushes immediately — a real power cut can land right after this, so
 // nothing here should be left sitting in a buffer this process still owns.
@@ -37,6 +45,21 @@ void persistRange(uint32_t addr, uint32_t len) {
   std::fseek(g_backing_file, (long)addr, SEEK_SET);
   std::fwrite(g_ram + addr, 1, len, g_backing_file);
   std::fflush(g_backing_file);
+}
+
+// Aborts loudly on an out-of-bounds [address, address+len) request
+// (review-store.md finding #4 — see mock_flash.h's own note on why this is
+// deliberately STRICTER than real hardware). len==0 is always in-bounds
+// regardless of address (a vacuous, no-op request).
+void abortIfOutOfBounds(const char* who, uint32_t address, uint32_t len) {
+  if (len == 0) return;
+  if (address >= g_total_size || len > g_total_size - address) {
+    std::fprintf(stderr,
+                 "mock_flash: OOB %s address=%u len=%u total_size=%u\n",
+                 who, address, len, g_total_size);
+    std::fflush(stderr);
+    std::abort();
+  }
 }
 
 }  // namespace
@@ -103,17 +126,30 @@ bool Adafruit_SPIFlashBase::begin(SPIFlash_Device_t const* flash_devs, size_t co
 uint32_t Adafruit_SPIFlashBase::size(void) { return total_size_; }
 
 uint32_t Adafruit_SPIFlashBase::readBuffer(uint32_t address, uint8_t* buffer, uint32_t len) {
-  if (!g_ram || address >= total_size_) return 0;
-  const uint32_t avail = total_size_ - address;
-  const uint32_t n = std::min(len, avail);
-  std::memcpy(buffer, g_ram + address, n);
-  return n;
+  if (!g_ram) return 0;
+  abortIfOutOfBounds("readBuffer", address, len);
+  std::memcpy(buffer, g_ram + address, len);
+  return len;
 }
 
 uint32_t Adafruit_SPIFlashBase::writeBuffer(uint32_t address, uint8_t const* buffer, uint32_t len) {
-  if (!g_ram || address >= total_size_) return 0;
-  const uint32_t avail = total_size_ - address;
-  uint32_t remain = std::min(len, avail);
+  if (!g_ram) return 0;
+  abortIfOutOfBounds("writeBuffer", address, len);
+
+  // Non-fatal short-write injection (mock_flash_test::arm_write_short_
+  // return()) — a ONE-SHOT cap applied BEFORE the real chunking loop below,
+  // so everything from here down (page chunking, AND-merge, persistence)
+  // runs exactly as it would for a genuinely shorter request; the only
+  // difference from a real short write is that we already know in advance
+  // how short, whereas real hardware would just stop wherever the
+  // transient failure happened to land — a distinction without a
+  // difference for what jh_store.cpp can observe (a return value less
+  // than what it asked for).
+  uint32_t remain = len;
+  if (g_write_short_armed) {
+    g_write_short_armed = false;
+    remain = std::min(remain, g_write_short_n);
+  }
 
   uint32_t cursor = address;
   const uint8_t* src = buffer;
@@ -171,16 +207,27 @@ uint32_t Adafruit_SPIFlashBase::writeBuffer(uint32_t address, uint8_t const* buf
 
 bool Adafruit_SPIFlashBase::eraseSector(uint32_t sectorNumber) {
   if (!g_ram) return false;
+  // Non-fatal erase-failure injection (mock_flash_test::arm_erase_failure())
+  // — checked BEFORE touching any bytes, so an injected failure leaves the
+  // target sector completely untouched, matching a real erase that simply
+  // didn't happen (no partial-erase shape is modeled — see mock_flash.h).
+  if (g_erase_fail_armed) { g_erase_fail_armed = false; return false; }
   const uint32_t addr = sectorNumber * MOCK_SFLASH_SECTOR_SIZE;
-  if (addr >= total_size_) return false;
-  const uint32_t len = std::min((uint32_t)MOCK_SFLASH_SECTOR_SIZE, total_size_ - addr);
-  std::memset(g_ram + addr, 0xFF, len);
-  persistRange(addr, len);
+  // Stricter than real hardware (review-store.md finding #4, same rationale
+  // as abortIfOutOfBounds() above): a sector number landing past the
+  // chip's own last sector aborts loudly rather than silently doing
+  // nothing (the old `if (addr >= total_size_) return false;` masked this
+  // the same way OOB reads/writes used to).
+  abortIfOutOfBounds("eraseSector", addr, MOCK_SFLASH_SECTOR_SIZE);
+  std::memset(g_ram + addr, 0xFF, MOCK_SFLASH_SECTOR_SIZE);
+  persistRange(addr, MOCK_SFLASH_SECTOR_SIZE);
   return true;
 }
 
 bool Adafruit_SPIFlashBase::eraseChip(void) {
   if (!g_ram) return false;
+  // Same non-fatal erase-failure injection as eraseSector() above.
+  if (g_erase_fail_armed) { g_erase_fail_armed = false; return false; }
   std::memset(g_ram, 0xFF, total_size_);
   persistRange(0, total_size_);
   return true;
@@ -201,5 +248,14 @@ void arm_fault_after_bytes(uint32_t n) {
 }
 
 bool fault_is_armed() { return g_fault_armed; }
+
+void arm_write_short_return(uint32_t n) {
+  g_write_short_armed = true;
+  g_write_short_n = n;
+}
+
+void arm_erase_failure() {
+  g_erase_fail_armed = true;
+}
 
 }  // namespace mock_flash_test

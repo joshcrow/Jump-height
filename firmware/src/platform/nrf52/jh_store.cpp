@@ -174,9 +174,9 @@ void flashSleep() {
 }
 
 // ------------------------------------------------------- record/CSV helpers
-uint32_t csvLineLen(float t_s, float mag_g) {
+uint32_t csvLineLen(double t_s, float mag_g) {
   char buf[32];
-  int n = snprintf(buf, sizeof(buf), "%.3f,%.3f\n", (double)t_s, (double)mag_g);
+  int n = snprintf(buf, sizeof(buf), "%.3f,%.3f\n", t_s, (double)mag_g);
   return n > 0 ? (uint32_t)n : 0;
 }
 
@@ -294,7 +294,7 @@ void findJumpsAppendPoint() {
 // count (s_trace_csv_bytes) by decoding every recovered block's samples,
 // since across a reboot we no longer have the original incoming text —
 // only the compact binary form — to measure directly.
-void csvByteCounter(void* ctx, float t_s, float mag_g) {
+void csvByteCounter(void* ctx, double t_s, float mag_g) {
   uint32_t* total = (uint32_t*)ctx;
   *total += csvLineLen(t_s, mag_g);
 }
@@ -358,7 +358,12 @@ void findTraceAppendPoint() {
     }
 
     uint8_t full[trace_codec::block_size(trace_codec::MAX_SAMPLES_PER_BLOCK)];
-    s_flash.readBuffer(s_trace_region_start + off, full, need);
+    // Reuse the header peek above instead of re-reading those same 5 bytes
+    // (review-store.md finding #6 / this port's optional fix K) — only the
+    // payload+crc bytes beyond the header are still unread.
+    memcpy(full, block_buf, trace_codec::HEADER_BYTES);
+    s_flash.readBuffer(s_trace_region_start + off + trace_codec::HEADER_BYTES,
+                       full + trace_codec::HEADER_BYTES, need - trace_codec::HEADER_BYTES);
     const trace_codec::BlockResult r =
         trace_codec::decode_one_block(full, need, JH_LOG_HZ, csvByteCounter, &csv_total);
     if (!r.ok) {
@@ -426,12 +431,12 @@ char   s_read_pending[6144];
 size_t s_read_pending_len = 0;
 size_t s_read_pending_pos = 0;
 
-void appendCsvLineToPending(void* ctx, float t_s, float mag_g) {
+void appendCsvLineToPending(void* ctx, double t_s, float mag_g) {
   (void)ctx;
   if (s_read_pending_len >= sizeof(s_read_pending)) return;  // defensive; never hit in practice
   const size_t room = sizeof(s_read_pending) - s_read_pending_len;
   const int n = snprintf(s_read_pending + s_read_pending_len, room, "%.3f,%.3f\n",
-                        (double)t_s, (double)mag_g);
+                        t_s, (double)mag_g);
   if (n > 0) s_read_pending_len += (size_t)((size_t)n < room ? n : room - 1);
 }
 
@@ -486,7 +491,11 @@ void produceNextUnit() {
       }
 
       uint8_t full[trace_codec::block_size(trace_codec::MAX_SAMPLES_PER_BLOCK)];
-      s_flash.readBuffer(s_trace_region_start + s_read_src_cursor, full, need);
+      // Reuse the header peek above instead of re-reading those same 5
+      // bytes (review-store.md finding #6 / this port's optional fix K).
+      memcpy(full, hdr, trace_codec::HEADER_BYTES);
+      s_flash.readBuffer(s_trace_region_start + s_read_src_cursor + trace_codec::HEADER_BYTES,
+                         full + trace_codec::HEADER_BYTES, need - trace_codec::HEADER_BYTES);
       s_read_pending_len = 0;
       const trace_codec::BlockResult r =
           trace_codec::decode_one_block(full, need, JH_LOG_HZ, appendCsvLineToPending, nullptr);
@@ -558,8 +567,29 @@ void jumps_append(uint32_t n, float takeoff_s, float airtime_raw_s,
   rec.airtime_s = airtime_s;
   rec.height_m = height_m;
   rec.crc = trace_codec::crc8((const uint8_t*)&rec, offsetof(JumpRecord, crc));
-  s_flash.writeBuffer(s_jumps_region_start + s_jumps_append_off, (const uint8_t*)&rec, sizeof(rec));
+  const uint32_t written = s_flash.writeBuffer(
+      s_jumps_region_start + s_jumps_append_off, (const uint8_t*)&rec, sizeof(rec));
   flashSleep();
+
+  if (written != sizeof(rec)) {
+    // Failed/short write (review-store.md finding #1): the real library
+    // returns short/false on a transient bus failure WITHOUT resetting the
+    // MCU — jh_store.cpp used to advance the offset/count unconditionally
+    // regardless, so a `dump` and STATS's own count could disagree WITHIN
+    // THE SAME power cycle (no reboot needed to see the drift). Worse, the
+    // bytes this failed write left behind are exactly the torn-write hazard
+    // skipPastTornWrite() already exists to protect against on reboot (NOR
+    // flash can only clear bits — the NEXT append landing exactly here
+    // would AND-merge against them). Chosen semantics: treat this
+    // identically to a torn write discovered during a boot scan — skip the
+    // append offset forward past anything this write could have touched
+    // (never resume on top of it) and do NOT count it. s_read_src_used
+    // (open_read()) tracks s_jumps_append_off directly, so a `dump`/STATS
+    // pair already agrees with no reboot required.
+    s_jumps_append_off =
+        skipPastTornWrite(s_jumps_append_off, JUMP_RECORD_BYTES, JUMPS_REGION_BYTES);
+    return;
+  }
 
   s_jumps_append_off += JUMP_RECORD_BYTES;
   s_jumps_count++;
@@ -606,7 +636,25 @@ bool closeAndWriteBlock() {
     if (newly_full) s_trace_full = true;
     return newly_full;
   }
-  s_flash.writeBuffer(s_trace_region_start + s_trace_append_off, buf, n);
+  const uint32_t written =
+      s_flash.writeBuffer(s_trace_region_start + s_trace_append_off, buf, n);
+  if (written != n) {
+    // Failed/short write (review-store.md finding #1, trace-region sibling
+    // of jumps_append()'s identical fix — see that function's comment for
+    // the full reasoning). Don't count these bytes as durably appended;
+    // skip the append offset past anything this write could have touched
+    // (skipPastTornWrite(), the SAME bound findTraceAppendPoint()'s own
+    // torn-block recovery uses, since a trace block — unlike a fixed
+    // 32-byte jump record — can straddle several pages) so a same-power-
+    // cycle dump/STATS pair already agrees and the next block never
+    // resumes on top of possibly-not-fully-written bytes.
+    s_trace_append_off =
+        skipPastTornWrite(s_trace_append_off, kMaxTraceBlockBytes, s_trace_region_bytes);
+    const bool newly_full =
+        !s_trace_full && (s_trace_region_bytes - s_trace_append_off < kMaxTraceBlockBytes);
+    if (newly_full) s_trace_full = true;
+    return newly_full;
+  }
   s_trace_append_off += (uint32_t)n;
 
   // "Full" means no further block could ever fit, not merely "this exact
@@ -649,12 +697,22 @@ bool feedSample(const char* line, size_t len) {
   const float t_s   = (float)atof(t_buf);
   const float mag_g = (float)atof(m_buf);
 
+  // Reject a non-finite PARSED value outright (review-store.md finding #3):
+  // atof("nan")/atof("inf") both parse successfully per the C standard (this
+  // is not the memchr/malformed-line case above) and would otherwise flow
+  // into t0_ms_from_t_s()/Encoder::add_sample() below. trace_codec.h's own
+  // milli_g_from_g() now guards mag_g (belt+suspenders), but t_s has no such
+  // guard downstream — lround(NaN) inside t0_ms_from_t_s() is unspecified,
+  // not merely "also maps to 0". Skip this sample entirely, the same
+  // tolerance as the other malformed-line cases above.
+  if (!isfinite(t_s) || !isfinite(mag_g)) return false;
+
   bool crossed = false;
   const long this_sec = (long)floorf(t_s);
   if (!s_trace_block_open || this_sec != s_trace_block_sec || s_trace_enc.full()) {
     crossed = closeAndWriteBlock() || crossed;
     if (!s_trace_full) {
-      s_trace_enc.begin((uint32_t)lroundf(t_s * 1000.0f));
+      s_trace_enc.begin(trace_codec::t0_ms_from_t_s(t_s));
       s_trace_block_open = true;
       s_trace_block_sec  = this_sec;
     }
@@ -752,22 +810,40 @@ void clear() {
   if (!s_fs_ok) return;
   flashWake();
 
-  s_flash.eraseSector(0);  // superblock
+  // Any erase/superblock-rewrite failure below (review-store.md finding #1)
+  // must leave storage considered NOT OK rather than silently pretending the
+  // reset fully landed: NOR flash write can only clear bits, so a later
+  // append trusting a region it never actually finished erasing risks
+  // AND-merging fresh data against leftover, un-erased bytes — real
+  // corruption, not just a stale count. jh_store.h's clear() is void (no
+  // return value to report this through), so s_fs_ok/ok() is the only
+  // honest channel available: once false, jumps_append()/trace_append()
+  // both already gate on it and go silent rather than writing on top of a
+  // region whose true state is now uncertain. Every step is still attempted
+  // (not short-circuited) — one sector glitching is no reason to skip the
+  // rest — the aggregate `all_erased` is what ends up governing s_fs_ok.
+  bool all_erased = s_flash.eraseSector(0);  // superblock
 
   const uint32_t jumps_sectors_used =
       (s_jumps_append_off + SECTOR_BYTES - 1) / SECTOR_BYTES;
   for (uint32_t i = 0; i < jumps_sectors_used; ++i) {
-    s_flash.eraseSector((s_jumps_region_start / SECTOR_BYTES) + i);
+    all_erased &= s_flash.eraseSector((s_jumps_region_start / SECTOR_BYTES) + i);
   }
 
   const uint32_t trace_sectors_used =
       (s_trace_append_off + SECTOR_BYTES - 1) / SECTOR_BYTES;
   for (uint32_t i = 0; i < trace_sectors_used; ++i) {
-    s_flash.eraseSector((s_trace_region_start / SECTOR_BYTES) + i);
+    all_erased &= s_flash.eraseSector((s_trace_region_start / SECTOR_BYTES) + i);
   }
 
-  writeSuperblock();
+  const bool wrote_sb = all_erased && writeSuperblock();
 
+  // Reset the RAM-side view unconditionally, success or failure: on
+  // success this is the ordinary post-clear state; on failure it keeps
+  // every accessor (jumps_scan(), trace_bytes(), a dump) from continuing to
+  // show the pre-clear data as though clear() had silently done nothing —
+  // s_fs_ok below is what actually stops FURTHER writes from trusting a
+  // region in an uncertain state; this is what stops STALE READS of it.
   s_jumps_append_off = 0;
   s_jumps_count      = 0;
   s_jumps_best_m     = 0.0f;
@@ -776,6 +852,12 @@ void clear() {
   s_trace_csv_header_counted = false;
   s_trace_full       = false;
   s_trace_block_open = false;
+
+  s_fs_ok = wrote_sb;  // honest: only a fully-succeeded erase+rewrite keeps
+                       // storage usable; any failure above means nothing
+                       // further should be trusted to write here (there is
+                       // no re-init path short of a reboot, matching
+                       // jh_store.h's void clear() contract).
 
   flashSleep();
 }

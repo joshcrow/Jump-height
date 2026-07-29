@@ -25,6 +25,7 @@ SPDX-License-Identifier: MIT
 
 from __future__ import annotations
 
+import math
 import struct
 from dataclasses import dataclass, field
 
@@ -51,7 +52,21 @@ def crc8(data: bytes) -> int:
 
 def milli_g_from_g(mag_g: float) -> int:
     """Encoder rounding rule: round-half-up (mag_g is a magnitude, >= 0),
-    clamped to a u16 — must match trace_codec.h::milli_g_from_g()."""
+    clamped to a u16 — must match trace_codec.h::milli_g_from_g().
+
+    Non-finite guard (review-store.md finding #3): a bare `int(nan * 1000.0
+    + 0.5)` RAISES (ValueError: cannot convert float NaN to integer) rather
+    than the C++ side's undefined-behavior cast — a different failure mode,
+    but still not the deliberate, cross-language "maps to 0" contract this
+    format wants for both NaN and +-inf alike (Python's `int(inf)` raises
+    OverflowError, so +inf isn't even accidentally survivable here the way
+    it was in the old C++ code — see that function's own comment). Reachable
+    from a garbled reading that ever reaches this encoder (e.g. Encoder.
+    add_sample() on a corrupted upstream value); must match
+    trace_codec.h::milli_g_from_g() bit for bit.
+    """
+    if not math.isfinite(mag_g):
+        return 0
     if mag_g < 0.0:
         mag_g = 0.0
     v = int(mag_g * 1000.0 + 0.5)

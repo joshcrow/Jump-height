@@ -105,20 +105,28 @@ symptom is the signal to grow it.
 **File:** `firmware/src/platform/nrf52/lsm6ds3_min.h`.
 
 The datasheet PDF itself did not fetch cleanly in the authoring
-environment; every register address, bit-field layout, and the ±8 g
-sensitivity constant (0.244 mg/LSB) were instead confirmed against ST's own
-published register-definition source
+environment; every register address and bit-field layout were instead
+confirmed against ST's own published register-definition source
 (`STMicroelectronics/lsm6ds3tr-c-pid` on GitHub — `lsm6ds3tr-c_reg.h`/`.c`),
 which is as authoritative as the datasheet for these specific facts (it's
 ST's own driver, not a third party's guess) — but a from-datasheet
 cross-check has not happened.
 
+*(Corrected 2026-07-29: this item previously stated the sensitivity
+constant as "±8 g / 0.244 mg/LSB" — stale, and self-contradictory with item
+20 below, which documents this port's DELIBERATE choice of the ±16 g range
+(`CTRL1_XL = 0x54`) at 0.488 mg/LSB. The register-map confirmation this item
+is actually about was always against the real, shipped ±16 g/0.488
+configuration; only the sensitivity NUMBER quoted here was wrong, copied
+from a generic ±8 g reference point rather than this file's own constants.)*
+
 **Verify:** `selftest`'s `whoami` row (see item 5) and `accel` row — a real
 LSM6DS3TR-C sitting still should read close to 1.000 g with low noise,
-confirming the ±8 g scale factor and axis byte order (little-endian, the
-opposite of the MPU-6050's big-endian burst — see the file's own comment on
-this exact risk) are both right. A wrong scale factor would show up as
-"self-test WARN/FAIL, mean far from 1.0 g" immediately.
+confirming the ±16 g scale factor (0.488 mg/LSB — item 20) and axis byte
+order (little-endian, the opposite of the MPU-6050's big-endian burst — see
+the file's own comment on this exact risk) are both right. A wrong scale
+factor would show up as "self-test WARN/FAIL, mean far from 1.0 g"
+immediately.
 
 ## 5. WHO_AM_I reads 0x6A, not 0x68 — an EXPECTED self-test WARN, not a bug
 
@@ -155,18 +163,27 @@ that log line and passing it back into `begin()`, which ignores it too).
 **Verify:** nothing behavioral to check; just don't be surprised the log
 says 0x68.
 
-## 7. IMU power-rail boot-settle delay (20 ms) is an unconfirmed guess
+## 7. IMU power-rail boot-settle delay — RESOLVED-BY-DATASHEET (35 ms found; margin now 40 ms)
 
-**File:** `firmware/src/platform/nrf52/jh_imu.cpp`, `init()`'s `delay(20)`
+**File:** `firmware/src/platform/nrf52/jh_imu.cpp`, `init()`'s `delay(40)`
 after driving `PIN_LSM6DS3TR_C_POWER` high.
 
-No datasheet "time to first valid I2C transaction after power-on" figure
-was available to confirm against. 20 ms is a conservative, commonly-seen
-value in community LSM6DS3 drivers, not a cited spec number.
+**RESOLVED 2026-07-29:** this item previously read "20 ms, unconfirmed
+guess — no datasheet figure was available." The real LSM6DS3TR-C
+datasheet's electrical characteristics table gives **Ton (turn-on time,
+power-up to first valid output) = 35 ms** — extracted directly from the
+datasheet for this fix (the earlier authoring environment couldn't fetch
+the PDF cleanly; a later pass could). The old 20 ms sat BELOW that figure —
+masked so far only by incidental boot ordering (other setup work already
+burning enough wall-clock time before the bus gets touched), not by the
+delay itself being adequate. The delay is now **40 ms**, a deliberate
+margin above the cited 35 ms rather than a bare guess.
 
-**Verify:** if `selftest`'s `i2c`/`config` rows ever fail intermittently
-right after a fresh power-on (but pass on `selftest` re-run moments later),
-this delay is the first thing to lengthen.
+**Verify:** nothing left to guess at — this is now a cited spec number with
+margin, not an open question. If `selftest`'s `i2c`/`config` rows ever fail
+intermittently right after a fresh power-on regardless, that would point at
+something OTHER than this delay (wiring, the rail itself, a different
+board revision).
 
 ## 8. QSPI deep power-down (0xB9/0xAB) — wired in, current draw and wake delay unmeasured
 
@@ -196,18 +213,41 @@ The Adafruit core's `micros()` is, like the ESP32's, only 32 bits and wraps
 at ~71.6 minutes. This file turns it into a 64-bit, effectively
 non-wrapping counter by comparing each reading to the last and bumping a
 wrap counter whenever it goes DOWN — which only correctly detects a wrap if
-called at least once per wrap period, and `main.cpp`'s loop calls it every
-sample-loop pass (>= `JH_SAMPLE_HZ` = 200 times/second, i.e. every few ms),
-comfortably inside that bound. This reasoning is sound by construction, not
-a guess — but it has never been run continuously across a real 71-minute
-boundary on this chip to see it happen live (the ESP32 sibling has years of
-field time doing exactly this; this port has none yet).
+called at least once per wrap period. This reasoning is sound by
+construction, not a guess — but it has never been run continuously across
+a real 71-minute boundary on this chip to see it happen live (the ESP32
+sibling has years of field time doing exactly this; this port has none
+yet).
+
+**Wrap-hole FOUND, then FIXED (2026-07-29):** the assumption above ("called
+at least once per wrap period") turned out to have a real hole.
+`main.cpp`'s `loop()` calls `jh_clock::micros64()` itself every
+sample-loop pass (>= `JH_SAMPLE_HZ` = 200/s) — but only AFTER an
+`if (!sensor_ok) { delay(10); return; }` early return. If the IMU is ever
+down (a wiring fault, later recovered by re-running `selftest`) for
+**longer than the 71.6-minute wrap period**, that early return starves
+`micros64()` entirely for the whole outage: no call means no wrap gets
+detected, so when the sensor recovers and sampling resumes, every
+subsequent timestamp this boot is off by ~71.6 minutes (a discontinuity,
+not a crash — the same failure mode this item's own "Verify" paragraph
+below describes, just triggered by a sensor outage instead of a genuine
+71-minute soak). **Fix:** `firmware/src/platform/nrf52/jh_link.cpp`'s `pump()` — which
+`loop()` calls unconditionally, every pass, BEFORE the `!sensor_ok` early
+return — now also calls `jh_clock::micros64()` itself (discarding the
+result; the call's only purpose is its wrap-tracking side effect), keeping
+the tracker alive across any length of sensor outage. Platform-local fix
+(this port's `jh_link.cpp` only) since the underlying wrap-tracking scheme
+itself is chip-specific.
 
 **Verify:** a long (>90 minute) continuous bench soak with the device
 actively sampling throughout; confirm no `t` discontinuity appears in the
 resulting trace around the 71-minute mark (the ESP32's own history is
 already the evidence this WOULD show up obviously if wrong — a jump
-mid-flight at the wrap instant, per the seam's own doc comment).
+mid-flight at the wrap instant, per the seam's own doc comment). ADDITIONALLY,
+now that the sensor-down hole above is understood: a bench soak that
+deliberately disconnects the IMU for >71.6 minutes, then reconnects and
+runs `selftest` to recover it, confirming no discontinuity appears in the
+trace resumed afterward either.
 
 ## 10. Serial port naming — already handled by the existing CLI, confirmed by reading it (not a new risk)
 
@@ -361,9 +401,35 @@ chapter — this is a high-confidence citation, but the watchdog has never
 actually been watched to (a) NOT fire during normal operation and (b) DOES
 fire (resetting the board) when something is deliberately hung.
 
+**WDT SCOPE — read this before assuming the watchdog protects everything
+(2026-07-29):** `wdtInit()` runs inside `jh_link::begin()`, which
+`main.cpp`'s `setup()` calls AFTER `jh_store::init()` (mounting/formatting
+the QSPI flash). That ordering is deliberate (a boot-time format that later
+tripped the watchdog mid-format would be worse — a reset loop instead of a
+clean, if slow, first boot), but it means **no watchdog protection exists
+at all** for anything `jh_store::init()` does, including the underlying
+Adafruit SPIFlash library's own `waitUntilReady()`-style busy-poll (waiting
+on the flash chip's WIP/busy bit) — which has **no software timeout of its
+own** in the library. **Diagnostic: if a fresh/blank board hangs before
+ever printing `READY` (no crash, no reset, just silence forever), the most
+likely cause is the QSPI flash chip itself stuck busy** — a soldering/joint
+problem on the QSPI bus, not a firmware logic bug. There is nothing
+firmware-side that will time this out or recover from it; the fix is
+physical (cable/reseat/inspect the QSPI joints on the board), not a
+`selftest` or reflash. Once past `jh_link::begin()` — which now feeds the
+watchdog once at its own end, right before returning control to `setup()`
+(see this port's fix for review-nrf52.md finding #4) — every remaining
+first-boot step (`jh_persist::init()`, `loadCalibration()`, `runSelfTest()`
+— its accel check alone loops 100x `delay(5)` — `scanStoredJumps()`) runs
+against a comfortably fresh ~3.5s budget instead of whatever was left over
+from `wdtInit()`'s own reload.
+
 **Verify:** flash a build with an intentional infinite loop somewhere in
 `loop()` (temporarily) and confirm the board resets within a few seconds;
-then confirm a normal, long-running session never resets on its own.
+then confirm a normal, long-running session never resets on its own. If a
+fresh board genuinely hangs pre-`READY`, don't expect a watchdog reset to
+rescue it — go straight to inspecting the QSPI flash chip's connections
+per the diagnostic above.
 
 ## 19. Jump/trace region sizing — never stress-tested against a marathon session
 
@@ -397,6 +463,59 @@ is itself the scale-factor verification — if the range/sensitivity pair
 were mismatched (e.g. 0x54 with the ±8 g LSB), rest would read ~0.5 g or
 ~2 g and the self-test would WARN/FAIL immediately. Confirm rest reads
 ≈1.0 g and a hard table slap exceeds 8 g in the trace.
+
+## 21. Interrupted ERASE during first-boot format / `clear()` — an unmodeled corruption shape (bench awareness note)
+
+**File:** `firmware/src/platform/nrf52/jh_store.cpp`, `init()`'s
+first-boot format path and `clear()`.
+
+Both paths erase one or more sectors and then rewrite the superblock as a
+multi-step sequence: `init()` prints `"# first boot: formatting storage —
+takes up to a minute, hang tight..."`, calls `eraseChip()`, then
+`writeSuperblock()`; `clear()` erases the superblock sector + every
+jumps/trace sector ever written, then rewrites the superblock. A power cut
+landing mid-erase (as opposed to mid-WRITE, which the existing torn-write
+recovery — `skipPastTornWrite()`/`isErasedBytes()` — was specifically
+designed for and is well-tested against, including the exact-last-slot
+case) is a genuinely different corruption shape: an ERASE that's only
+partway done can leave a sector in some chip-specific intermediate state
+that is neither "cleanly erased" (all-0xFF) nor "whatever was there
+before" — real NOR flash sector-erase operations are not required to be
+interruptible-and-resumable the way a byte/page write is, and this
+possibility was not part of what the recovery scheme (jumps/trace
+append-point scanning, the superblock magic/version/CRC check) was designed
+to detect or recover from. This is a real, user-reachable scenario: anyone
+power-cycling the board while the "formatting storage" message is on
+screen (first boot) or immediately after typing `clear` hits exactly this
+window.
+
+**Practical consequence, honestly stated:** this is NOT fixed here (harder
+than the return-value/no-resurrection fix `jh_store.cpp`'s `clear()` DOES
+now have for a same-process, non-fatal erase FAILURE — see this file's
+`clear()` and `tools/tests/test_store_host.py`'s
+`test_failed_clear_leaves_not_ok_and_no_resurrection` — that's a different,
+narrower shape: the chip reports failure but keeps running; THIS item is
+about a genuine power cut, mid-erase, across a reboot, which the mock's
+fault injection deliberately does not model either — see
+`firmware/test/store_host/mock_flash.h`'s own note on interrupted-erase
+being out of scope for that harness). Worst case on real silicon: a
+reboot's `superblockValid()` check fails (an in-progress erase would very
+plausibly also corrupt the superblock sector itself, sector 0, which both
+paths erase first or early) and the device re-formats from scratch,
+losing everything — the SAME outcome as any other unreadable superblock,
+just via a corruption path the design didn't specifically reason through.
+No SILENT wrong-data case is currently known, but it hasn't been
+specifically hunted for either.
+
+**Verify (bench-only, not code):** if practical, a deliberate power-cut
+test mid-format (first boot) and mid-`clear()` (after a session with
+data), confirming the device always comes up EITHER fully formatted/empty
+OR with its pre-clear data intact — never a state that reads back garbage,
+hangs, or reports success while actually corrupted. Not built into the
+host test harness (`mock_flash.h` only interrupts WRITEs, by design — see
+that file's own scope note) — a future harness mode that can also tear
+down mid-`eraseSector()`/`eraseChip()` call would be the natural way to
+cover this without needing real hardware.
 
 ---
 
