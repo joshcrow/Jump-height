@@ -242,6 +242,8 @@ too slow, the fix (not built here, to keep the on-disk format simple for
 this pass) is a periodic checkpoint of append-offset + running CSV byte
 count, so a reboot only replays the tail since the last checkpoint.
 
+Logic host-verified (tools/tests/test_store_host.py); bench now verifies timing/the real chip only.
+
 ## 12. `trace_is_full()` means "the physical region is full", not "`JH_TRACE_MAX_BYTES` CSV-equivalent bytes" — a deliberate platform difference, not a bug
 
 **File:** `firmware/src/platform/nrf52/jh_store.cpp`'s file-level comment
@@ -261,6 +263,8 @@ exhausted." Net effect: a Sense board will keep recording (and
 moving-time trace before `trace_is_full()` trips, roughly matching
 docs/ota.md §4.5's ~3.6–5 h math for this flash size.
 
+Logic host-verified (tools/tests/test_store_host.py); bench now verifies timing/the real chip only.
+
 ## 13. `clear()` can block the device for a while on a nearly-full trace region
 
 **File:** `firmware/src/platform/nrf52/jh_store.cpp`, `clear()`.
@@ -279,6 +283,8 @@ boot; if the worst case is user-hostile in practice, the fix is a
 courser-grained erase (e.g. `eraseChip()` traded against always taking the
 same, fixed, longer time) or accepting the trade-off explicitly in
 BUILD.md-equivalent user docs — not decided here.
+
+Logic host-verified (tools/tests/test_store_host.py); bench now verifies timing/the real chip only.
 
 ## 14. Bluefruit two-central mechanics — re-derived from source, never run against real centrals
 
@@ -374,6 +380,8 @@ wrapping or erroring loudly.
 **Verify:** a long bench/water-adjacent soak test with unusually frequent
 jumps; confirm `stored_jumps` in `STATS` keeps climbing sanely and doesn't
 silently plateau well under a real session's jump count.
+
+Logic host-verified (tools/tests/test_store_host.py); bench now verifies timing/the real chip only.
 
 ## 20. Accel range is ±16 g on this platform (ESP32 build stays ±8 g)
 
