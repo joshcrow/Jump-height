@@ -23,6 +23,31 @@ permissions:
   id-token: write
 
 jobs:
+  # The full software test suite: CLI + fake-device integration, web app
+  # (Playwright vs the mock device), trace-codec C++/Python parity, and
+  # simtest (detector parity + firmware-core host compile). Until 2026-07
+  # these only ever ran on a developer machine — CI compiled the firmware
+  # but never tested the software. Runs in parallel with the firmware job.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: |
+          pip install pytest pyserial playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Run test suite
+        run: python -m pytest tools/tests -q
+
+      - name: Run simtest (detector parity + integration)
+        run: ./tools/jump simtest
+
   firmware:
     runs-on: ubuntu-latest
     steps:
