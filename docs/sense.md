@@ -106,8 +106,12 @@ ESP32 scheme would. Mitigations: releases get bench-soaked first, and
 UF2 drag-drop is a trivial cable recovery. CI grows a `.uf2` artifact
 (hex → uf2conv) published on Pages next to the ESP32 binaries. VERIFY:
 nRF Connect on iOS against the Adafruit bootloader end-to-end, twice in
-a row; later, possibly DFU from our own web app (Web Bluetooth DFU
-implementations exist).
+a row. *(Researched 2026-07-28: DFU from our own web app is effectively
+OFF the table with the stock bootloader — browsers blocklist the Nordic
+legacy-DFU service UUID in Web Bluetooth, and the existing JS libraries
+implement Secure DFU, a different protocol than the Adafruit
+bootloader's legacy one. The nRF Connect app IS the wireless path; UF2
+is the cable path. Revisit only if we ever swap bootloaders.)*
 
 ### 3.4 Battery plumbing we never built (firmware reports nothing today)
 
@@ -271,7 +275,8 @@ duty cycle) and replace this table with numbers.
 2. NUS 128-bit UUID in the advertisement (Garmin scan filter), name in
    scan response.
 3. Internal I2C pins / `Wire` instance for the IMU in the Seeed
-   variant; LSM6DS3TR-C FIFO size.
+   variant; LSM6DS3TR-C FIFO size *(4 KB confirmed from ST docs
+   2026-07-28; register-map cross-check on the bench remains)*.
 4. nRF Connect (iOS) DFU against the Adafruit bootloader, end-to-end,
    twice consecutively.
 5. QSPI deep-power-down API in Adafruit SPIFlash + metered µA delta.
@@ -295,6 +300,85 @@ duty cycle) and replace this table with numbers.
   still want smaller.
 - Signed DFU, fleet management.
 - WiFi anything — this chip has none; that is the point.
+
+## 9. Jump-starts — existing tools, code, and papers *(researched 2026-07-28)*
+
+Standing on shoulders for the bench milestones, so nothing below gets
+hand-rolled that doesn't need to be:
+
+**Current measurement (S0/S2)**
+- [Nordic Online Power Profiler](https://devzone.nordicsemi.com/power/) —
+  free calculator that models BLE current for given connection
+  parameters BEFORE measuring; sanity-checks §5's table.
+- **Nordic Power Profiler Kit II (PPK2, ~$100)** — the standard µA-level
+  source-meter/logger for exactly this chip family; a multimeter cannot
+  see dynamic duty-cycle draw honestly. Recommended purchase before S2.
+- Nordic DevZone + Seeed forum threads on XIAO Sense sleep current
+  (QSPI deep-power-down, mic rail) — §3.6's gotcha is
+  community-documented; read the threads before chasing µA.
+
+**Sleep/wake + IMU hardware features (S2)**
+- [ST's official platform-independent driver examples](https://github.com/STMicroelectronics/STMems_Standard_C_drivers)
+  — ready register sequences for wake_up, activity/inactivity,
+  free-fall, and FIFO on our exact part. We keep our minimal driver but
+  copy their sequences instead of deriving them.
+- [AN5130 — the LSM6DS3TR-C application note](https://www.st.com/resource/en/application_note/an5130-lsm6ds3trc-alwayson-3d-accelerometer-and-3d-gyroscope-stmicroelectronics.pdf)
+  — threshold math, per-mode current tables, FIFO (4 KB confirmed).
+  *(Careful: AN4987 is the LSM6DSM's — sibling part, wrong doc.)*
+- Adafruit nRF52 core: FreeRTOS tickless idle means plain `delay()` is
+  already low-power; `sd_power_system_off` examples exist in the core.
+
+**Battery telemetry (S2)**
+- Adafruit's canonical nRF52 VBAT ADC snippet (internal 0.6 V
+  reference + gain + divider handling) — adapt, don't derive.
+- **Standard BLE Battery Service**: Bluefruit ships `BLEBas` — one line,
+  and every phone (and nRF Connect) renders it natively. Adopt it
+  ALONGSIDE the protocol's `vbat=` key; genuine hand-roll avoided.
+- Published LiPo discharge curves for the voltage→percent table (with
+  the honest under-load-sag caveat).
+
+**OTA proof (S3)** — the client side already exists end-to-end:
+adafruit-nrfutil builds packages, Nordic's free nRF Connect / nRF
+Toolbox apps are the iOS DFU clients, `BLEDfu` ships in the core. Zero
+client code to write. Browser DFU: dead with the stock bootloader (see
+§3.3 note).
+
+**Drop calibration + height validation (S1 / water)**
+- Sports-science flight-time literature: the MyJump app validation
+  studies (video frame-counting vs force plates — our exact 120–240 fps
+  ground-truth method, peer-validated) and IMU-vs-force-plate
+  flight-time papers, which quantify detection timing bias — the
+  published justification for `airtime_offset_s` being additive.
+- [Woodman, "An introduction to inertial navigation" (free Cambridge
+  tech report)](https://www.cl.cam.ac.uk/techreports/UCAM-CL-TR-696.pdf)
+  — the standard primer; the drift math there is WHY this project never
+  integrates.
+- Phyphox (free physics app) as an independent second sensor for bench
+  drop cross-checks.
+
+**BLE pacing (S1 tuning)** — Apple's *Accessory Design Guidelines for
+Apple Devices* (Bluetooth LE chapter) is the authoritative source for
+iPhone connection-interval behavior; turns `CHUNK_GAP_US` tuning from
+guesswork into arithmetic. Nordic's throughput app notes cover the
+peripheral side.
+
+**Later metrics (S5)**
+- [Edge Impulse supports this exact board](https://docs.edgeimpulse.com/hardware/boards/seeed-xiao-nrf52840-sense)
+  (official docs page; data in via their serial forwarder, deploy as an
+  Arduino library) — free-tier data collection/labeling/classifier
+  tooling if time-on-foil outgrows the windowed-variance approach.
+- [xio Technologies "Fusion"](https://github.com/xioTechnologies/Fusion)
+  (MIT-licensed AHRS in C) — when spins/orientation land, sensor fusion
+  is adopted, not hand-rolled.
+
+**Storage fallback** — if the raw QSPI region manager misbehaves on the
+bench, littlefs (power-loss-proven by design) is the drop-in fallback;
+the swap hides entirely behind the `jh_store` seam.
+
+**What rightly stays hand-rolled**: the detection thresholds and
+wing-foil traces (no public prior art exists — WOO's kite-only retreat
+is the market gap this project stands in), the line protocol, and the
+minimal clone-tolerant drivers (DECISIONS #13).
 
 ---
 
