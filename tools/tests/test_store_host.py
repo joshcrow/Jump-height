@@ -26,14 +26,36 @@ only thing that genuinely reproduces "RAM cleared, flash unchanged," exactly
 like a real power-cycle. See mock_flash.h's header comment for the full
 rationale.
 
-NOTABLE FINDINGS from building this suite (see the two tests named
-`test_power_cut_can_permanently_stick_the_append_slot_until_clear` and
-`test_trace_is_full_flag_can_under_report_at_the_tail` below for the
-mechanics) — surfaced here, not fixed: jh_store.cpp does not re-erase a torn
-write's slot before resuming appends after a reboot, and it never counts a
-NEAR-exhausted trace region (less than one more block's worth of physical
-room, but not literally zero) as "full." Neither is a mock artifact; both
-reproduce against the real, unmodified jh_store.cpp source.
+NOTABLE FINDINGS from building this suite, BOTH SINCE FIXED in
+jh_store.cpp (neither was a mock artifact — both reproduced, and now both
+are verified fixed, against the real, unmodified-except-for-the-fix
+source):
+
+  1. A torn write used to permanently stick the append offset: resuming an
+     append exactly where a torn write left off silently AND-merged new
+     data against leftover garbage (real NOR flash can only clear bits),
+     which the CRC check safely rejected but never advanced past — every
+     later append could silently fail forever until clear(). Fixed by
+     skipPastTornWrite()/isErasedBytes() in jh_store.cpp: a boot scan (and
+     the read-back path) that finds damage (invalid AND not simply erased)
+     skips to the next safe page boundary and keeps looking, rather than
+     giving up. See test_power_cut_recovers_next_append_lands_cleanly_and_
+     is_readable, test_power_cut_trace_block_recovers_and_is_readable, and
+     the regression test test_multiple_torn_writes_all_recover_and_stay_
+     readable below.
+  2. trace_is_full() used to never trip when the remaining tail was smaller
+     than one block but not literally zero — the flag could read false
+     forever, the "# trace log full" narration might never fire, and
+     trace_bytes()'s estimate kept climbing past what was truly stored.
+     Fixed by treating "full" as "the remaining tail can't fit the LARGEST
+     possible block" (kMaxTraceBlockBytes), not merely "not one more byte
+     remains." See test_trace_is_full_flag_trips_before_the_tail_runs_out
+     below.
+
+Both tests keep their original "FINDING" framing front and center in their
+docstrings (what was found, exactly how, and why it mattered) alongside
+what the fix actually does — this suite is the regression guard for both
+from here on.
 
 SPDX-License-Identifier: MIT
 """
@@ -376,14 +398,13 @@ class TestStoreHost(unittest.TestCase):
         magnitude host info only, never a hardware timing stand-in; run
         with `-s` to see the printed line).
 
-        Also verifies (and documents, since it's a genuine finding from
-        building this suite, not a mock artifact) that trace_is_full() can
-        stay 0 even once the region has no room left for another block —
-        see test_trace_is_full_flag_can_under_report_at_the_tail below for
-        the focused version of this same finding. This test's OWN
-        correctness bar is narrower and unaffected by it: no bytes are ever
-        written past the region (checked via reboot-stable trace_bytes()),
-        and jumps keep appending regardless of what the trace flag reports.
+        Also confirms trace_is_full() actually trips once the region is
+        physically exhausted (see test_trace_is_full_flag_trips_before_the_
+        tail_runs_out below for the focused version of this fix, and the
+        module docstring for the pre-fix finding this guards against) — the
+        fill loop here relies on that flag to know when to stop, so a
+        regression back to the old under-reporting behavior would show up
+        here too as `TRACE_FILL`'s own `full=` line never becoming 1.
         """
         backing = self._backing("marathon.bin")
 
@@ -396,6 +417,7 @@ class TestStoreHost(unittest.TestCase):
         r1 = run_harness(self.harness, [
             "INIT",
             f"TRACE_FILL {seconds_to_try} {LOG_HZ} 0.0 1.0",
+            "TRACE_IS_FULL",
             "TRACE_BYTES",
             "FREE_BYTES",
             "JUMPS_APPEND 1 1.0 0.30 0.28 0.50",
@@ -404,13 +426,23 @@ class TestStoreHost(unittest.TestCase):
         ], backing=backing)
         self.assertEqual(r1.returncode, 0)
 
+        fill = last(r1.events, "TRACE_FILL")
+        self.assertEqual(fill["full"], "1", "the fill loop's own stopping condition — "
+                         "confirms trace_is_full() tripped instead of running the whole "
+                         "requested seconds_to_try regardless (the pre-fix behavior)")
+        self.assertLess(int(fill["seconds_appended"]), seconds_to_try,
+                        "should have stopped early once full, not exhausted the whole ask")
+        self.assertEqual(last(r1.events, "TRACE_IS_FULL")["full"], "1")
+
         free_after_fill = int(last(r1.events, "FREE_BYTES")["n"])
-        # Physical trace headroom left is under one block's worth (the exact
-        # arithmetic the region was sized against) — i.e. genuinely,
-        # physically full for all practical purposes, whatever the flag says.
+        # Physical trace headroom left is under the LARGEST possible block's
+        # worth (kMaxTraceBlockBytes in jh_store.cpp — a conservative bound,
+        # not the specific size of whatever block happened to be tried last)
+        # — i.e. genuinely, physically full: no further block could ever fit.
+        max_block_bytes = trace_codec.block_size(trace_codec.MAX_SAMPLES_PER_BLOCK)
         trace_free = free_after_fill - JUMPS_REGION_BYTES
         self.assertGreaterEqual(trace_free, 0)
-        self.assertLess(trace_free, trace_codec.block_size(LOG_HZ))
+        self.assertLess(trace_free, max_block_bytes)
 
         # Jumps region is entirely unaffected by how full trace is.
         scan = last(r1.events, "JUMPS_SCAN")
@@ -446,32 +478,36 @@ class TestStoreHost(unittest.TestCase):
         # catches a genuine hang/quadratic-blowup, nothing tighter.
         self.assertLess(boot_scan_us, 30_000_000)
 
-    def test_trace_is_full_flag_can_under_report_at_the_tail(self) -> None:
-        """FINDING (not fixed here — see this file's module docstring and
-        the final report): trace_is_full() is only ever set true inside
-        closeAndWriteBlock() at the exact moment a write makes
+    def test_trace_is_full_flag_trips_before_the_tail_runs_out(self) -> None:
+        """FIXED BEHAVIOR — was a genuine pre-hardware FINDING (see this
+        file's module docstring): trace_is_full() used to only ever get set
+        true inside closeAndWriteBlock() at the exact moment a write made
         s_trace_append_off >= s_trace_region_bytes. A block that instead
-        arrives when LESS than one block's worth of room remains (the
+        arrived when LESS than one block's worth of room remained (the
         overwhelmingly likely case, since block sizes rarely divide the
-        region evenly) is silently dropped WITHOUT crossing that threshold —
-        so trace_is_full() can read false forever after, even though no
-        further block will ever again fit. main.cpp's own gate
+        region evenly) was silently dropped WITHOUT crossing that
+        threshold — so the flag could read false forever after, even
+        though no further block would ever fit again. main.cpp's own gate
         (`if (fs_ok && !jh_store::trace_is_full() ...)`) would therefore
-        keep calling trace_append() indefinitely, each call harmlessly (no
-        corruption — closeAndWriteBlock()'s own bounds check still refuses
-        to write past the region) but pointlessly wasting the call and the
-        RAM-side trace_bytes() estimate would keep climbing forever, never
-        matching what is truly, durably stored, and the "# trace log full"
-        narration main.cpp prints on the true-crossing transition may never
-        fire for a real session that happens to land in this (common) gap.
+        have kept calling trace_append() indefinitely (harmlessly — no
+        corruption, closeAndWriteBlock()'s own bounds check already
+        refused to write past the region — but pointlessly), the "# trace
+        log full" narration might never have fired, and trace_bytes()'s
+        estimate would have kept climbing past what was truly stored.
+
+        THE FIX (jh_store.cpp's kMaxTraceBlockBytes, used in both
+        findTraceAppendPoint()'s boot-time check and closeAndWriteBlock()'s
+        runtime check): "full" now means "the remaining tail cannot fit
+        the LARGEST block that could ever legitimately be written"
+        (trace_codec::block_size(MAX_SAMPLES_PER_BLOCK) — a fixed,
+        conservative upper bound), not merely "this specific block that
+        just arrived didn't fit." This test drives the region to true
+        physical exhaustion and confirms the flag trips there, and that
+        trace_append() then correctly stops growing its byte estimate.
         """
         backing = self._backing("full_flag.bin")
         exact_blocks = TRACE_REGION_BYTES // trace_codec.block_size(LOG_HZ)
-        remainder = TRACE_REGION_BYTES % trace_codec.block_size(LOG_HZ)
-        self.assertGreater(remainder, 0, "this finding only manifests when the region "
-                                         "doesn't divide evenly by the block size — true "
-                                         "for JH_LOG_HZ=50 against this chip size today; "
-                                         "if that ever changes this assertion will say so")
+        max_block_bytes = trace_codec.block_size(trace_codec.MAX_SAMPLES_PER_BLOCK)
 
         r = run_harness(self.harness, [
             "INIT",
@@ -479,36 +515,30 @@ class TestStoreHost(unittest.TestCase):
             "TRACE_IS_FULL",
             "TRACE_BYTES",
             "FREE_BYTES",
+            "TRACE_APPEND 999999.000,1.000",  # one more, after already at the tail
+            "TRACE_BYTES",
         ], backing=backing)
         self.assertEqual(r.returncode, 0)
 
         trace_free = int(last(r.events, "FREE_BYTES")["n"]) - JUMPS_REGION_BYTES
-        self.assertLess(trace_free, trace_codec.block_size(LOG_HZ),
-                        "physically no room for another block")
-        self.assertGreater(trace_free, 0, "but not exactly zero either")
+        self.assertGreaterEqual(trace_free, 0)
+        self.assertLess(trace_free, max_block_bytes,
+                        "no further block could ever fit in what's left")
 
-        # The actual finding: the flag does not reflect that reality.
-        self.assertEqual(last(r.events, "TRACE_IS_FULL")["full"], "0",
-                         "trace_is_full() under-reports at the tail (see this test's "
-                         "docstring) — if this ever starts asserting '1' instead, "
-                         "jh_store.cpp's fullness bookkeeping changed and this whole "
-                         "finding (and the accompanying report language) is stale")
+        # The fix: the flag reflects that reality instead of staying 0.
+        self.assertEqual(last(r.events, "TRACE_IS_FULL")["full"], "1",
+                         "trace_is_full() must trip once the tail can't fit the largest "
+                         "possible block — if this ever asserts '0' again, the "
+                         "under-report finding documented in this file's module "
+                         "docstring has regressed")
 
-        # And the RAM-side estimate keeps climbing on every further call in
-        # THIS SAME session, each one silently a no-op on the durable side —
-        # rerun with one more TRACE_APPEND appended to the same script so
-        # the before/after comparison is within a single process/chip.
-        r_plus_one = run_harness(self.harness, [
-            "INIT",
-            f"TRACE_FILL {exact_blocks + 20} {LOG_HZ} 0.0 1.0",
-            "TRACE_BYTES",
-            "TRACE_APPEND 999999.000,1.000",
-            "TRACE_BYTES",
-        ], backing=self._backing("full_flag_plus_one.bin"))
-        bytes_events = all_of(r_plus_one.events, "TRACE_BYTES")
-        self.assertGreater(int(bytes_events[1]["n"]), int(bytes_events[0]["n"]),
-                           "the CSV-equivalent estimate keeps growing even once nothing "
-                           "more can physically be written")
+        # And the RAM-side estimate correctly stops climbing once full,
+        # since trace_append() itself gates on trace_is_full() before ever
+        # touching s_trace_csv_bytes — both checked within ONE session so
+        # the before/after comparison is on the same process/chip.
+        bytes_events = all_of(r.events, "TRACE_BYTES")
+        self.assertEqual(int(bytes_events[1]["n"]), int(bytes_events[0]["n"]),
+                         "the CSV-equivalent estimate must stop growing once genuinely full")
 
     # -------------------------------------------------------- clear/reuse
 
@@ -603,25 +633,32 @@ class TestStoreHost(unittest.TestCase):
         self.assertEqual(len(rows), 1, "torn record must not be surfaced by a dump either")
         self.assertTrue(rows[0].startswith("1,1.000,"))
 
-    def test_power_cut_can_permanently_stick_the_append_slot_until_clear(self) -> None:
-        """FINDING (not fixed here — see this file's module docstring and
-        the final report): jh_store.cpp resumes appending at the exact
-        flash offset a torn write left behind WITHOUT re-erasing it first.
-        Real NOR flash writes can only clear bits (never set one back to 1
-        without an erase — modeled faithfully in mock_flash.h), so the next
-        write attempt at that same offset ANDs its intended bytes against
-        whatever the torn attempt already left there. If that corrupts even
-        one bit the new record's own stored CRC (computed over the
-        INTENDED bytes before the corrupting AND) will no longer match the
-        ACTUAL stored bytes — so the corruption is always safely caught by
-        the very same CRC check (nothing corrupt is ever surfaced as valid)
-        — but the practical result is that the append offset never advances
-        past that dead slot, so it can keep failing forever, silently
-        losing every jump logged after a mid-write power cut, until clear()
-        is called. This reproduces on the FIRST retry with the values below
-        (not a contrived adversarial search); whether any given real-world
-        retry collides is data-dependent, but this demonstrates it is a
-        real, easily-reached outcome rather than a theoretical one.
+    def test_power_cut_recovers_next_append_lands_cleanly_and_is_readable(self) -> None:
+        """FIXED BEHAVIOR — was a genuine pre-hardware FINDING (see this
+        file's module docstring): jh_store.cpp used to resume appending at
+        the exact flash offset a torn write left behind WITHOUT re-erasing
+        it first. Real NOR flash writes can only clear bits (never set one
+        back to 1 without an erase — modeled faithfully in mock_flash.h),
+        so the next write attempt at that same offset ANDed its intended
+        bytes against whatever the torn attempt already left there. If that
+        corrupted even one bit the new record's own stored CRC (computed
+        over the INTENDED bytes before the corrupting AND) no longer
+        matched the ACTUAL stored bytes — safely caught by the CRC check
+        (nothing corrupt was ever surfaced as valid), but the append offset
+        never advanced past that dead slot, so it could keep failing
+        forever, silently losing every jump logged after a mid-write power
+        cut, until clear() was called. This reproduced on the FIRST retry
+        with the values below (not a contrived adversarial search).
+
+        THE FIX (jh_store.cpp's skipPastTornWrite()/isErasedBytes(),
+        applied in findJumpsAppendPoint() and produceNextUnit()): a boot
+        scan that finds a record which fails validation AND isn't simply
+        erased treats it as torn/corrupted, skips the resume point forward
+        to the next page boundary beyond anything that write could have
+        touched (never resuming on top of not-fully-erased bytes), and
+        KEEPS scanning rather than giving up — the read-back path applies
+        the identical skip, so what jumps_scan() counts and what a dump
+        actually shows never disagree.
         """
         backing = self._backing("stuck_slot.bin")
 
@@ -631,56 +668,170 @@ class TestStoreHost(unittest.TestCase):
             "FAULT_AFTER 12",
             "JUMPS_APPEND 2 2.000 0.300 0.280 0.999",
         ], backing=backing)
-        self.assertEqual(r1.returncode, FAULT_EXIT_CODE)
+        self.assertEqual(r1.returncode, FAULT_EXIT_CODE,
+                         "expected the armed fault to terminate the process")
 
-        # Reboot once: confirm the clean baseline (count=1), then retry a
-        # DIFFERENT record at the same (now-dead) offset.
+        # Reboot: torn record #2 correctly excluded, then append a NEW,
+        # different record at what is now a safely-skipped-to offset.
         r2 = run_harness(self.harness, [
             "INIT",
             "JUMPS_SCAN",
             "JUMPS_APPEND 99 3.000 0.300 0.280 0.650",
-            "JUMPS_SCAN",  # optimistic in-RAM count — bumps regardless of validity
+            "JUMPS_SCAN",
             "OPEN_READ JUMPS", "READ_ALL", "CLOSE_READ",
         ], backing=backing)
         self.assertEqual(r2.returncode, 0)
         scans = all_of(r2.events, "JUMPS_SCAN")
-        self.assertEqual(int(scans[0]["count"]), 1)
-        optimistic_count = int(scans[1]["count"])
+        self.assertEqual(int(scans[0]["count"]), 1, "the torn record must still be excluded")
+        self.assertEqual(int(scans[1]["count"]), 2, "the fix: the retry is counted...")
         rows = [ln for ln in r2.read_alls[0].splitlines() if ln and not ln.startswith("n,")]
-        # The finding: the in-RAM count optimistically advanced, but the
-        # dump — which re-validates every record's CRC — did not.
-        self.assertEqual(optimistic_count, 2, "jumps_append() advances its cached count "
-                         "unconditionally; this is the optimistic side of the finding")
-        self.assertEqual(len(rows), 1, "the retry did not actually produce a valid, "
-                         "readable second record — the dead-slot finding")
+        self.assertEqual(len(rows), 2, "...AND the fix: the retry is actually READABLE, "
+                         "not just optimistically counted — the pre-fix version of this "
+                         "test asserted len(rows) == 1 here (see git history)")
+        self.assertTrue(rows[0].startswith("1,1.000,"))
+        self.assertTrue(rows[1].startswith("99,3.000,"))
 
-        # Reboot AGAIN: the discrepancy self-corrects on the *cached* side
-        # (a fresh scan re-derives truth from storage)... but the slot is
-        # still dead, so it happens again, forever, without clear().
+        # Reboot AGAIN: the recovered state must be durable, not a one-
+        # process fluke (before the fix, a second reboot's fresh re-scan
+        # would have reverted the cached count back down to 1).
         r3 = run_harness(self.harness, [
             "INIT",
             "JUMPS_SCAN",
-            "JUMPS_APPEND 100 4.000 0.300 0.280 0.700",
             "OPEN_READ JUMPS", "READ_ALL", "CLOSE_READ",
         ], backing=backing)
-        self.assertEqual(int(last(r3.events, "JUMPS_SCAN")["count"]), 1,
-                         "a fresh boot re-derives the true (still just 1 valid record) count")
+        self.assertEqual(int(last(r3.events, "JUMPS_SCAN")["count"]), 2)
         rows3 = [ln for ln in r3.read_alls[0].splitlines() if ln and not ln.startswith("n,")]
-        self.assertEqual(len(rows3), 1, "the slot is still dead on a second retry, "
-                         "without an intervening clear()")
+        self.assertEqual(len(rows3), 2)
+        self.assertTrue(rows3[0].startswith("1,1.000,"))
+        self.assertTrue(rows3[1].startswith("99,3.000,"))
 
-        # clear() is the documented, confirmed way out.
+        # And a further, entirely ordinary append lands right after both,
+        # with no gap-related off-by-ones.
         r4 = run_harness(self.harness, [
             "INIT",
-            "CLEAR",
+            "JUMPS_APPEND 100 4.000 0.300 0.280 0.700",
+            "JUMPS_SCAN",
+            "OPEN_READ JUMPS", "READ_ALL", "CLOSE_READ",
+        ], backing=backing)
+        self.assertEqual(int(last(r4.events, "JUMPS_SCAN")["count"]), 3)
+        rows4 = [ln for ln in r4.read_alls[0].splitlines() if ln and not ln.startswith("n,")]
+        self.assertEqual(len(rows4), 3)
+        self.assertTrue(rows4[2].startswith("100,4.000,"))
+
+        # clear() still works as the (now merely optional) full reset.
+        r5 = run_harness(self.harness, [
+            "INIT", "CLEAR",
             "JUMPS_APPEND 1 5.000 0.300 0.280 0.800",
             "JUMPS_SCAN",
             "OPEN_READ JUMPS", "READ_ALL", "CLOSE_READ",
         ], backing=backing)
-        self.assertEqual(int(last(r4.events, "JUMPS_SCAN")["count"]), 1)
+        self.assertEqual(int(last(r5.events, "JUMPS_SCAN")["count"]), 1)
+        rows5 = [ln for ln in r5.read_alls[0].splitlines() if ln and not ln.startswith("n,")]
+        self.assertEqual(len(rows5), 1)
+        self.assertTrue(rows5[0].startswith("1,5.000,"))
+
+    def test_power_cut_trace_block_recovers_and_is_readable(self) -> None:
+        """Trace-region sibling of test_power_cut_recovers_next_append_
+        lands_cleanly_and_is_readable — the identical torn-write/AND-merge
+        mechanism and fix apply here too (findTraceAppendPoint()/
+        produceNextUnit()'s trace branch), but trace blocks are variable-
+        size and can straddle multiple 256B pages (unlike a fixed 32-byte
+        jump record, which never does), so this is a genuinely different
+        code path worth its own regression coverage, not just a restatement
+        of the jumps case."""
+        backing = self._backing("stuck_slot_trace.bin")
+
+        r1 = run_harness(self.harness, [
+            "INIT",
+            "TRACE_APPEND 0.020,1.001;0.040,1.002",  # block A: closes on the next line
+            "TRACE_APPEND 1.020,1.010",               # block B: torn below
+            "FAULT_AFTER 4",
+            "OPEN_READ TRACE", "CLOSE_READ",          # forces block B's write — this tears
+        ], backing=backing)
+        self.assertEqual(r1.returncode, FAULT_EXIT_CODE)
+
+        r2 = run_harness(self.harness, [
+            "INIT",
+            "TRACE_BYTES",
+            "TRACE_APPEND 5.000,2.000;5.020,2.001",
+            "TRACE_APPEND 9.000,3.000",
+            "OPEN_READ TRACE", "CLOSE_READ",
+            "TRACE_BYTES",
+            "OPEN_READ TRACE", "READ_ALL", "CLOSE_READ",
+        ], backing=backing)
+        self.assertEqual(r2.returncode, 0)
+        bytes_events = all_of(r2.events, "TRACE_BYTES")
+        self.assertEqual(int(bytes_events[0]["n"]), 6 + 2 * len("0.020,1.001\n"),
+                         "only block A survives the torn block B")
+        self.assertGreater(int(bytes_events[1]["n"]), int(bytes_events[0]["n"]),
+                           "the fix: the retry blocks are now counted too")
+        dump = r2.read_alls[0]
+        rows = [ln for ln in dump.splitlines() if ln and ln != "t,mag"]
+        self.assertEqual(rows, ["0.020,1.001", "0.040,1.002", "5.000,2.000",
+                                "5.020,2.001", "9.000,3.000"],
+                         "the fix: every sample survives — the pre-fix block B's damage "
+                         "would have hidden the retry blocks entirely")
+
+        # Durable across a further reboot.
+        r3 = run_harness(self.harness, ["INIT", "OPEN_READ TRACE", "READ_ALL", "CLOSE_READ"],
+                         backing=backing)
+        rows3 = [ln for ln in r3.read_alls[0].splitlines() if ln and ln != "t,mag"]
+        self.assertEqual(rows3, rows)
+
+    def test_multiple_torn_writes_all_recover_and_stay_readable(self) -> None:
+        """Regression scenario for the fix's "keep scanning/reading past
+        damage" behavior specifically (not just "skip past one gap"): TWO
+        separate power cuts, each leaving its own torn record behind, with
+        a successful append landing between them. All three genuinely
+        valid records (one before each gap, one after both) must survive,
+        stay correctly counted, and stay readable — including still being
+        correctly ORDERED — across further reboots. This is exactly the
+        shape of code a future refactor could silently regress (e.g.
+        reintroducing a `break` where this test needs `continue`), so it's
+        worth pinning on its own rather than only ever exercising a single
+        gap."""
+        backing = self._backing("multi_gap.bin")
+
+        r1 = run_harness(self.harness, [
+            "INIT",
+            "JUMPS_APPEND 0 0.0 0.300 0.280 0.10",
+            "FAULT_AFTER 12",
+            "JUMPS_APPEND 1 1.0 0.300 0.280 0.20",  # torn: gap #1
+        ], backing=backing)
+        self.assertEqual(r1.returncode, FAULT_EXIT_CODE)
+
+        r2 = run_harness(self.harness, [
+            "INIT",
+            "JUMPS_APPEND 10 10.0 0.300 0.280 0.30",  # lands cleanly past gap #1
+            "FAULT_AFTER 12",
+            "JUMPS_APPEND 11 11.0 0.300 0.280 0.40",  # torn: gap #2
+        ], backing=backing)
+        self.assertEqual(r2.returncode, FAULT_EXIT_CODE)
+
+        r3 = run_harness(self.harness, [
+            "INIT",
+            "JUMPS_SCAN",
+            "JUMPS_APPEND 20 20.0 0.300 0.280 0.50",  # lands cleanly past gap #2
+            "JUMPS_SCAN",
+            "OPEN_READ JUMPS", "READ_ALL", "CLOSE_READ",
+        ], backing=backing)
+        self.assertEqual(r3.returncode, 0)
+        scans = all_of(r3.events, "JUMPS_SCAN")
+        self.assertEqual(int(scans[0]["count"]), 2, "the two records either side of gap #1 "
+                         "recovered by the PREVIOUS boot, before gap #2 even existed")
+        self.assertEqual(int(scans[1]["count"]), 3)
+        rows = [ln for ln in r3.read_alls[0].splitlines() if ln and not ln.startswith("n,")]
+        self.assertEqual(len(rows), 3)
+        self.assertTrue(rows[0].startswith("0,0.000,"))
+        self.assertTrue(rows[1].startswith("10,10.000,"))
+        self.assertTrue(rows[2].startswith("20,20.000,"))
+
+        # One more reboot: fully stable with 3 valid records spanning 2 gaps.
+        r4 = run_harness(self.harness, ["INIT", "JUMPS_SCAN", "OPEN_READ JUMPS", "READ_ALL",
+                                        "CLOSE_READ"], backing=backing)
+        self.assertEqual(int(last(r4.events, "JUMPS_SCAN")["count"]), 3)
         rows4 = [ln for ln in r4.read_alls[0].splitlines() if ln and not ln.startswith("n,")]
-        self.assertEqual(len(rows4), 1)
-        self.assertTrue(rows4[0].startswith("1,5.000,"), "clear() fully un-sticks the region")
+        self.assertEqual(rows4, rows)
 
     # --------------------------------------------------------- corruption
 

@@ -84,7 +84,14 @@ const uint32_t SECTOR_BYTES       = 4096;
 const uint32_t SUPERBLOCK_BYTES   = SECTOR_BYTES;  // sector 0
 const uint32_t JUMPS_REGION_BYTES = 65536;         // 16 sectors, 2048 records
 const uint32_t JUMP_RECORD_BYTES  = 32;
-const uint32_t JUMP_RECORD_COUNT  = JUMPS_REGION_BYTES / JUMP_RECORD_BYTES;
+const uint32_t PAGE_BYTES         = 256;  // matches Adafruit_FlashTransport.h's
+                                          // SFLASH_PAGE_SIZE — the physical QSPI
+                                          // program-page size Adafruit_SPIFlashBase::
+                                          // writeBuffer() itself chunks writes at
+                                          // (see its own source: "write one page at
+                                          // a time and must not go over page
+                                          // boundary"). Used only by the torn-write
+                                          // recovery below — see skipPastTornWrite().
 
 const char* TRACE_HEADER = "t,mag\n";
 const char* JUMPS_HEADER = "n,takeoff_s,airtime_raw_s,airtime_s,height_m\n";
@@ -184,6 +191,51 @@ bool jumpRecordValid(const JumpRecord& rec) {
   return want == rec.crc;
 }
 
+// ---------------------------------------------------- torn-write recovery
+// True iff every byte of `buf` is the flash-erased fill value (0xFF) — i.e.
+// genuinely blank, never-written flash, as opposed to bytes a write landed
+// on (whether that write completed, was torn by a power cut partway
+// through, or the result was corrupted afterward).
+bool isErasedBytes(const uint8_t* buf, size_t len) {
+  for (size_t i = 0; i < len; ++i) {
+    if (buf[i] != 0xFF) return false;
+  }
+  return true;
+}
+
+// Called by both boot-time scans when they reach a record/block that fails
+// validation. If the bytes sitting there are simply erased (0xFF), that's
+// the ordinary, expected end-of-valid-data case — `off` is already a safe
+// place to resume appending and is returned unchanged. If they are NOT
+// erased, something was written there (a torn power-cut write or later
+// corruption) — NOR flash writes can only ever CLEAR bits, never set one
+// back to 1 without an erase, so resuming a fresh append exactly on top of
+// those leftover bytes would AND-merge the new data against them and can
+// silently and PERMANENTLY wedge that slot: every future append landing on
+// the same not-fully-erased bytes has a real chance of getting corrupted in
+// turn, failing its own CRC check in exactly the same way, so the append
+// offset never advances past it again without a clear(). Proved by
+// firmware/test/store_host's
+// test_power_cut_recovers_next_append_lands_cleanly_and_is_readable (named
+// for the fix below — it originally proved and was named after the bug,
+// see tools/tests/test_store_host.py's module docstring for that history).
+//
+// The fix: skip `off` forward to the first page boundary beyond anything a
+// write starting at `off` could possibly have touched — `worst_case_bytes`
+// is the largest that write could legitimately have been (JUMP_RECORD_BYTES
+// for a jump record, which never straddles a page; the largest possible
+// trace block for the trace region, which can straddle several). That
+// bound holds regardless of what the (possibly torn/corrupt) bytes
+// themselves claim, so this is safe even when the tear lands inside the
+// header fields those claims would otherwise come from. Clamped to
+// `region_bytes` so a torn write near the very end of a region can't skip
+// past it.
+uint32_t skipPastTornWrite(uint32_t off, uint32_t worst_case_bytes, uint32_t region_bytes) {
+  const uint32_t next_page =
+      ((off + worst_case_bytes + PAGE_BYTES - 1) / PAGE_BYTES) * PAGE_BYTES;
+  return (next_page < region_bytes) ? next_page : region_bytes;
+}
+
 // Scans the jumps region at boot: finds the true append offset AND the live
 // count/best height in one linear pass.
 //
@@ -206,10 +258,29 @@ void findJumpsAppendPoint() {
   uint32_t off   = 0;
   uint32_t count = 0;
   float    best  = 0.0f;
-  for (uint32_t i = 0; i < JUMP_RECORD_COUNT; ++i) {
+  // A while-loop over byte offset, not a for-loop over record index: torn-
+  // write recovery (below) can jump `off` forward by more than one record's
+  // width, so a fixed per-iteration step no longer fits.
+  while (off + JUMP_RECORD_BYTES <= JUMPS_REGION_BYTES) {
     JumpRecord rec;
     s_flash.readBuffer(s_jumps_region_start + off, (uint8_t*)&rec, sizeof(rec));
-    if (!jumpRecordValid(rec)) break;
+    if (!jumpRecordValid(rec)) {
+      if (isErasedBytes((const uint8_t*)&rec, sizeof(rec))) break;  // genuine end of data
+      // Torn-write recovery (see skipPastTornWrite()'s comment): a jump
+      // record never straddles a page (JUMP_RECORD_BYTES divides PAGE_BYTES
+      // evenly), so a write landing anywhere in it can only ever have
+      // touched the one page `off` falls in. Skip past it and KEEP
+      // scanning — a prior boot may already have resumed appending beyond
+      // an earlier torn record (possibly more than once), so there can be
+      // more genuinely valid data past this damaged patch; produceNextUnit()
+      // below applies the identical skip on the read-back side so a dump
+      // and this count never disagree. Proved by firmware/test/store_host's
+      // test_power_cut_recovers_next_append_lands_cleanly_and_is_readable
+      // and test_multiple_torn_writes_all_recover_and_stay_readable
+      // (tools/tests/test_store_host.py).
+      off = skipPastTornWrite(off, JUMP_RECORD_BYTES, JUMPS_REGION_BYTES);
+      continue;
+    }
     count++;
     if (rec.height_m > best) best = rec.height_m;
     off += JUMP_RECORD_BYTES;
@@ -226,6 +297,33 @@ void findJumpsAppendPoint() {
 void csvByteCounter(void* ctx, float t_s, float mag_g) {
   uint32_t* total = (uint32_t*)ctx;
   *total += csvLineLen(t_s, mag_g);
+}
+
+// Largest a single trace block can ever legitimately be (header + the max
+// sample count + crc) — unlike a jump record, a trace block CAN straddle
+// several 256B pages, so torn-write recovery below has to skip past this
+// much, not just one page (see skipPastTornWrite()).
+const uint32_t kMaxTraceBlockBytes = trace_codec::block_size(trace_codec::MAX_SAMPLES_PER_BLOCK);
+
+// Called at every point findTraceAppendPoint() finds a record that fails
+// validation. If the bytes read there are simply erased (0xFF), that's the
+// ordinary, expected end-of-valid-data case — returns false (nothing to
+// skip; the caller should stop scanning). Otherwise something was written
+// there and never validated (a torn power-cut write or later corruption) —
+// advances `*off` past every page a block starting there could possibly
+// have reached (see skipPastTornWrite()) and returns true, telling the
+// caller to skip forward and KEEP scanning: a prior boot may already have
+// resumed appending beyond an earlier torn block, so there can be more
+// genuinely valid data past this one damaged patch. produceNextUnit()
+// applies the identical skip on the read-back side so a dump and this
+// scan's counts never disagree with each other. Proved by
+// firmware/test/store_host's test_power_cut_trace_block_recovers_and_is_
+// readable (tools/tests/test_store_host.py) — the trace-region sibling of
+// findJumpsAppendPoint()'s identical jumps-region recovery above.
+bool traceScanHitDamage(uint32_t* off, const uint8_t* buf, size_t len) {
+  if (isErasedBytes(buf, len)) return false;
+  *off = skipPastTornWrite(*off, kMaxTraceBlockBytes, s_trace_region_bytes);
+  return true;
 }
 
 // Same reasoning as findJumpsAppendPoint() above (a linear pass is required
@@ -248,22 +346,44 @@ void findTraceAppendPoint() {
     const uint32_t t0_ms = (uint32_t)block_buf[0] | ((uint32_t)block_buf[1] << 8) |
                           ((uint32_t)block_buf[2] << 16) | ((uint32_t)block_buf[3] << 24);
     const uint32_t count = block_buf[4];
-    if (t0_ms == 0xFFFFFFFFu || count == 0 || count > trace_codec::MAX_SAMPLES_PER_BLOCK) break;
+    if (t0_ms == 0xFFFFFFFFu || count == 0 || count > trace_codec::MAX_SAMPLES_PER_BLOCK) {
+      if (traceScanHitDamage(&off, block_buf, sizeof(block_buf))) continue;
+      break;
+    }
 
     const uint32_t need = trace_codec::block_size(count);
-    if (off + need > s_trace_region_bytes) break;
+    if (off + need > s_trace_region_bytes) {
+      if (traceScanHitDamage(&off, block_buf, sizeof(block_buf))) continue;
+      break;
+    }
 
     uint8_t full[trace_codec::block_size(trace_codec::MAX_SAMPLES_PER_BLOCK)];
     s_flash.readBuffer(s_trace_region_start + off, full, need);
     const trace_codec::BlockResult r =
         trace_codec::decode_one_block(full, need, JH_LOG_HZ, csvByteCounter, &csv_total);
-    if (!r.ok) break;
+    if (!r.ok) {
+      if (traceScanHitDamage(&off, full, need)) continue;
+      break;
+    }
     off += r.bytes_consumed;
   }
   s_trace_append_off = off;
   s_trace_csv_bytes  = off > 0 ? csv_total + 6 /* "t,mag\n" header */ : 0;
   s_trace_csv_header_counted = off > 0;
-  s_trace_full = (off >= s_trace_region_bytes);
+  // Full means "no further block can ever fit" — not merely "not one more
+  // byte remains." A block that arrives when less than kMaxTraceBlockBytes
+  // remains is silently dropped by closeAndWriteBlock() without s_trace_full
+  // ever crossing the >= region_bytes threshold on its own, so trace_is_full()
+  // could read false forever after the region is, in every practical sense,
+  // done accepting data — main.cpp's "# trace log full" narration would then
+  // never fire and trace_bytes()'s estimate would keep climbing past what's
+  // truly stored. Proved by firmware/test/store_host's
+  // test_trace_is_full_flag_trips_before_the_tail_runs_out (named for the
+  // fix below — it originally proved and was named after the bug, see
+  // tools/tests/test_store_host.py's module docstring for that history).
+  // Mirrored in closeAndWriteBlock()'s own newly_full check below.
+  s_trace_full = (off >= s_trace_region_bytes) ||
+                 (s_trace_region_bytes - off < kMaxTraceBlockBytes);
 }
 
 bool writeSuperblock() {
@@ -321,36 +441,63 @@ void appendCsvLineToPending(void* ctx, float t_s, float mag_g) {
 // delivered (EOF) — including stopping early on a corrupt/partial trailing
 // one, matching the power-loss stance (nothing past it is ever surfaced to
 // a client).
+//
+// A torn-write recovery boundary (see skipPastTornWrite()'s comment and
+// findJumpsAppendPoint()/findTraceAppendPoint() above, which already
+// resumed appending past exactly this kind of damage) is NOT such a
+// trailing case: this loops past it internally rather than declaring EOF,
+// so a dump surfaces every genuinely valid unit on both sides of a damaged
+// patch — the same recovered data findJumpsAppendPoint()/
+// findTraceAppendPoint() already counted. Without this, a client could get
+// a `count` from STATS that disagrees with what an actual `dump` shows,
+// which defeats the point of the fix. Proved by firmware/test/store_host's
+// test_power_cut_recovers_next_append_lands_cleanly_and_is_readable and its
+// siblings (tools/tests/test_store_host.py).
 void produceNextUnit() {
-  if (s_read_src_cursor >= s_read_src_used) return;
+  while (s_read_src_cursor < s_read_src_used) {
+    if (s_read_which == StoredFile::JUMPS) {
+      JumpRecord rec;
+      s_flash.readBuffer(s_jumps_region_start + s_read_src_cursor, (uint8_t*)&rec, sizeof(rec));
+      if (!jumpRecordValid(rec)) {
+        if (isErasedBytes((const uint8_t*)&rec, sizeof(rec))) { s_read_src_cursor = s_read_src_used; return; }
+        s_read_src_cursor = skipPastTornWrite(s_read_src_cursor, JUMP_RECORD_BYTES, s_read_src_used);
+        continue;
+      }
+      const int n = snprintf(s_read_pending, sizeof(s_read_pending), "%lu,%.3f,%.3f,%.3f,%.3f\n",
+                            (unsigned long)rec.n, (double)rec.takeoff_s, (double)rec.airtime_raw_s,
+                            (double)rec.airtime_s, (double)rec.height_m);
+      s_read_pending_len = n > 0 ? (size_t)n : 0;
+      s_read_src_cursor += JUMP_RECORD_BYTES;
+      return;
+    } else {
+      uint8_t hdr[trace_codec::HEADER_BYTES];
+      s_flash.readBuffer(s_trace_region_start + s_read_src_cursor, hdr, sizeof(hdr));
+      const uint32_t count = hdr[4];
+      if (count == 0 || count > trace_codec::MAX_SAMPLES_PER_BLOCK) {
+        if (isErasedBytes(hdr, sizeof(hdr))) { s_read_src_cursor = s_read_src_used; return; }
+        s_read_src_cursor = skipPastTornWrite(s_read_src_cursor, kMaxTraceBlockBytes, s_read_src_used);
+        continue;
+      }
+      const uint32_t need = trace_codec::block_size(count);
+      if (s_read_src_cursor + need > s_read_src_used) {
+        if (isErasedBytes(hdr, sizeof(hdr))) { s_read_src_cursor = s_read_src_used; return; }
+        s_read_src_cursor = skipPastTornWrite(s_read_src_cursor, kMaxTraceBlockBytes, s_read_src_used);
+        continue;
+      }
 
-  if (s_read_which == StoredFile::JUMPS) {
-    JumpRecord rec;
-    s_flash.readBuffer(s_jumps_region_start + s_read_src_cursor, (uint8_t*)&rec, sizeof(rec));
-    if (!jumpRecordValid(rec)) { s_read_src_cursor = s_read_src_used; return; }
-    const int n = snprintf(s_read_pending, sizeof(s_read_pending), "%lu,%.3f,%.3f,%.3f,%.3f\n",
-                          (unsigned long)rec.n, (double)rec.takeoff_s, (double)rec.airtime_raw_s,
-                          (double)rec.airtime_s, (double)rec.height_m);
-    s_read_pending_len = n > 0 ? (size_t)n : 0;
-    s_read_src_cursor += JUMP_RECORD_BYTES;
-  } else {
-    uint8_t hdr[trace_codec::HEADER_BYTES];
-    s_flash.readBuffer(s_trace_region_start + s_read_src_cursor, hdr, sizeof(hdr));
-    const uint32_t count = hdr[4];
-    if (count == 0 || count > trace_codec::MAX_SAMPLES_PER_BLOCK) {
-      s_read_src_cursor = s_read_src_used;
+      uint8_t full[trace_codec::block_size(trace_codec::MAX_SAMPLES_PER_BLOCK)];
+      s_flash.readBuffer(s_trace_region_start + s_read_src_cursor, full, need);
+      s_read_pending_len = 0;
+      const trace_codec::BlockResult r =
+          trace_codec::decode_one_block(full, need, JH_LOG_HZ, appendCsvLineToPending, nullptr);
+      if (!r.ok) {
+        if (isErasedBytes(full, need)) { s_read_src_cursor = s_read_src_used; return; }
+        s_read_src_cursor = skipPastTornWrite(s_read_src_cursor, kMaxTraceBlockBytes, s_read_src_used);
+        continue;
+      }
+      s_read_src_cursor += r.bytes_consumed;
       return;
     }
-    const uint32_t need = trace_codec::block_size(count);
-    if (s_read_src_cursor + need > s_read_src_used) { s_read_src_cursor = s_read_src_used; return; }
-
-    uint8_t full[trace_codec::block_size(trace_codec::MAX_SAMPLES_PER_BLOCK)];
-    s_flash.readBuffer(s_trace_region_start + s_read_src_cursor, full, need);
-    s_read_pending_len = 0;
-    const trace_codec::BlockResult r =
-        trace_codec::decode_one_block(full, need, JH_LOG_HZ, appendCsvLineToPending, nullptr);
-    if (!r.ok) { s_read_src_cursor = s_read_src_used; return; }
-    s_read_src_cursor += r.bytes_consumed;
   }
 }
 
@@ -444,17 +591,35 @@ bool closeAndWriteBlock() {
   s_trace_block_open = false;
   if (n == 0) return false;
   if (s_trace_append_off + n > s_trace_region_bytes) {
-    // Physically out of room: drop this block rather than write past the
-    // region (into the next chip's worth of nothing). trace_is_full()
+    // Physically out of room for THIS block: drop it rather than write past
+    // the region (into the next chip's worth of nothing). trace_is_full()
     // should already have stopped main.cpp from calling us by this point
     // (it gates on trace_is_full() before ever building up trace_buf) —
-    // this is a last-ditch guard, not the primary mechanism.
-    return false;
+    // this is a last-ditch guard, not the primary mechanism. Nothing is
+    // written here, so s_trace_append_off doesn't move and this can only
+    // ever get MORE true from here — latch fullness now with the same
+    // "no further block could ever fit" rule as below, so a caller that
+    // keeps calling anyway (or a `dump` forcing a flush) doesn't have to
+    // wait for some later write attempt to notice.
+    const bool newly_full =
+        !s_trace_full && (s_trace_region_bytes - s_trace_append_off < kMaxTraceBlockBytes);
+    if (newly_full) s_trace_full = true;
+    return newly_full;
   }
   s_flash.writeBuffer(s_trace_region_start + s_trace_append_off, buf, n);
   s_trace_append_off += (uint32_t)n;
 
-  const bool newly_full = !s_trace_full && (s_trace_append_off >= s_trace_region_bytes);
+  // "Full" means no further block could ever fit, not merely "this exact
+  // byte is the last one" — checking only `>= s_trace_region_bytes` lets
+  // trace_is_full() under-report forever once the remaining tail drops
+  // below one block's worth but isn't literally zero (a block that doesn't
+  // fit is simply dropped by the guard above, which never by itself crosses
+  // that threshold). Proved by firmware/test/store_host's
+  // test_trace_is_full_flag_trips_before_the_tail_runs_out
+  // (tools/tests/test_store_host.py). Mirrored in findTraceAppendPoint()'s
+  // own boot-time fullness check.
+  const bool newly_full =
+      !s_trace_full && (s_trace_region_bytes - s_trace_append_off < kMaxTraceBlockBytes);
   if (newly_full) s_trace_full = true;
   return newly_full;
 }
