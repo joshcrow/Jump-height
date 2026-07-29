@@ -1,5 +1,12 @@
 # Over-the-air firmware updates — scope & build spec
 
+> **ESP32-era spec (banner added 2026-07-28).** Superseded on the v2
+> Sense board by Nordic DFU ([sense.md](sense.md) §3.3) for everything
+> below except **§4.5 (binary trace v2)**, whose storage format SHIPPED
+> in the Sense port rather than merely being planned here. Still the
+> live plan for the ESP32 FireBeetle rig until the Sense takes over
+> water duty. Body below is otherwise unchanged.
+
 **Status:** scoped, not started. Build AFTER water validation (same gate as
 everything; nothing here affects measurement). Companion to Phase 3.5 in
 [roadmap.md](roadmap.md) — the two share a partition-map change and should

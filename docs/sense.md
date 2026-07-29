@@ -2,18 +2,17 @@
 
 **Status:** ALL-IN (owner, 2026-07-28). Board + 500 mAh battery ordered,
 arriving within days. Written before first power-on: this is the honest
-list of what the plan had NOT covered, plus the bring-up sequence. Items
+list of what the plan had NOT covered, plus the bring-up sequence — items
 marked **VERIFY** get answered on the bench and this doc gets edited.
-
-> **Build-ahead status (2026-07-28, same day):** the pre-arrival software
-> is DONE — firmware 0.4.3 split the core behind platform seams (§3.9),
-> and the complete nRF52 layer now compiles clean (Bluefruit link with
-> library-source citations, LSM6DS3 driver, raw QSPI store with binary
-> trace v2 + codec parity tests, watchdog); CI publishes a drag-and-drop
-> `.uf2`. Every runtime assumption that only hardware can prove is
-> numbered in **[../firmware/SENSE_FIRST_BOOT.md](../firmware/SENSE_FIRST_BOOT.md)**
-> (19 items). Day one = flash + work down that list, i.e. milestone S0
-> and most of S1 have prebuilt answers waiting.
+Build-ahead, same day: the pre-arrival software is already DONE — firmware
+0.4.3 split the core behind platform seams (§3.9), and the complete nRF52
+layer now compiles clean (Bluefruit link with library-source citations,
+LSM6DS3 driver, raw QSPI store with binary trace v2 + codec parity tests,
+watchdog); CI publishes a drag-and-drop `.uf2`. Every runtime assumption
+that only hardware can prove is numbered in
+**[../firmware/SENSE_FIRST_BOOT.md](../firmware/SENSE_FIRST_BOOT.md)**
+(19 items) — day one is flash + work down that list, i.e. milestone S0
+and most of S1 already have prebuilt answers waiting.
 
 **Product statement.** The Sense puck is a **tiny Garmin data-field
 adder**: it rides the board, measures, and feeds the watch live — phone
@@ -301,46 +300,53 @@ duty cycle) and replace this table with numbers.
 - Signed DFU, fleet management.
 - WiFi anything — this chip has none; that is the point.
 
-## 9. Jump-starts — existing tools, code, and papers *(researched 2026-07-28)*
+## 9. Jump-starts — existing tools, code, and papers *(researched
+2026-07-28; expanded 2026-07-29 by the four-agent deep pass in
+[research.md](research.md) — market map, literature verdicts on every
+design choice, nautical-science transfers, and the OSS adoption list
+with licenses verified)*
 
-> Expanded 2026-07-29 by the four-agent deep pass in
-> **[research.md](research.md)** — market map, literature verdicts on
-> every design choice, nautical-science transfers, and the OSS adoption
-> list with licenses verified.
+Three items below are the same recommendation research.md §7's adopt
+list already makes with full license detail, so they're pointers here,
+not restated: **ST's official driver examples** (research.md §7 — the
+detail unique to this doc is that we keep our own minimal driver but
+copy their wake_up/activity/free-fall/FIFO register sequences rather
+than deriving them), **xio Fusion** (research.md §7, adopted whole once
+spins/orientation land), and **Edge Impulse's XIAO Sense support**
+(research.md §7's S5 classifier fallback — unique detail: data in via
+their serial forwarder, deployed as an Arduino library, free tier, worth
+it if time-on-foil ever outgrows the windowed-variance approach). The
+sports-science flight-time literature below (MyJump vs. force-plate
+validation, IMU timing-bias papers justifying `airtime_offset_s` as
+additive) is likewise cited with hard numbers in research.md §2.
 
-Standing on shoulders for the bench milestones, so nothing below gets
+What's unique to this doc, standing on shoulders so nothing below gets
 hand-rolled that doesn't need to be:
 
-**Current measurement (S0/S2)**
-- [Nordic Online Power Profiler](https://devzone.nordicsemi.com/power/) —
-  free calculator that models BLE current for given connection
-  parameters BEFORE measuring; sanity-checks §5's table.
-- **Nordic Power Profiler Kit II (PPK2, ~$100)** — the standard µA-level
-  source-meter/logger for exactly this chip family; a multimeter cannot
-  see dynamic duty-cycle draw honestly. Recommended purchase before S2.
-- Nordic DevZone + Seeed forum threads on XIAO Sense sleep current
-  (QSPI deep-power-down, mic rail) — §3.6's gotcha is
-  community-documented; read the threads before chasing µA.
+**Current measurement (S0/S2)**: Nordic's free [Online Power
+Profiler](https://devzone.nordicsemi.com/power/) calculator models BLE
+current for given connection parameters before you measure, as a sanity
+check on §5's table. **Nordic Power Profiler Kit II (PPK2, ~$100)** —
+the standard µA-level source-meter/logger for exactly this chip family;
+a multimeter cannot see dynamic duty-cycle draw honestly. Recommended
+purchase before S2. Nordic DevZone + Seeed forum threads on XIAO Sense
+sleep current (QSPI deep-power-down, mic rail) mean §3.6's gotcha is
+already community-documented — read them before chasing µA.
 
-**Sleep/wake + IMU hardware features (S2)**
-- [ST's official platform-independent driver examples](https://github.com/STMicroelectronics/STMems_Standard_C_drivers)
-  — ready register sequences for wake_up, activity/inactivity,
-  free-fall, and FIFO on our exact part. We keep our minimal driver but
-  copy their sequences instead of deriving them.
-- [AN5130 — the LSM6DS3TR-C application note](https://www.st.com/resource/en/application_note/an5130-lsm6ds3trc-alwayson-3d-accelerometer-and-3d-gyroscope-stmicroelectronics.pdf)
-  — threshold math, per-mode current tables, FIFO (4 KB confirmed).
-  *(Careful: AN4987 is the LSM6DSM's — sibling part, wrong doc.)*
-- Adafruit nRF52 core: FreeRTOS tickless idle means plain `delay()` is
-  already low-power; `sd_power_system_off` examples exist in the core.
+**Sleep/wake + IMU hardware features (S2)**:
+[AN5130 — the LSM6DS3TR-C application note](https://www.st.com/resource/en/application_note/an5130-lsm6ds3trc-alwayson-3d-accelerometer-and-3d-gyroscope-stmicroelectronics.pdf)
+— threshold math, per-mode current tables, FIFO (4 KB confirmed).
+*(Careful: AN4987 is the LSM6DSM's — sibling part, wrong doc.)* The
+Adafruit nRF52 core's FreeRTOS tickless idle already makes plain
+`delay()` low-power, and `sd_power_system_off` examples ship in the core.
 
-**Battery telemetry (S2)**
-- Adafruit's canonical nRF52 VBAT ADC snippet (internal 0.6 V
-  reference + gain + divider handling) — adapt, don't derive.
-- **Standard BLE Battery Service**: Bluefruit ships `BLEBas` — one line,
-  and every phone (and nRF Connect) renders it natively. Adopt it
-  ALONGSIDE the protocol's `vbat=` key; genuine hand-roll avoided.
-- Published LiPo discharge curves for the voltage→percent table (with
-  the honest under-load-sag caveat).
+**Battery telemetry (S2)**: Adafruit's canonical nRF52 VBAT ADC snippet
+(internal 0.6 V reference + gain + divider handling) is adapted, not
+derived. Bluefruit ships a standard BLE Battery Service, `BLEBas`, in
+one line, rendered natively by every phone (and nRF Connect) — adopted
+ALONGSIDE the protocol's own `vbat=` key, genuine hand-roll avoided.
+Published LiPo discharge curves supply the voltage→percent table, with
+the honest under-load-sag caveat.
 
 **OTA proof (S3)** — the client side already exists end-to-end:
 adafruit-nrfutil builds packages, Nordic's free nRF Connect / nRF
@@ -348,18 +354,12 @@ Toolbox apps are the iOS DFU clients, `BLEDfu` ships in the core. Zero
 client code to write. Browser DFU: dead with the stock bootloader (see
 §3.3 note).
 
-**Drop calibration + height validation (S1 / water)**
-- Sports-science flight-time literature: the MyJump app validation
-  studies (video frame-counting vs force plates — our exact 120–240 fps
-  ground-truth method, peer-validated) and IMU-vs-force-plate
-  flight-time papers, which quantify detection timing bias — the
-  published justification for `airtime_offset_s` being additive.
-- [Woodman, "An introduction to inertial navigation" (free Cambridge
-  tech report)](https://www.cl.cam.ac.uk/techreports/UCAM-CL-TR-696.pdf)
-  — the standard primer; the drift math there is WHY this project never
-  integrates.
-- Phyphox (free physics app) as an independent second sensor for bench
-  drop cross-checks.
+**Drop calibration + height validation (S1 / water)**:
+[Woodman, "An introduction to inertial navigation" (free Cambridge tech
+report)](https://www.cl.cam.ac.uk/techreports/UCAM-CL-TR-696.pdf) — the
+standard primer; the drift math there is WHY this project never
+integrates. Phyphox (free physics app) serves as an independent second
+sensor for bench drop cross-checks.
 
 **BLE pacing (S1 tuning)** — Apple's *Accessory Design Guidelines for
 Apple Devices* (Bluetooth LE chapter) is the authoritative source for
@@ -367,23 +367,14 @@ iPhone connection-interval behavior; turns `CHUNK_GAP_US` tuning from
 guesswork into arithmetic. Nordic's throughput app notes cover the
 peripheral side.
 
-**Later metrics (S5)**
-- [Edge Impulse supports this exact board](https://docs.edgeimpulse.com/hardware/boards/seeed-xiao-nrf52840-sense)
-  (official docs page; data in via their serial forwarder, deploy as an
-  Arduino library) — free-tier data collection/labeling/classifier
-  tooling if time-on-foil outgrows the windowed-variance approach.
-- [xio Technologies "Fusion"](https://github.com/xioTechnologies/Fusion)
-  (MIT-licensed AHRS in C) — when spins/orientation land, sensor fusion
-  is adopted, not hand-rolled.
-
 **Storage fallback** — if the raw QSPI region manager misbehaves on the
 bench, littlefs (power-loss-proven by design) is the drop-in fallback;
 the swap hides entirely behind the `jh_store` seam.
 
 **What rightly stays hand-rolled**: the detection thresholds and
-wing-foil traces (no public prior art exists — WOO's kite-only retreat
-is the market gap this project stands in), the line protocol, and the
-minimal clone-tolerant drivers (DECISIONS #13).
+wing-foil traces — no public vibration-signature prior art exists,
+confirmed by the research pass ([research.md §6](research.md)) — the
+line protocol, and the minimal clone-tolerant drivers (DECISIONS #13).
 
 ---
 

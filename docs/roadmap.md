@@ -6,28 +6,27 @@ A phased plan that de-risks the hard parts early. Each phase has a concrete
 
 ## Phase 0 — Prove the algorithm, no hardware ✅ *(available now)*
 
-Validate the whole concept in software before spending a cent.
+Validate the whole concept in software before spending a cent: airtime →
+height physics (`docs/algorithm.md`), the detection state machine
+(`sim/detector.py`, mirrored in firmware), a synthetic IMU generator with
+known jumps (`sim/generate.py`), and a test harness comparing detected vs
+true height (`sim/run.py`).
 
-- [x] Airtime → height physics (`docs/algorithm.md`)
-- [x] Detection state machine (`sim/detector.py`, mirrored in firmware)
-- [x] Synthetic IMU generator with known jumps (`sim/generate.py`)
-- [x] Test harness comparing detected vs true height (`sim/run.py`)
-
-**Done when:** `python3 sim/run.py` detects the synthetic jumps with small height
-error. *(It does — this is the starting point.)*
+**Done when:** `python3 sim/run.py` detects the synthetic jumps with small
+height error — it does; this is the starting point.
 
 ## Phase 1 — Bench firmware ✅ COMPLETE *(hardware-validated 2026-07-25)*
 
-Get the same algorithm running on real hardware on your desk. The firmware and
-tooling exist — the runbook for executing this phase is **[../BUILD.md](../BUILD.md)**.
-
-- [x] FireBeetle 2 ESP32-E + MPU-6050 firmware (`firmware/`), ±8 g, 200 Hz, clone-tolerant
-      raw driver, power-on self-test with fix hints
-- [x] One-command flash + wiring check: `./tools/jump flash` / `selftest`
-- [x] Guided assembly verification: `./tools/jump desktest` (3 tosses)
-- [x] Trace logging to flash + offline replay: `./tools/jump sync` / `replay`
-- [x] **On hardware:** desk test passed on the real assembly (untethered tosses)
-- [x] **On hardware:** drop calibration run — correction stored in device memory (NVS)
+Got the same algorithm running on real hardware on the desk — the runbook
+for this phase is **[../BUILD.md](../BUILD.md)**. Delivered: FireBeetle 2
+ESP32-E + MPU-6050 firmware (`firmware/`) at ±8 g / 200 Hz with a
+clone-tolerant raw driver and a power-on self-test with fix hints;
+one-command flash + wiring check (`./tools/jump flash` / `selftest`);
+guided assembly verification (`./tools/jump desktest`, 3 tosses); trace
+logging to flash with offline replay (`./tools/jump sync` / `replay`);
+and, on hardware, a passed desk test on the real assembly (untethered
+tosses) plus a drop-calibration run with the correction stored in device
+memory (NVS).
 
 **Done when:** `./tools/jump desktest` passes on the real device and a measured
 drop reads correctly after calibration.
@@ -51,21 +50,22 @@ goal (aim for ~10%). Now you actually know how high he jumps.
 
 ## Phase 3 — App & live stats ✅ COMPLETE *(hardware-validated 2026-07)*
 
-- [x] BLE in the firmware: the exact serial protocol mirrored over a Nordic
-      UART Service (NimBLE; compiles clean, 42% of the new 1.5 MB partition)
-- [x] Browser app (`web/`, served by `./tools/jump web`): live height/airtime/
-      best/count over **Web Bluetooth**, self-test + session download + CSV
-      export over **Web Serial**, Playwright-tested against a mock device
-- [x] Session history/export (browser localStorage + per-session CSV)
-- [x] **Zero-install browser flasher** (ESP Web Tools): Install button on the
-      web app; binaries staged by `./tools/jump web` locally and built/published
-      to GitHub Pages by CI (`.github/workflows/build.yml`)
-- [x] **On hardware:** BLE validated end-to-end (Bluefy on iPhone, live jumps, sync, bench flows)
-- [x] GitHub Pages live at joshcrow.github.io/Jump-height; board flashed from tooling
+BLE in the firmware mirrors the exact serial protocol over a Nordic UART
+Service (NimBLE; compiles clean, 42% of the new 1.5 MB partition). The
+browser app (`web/`, served by `./tools/jump web`) shows live
+height/airtime/best/count over **Web Bluetooth**, plus self-test +
+session download + CSV export over **Web Serial**, Playwright-tested
+against a mock device; session history/export lives in browser
+localStorage with per-session CSV. A **zero-install browser flasher**
+(ESP Web Tools) adds an Install button to the web app, with binaries
+staged locally by `./tools/jump web` and built/published to GitHub Pages
+by CI (`.github/workflows/build.yml`). On hardware: BLE validated
+end-to-end (Bluefy on iPhone, live jumps, sync, bench flows), and GitHub
+Pages is live at joshcrow.github.io/Jump-height with the board flashed
+from the tooling.
 
 **Done when:** you can see jumps pop up live on a phone and review a session
-afterward. *(Software side is done and tested; the two unchecked boxes need the
-physical board.)*
+afterward — done, on both software and hardware.
 
 ## Phase 3.5 — WiFi sync mode *(scoped — DECISION PENDING, likely superseded)*
 
@@ -74,10 +74,10 @@ physical board.)*
 > justifications dissolve: binary-WIRE BLE sync (ota.md §4.5 companion)
 > covers bulk speed, the watch + Garmin Connect FIT fields cover live +
 > auto-archive, and BLE is already OTA's primary doorway. Re-decide after
-> the Garmin field ships; the scope below is kept, not being built now.
-> *(2026-07-28: the owner went all-in on the Sense — see
-> [sense.md](sense.md) — which has no WiFi at all; this phase now applies
-> only if the ESP32 era extends.)*
+> the Garmin field ships. As of 2026-07-28 the owner went all-in on the
+> Sense (see [sense.md](sense.md)), which has no WiFi at all — so this
+> phase now applies only if the ESP32 era extends, and the scope below is
+> kept for that case, not being built now.
 
 WiFi is the answer to BLE's two weaknesses — bulk-transfer speed (seconds vs
 minutes for a full trace) and iPhones (no Web Bluetooth on iOS, but every phone
@@ -112,17 +112,20 @@ exists. Ships together with 3.5 as one partition epoch (one-time storage
 reformat; calibration in NVS survives) — and the same epoch moves trace
 storage to a binary format (ota.md §4.5), so recording capacity RISES
 from ~45 min to ~3.5 h of moving time even with half the partition.
-Build after water validation. *(2026-07-28: the esp_ota/partition parts
-are ESP32-specific and are superseded on the v2 board by Nordic DFU —
-[sense.md](sense.md) §3.3; §4.5's binary trace format transfers and is
-launch-blocking there.)*
+Build after water validation — though as of 2026-07-28 the esp_ota and
+partition parts (§§4.1–4.4, 4.6) are ESP32-specific and are superseded on
+the v2 board by Nordic DFU ([sense.md](sense.md) §3.3); §4.5's binary
+trace format transfers unchanged and is launch-blocking there regardless.
 
 ## Backlog study — what else the same hardware can measure *(thought through 2026-07)*
 
 The pipeline (50 Hz trace → sync → offline analysis → report) makes most new
 metrics pure software over data already being recorded. Tune everything
 against the first real water-session trace + video — desk guesses about what
-foiling "feels like" to the sensor would be fiction.
+foiling "feels like" to the sensor would be fiction. Literature context for
+several of the tiers below (time on foil, chop meter, crash counter, pop
+strength, clip-that, landing quality) is gathered in
+[research.md §8](research.md); not restated per item here.
 
 **Tier A — trace mining, zero firmware change** *(build after water session 1)*
 - **Time on foil**: classify 1 s windows by vibration signature (foil flight
@@ -153,29 +156,29 @@ foiling "feels like" to the sensor would be fiction.
 **Tier D — needs Phase 4 hardware**: GPS speed/distance/runs (the other half
 of the Woo/Surfr feature set); barometer stays rejected for jump height.
 
-**Prior-art check — WOO's "The WOO Way" whitepaper (v1.3, 2024)**: read and
-digested 2026-07. Their empirical data independently confirms our board
-mount (takeoff/landing detection fails from chest/wrist; chest reads ~60%
-different on inverted tricks; wrists are cheatable) and our rigid-packing
-rule ("any wiggle room leads to inaccurate results"). Their sensor arms
-race (±32 g, 32 kHz, timing crystal, 6-axis factory cal, Kalman fusion) is
-the price of DOUBLE-INTEGRATING height for kites, whose jumps are not
-ballistic (their data: 15.5 m at 5.9 s airtime — free-fall math would say
-42 m). Wing jumps are short and near-ballistic, and the airtime method
-never integrates — which is why a $2 mis-scaled sensor passes our bench.
-Adopted notes: (1) our ±8 g range clips landing PEAKS (detection at 2.5 g
-unaffected) — switch to ±16 g when crash-severity analytics land; (2) their
-users complain "reads too low" 95% of the time and WOO resolves doubt
-upward (wave-trough baselines) — when video-calibrating height_scale, keep
-the honest number; that pressure will arrive. Strategically: WOO retreated
-to kite-only in 2024 and concedes simpler tools suffice for personal
-measurement — wing foil is exactly the orphaned ground this project stands
-on. *(Update 2026-07-29, deep research pass: WOO's current site markets
-"wingfoilers" again, and the "~60 % chest" figure could not be
-re-verified — WOO's own site shows a ≈25 % board-vs-chest example. The
-sharpened, still-true thesis — "nobody serves wing foil with an open,
-inexpensive, board-mounted, independently video-validated sensor" — and
-all citations live in [research.md](research.md).)*
+**Prior-art check — WOO's "The WOO Way" whitepaper (v1.3, 2024)**, read
+and digested 2026-07: their empirical data independently confirms our
+board mount (takeoff/landing detection fails from chest/wrist; wrists
+are cheatable; chest reportedly read ~60% different on inverted tricks —
+a 2026-07-29 research pass could not re-verify that figure; see below)
+and our rigid-packing rule ("any wiggle room leads to inaccurate
+results"). Their sensor arms race (±32 g, 32 kHz, timing crystal, 6-axis
+factory cal, Kalman fusion) is the price of DOUBLE-INTEGRATING height for
+kites, whose jumps are not ballistic (their data: 15.5 m at 5.9 s airtime
+— free-fall math would say 42 m). Wing jumps are short and near-ballistic,
+and the airtime method never integrates — which is why a $2 mis-scaled
+sensor passes our bench. Adopted notes: (1) our ±8 g range clips landing
+PEAKS (detection at 2.5 g unaffected) — switch to ±16 g when
+crash-severity analytics land; (2) their users complain "reads too low"
+95% of the time and WOO resolves doubt upward (wave-trough baselines) —
+when video-calibrating height_scale, keep the honest number; that
+pressure will arrive. Strategically, the whitepaper read as a kite-only
+retreat in 2024, conceding that simpler tools suffice for personal
+measurement. The 2026-07-29 deep research pass revisited both of those
+points — WOO's site again markets to wingfoilers, and the chest-mount
+figure above is downgraded to unverified — which sharpens rather than
+breaks the thesis: full corrected figures, the market thesis, and every
+citation are in [research.md](research.md), not restated here.
 
 **New output surface — Garmin watch data field**: fully scoped with user
 stories, interaction design, architecture, milestones, and acceptance
@@ -205,10 +208,11 @@ decision (§8 there). Precedent: Surfr ships a Garmin companion.
       Nordic DFU replaces the ESP32 OTA plan, battery telemetry +
       System OFF sleep, metrics-layering architecture feeding the
       Garmin field). The FireBeetle stays the water-day rig until the
-      Sense passes the same bench → bucket → water gauntlet.
-      *Build-ahead (2026-07-28): done — 0.4.3 platform seams + the full
-      nRF52 layer compile for the Sense; CI publishes the `.uf2`; bench
-      unknowns numbered in firmware/SENSE_FIRST_BOOT.md.*
+      Sense passes the same bench → bucket → water gauntlet. Build-ahead
+      work the same day is already done: 0.4.3 platform seams and the
+      full nRF52 layer compile for the Sense, with CI publishing the
+      `.uf2` and bench unknowns numbered in
+      `firmware/SENSE_FIRST_BOOT.md`.
       Middle option if the WiFi decision ever revives: XIAO ESP32-C6
       (same thumbnail size, WiFi 6 + BLE, better efficiency than classic
       ESP32) — but NO onboard IMU (external sensor + wiring stays), and
