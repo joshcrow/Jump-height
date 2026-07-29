@@ -96,6 +96,14 @@ class String {
 
   String substring(int from) const { return substring(from, (int)s_.length()); }
   String substring(int from, int to) const {
+    // Real Arduino's String::substring swaps the two indices when
+    // from > to, rather than returning an empty string — match that here
+    // too (this is what an Arduino core actually does, not a house rule).
+    if (from > to) {
+      int t = from;
+      from = to;
+      to = t;
+    }
     if (from < 0) from = 0;
     if (to > (int)s_.length()) to = (int)s_.length();
     if (to < from) return String("");

@@ -76,6 +76,12 @@ jobs:
       - name: Build firmware (Sense / nRF52)
         # A separate step (not folded into the one above) so a failure here
         # is unambiguous in the Actions log about which target broke.
+        # continue-on-error: a Sense-only regression must not block the
+        # ESP32 build/upload or the web/Pages publish below (uploads still
+        # happen further down this same job) — the "Enforce Sense build
+        # result" step at the end turns this loud again once they have.
+        id: build_sense
+        continue-on-error: true
         run: pio run -d firmware -e xiaoblesense_adafruit
 
       - name: Stage web app + flasher binaries
@@ -89,12 +95,21 @@ jobs:
           ls -la web/firmware/
 
       - name: Convert Sense firmware to .uf2
+        # Only attempted if the Sense build actually produced a .hex, and
+        # itself continue-on-error, so a conversion regression can't block
+        # ESP32/web/Pages either — same reasoning as the build step above.
+        # This step both converts AND stages the result into web/firmware/,
+        # so gating it on build_sense having succeeded is what keeps a
+        # half-built/missing .uf2 out of web/ when Sense regresses.
+        if: steps.build_sense.outcome == 'success'
+        id: convert_sense
+        continue-on-error: true
         # tools/uf2conv.py is vendored from github.com/microsoft/uf2 (MIT —
         # see that file's own header); 0xADA52840 is the nRF52840 family id,
         # passed as a raw hex literal since we don't vendor the companion
         # uf2families.json name table (see uf2conv.py's own comment on why).
         run: |
-          FW_VERSION=$(grep -oP '(?<=#define FW_VERSION ")[^"]+' firmware/src/main.cpp)
+          FW_VERSION=$(grep -oP '#define\s+FW_VERSION\s+"\K[^"]+' firmware/src/main.cpp)
           python3 tools/uf2conv.py \
             firmware/.pio/build/xiaoblesense_adafruit/firmware.hex \
             -f 0xADA52840 -c -o "web/firmware/jumpheight-sense-${FW_VERSION}.uf2"
@@ -111,9 +126,25 @@ jobs:
         with:
           path: web/
 
+      - name: Enforce Sense build result
+        # The Sense/.uf2 steps above are continue-on-error so a Sense-only
+        # regression can never block the ESP32 firmware or the web/Pages
+        # publish (both already uploaded above, unaffected) — but a real
+        # regression must still fail this workflow loudly rather than go
+        # silently green forever. steps.*.outcome (unlike .conclusion)
+        # reflects the step's real pass/fail, ignoring continue-on-error.
+        if: steps.build_sense.outcome == 'failure' || steps.convert_sense.outcome == 'failure'
+        run: |
+          echo "::error::Sense (nRF52) build or .uf2 conversion failed — see the 'Build firmware (Sense / nRF52)' / 'Convert Sense firmware to .uf2' steps above. ESP32 firmware and the web/Pages artifacts were still published."
+          exit 1
+
   pages:
     needs: firmware
-    if: github.ref == 'refs/heads/main'
+    # A Sense-only regression makes the firmware job's own conclusion
+    # `failure` (its last step turns that loud on purpose — see above), but
+    # the ESP32 + web/Pages artifacts were already uploaded earlier in that
+    # same job, so publishing them must not be skipped just because of it.
+    if: (success() || failure()) && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

@@ -632,7 +632,11 @@ def _autopsy_trace(dev: "Device") -> None:
                 break
             got += len(ln) + 1
             if got >= next_mark:
-                pct = f"  {100 * got // tb}%" if tb else ""
+                # Clamp at 100%: `got` counts every received line including
+                # the "FILE trace.csv BEGIN/END" framing, which isn't part
+                # of `tb` (STATS' trace_bytes, the stored CSV content only)
+                # — so the raw ratio can otherwise tick past 100%.
+                pct = f"  {min(100, 100 * got // tb)}%" if tb else ""
                 print(f"    … {got // 1024} KB{pct}", flush=True)
                 next_mark += 51200
             if ln.startswith("FILE trace.csv BEGIN"):
@@ -1135,6 +1139,22 @@ def parse_file_sections(lines: list[str]) -> dict:
     return files
 
 
+def _write_session_info(sess: Path, dev: "Device") -> None:
+    """A small ADDITIVE companion to jumps.csv/trace.csv: the firmware
+    version and CAL line captured at sync time, so a future session-vs-
+    device identity check has something to compare against (item 1's
+    underlying concern — nothing today ties a synced/validated session
+    file to the specific device that recorded it). Best-effort — never
+    raises, and changes nothing about jumps.csv/trace.csv/report.md."""
+    try:
+        lines = dev.command("info", timeout=8)
+    except Exception:
+        return
+    fw = _last_tagged(lines, "INFO ").get("fw", "unknown")
+    cal_line = next((ln for ln in lines if ln.startswith("CAL ")), "CAL unknown")
+    (sess / "session-info.txt").write_text(f"fw={fw}\n{cal_line}\n")
+
+
 def cmd_sync(args) -> int:
     from detector import Detector, load_params
 
@@ -1152,6 +1172,7 @@ def cmd_sync(args) -> int:
         sess.mkdir(parents=True, exist_ok=True)
         (sess / "jumps.csv").write_text(jumps_csv + "\n")
         (sess / "trace.csv").write_text(trace_csv + "\n")
+        _write_session_info(sess, dev)
 
         # Device's own jump list
         dev_jumps: list[dict] = []
@@ -1522,6 +1543,13 @@ def _validate_stats(rows: list[dict], g: float, existing_offset: float = 0.0,
     rmse_height = math.sqrt(statistics.mean(
         (e["h"] - e["true_height"]) ** 2 for e in enriched))
     current_mean_abs_pct = statistics.mean(abs(e["pct_error"]) for e in enriched)
+    # Decisions are gated on the MEDIAN of these (see _validate_decide): a
+    # single mistyped --pairs row (e.g. a 10x fps/frames slip) can blow up
+    # one jump's pct_error hugely, and a MEAN would let that one bad row
+    # single-handedly trigger a "needs correcting"/height_scale-write verdict
+    # that four good jumps say is unwarranted. The mean is kept too, purely
+    # as report context (labeled "Mean" wherever it's shown).
+    current_median_abs_pct = statistics.median(abs(e["pct_error"]) for e in enriched)
 
     recommended_offset = -median_bias
 
@@ -1531,7 +1559,10 @@ def _validate_stats(rows: list[dict], g: float, existing_offset: float = 0.0,
         if e["adj"] > 0:
             corrected_height = e["h"] * (corrected_airtime / e["adj"]) ** 2
         else:
-            corrected_height = g * corrected_airtime ** 2 / 8.0
+            # Limit of the adj>0 formula as adj -> 0: h is always
+            # existing_scale*g*adj^2/8 (never just g*adj^2/8 — that drops
+            # whatever height_scale was already baked into this row).
+            corrected_height = existing_scale * g * corrected_airtime ** 2 / 8.0
         e["corrected_airtime"] = corrected_airtime
         e["corrected_height"] = corrected_height
         residual_ratios.append(
@@ -1543,6 +1574,9 @@ def _validate_stats(rows: list[dict], g: float, existing_offset: float = 0.0,
     residual_pct_offset_only = statistics.mean(
         abs((e["corrected_height"] - e["true_height"]) / e["true_height"] * 100.0)
         for e in enriched)
+    residual_pct_offset_only_median = statistics.median(
+        abs((e["corrected_height"] - e["true_height"]) / e["true_height"] * 100.0)
+        for e in enriched)
     residual_pct_both = statistics.mean(
         abs((e["corrected_height"] * scale_residual_factor - e["true_height"])
             / e["true_height"] * 100.0)
@@ -1552,24 +1586,31 @@ def _validate_stats(rows: list[dict], g: float, existing_offset: float = 0.0,
         "rows": enriched, "n": len(enriched),
         "median_bias_s": median_bias, "mean_bias_s": mean_bias, "sd_bias_s": sd_bias,
         "rmse_height_m": rmse_height, "current_mean_abs_pct_error": current_mean_abs_pct,
+        "current_median_abs_pct_error": current_median_abs_pct,
         "existing_offset": existing_offset, "existing_scale": existing_scale,
         "recommended_airtime_offset_s": recommended_offset,
         "recommended_height_scale": recommended_scale,
         "residual_pct_after_offset_only": residual_pct_offset_only,
+        "residual_pct_after_offset_only_median": residual_pct_offset_only_median,
         "residual_pct_after_both": residual_pct_both,
     }
 
 
 def _validate_decide(stats: dict) -> dict:
-    """Plain-English decision guidance (docs/algorithm.md, research.md §2)."""
+    """Plain-English decision guidance (docs/algorithm.md, research.md §2).
+
+    height_ok/want_scale are gated on the MEDIAN percent-error stats, not
+    the mean — a single mistyped --pairs row can otherwise single-handedly
+    swing a "recommend changing nothing" case into an unwarranted
+    height_scale write (see _validate_stats's median fields)."""
     bias_ok = abs(stats["median_bias_s"]) < BIAS_OK_S
-    height_ok = stats["current_mean_abs_pct_error"] < HEIGHT_ERR_OK_PCT
+    height_ok = stats["current_median_abs_pct_error"] < HEIGHT_ERR_OK_PCT
     offset_rail = _rail_check(stats["recommended_airtime_offset_s"],
                               OFFSET_MIN, OFFSET_MAX, "airtime_offset_s")
     scale_rail = _rail_check(stats["recommended_height_scale"],
                              SCALE_MIN, SCALE_MAX, "height_scale")
     want_offset = not bias_ok
-    want_scale = stats["residual_pct_after_offset_only"] >= HEIGHT_ERR_OK_PCT
+    want_scale = stats["residual_pct_after_offset_only_median"] >= HEIGHT_ERR_OK_PCT
     if bias_ok and height_ok:
         verdict = "good"
     elif want_offset and want_scale:
@@ -1631,15 +1672,37 @@ def _fmt_cal_line(cal: dict) -> str:
             f"(source: {cal.get('source', '?')})")
 
 
+def _session_derived_height_scale(rows: list[dict], g: float) -> float | None:
+    """Median per-row height_scale implied directly by a session's own
+    recorded rows, i.e. the firmware's own `h = height_scale * g * adj^2/8`
+    identity (sim/detector.py) solved backwards: `8*h/(g*adj^2)`.
+
+    This recovers EXACTLY whatever height_scale was actually active on the
+    device when each row was recorded — no approximation — which makes it a
+    more trustworthy stand-in for "the device's calibration" than blindly
+    reading config/params.json on THIS machine when validating a --session
+    file with no device connected: that config may be stale, or may simply
+    belong to a different unit than the one that recorded the session.
+    None if no row has a usable (adj > 0) airtime to divide by.
+    """
+    vals = [8.0 * r["h"] / (g * r["adj"] ** 2) for r in rows if r["adj"] > 0]
+    return statistics.median(vals) if vals else None
+
+
 def _write_validate_report(md_path: Path, csv_path: Path, stats: dict, decide: dict,
                            cal: dict, args, apply_result: str,
-                           applied_msgs: list[str]) -> None:
+                           applied_msgs: list[str],
+                           session_scale_note: str | None = None) -> None:
     utc_now = datetime.now(timezone.utc)
     lines = [
         f"# Video ground-truth validation — {utc_now.strftime('%Y-%m-%d')}", "",
         f"**Generated (UTC):** {utc_now.isoformat(timespec='seconds')}",
         f"**Firmware:** {cal.get('fw') or 'not connected'}",
         f"**Device calibration (CAL line):** {_fmt_cal_line(cal)}",
+    ]
+    if session_scale_note:
+        lines.append(f"**Calibration source note:** {session_scale_note}")
+    lines += [
         "**Source of measured jumps:** "
         + (f"session file `{args.session}`" if args.session else "connected device"),
         "", "## Pairs", "",
@@ -1661,7 +1724,10 @@ def _write_validate_report(md_path: Path, csv_path: Path, stats: dict, decide: d
         f"sd {stats['sd_bias_s'] * 1000:.0f} ms",
         f"- Height RMSE: {stats['rmse_height_m']:.3f} m",
         f"- Mean |per-jump % error|, as currently configured: "
-        f"{stats['current_mean_abs_pct_error']:.1f}%",
+        f"{stats['current_mean_abs_pct_error']:.1f}% "
+        f"(median {stats['current_median_abs_pct_error']:.1f}% — the "
+        "good/needs-scale decision below uses the median, robust to a "
+        "single outlier row)",
         "", "## Recommendation", "",
     ]
     if decide["verdict"] == "good":
@@ -1669,8 +1735,8 @@ def _write_validate_report(md_path: Path, csv_path: Path, stats: dict, decide: d
             f"Calibration already looks good: median bias "
             f"{stats['median_bias_s'] * 1000:+.0f} ms is under the "
             f"~{BIAS_OK_S * 1000:.0f} ms published IMU-bias scale (research.md §2), "
-            f"and height error ({stats['current_mean_abs_pct_error']:.1f}%) is under "
-            f"{HEIGHT_ERR_OK_PCT:.0f}%. **Recommend changing nothing.**")
+            f"and height error (median {stats['current_median_abs_pct_error']:.1f}%) is "
+            f"under {HEIGHT_ERR_OK_PCT:.0f}%. **Recommend changing nothing.**")
     else:
         if decide["want_offset"]:
             if decide["offset_rail_refusal"]:
@@ -1693,20 +1759,20 @@ def _write_validate_report(md_path: Path, csv_path: Path, stats: dict, decide: d
             else:
                 lines.append(
                     f"- **height_scale = {stats['recommended_height_scale']:.3f}** — a "
-                    "residual height error of "
-                    f"{stats['residual_pct_after_offset_only']:.1f}% survives the airtime "
-                    f"correction (above the {HEIGHT_ERR_OK_PCT:.0f}% bar). algorithm.md's "
-                    "open wing-lift question — whether an aggressively-flown wing adds "
-                    "measurable mid-air lift — is the physical reason a scale residual "
-                    "might exist (research.md §2).")
+                    "residual height error of (median) "
+                    f"{stats['residual_pct_after_offset_only_median']:.1f}% survives the "
+                    f"airtime correction (above the {HEIGHT_ERR_OK_PCT:.0f}% bar). "
+                    "algorithm.md's open wing-lift question — whether an "
+                    "aggressively-flown wing adds measurable mid-air lift — is the "
+                    "physical reason a scale residual might exist (research.md §2).")
                 lines.append(
                     "- With both corrections applied, residual height error drops to "
-                    f"{stats['residual_pct_after_both']:.1f}%.")
+                    f"{stats['residual_pct_after_both']:.1f}% (mean).")
         else:
             lines.append(
                 "- height_scale: no change — after the airtime correction, residual "
-                f"height error is {stats['residual_pct_after_offset_only']:.1f}%, under "
-                f"{HEIGHT_ERR_OK_PCT:.0f}%.")
+                f"height error is (median) {stats['residual_pct_after_offset_only_median']:.1f}%, "
+                f"under {HEIGHT_ERR_OK_PCT:.0f}%.")
     lines += ["", f"**Applied:** {apply_result}"]
     if applied_msgs:
         lines += ["```"] + applied_msgs + ["```"]
@@ -1766,17 +1832,65 @@ def cmd_validate(args) -> int:
     cal = {"fw": None, "airtime_offset_s": p.airtime_offset_s,
           "height_scale": p.height_scale,
           "source": "config/params.json (no device connected)"}
+    device_cal_read = False
+    session_scale_note: str | None = None
     try:
         if need_device:
             dev, proc = open_device(args, fake_scenario="session")
             live = _read_device_cal(dev)
             if live["airtime_offset_s"] is not None:
                 cal = live
+                device_cal_read = True
+
+            # --session + --apply writes a calibration derived from a FILE's
+            # jumps onto WHATEVER device happens to be plugged in right now —
+            # nothing ties a session file to the specific unit that recorded
+            # it. Refuse to do that silently: require an explicit interactive
+            # confirmation (TTY) or --force (non-interactive/scripted use).
+            if args.session and args.apply:
+                print("\n⚠️  DEVICE IDENTITY WARNING: --session analyzes jumps "
+                      f"from a file ({args.session}), but --apply would write "
+                      "the resulting calibration to WHATEVER device is "
+                      "plugged in right now. Nothing ties a session file to "
+                      "the specific unit that recorded it — if this isn't "
+                      "that same device, you are about to calibrate the "
+                      "wrong one.")
+                if getattr(args, "force", False):
+                    print("(--force given: proceeding without confirmation.)")
+                elif sys.stdin.isatty():
+                    ans = input("Type 'yes' if you're CERTAIN this is the "
+                                "same device that recorded that session: "
+                                ).strip().lower()
+                    if ans != "yes":
+                        print("Not confirmed — stopping before applying "
+                              "anything.")
+                        return 1
+                else:
+                    print("Refusing to continue non-interactively without "
+                          "--force. Re-run with --force once you've "
+                          "confirmed this by hand, or drop --apply to just "
+                          "get the report without touching the device.")
+                    return 1
 
         if args.session:
             measured = _load_session_jumps(args.session)
             if measured is None:
                 return 1
+            if not device_cal_read:
+                derived = _session_derived_height_scale(measured, p.g)
+                if derived is not None:
+                    n_usable = sum(1 for r in measured if r["adj"] > 0)
+                    session_scale_note = (
+                        "no device was connected to confirm its actual "
+                        f"calibration, so height_scale for this analysis "
+                        f"({derived:.3f}) was derived directly from this "
+                        f"session's own {n_usable} row(s) (median of "
+                        "8·h/(g·adj²), the firmware's own height formula "
+                        "solved backwards) rather than trusted from "
+                        f"config/params.json ({cal['height_scale']:.3f}), "
+                        "which may be stale or belong to a different device.")
+                    cal = {**cal, "height_scale": derived,
+                          "source": "derived from the session's own rows"}
             print(f"=== Video ground-truth validation — {len(measured)} jump(s) "
                   f"from {args.session} ===\n")
         else:
@@ -1824,9 +1938,12 @@ def cmd_validate(args) -> int:
               f"mean {stats['mean_bias_s'] * 1000:+.0f} ms, "
               f"sd {stats['sd_bias_s'] * 1000:.0f} ms  ({stats['n']} jumps)")
         print(f"Height RMSE: {stats['rmse_height_m']:.3f} m   "
-              "(mean |error| as currently configured: "
-              f"{stats['current_mean_abs_pct_error']:.1f}%)")
+              "(as currently configured — mean |error| "
+              f"{stats['current_mean_abs_pct_error']:.1f}%, median "
+              f"{stats['current_median_abs_pct_error']:.1f}%)")
         print(f"Device calibration read: {_fmt_cal_line(cal)}")
+        if session_scale_note:
+            print(f"ℹ️  {session_scale_note}")
 
         print()
         if decide["verdict"] == "good":
@@ -1853,18 +1970,18 @@ def cmd_validate(args) -> int:
                 else:
                     print(
                         "A residual height error survives the airtime correction "
-                        f"({stats['residual_pct_after_offset_only']:.1f}%, above the "
-                        f"{HEIGHT_ERR_OK_PCT:.0f}% bar) — recommend: height_scale = "
-                        f"{stats['recommended_height_scale']:.3f}. (algorithm.md's open "
-                        "wing-lift question — whether an aggressively-flown wing adds "
-                        "measurable mid-air lift — is the physical reason a scale "
-                        "residual might exist; research.md §2.)")
+                        f"(median {stats['residual_pct_after_offset_only_median']:.1f}%, "
+                        f"above the {HEIGHT_ERR_OK_PCT:.0f}% bar) — recommend: "
+                        f"height_scale = {stats['recommended_height_scale']:.3f}. "
+                        "(algorithm.md's open wing-lift question — whether an "
+                        "aggressively-flown wing adds measurable mid-air lift — is the "
+                        "physical reason a scale residual might exist; research.md §2.)")
                     print(f"With both corrections applied, residual height error drops "
-                          f"to {stats['residual_pct_after_both']:.1f}%.")
+                          f"to {stats['residual_pct_after_both']:.1f}% (mean).")
             elif decide["want_offset"]:
                 print(
-                    "After that correction, residual height error is "
-                    f"{stats['residual_pct_after_offset_only']:.1f}% — under "
+                    "After that correction, residual height error is (median) "
+                    f"{stats['residual_pct_after_offset_only_median']:.1f}% — under "
                     f"{HEIGHT_ERR_OK_PCT:.0f}%, so no height_scale change is recommended.")
 
         out_dir = DATA_DIR / "validation"
@@ -1894,7 +2011,8 @@ def cmd_validate(args) -> int:
                 if not ok:
                     apply_result = "FAILED (see messages above)"
                     _write_validate_report(md_path, csv_path, stats, decide, cal,
-                                          args, apply_result, applied_msgs)
+                                          args, apply_result, applied_msgs,
+                                          session_scale_note)
                     print(f"\nReport written anyway: {md_path}")
                     return 1
                 apply_result = "applied"
@@ -1902,7 +2020,7 @@ def cmd_validate(args) -> int:
             apply_result = "not applied (pass --apply, or confirm at the prompt)"
 
         _write_validate_report(md_path, csv_path, stats, decide, cal, args,
-                              apply_result, applied_msgs)
+                              apply_result, applied_msgs, session_scale_note)
         print(f"\nReport: {md_path}\nData:   {csv_path}")
         return 0
     finally:
@@ -2618,6 +2736,10 @@ def main() -> int:
     p.add_argument("--apply", action="store_true",
                    help="write the recommendation(s) to the connected device "
                         "(else asks on a TTY, or use --apply non-interactively)")
+    p.add_argument("--force", action="store_true",
+                   help="skip the device-identity confirmation that --session "
+                        "+ --apply otherwise requires (needed for "
+                        "non-interactive/scripted use — read the warning first)")
     p.add_argument("--fake", action="store_true", help="rehearse with a simulated device")
     p.add_argument("--fast", action="store_true", help=argparse.SUPPRESS)
 

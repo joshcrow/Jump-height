@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -194,6 +195,24 @@ class TestSync(unittest.TestCase):
             self.assertTrue((sessions[0] / "trace.csv").read_text().startswith("t,mag"))
             self.assertIn("best", r.stdout.lower())
 
+    def test_sync_writes_session_info_additively(self):
+        """Item 1(b): sync writes a small session-info.txt (fw= line + CAL
+        line captured at sync time) next to jumps.csv, for a future
+        session-vs-device identity check — additive only: jumps.csv/
+        trace.csv keep their exact existing format."""
+        with tempfile.TemporaryDirectory() as td:
+            r = run_cli(["sync", "--fake", "--fast", "--out", td])
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            sess = next(Path(td).iterdir())
+            info = (sess / "session-info.txt").read_text()
+            self.assertIn("fw=0.4.3", info)
+            self.assertIn("CAL airtime_offset_s=", info)
+            self.assertIn("height_scale=", info)
+            # Existing files' formats are untouched.
+            jumps = (sess / "jumps.csv").read_text()
+            self.assertTrue(jumps.startswith("n,takeoff_s,airtime_raw_s,airtime_s,height_m"))
+            self.assertTrue((sess / "trace.csv").read_text().startswith("t,mag"))
+
 
 class TestValidateMath(unittest.TestCase):
     """Pure math-core tests for `validate` — no device, no subprocess:
@@ -213,10 +232,17 @@ class TestValidateMath(unittest.TestCase):
         exactly the height_scale this tool should recommend, regardless of
         existing_scale. That independence from existing_scale/existing_offset
         is the composition property under test.
+
+        `bias` may also be a list/tuple of one value per jump (non-uniform
+        bias) — every other caller passes a single constant, for which
+        median(bias) == mean(bias) trivially; a non-uniform fixture is the
+        only way to tell the two apart (see test_offset_recommendation_uses_
+        median_not_mean_of_bias).
         """
+        biases = bias if isinstance(bias, (list, tuple)) else [bias] * len(true_airtimes)
         rows = []
-        for i, ta in enumerate(true_airtimes, start=1):
-            raw = ta + bias
+        for i, (ta, b) in enumerate(zip(true_airtimes, biases), start=1):
+            raw = ta + b
             adj = raw + existing_offset
             true_h = self.G * ta * ta / 8.0
             h = (existing_scale / target_scale) * true_h * (adj / ta) ** 2
@@ -284,6 +310,79 @@ class TestValidateMath(unittest.TestCase):
         self.assertEqual(decide["verdict"], "good")
         self.assertFalse(decide["recommend_offset"])
         self.assertFalse(decide["recommend_scale"])
+
+    def test_offset_recommendation_uses_median_not_mean_of_bias(self):
+        """Item 8: every fixture above uses a CONSTANT bias, so
+        median(bias) == mean(bias) trivially and the two can never be told
+        apart. This fixture uses distinct per-jump biases where they
+        genuinely disagree, and pins the recommendation to the median."""
+        mod = _load_jump_module()
+        biases = [0.040, 0.043, 0.045, 0.047, 0.200]
+        # Sanity check the fixture itself actually distinguishes the two.
+        self.assertGreater(abs(statistics.median(biases) - statistics.mean(biases)), 0.02)
+        rows = self._rows([0.6, 0.8, 1.0, 1.5, 2.0], bias=biases)
+        stats = mod._validate_stats(rows, self.G)
+        self.assertAlmostEqual(stats["median_bias_s"], 0.045, places=6)
+        self.assertAlmostEqual(stats["recommended_airtime_offset_s"], -0.045, places=6)
+        # Would be ~-0.075 if the code mistakenly used the mean instead.
+        self.assertNotAlmostEqual(stats["recommended_airtime_offset_s"],
+                                  -statistics.mean(biases), places=3)
+
+    def test_scale_applied_even_when_adj_clips_to_zero(self):
+        """Item 2 regression (exact review repro): offset=-0.30, raw=0.26
+        clips this row's stored adj to 0 (a real device clips a negative
+        post-offset airtime to 0 too, before ever writing it to jumps.csv).
+        The adj==0 branch must still carry existing_scale — it's the limit
+        of the adj>0 formula (`h == existing_scale*g*adj^2/8` always, by
+        the firmware's own height formula), not `g*adj^2/8` alone."""
+        mod = _load_jump_module()
+        g = self.G
+        raw = 0.26
+        existing_offset = -0.30
+        existing_scale = 1.6
+        adj = max(0.0, raw + existing_offset)  # 0.0, exactly like the device stores
+        h = existing_scale * g * adj * adj / 8.0  # 0.0 too, for the same reason
+        true_airtime = raw  # zero measurement bias on this one jump, by construction
+        rows = [{"n": 1, "fps": 1000.0, "frames": true_airtime * 1000.0,
+                "raw": raw, "adj": adj, "h": h}]
+        stats = mod._validate_stats(rows, g, existing_offset=existing_offset,
+                                    existing_scale=existing_scale)
+        # Buggy code (missing the existing_scale factor) recovers 1.6 here
+        # (i.e. "no change needed") instead of the correct 1.0.
+        self.assertAlmostEqual(stats["recommended_height_scale"], 1.0, places=6)
+
+    def test_scale_decision_uses_median_not_mean_one_outlier_no_recommendation(self):
+        """Item 3 regression: 4 clean pairs (0% error) plus one mistyped
+        pairs row (a 10x frames/fps slip — a huge single-row pct_error) must
+        NOT trigger a height_scale recommendation. The decision has to be
+        gated on the median residual (robust to one outlier), even though
+        the informational MEAN residual is dragged sky-high by it."""
+        mod = _load_jump_module()
+        g = self.G
+        rows = []
+        for i, ta in enumerate([0.6, 1.0, 1.5, 2.0], start=1):
+            h = g * ta * ta / 8.0
+            rows.append({"n": i, "fps": 1000.0, "frames": ta * 1000.0,
+                        "raw": ta, "adj": ta, "h": h})
+        # 5th jump: the device saw a real, perfectly-calibrated 0.8s flight,
+        # but the pairs file has a 10x frames typo (80 instead of 800).
+        outlier_ta = 0.8
+        outlier_h = g * outlier_ta * outlier_ta / 8.0
+        rows.append({"n": 5, "fps": 1000.0, "frames": 80.0,  # should have been 800
+                    "raw": outlier_ta, "adj": outlier_ta, "h": outlier_h})
+
+        stats = mod._validate_stats(rows, g)
+        decide = mod._validate_decide(stats)
+        # Confirm the fixture really does exercise the bug scenario: the
+        # mean-based stats are dragged sky-high by the one outlier row...
+        self.assertGreater(stats["residual_pct_after_offset_only"], 100.0)
+        self.assertGreater(stats["current_mean_abs_pct_error"], 100.0)
+        # ...but the decision must not be fooled by it.
+        self.assertLess(stats["residual_pct_after_offset_only_median"], 1.0)
+        self.assertLess(stats["current_median_abs_pct_error"], 1.0)
+        self.assertFalse(decide["want_scale"])
+        self.assertFalse(decide["recommend_scale"])
+        self.assertEqual(decide["verdict"], "good")
 
 
 class TestValidatePairsFile(unittest.TestCase):
@@ -376,6 +475,64 @@ class TestValidateNonTTY(unittest.TestCase):
         self.assertIn("terminal", r.stdout.lower())
 
 
+class TestValidateDeviceIdentityGuard(unittest.TestCase):
+    """Item 1: `validate --session X --apply` would otherwise write a
+    session-derived calibration onto WHATEVER device happens to be plugged
+    in — nothing ties a session file to a specific device. Must refuse
+    non-interactively without --force, and must proceed with --force."""
+
+    @staticmethod
+    def _session_and_pairs(td):
+        g = 9.80665
+        true_airtimes = [0.6, 1.0, 1.5, 2.0]
+        bias = 0.045
+        session = Path(td) / "jumps.csv"
+        lines = ["n,takeoff_s,airtime_raw_s,airtime_s,height_m"]
+        for i, ta in enumerate(true_airtimes, start=1):
+            adj = ta + bias
+            h = g * adj * adj / 8.0
+            lines.append(f"{i},{10 + 5 * i:.3f},{adj:.4f},{adj:.4f},{h:.4f}")
+        session.write_text("\n".join(lines) + "\n")
+        pairs = Path(td) / "pairs.csv"
+        pairs_lines = ["jump_n,fps,frames"]
+        for i, ta in enumerate(true_airtimes, start=1):
+            pairs_lines.append(f"{i},1000,{ta * 1000:.0f}")
+        pairs.write_text("\n".join(pairs_lines) + "\n")
+        return session, pairs
+
+    def test_force_flag_appears_in_help(self):
+        r = run_cli(["validate", "--help"])
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("--force", r.stdout)
+
+    def test_session_apply_without_force_refuses_non_interactively(self):
+        with tempfile.TemporaryDirectory() as td:
+            session, pairs = self._session_and_pairs(td)
+            data_dir = Path(td) / "data"
+            r = run_cli(["validate", "--fake", "--fast", "--session", str(session),
+                        "--pairs", str(pairs), "--apply"],
+                       env_extra={"JH_DATA_DIR": str(data_dir)})
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("--force", r.stdout)
+            self.assertIn("device", r.stdout.lower())
+            self.assertNotIn("applied airtime_offset_s", r.stdout)
+            # No report should claim anything was actually applied.
+            reports = list((data_dir / "validation").glob("validate-*.md")) \
+                if (data_dir / "validation").exists() else []
+            self.assertEqual(reports, [])
+
+    def test_session_apply_with_force_proceeds(self):
+        with tempfile.TemporaryDirectory() as td:
+            session, pairs = self._session_and_pairs(td)
+            data_dir = Path(td) / "data"
+            r = run_cli(["validate", "--fake", "--fast", "--session", str(session),
+                        "--pairs", str(pairs), "--apply", "--force"],
+                       env_extra={"JH_DATA_DIR": str(data_dir)})
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("--force given", r.stdout)
+            self.assertIn("applied airtime_offset_s", r.stdout)
+
+
 class TestValidateSessionMode(unittest.TestCase):
     """--session reads the exact jumps.csv format `sync` writes, and (unlike
     the connected-device path) works fully offline unless --apply is given."""
@@ -389,25 +546,64 @@ class TestValidateSessionMode(unittest.TestCase):
         p.write_text("\n".join(lines) + "\n")
         return p
 
-    def test_session_mode_composes_with_existing_config_calibration(self):
-        """Device-offset composition, exercised through the full CLI: the
-        LOCAL config (standing in for 'the device's last-known calibration')
-        already carries a non-zero airtime_offset_s AND height_scale, the
-        session file's raw/adj/h reflect that plus a genuine +45 ms residual
-        bias and a genuine 0.93 residual scale anomaly, and the recommended
-        values must still land on the clean, composed replacement values —
-        not double-corrected relative to what's already configured."""
+    def test_session_mode_composes_offset_with_existing_device_offset(self):
+        """Offset composition, exercised through the full CLI: the session's
+        raw/adj reflect a device that already had a non-zero
+        airtime_offset_s applied, plus a genuine +45 ms residual bias, and
+        the recommended airtime_offset_s must land on the clean, composed
+        replacement value — not double-corrected relative to what was
+        already applied when the session was recorded. (height_scale
+        composition is covered separately below — item 4 changed what
+        existing_scale session-without-device mode uses.)"""
         g = 9.80665
         true_airtimes = [0.6, 1.0, 1.5, 2.0]
-        existing_offset, existing_scale = -0.02, 1.075
-        bias, target_scale = 0.045, 0.93
+        existing_offset = -0.02
+        bias = 0.045
         with tempfile.TemporaryDirectory() as td:
             rows = []
             for i, ta in enumerate(true_airtimes, start=1):
                 raw = ta + bias
                 adj = raw + existing_offset
-                true_h = g * ta * ta / 8.0
-                h = (existing_scale / target_scale) * true_h * (adj / ta) ** 2
+                h = g * adj * adj / 8.0  # height_scale=1.0 actually baked in
+                rows.append((i, raw, adj, h))
+            session_csv = self._session_csv(td, rows)
+
+            pairs = Path(td) / "pairs.csv"
+            pairs_lines = ["jump_n,fps,frames"]
+            for i, ta in enumerate(true_airtimes, start=1):
+                pairs_lines.append(f"{i},1000,{ta * 1000:.0f}")
+            pairs.write_text("\n".join(pairs_lines) + "\n")
+
+            env = {"JH_DATA_DIR": str(Path(td) / "data")}
+            r = run_cli(["validate", "--session", str(session_csv),
+                        "--pairs", str(pairs)], env_extra=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("airtime_offset_s = -0.0450", r.stdout)
+            # Pure --session analysis (no --apply) must never open a device.
+            self.assertNotIn("Connecting to", r.stdout)
+
+    def test_session_mode_ignores_stale_config_scale_derives_from_rows(self):
+        """Item 4 regression: without a connected device, `validate
+        --session` must NOT blindly trust config/params.json's height_scale
+        (it can be stale, or simply belong to a different unit entirely) —
+        it derives the session's own actual height_scale directly from its
+        rows instead, since `h == height_scale * g * adj^2/8` is an exact
+        firmware identity (sim/detector.py), invertible with no
+        approximation. Reviewer-verified repro shape: trusting a mismatched
+        config value computes a materially wrong recommendation (0.75-style);
+        deriving from the session recovers the correct, self-consistent one.
+        """
+        g = 9.80665
+        true_airtimes = [0.6, 1.0, 1.5, 2.0]
+        bias = 0.045
+        s_dev_actual = 1.2       # what ACTUALLY produced this session's h values
+        stale_config_scale = 0.9  # config/params.json — deliberately mismatched
+        with tempfile.TemporaryDirectory() as td:
+            rows = []
+            for i, ta in enumerate(true_airtimes, start=1):
+                raw = ta + bias
+                adj = raw  # existing_offset baked into adj is 0 here, kept simple
+                h = s_dev_actual * g * adj * adj / 8.0  # the real firmware identity
                 rows.append((i, raw, adj, h))
             session_csv = self._session_csv(td, rows)
 
@@ -419,17 +615,28 @@ class TestValidateSessionMode(unittest.TestCase):
 
             cfg_path = Path(td) / "params.json"
             cfg = json.loads((REPO / "config" / "params.json").read_text())
-            cfg["detector"]["airtime_offset_s"] = existing_offset
-            cfg["detector"]["height_scale"] = existing_scale
+            cfg["detector"]["height_scale"] = stale_config_scale
             cfg_path.write_text(json.dumps(cfg))
 
             env = {"JH_CONFIG": str(cfg_path), "JH_DATA_DIR": str(Path(td) / "data")}
             r = run_cli(["validate", "--session", str(session_csv),
                         "--pairs", str(pairs)], env_extra=env)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            # Offset composition (a separate concern) is untouched.
             self.assertIn("airtime_offset_s = -0.0450", r.stdout)
-            self.assertIn("height_scale = 0.930", r.stdout)
-            # Pure --session analysis (no --apply) must never open a device.
+            # s_dev_actual != 1.0 is a genuine residual (true_height doesn't
+            # carry it), so a scale recommendation IS expected here — the
+            # question is which value. Trusting the stale config would give
+            # stale_config_scale * (1/s_dev_actual) = 0.9/1.2 = 0.750 (wrong);
+            # deriving from the session's own rows must instead recover
+            # s_dev_actual * (1/s_dev_actual) = 1.000 (self-consistently
+            # correct, independent of whatever config happens to say).
+            self.assertIn("height_scale = 1.000", r.stdout)
+            self.assertNotIn("height_scale = 0.750", r.stdout)
+            body = (list((Path(td) / "data" / "validation").glob("validate-*.md"))[0]
+                   ).read_text()
+            self.assertIn("derived directly from this session's own", body)
+            self.assertIn(f"{s_dev_actual:.3f}", body)
             self.assertNotIn("Connecting to", r.stdout)
 
     def test_session_directory_path_also_works(self):

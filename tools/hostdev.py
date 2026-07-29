@@ -81,6 +81,20 @@ def main() -> int:
 
     import subprocess
 
+    # The child must never outlive the bridge. A SIGTERM'd Python process
+    # (how tests and shells tear this bridge down) skips finally: blocks
+    # unless the signal becomes an exception first — which orphaned the host
+    # binary (CPU-spinning, holding its pipes open, hanging any
+    # capture_output caller downstream) on every bridge teardown. Convert
+    # SIGTERM/SIGINT to SystemExit so the finally below always reaps it.
+    import signal
+
+    def _die(*_a):
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, _die)
+    signal.signal(signal.SIGINT, _die)
+
     proc = subprocess.Popen([str(binp)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=env)
     assert proc.stdin is not None and proc.stdout is not None
     child_out_fd = proc.stdout.fileno()

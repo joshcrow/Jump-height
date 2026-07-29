@@ -163,6 +163,12 @@ class FakeDevice:
 
     def send_boot(self):
         self.send(f"# JumpHeight fw v{FW_VERSION}")
+        if self.cal_from_nvs:
+            # Mirrors firmware's loadCalibration(), called at boot before
+            # the self-test (main.cpp's setup()).
+            self.send(f"# calibration from device memory: "
+                      f"airtime_offset_s={self.params.airtime_offset_s:.4f} "
+                      f"height_scale={self.params.height_scale:.3f}")
         self.send_selftest()
         if self.jumps_rows:
             best = max(float(r.split(",")[-1]) for r in self.jumps_rows)
@@ -219,27 +225,35 @@ class FakeDevice:
             self.send_selftest()
             self.send("OK selftest")
         elif cmd.startswith("set "):
-            # Mirrors firmware: set <airtime_offset_s|height_scale> <value|default>
-            parts = cmd.split()
-            if len(parts) != 3 or parts[1] not in ("airtime_offset_s", "height_scale"):
+            # Mirrors firmware EXACTLY (main.cpp): key = cmd[4:sp], value =
+            # cmd[sp+1:].strip(), where sp is the first space at-or-after
+            # index 4 (indexOf-style, not a whitespace-collapsing split()) —
+            # so a double space right after "set" yields an EMPTY key (sp
+            # lands immediately, before any key text), not a leniently-
+            # skipped-past one. `cmd.split()` would silently tolerate that;
+            # the real firmware does not, and neither must this.
+            sp = cmd.find(" ", 4)
+            key = cmd[4:sp].strip() if sp > 0 else ""
+            val = cmd[sp + 1:].strip() if sp > 0 else ""
+            if key not in ("airtime_offset_s", "height_scale"):
                 self.send("ERR set_unknown_key (airtime_offset_s | height_scale)")
-            elif parts[2] == "default":
+            elif val == "default":
                 defaults = load_params()
-                setattr(self.params, parts[1], getattr(defaults, parts[1]))
+                setattr(self.params, key, getattr(defaults, key))
                 self.cal_from_nvs = False
                 self.send("# reverted to the compiled default")
                 self.send("OK set")
             else:
                 try:
-                    f = float(parts[2])
+                    f = float(val)
                 except ValueError:
                     f = 0.0
-                sane = (-0.5 <= f <= 0.5) if parts[1] == "airtime_offset_s" \
+                sane = (-0.5 <= f <= 0.5) if key == "airtime_offset_s" \
                     else (0.5 <= f <= 2.0)
                 if not sane:
-                    self.send(f"ERR set_out_of_range {parts[1]}={parts[2]}")
+                    self.send(f"ERR set_out_of_range {key}={val}")
                 else:
-                    setattr(self.params, parts[1], f)
+                    setattr(self.params, key, f)
                     self.cal_from_nvs = True
                     self.send("# saved to device memory — survives reboot and reflash")
                     self.send("OK set")

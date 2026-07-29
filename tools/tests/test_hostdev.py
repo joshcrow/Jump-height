@@ -9,13 +9,25 @@ first thing that ever runs the shared core's OWN command dispatch, self-test
 orchestration, motion gate, and emit layer — the code in firmware/src/main.cpp
 itself — off real hardware.
 
-Requires PlatformIO (`pio`); the whole module is skipped (not failed) if it
-can't be found, since this machine's software test suite must still pass
+Requires PlatformIO (`pio`); every test class here is SKIPPED (not failed) if
+it can't be found, since this machine's software test suite must still pass
 with zero embedded toolchain installed (see tools/jump simtest's own g++
 skip for the same policy applied to firmware/test/host_test.cpp).
 
+All test classes are unittest.TestCase subclasses (not bare/pytest-fixture
+classes): `./tools/jump simtest` drives this whole repo's Python tests via
+`python -m unittest discover`, which silently never collects non-TestCase
+classes at all — and a module-level `pytest.skip(allow_module_level=True)`
+is a hard collection ERROR under plain `unittest`, not a skip. Moving the
+"pio missing" skip into each class's setUpClass (raising unittest.SkipTest)
+fixes both: it's a real skip under unittest AND under pytest (which defers
+to unittest's own protocol for TestCase-derived tests), and simtest's
+`python -m unittest discover` now actually runs these tests when pio IS
+available, instead of quietly never collecting them.
+
 Run via ./tools/jump simtest, or directly:
     python3 -m pytest tools/tests/test_hostdev.py -q
+    python3 -m unittest discover -s tools/tests -p "test_hostdev.py"
 """
 
 from __future__ import annotations
@@ -25,10 +37,10 @@ import select
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
+import unittest
 from pathlib import Path
-
-import pytest
 
 REPO = Path(__file__).resolve().parent.parent.parent
 FIRMWARE_DIR = REPO / "firmware"
@@ -63,10 +75,29 @@ def _find_pio() -> list[str] | None:
     return None
 
 
-PIO = _find_pio()
-if PIO is None:
-    pytest.skip("PlatformIO (pio) is not available on this machine — "
-                "skipping host-platform integration tests", allow_module_level=True)
+PIO = _find_pio()  # module-level lookup only — no module-level skip here;
+                    # see HostDevTestCase.setUpClass for the actual skip.
+
+_host_binary_cache: Path | None = None
+
+
+def _get_host_binary() -> Path:
+    """Builds env:host once (pio run -e host) and returns the binary path,
+    cached at module scope so every TestCase class shares a single build —
+    the same "once per process" effect pytest's session-scoped fixture used
+    to give, without depending on pytest's fixture machinery. Only called
+    when PIO is known to be present; a build failure here is a real bug
+    (asserted), not something to skip over."""
+    global _host_binary_cache
+    if _host_binary_cache is None:
+        assert PIO is not None
+        r = subprocess.run(PIO + ["run", "-d", str(FIRMWARE_DIR), "-e", "host"],
+                           capture_output=True, text=True, timeout=300)
+        assert r.returncode == 0, f"pio run -e host failed:\n{r.stdout}\n{r.stderr}"
+        binp = FIRMWARE_DIR / ".pio" / "build" / "host" / "program"
+        assert binp.exists(), f"expected host binary not found at {binp}"
+        _host_binary_cache = binp
+    return _host_binary_cache
 
 
 # --------------------------------------------------------------- kv parsing
@@ -198,119 +229,131 @@ def _load_jump_module():
     return mod
 
 
-# ------------------------------------------------------------------ fixture
+# ------------------------------------------------------------ base TestCase
 
 
-@pytest.fixture(scope="session")
-def host_binary() -> Path:
-    """Builds env:host once (pio run -e host) and returns the binary path."""
-    r = subprocess.run(PIO + ["run", "-d", str(FIRMWARE_DIR), "-e", "host"],
-                       capture_output=True, text=True, timeout=300)
-    assert r.returncode == 0, f"pio run -e host failed:\n{r.stdout}\n{r.stderr}"
-    binp = FIRMWARE_DIR / ".pio" / "build" / "host" / "program"
-    assert binp.exists(), f"expected host binary not found at {binp}"
-    return binp
+class HostDevTestCase(unittest.TestCase):
+    """Shared setUpClass/setUp for every TestCase below: skip the whole class
+    if PlatformIO isn't installed (both `python -m pytest` and `python -m
+    unittest discover` must exit clean in that case — the latter is what
+    `./tools/jump simtest` actually runs), else build env:host once (cached
+    at module scope) and hand out a fresh tmp_path-equivalent per test,
+    since plain unittest has no `tmp_path` fixture of its own."""
+
+    host_binary: Path
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        if PIO is None:
+            raise unittest.SkipTest(
+                "PlatformIO (pio) is not available on this machine — "
+                "skipping host-platform integration tests")
+        cls.host_binary = _get_host_binary()
+
+    def setUp(self) -> None:
+        self.tmp_path = Path(tempfile.mkdtemp(prefix="jh_hostdev_"))
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.tmp_path, ignore_errors=True)
 
 
 # --------------------------------------------------------------------- tests
 
 
-class TestBootAndInfo:
-    def test_boot_sequence(self, host_binary: Path, tmp_path: Path) -> None:
-        script = write_script(tmp_path / "script.txt", "rest 5.0\n")
-        dev = HostDevice(host_binary, tmp_path / "hostdir", script)
+class TestBootAndInfo(HostDevTestCase):
+    def test_boot_sequence(self) -> None:
+        script = write_script(self.tmp_path / "script.txt", "rest 5.0\n")
+        dev = HostDevice(self.host_binary, self.tmp_path / "hostdir", script)
         try:
             lines = dev.drain_boot()
             joined = "\n".join(lines)
-            assert f"# JumpHeight fw v{FW_VERSION}" in joined
-            assert "SELFTEST BEGIN" in joined
-            assert "SELFTEST END result=PASS" in joined
-            assert lines[-1].strip() == "READY"
+            self.assertIn(f"# JumpHeight fw v{FW_VERSION}", joined)
+            self.assertIn("SELFTEST BEGIN", joined)
+            self.assertIn("SELFTEST END result=PASS", joined)
+            self.assertEqual(lines[-1].strip(), "READY")
         finally:
             dev.close()
 
-    def test_info_reports_fw_and_expected_keys(self, host_binary: Path,
-                                               tmp_path: Path) -> None:
-        script = write_script(tmp_path / "script.txt", "rest 5.0\n")
-        dev = HostDevice(host_binary, tmp_path / "hostdir", script)
+    def test_info_reports_fw_and_expected_keys(self) -> None:
+        script = write_script(self.tmp_path / "script.txt", "rest 5.0\n")
+        dev = HostDevice(self.host_binary, self.tmp_path / "hostdir", script)
         try:
             dev.drain_boot()
             lines = dev.command("info")
             info_line = next((ln for ln in lines if ln.startswith("INFO ")), None)
-            assert info_line is not None, f"no INFO line in {lines}"
+            self.assertIsNotNone(info_line, f"no INFO line in {lines}")
             kv = parse_kv(info_line)
-            assert kv["fw"] == FW_VERSION
+            self.assertEqual(kv["fw"], FW_VERSION)
             for key in ("sample_hz", "log_hz", "motion_thresh_g", "idle_timeout_s", "ble"):
-                assert key in kv, f"INFO line missing {key!r}: {info_line}"
-            assert any(ln.strip() == "OK info" for ln in lines)
+                self.assertIn(key, kv, f"INFO line missing {key!r}: {info_line}")
+            self.assertTrue(any(ln.strip() == "OK info" for ln in lines))
         finally:
             dev.close()
 
 
-class TestCalibrationPersistence:
-    def test_set_persists_across_process_restart(self, host_binary: Path,
-                                                  tmp_path: Path) -> None:
-        host_dir = tmp_path / "hostdir"
-        script = write_script(tmp_path / "script.txt", "rest 5.0\n")
+class TestCalibrationPersistence(HostDevTestCase):
+    def test_set_persists_across_process_restart(self) -> None:
+        host_dir = self.tmp_path / "hostdir"
+        script = write_script(self.tmp_path / "script.txt", "rest 5.0\n")
 
-        dev1 = HostDevice(host_binary, host_dir, script)
+        dev1 = HostDevice(self.host_binary, host_dir, script)
         try:
             dev1.drain_boot()
             resp = dev1.command("set airtime_offset_s 0.02")
-            assert not any(ln.startswith("ERR") for ln in resp), resp
+            self.assertFalse(any(ln.startswith("ERR") for ln in resp), resp)
         finally:
             dev1.close()
 
         # A brand-new process, same JH_HOST_DIR: the calibration must have
         # survived the restart, exactly like NVS surviving a reboot.
-        dev2 = HostDevice(host_binary, host_dir, script)
+        dev2 = HostDevice(self.host_binary, host_dir, script)
         try:
             dev2.drain_boot()
             lines = dev2.command("info")
             cal_line = next((ln for ln in lines if ln.startswith("CAL ")), None)
-            assert cal_line is not None, f"no CAL line in {lines}"
+            self.assertIsNotNone(cal_line, f"no CAL line in {lines}")
             kv = parse_kv(cal_line)
-            assert kv["source"] == "device"
-            assert abs(float(kv["airtime_offset_s"]) - 0.02) < 1e-4
+            self.assertEqual(kv["source"], "device")
+            self.assertLess(abs(float(kv["airtime_offset_s"]) - 0.02), 1e-4)
         finally:
             dev2.close()
 
 
-class TestJumpDetectionAndStorage:
-    def test_scripted_jump_detected_and_stored(self, host_binary: Path,
-                                               tmp_path: Path) -> None:
+class TestJumpDetectionAndStorage(HostDevTestCase):
+    def test_scripted_jump_detected_and_stored(self) -> None:
         # rest -> a toss-style free-fall -> rest, per the script mini-language
         # in firmware/src/platform/host/jh_imu.cpp.
         freefall_s = 0.65
-        script = write_script(tmp_path / "script.txt",
+        script = write_script(self.tmp_path / "script.txt",
                               f"rest 2.0\njump {freefall_s}\nrest 2.0\n")
-        host_dir = tmp_path / "hostdir"
-        dev = HostDevice(host_binary, host_dir, script)
+        host_dir = self.tmp_path / "hostdir"
+        dev = HostDevice(self.host_binary, host_dir, script)
         try:
             boot = dev.drain_boot()
-            assert boot and boot[-1].strip() == "READY"
+            self.assertTrue(boot and boot[-1].strip() == "READY")
 
             jump_line = dev.wait_for("JUMP", timeout=10.0)
-            assert jump_line is not None, "no JUMP line seen from the scripted toss"
+            self.assertIsNotNone(jump_line, "no JUMP line seen from the scripted toss")
             kv = parse_kv(jump_line)
             airtime_raw = float(kv["airtime_raw_s"])
-            assert abs(airtime_raw - freefall_s) <= 0.1, (
+            self.assertLessEqual(
+                abs(airtime_raw - freefall_s), 0.1,
                 f"airtime_raw_s={airtime_raw} not within 0.1s of scripted {freefall_s}")
-            assert float(kv["height_m"]) > 0.0
+            self.assertGreater(float(kv["height_m"]), 0.0)
 
             lines = dev.command("jumps")
-            assert any(ln.startswith("FILE jumps.csv BEGIN") for ln in lines)
-            assert any(ln.startswith("FILE jumps.csv END") for ln in lines)
+            self.assertTrue(any(ln.startswith("FILE jumps.csv BEGIN") for ln in lines))
+            self.assertTrue(any(ln.startswith("FILE jumps.csv END") for ln in lines))
             data_rows = [ln for ln in lines if "," in ln and not ln.startswith(("n,", "#", "FILE"))]
-            assert len(data_rows) == 1, f"expected exactly one stored jump row, got {lines}"
+            self.assertEqual(len(data_rows), 1, f"expected exactly one stored jump row, got {lines}")
             cells = data_rows[0].split(",")
-            assert cells[0] == "1"  # n
-            assert abs(float(cells[2]) - freefall_s) <= 0.1  # airtime_raw_s
+            self.assertEqual(cells[0], "1")  # n
+            self.assertLessEqual(abs(float(cells[2]) - freefall_s), 0.1)  # airtime_raw_s
         finally:
             dev.close()
 
 
-class TestPtyBridge:
+class TestPtyBridge(HostDevTestCase):
     """STRETCH: tools/hostdev.py bridges the real host-platform core onto a
     pty. One smoke assertion: drive it through tools/jump's OWN low-level
     transport (SerialPort/Device — the exact classes a real board's
@@ -329,16 +372,16 @@ class TestPtyBridge:
     tools/hostdev.py's own docstring for the full story.
     """
 
-    def test_selftest_over_the_bridged_pty(self, host_binary: Path, tmp_path: Path) -> None:
-        script = write_script(tmp_path / "script.txt", "rest 5.0\n")
+    def test_selftest_over_the_bridged_pty(self) -> None:
+        script = write_script(self.tmp_path / "script.txt", "rest 5.0\n")
         bridge = subprocess.Popen(
             [sys.executable, str(REPO / "tools" / "hostdev.py"),
-             "--bin", str(host_binary), "--host-dir", str(tmp_path / "hostdir"),
+             "--bin", str(self.host_binary), "--host-dir", str(self.tmp_path / "hostdir"),
              "--script", str(script)],
             stdout=subprocess.PIPE, text=True)
         try:
             first = bridge.stdout.readline().strip()
-            assert first.startswith("PTY "), f"bridge failed to start: {first!r}"
+            self.assertTrue(first.startswith("PTY "), f"bridge failed to start: {first!r}")
             port = first.split(None, 1)[1]
 
             mod = _load_jump_module()
@@ -347,7 +390,7 @@ class TestPtyBridge:
                 dev.drain_boot(timeout=5.0)
                 lines = dev.command("selftest", timeout=15)
                 ok = mod.render_selftest(lines)
-                assert ok, f"selftest over the bridged pty did not PASS: {lines}"
+                self.assertTrue(ok, f"selftest over the bridged pty did not PASS: {lines}")
             finally:
                 dev.close()
         finally:
@@ -356,3 +399,7 @@ class TestPtyBridge:
                 bridge.wait(timeout=5)
             except Exception:
                 bridge.kill()
+
+
+if __name__ == "__main__":
+    unittest.main()
