@@ -264,6 +264,16 @@ def parse_kv(line: str) -> dict:
     return out
 
 
+def _last_tagged(lines: list[str], prefix: str) -> dict:
+    """parse_kv() of the LAST line starting with `prefix` (PARAMS/CAL/INFO
+    lines only ever repeat with updated values), or {} if none appear."""
+    kv: dict = {}
+    for line in lines:
+        if line.startswith(prefix):
+            kv = parse_kv(line)
+    return kv
+
+
 # ------------------------------------------------------------- device session
 
 
@@ -443,6 +453,14 @@ def open_device(args, fake_scenario: str = "ok", fake_extra: list[str] | None = 
     return dev, None
 
 
+def _close_device(dev: "Device | None", proc) -> None:
+    """Shared `finally:` cleanup for an open_device() (Device, fake_proc) pair."""
+    if dev:
+        dev.close()
+    if proc:
+        proc.terminate()
+
+
 # ----------------------------------------------------------------- self-test
 
 MARKS = {"PASS": "✅", "WARN": "⚠️ ", "FAIL": "❌", "SKIP": "—"}
@@ -465,6 +483,14 @@ def render_selftest(lines: list[str]) -> bool:
     return ok
 
 
+def _print_config_diffs(kind: str, diffs: list[str]) -> None:
+    """check_device_params' two mismatch warnings share this shape: a '<kind>
+    from config/params.json — run flash' header + one indented line/diff."""
+    print(f"  ⚠️  {kind} from config/params.json — run ./tools/jump flash:")
+    for d in diffs:
+        print(f"       {d}")
+
+
 def check_device_params(dev: Device) -> bool:
     """Compare the flashed firmware's params against local config/params.json."""
     try:
@@ -475,16 +501,9 @@ def check_device_params(dev: Device) -> bool:
     from detector import load_params
 
     local = load_params(CONFIG_PATH)
-    device_kv = {}
-    cal_kv = {}
-    info_kv = {}
-    for line in lines:
-        if line.startswith("PARAMS "):
-            device_kv = {k: v for k, v in parse_kv(line).items() if k != "_tag"}
-        elif line.startswith("CAL "):
-            cal_kv = {k: v for k, v in parse_kv(line).items() if k != "_tag"}
-        elif line.startswith("INFO "):
-            info_kv = {k: v for k, v in parse_kv(line).items() if k != "_tag"}
+    device_kv = {k: v for k, v in _last_tagged(lines, "PARAMS ").items() if k != "_tag"}
+    cal_kv = {k: v for k, v in _last_tagged(lines, "CAL ").items() if k != "_tag"}
+    info_kv = {k: v for k, v in _last_tagged(lines, "INFO ").items() if k != "_tag"}
     if not device_kv:
         print("  (device didn't report its params — old firmware? run ./tools/jump flash)")
         return False
@@ -524,9 +543,7 @@ def check_device_params(dev: Device) -> bool:
                 except ValueError:
                     pass
     if mismatches:
-        print("  ⚠️  device settings differ from config/params.json — run ./tools/jump flash:")
-        for m in mismatches:
-            print(f"       {m}")
+        _print_config_diffs("device settings differ", mismatches)
         return False
     if cal_kv:
         cal_diffs = []
@@ -545,9 +562,7 @@ def check_device_params(dev: Device) -> bool:
             for d in cal_diffs:
                 print(f"       {d}")
         elif cal_diffs:
-            print("  ⚠️  calibration differs from config/params.json — run ./tools/jump flash:")
-            for d in cal_diffs:
-                print(f"       {d}")
+            _print_config_diffs("calibration differs", cal_diffs)
             return False
     print("  ✅ device settings match config/params.json")
     return True
@@ -568,9 +583,7 @@ def cmd_selftest(args) -> int:
               "./tools/jump selftest again. No re-flash needed.")
         return 1
     finally:
-        dev.close()
-        if proc:
-            proc.terminate()
+        _close_device(dev, proc)
 
 
 # ------------------------------------------------------------------ desktest
@@ -736,6 +749,20 @@ def _replug_pause() -> None:
         print("\n>> (non-interactive: continuing)")
 
 
+def _reopen_after_replug(dev: "Device") -> "Device | None":
+    """Close `dev`, wait through the human's unplug/replug, and reopen it on
+    whatever port returns — shared by both untethered flows. None if it
+    never came back (the caller reports and bails)."""
+    prev_port, baseline = dev.sp.path, set(scan_ports())
+    dev.close()
+    _replug_pause()
+    port = _wait_for_port_return(prev_port, baseline)
+    if port is None:
+        print("❌ The board never came back on USB. Check the cable, re-run.")
+        return None
+    return Device(port)
+
+
 def _parse_jump_row(parts: list[str]) -> dict | None:
     """One data row of the jumps.csv format — shared by the device's live
     `jumps`/`dump` output and a synced session file on disk, since both are
@@ -766,6 +793,12 @@ def _stored_rows(dev: "Device") -> list[dict]:
     return rows
 
 
+def _is_plausible_toss(raw_s: float) -> bool:
+    """Airtime range a gentle hand toss over a cushion should land in —
+    shared by the untethered and --fake desk test flows."""
+    return 0.10 <= raw_s <= 1.2
+
+
 def _desktest_untethered(dev: "Device") -> int:
     """Toss test for a real board: NO cable during the tosses.
 
@@ -783,20 +816,15 @@ def _desktest_untethered(dev: "Device") -> int:
     print("  3. THREE tosses over the cushion: a foot or more straight up,")
     print("     flat like a pizza tray — let it LAND, don't catch it.")
     print("  4. Plug the cable back in and return here.")
-    prev_port, baseline = dev.sp.path, set(scan_ports())
-    dev.close()
-    _replug_pause()
-    port = _wait_for_port_return(prev_port, baseline)
-    if port is None:
-        print("❌ The board never came back on USB. Check the cable, re-run.")
+    dev2 = _reopen_after_replug(dev)
+    if dev2 is None:
         return 1
-    dev2 = Device(port)
     try:
         dev2.drain_boot(timeout=3.0)
         new = _stored_rows(dev2)[base_n:]
         good = 0
         for k, r in enumerate(new, 1):
-            ok = 0.10 <= r["raw"] <= 1.2
+            ok = _is_plausible_toss(r["raw"])
             mark = "✅" if ok else "⚠️"
             note = "" if ok else "  (implausible for a hand toss — ignored)"
             print(f"  {mark} flight {k}: airtime {r['raw']:.2f}s → "
@@ -896,7 +924,7 @@ def cmd_desktest(args) -> int:
                 return 1
             raw = float(ev.get("airtime_raw_s", 0))
             h = float(ev.get("height_m", 0))
-            plaus = "✅" if 0.10 <= raw <= 1.2 else "⚠️ implausible for a hand toss"
+            plaus = "✅" if _is_plausible_toss(raw) else "⚠️ implausible for a hand toss"
             print(f"  {plaus} toss {i}: airtime {raw:.2f}s → height {h:.2f} m")
             heights.append(h)
 
@@ -912,9 +940,7 @@ def cmd_desktest(args) -> int:
         print(f"\nRESULT: CHECK ⚠️ — expected 3 recorded jumps, device says {n}.")
         return 1
     finally:
-        dev.close()
-        if proc:
-            proc.terminate()
+        _close_device(dev, proc)
 
 
 # ---------------------------------------------------------------------- drop
@@ -967,9 +993,7 @@ def cmd_drop(args) -> int:
 
         return _drop_analyze(raws, expected, args, p, dev)
     finally:
-        dev.close()
-        if proc:
-            proc.terminate()
+        _close_device(dev, proc)
 
 
 def _drop_untethered(args, dev: "Device", p, expected: float) -> int:
@@ -982,14 +1006,9 @@ def _drop_untethered(args, dev: "Device", p, expected: float) -> int:
     print("     hold dead still a second, let go clean, let it land.")
     print("     Pick it up gently between drops.")
     print("  4. Plug the cable back in and return here.")
-    prev_port, baseline = dev.sp.path, set(scan_ports())
-    dev.close()
-    _replug_pause()
-    port = _wait_for_port_return(prev_port, baseline)
-    if port is None:
-        print("❌ The board never came back on USB. Check the cable, re-run.")
+    dev2 = _reopen_after_replug(dev)
+    if dev2 is None:
         return 1
-    dev2 = Device(port)
     try:
         dev2.drain_boot(timeout=3.0)
         new = _stored_rows(dev2)[base_n:]
@@ -1008,6 +1027,14 @@ def _drop_untethered(args, dev: "Device", p, expected: float) -> int:
         return _drop_analyze(raws, expected, args, p, dev2)
     finally:
         dev2.close()
+
+
+def _send_set(dev: "Device", key: str, val, timeout: int = 8) -> "tuple[bool, list[str]]":
+    """Send `set <key> <val>`; return (accepted, response_lines) — False on
+    an ERR reply. dev.command()'s own exceptions (e.g. TimeoutError)
+    propagate unchanged, for the caller's own try/except to word."""
+    resp = dev.command(f"set {key} {val}", timeout=timeout)
+    return not any(ln.startswith("ERR") for ln in resp), resp
 
 
 def _drop_analyze(raws: list[float], expected: float, args, p,
@@ -1054,9 +1081,7 @@ def _drop_analyze(raws: list[float], expected: float, args, p,
             # check the reply — a silent false "applied" here would send a
             # whole water session out under the wrong calibration.
             try:
-                resp = dev.command(f"set airtime_offset_s {round(offset, 4)}",
-                                   timeout=8)
-                applied = not any(ln.startswith("ERR") for ln in resp)
+                applied, resp = _send_set(dev, "airtime_offset_s", round(offset, 4))
                 if not applied:
                     for ln in resp:
                         print(f"    {ln}")
@@ -1226,9 +1251,7 @@ def cmd_sync(args) -> int:
             print("✅ device cleared")
         return 0
     finally:
-        dev.close()
-        if proc:
-            proc.terminate()
+        _close_device(dev, proc)
 
 
 # ------------------------------------------------------------------ validate
@@ -1251,18 +1274,26 @@ def _read_device_cal(dev: "Device") -> dict:
         lines = dev.command("info", timeout=8)
     except TimeoutError:
         return info
-    for ln in lines:
-        if ln.startswith("INFO "):
-            info["fw"] = parse_kv(ln).get("fw")
-        elif ln.startswith("CAL "):
-            kv = parse_kv(ln)
-            try:
-                info["airtime_offset_s"] = float(kv["airtime_offset_s"])
-                info["height_scale"] = float(kv["height_scale"])
-            except (KeyError, ValueError):
-                pass
-            info["source"] = kv.get("source")
+    info["fw"] = _last_tagged(lines, "INFO ").get("fw")
+    cal_kv = _last_tagged(lines, "CAL ")
+    if cal_kv:
+        try:
+            info["airtime_offset_s"] = float(cal_kv["airtime_offset_s"])
+            info["height_scale"] = float(cal_kv["height_scale"])
+        except (KeyError, ValueError):
+            pass
+        info["source"] = cal_kv.get("source")
     return info
+
+
+def _read_lines_or_none(p: Path, flag: str) -> list[str] | None:
+    """`p`'s text as lines, or None after printing a friendly '--<flag>
+    file ...' message — shared by the --session/--pairs loaders."""
+    try:
+        return p.read_text().splitlines()
+    except OSError as e:
+        print(f"can't read --{flag} file {p}: {e}")
+        return None
 
 
 def _load_session_jumps(path: str) -> list[dict] | None:
@@ -1271,10 +1302,8 @@ def _load_session_jumps(path: str) -> list[dict] | None:
     p = Path(path)
     if p.is_dir():
         p = p / "jumps.csv"
-    try:
-        lines = p.read_text().splitlines()
-    except OSError as e:
-        print(f"can't read --session file {p}: {e}")
+    lines = _read_lines_or_none(p, "session")
+    if lines is None:
         return None
     rows = []
     for ln in lines:
@@ -1296,10 +1325,8 @@ def _load_pairs_csv(path: str) -> list[dict] | None:
     filmed jump. This gets typed up at home from a phone's frame stepper, so
     mistakes are common — every failure names the exact line and what's wrong."""
     p = Path(path)
-    try:
-        lines = p.read_text().splitlines()
-    except OSError as e:
-        print(f"can't read --pairs file {p}: {e}")
+    lines = _read_lines_or_none(p, "pairs")
+    if lines is None:
         return None
     lines = [ln for ln in lines if ln.strip()]
     if not lines:
@@ -1565,18 +1592,18 @@ def _validate_decide(stats: dict) -> dict:
 
 def _validate_apply(dev: "Device", decide: dict, stats: dict) -> "tuple[bool, list[str]]":
     """Push accepted recommendations to a connected device via `set`, using
-    the exact ERR-checking pattern _drop_analyze uses: a `set` that returns
-    ERR is a hard failure — stop immediately rather than apply a partial or
-    silently-wrong calibration."""
+    _send_set() (the exact ERR-checking pattern _drop_analyze uses too): a
+    `set` that returns ERR is a hard failure — stop immediately rather than
+    apply a partial or silently-wrong calibration."""
     msgs: list[str] = []
     if decide["recommend_offset"]:
         val = round(stats["recommended_airtime_offset_s"], 4)
         try:
-            resp = dev.command(f"set airtime_offset_s {val}", timeout=8)
+            ok, resp = _send_set(dev, "airtime_offset_s", val)
         except Exception as e:
             msgs.append(f"couldn't apply airtime_offset_s: {e}")
             return False, msgs
-        if any(ln.startswith("ERR") for ln in resp):
+        if not ok:
             msgs.append(f"device REJECTED airtime_offset_s={val}:")
             msgs.extend(f"  {ln}" for ln in resp)
             return False, msgs
@@ -1584,11 +1611,11 @@ def _validate_apply(dev: "Device", decide: dict, stats: dict) -> "tuple[bool, li
     if decide["recommend_scale"]:
         val = round(stats["recommended_height_scale"], 3)
         try:
-            resp = dev.command(f"set height_scale {val}", timeout=8)
+            ok, resp = _send_set(dev, "height_scale", val)
         except Exception as e:
             msgs.append(f"couldn't apply height_scale: {e}")
             return False, msgs
-        if any(ln.startswith("ERR") for ln in resp):
+        if not ok:
             msgs.append(f"device REJECTED height_scale={val}:")
             msgs.extend(f"  {ln}" for ln in resp)
             return False, msgs
@@ -1879,10 +1906,7 @@ def cmd_validate(args) -> int:
         print(f"\nReport: {md_path}\nData:   {csv_path}")
         return 0
     finally:
-        if dev is not None:
-            dev.close()
-        if proc:
-            proc.terminate()
+        _close_device(dev, proc)
 
 
 # ------------------------------------------------------------------- simtest
@@ -2505,10 +2529,7 @@ def cmd_report(args) -> int:
     except (SystemExit, TimeoutError, OSError) as e:
         S.append(f"(no live device: {e})")
     finally:
-        if dev:
-            dev.close()
-        if proc:
-            proc.terminate()
+        _close_device(dev, proc)
 
     sec("recent logs")
     logs = []
