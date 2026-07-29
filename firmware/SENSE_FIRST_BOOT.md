@@ -79,16 +79,21 @@ If gaps show up, first try loosening `CHUNK_GAP_US` in `jh_link.cpp` (currently
 allowed to lag the other rather than both being serviced from one shared
 queue.
 
-## 3. `CHUNK_GAP_US` (BLE send pacing) is an untuned guess
+## 3. `CHUNK_GAP_US` (BLE send pacing) — derived, not yet measured
 
 **File:** `firmware/src/platform/nrf52/jh_link.cpp`, `CHUNK_GAP_US = 15000`.
 
-Chosen reasoning from item 2's `hvn_qsize=1` fact: pacing slower than a
-typical negotiated BLE connection interval (commonly low tens of ms) gives
-the previous chunk a realistic chance to have already been ACKed before the
-next send attempt, keeping `getHvnPacket()` in its fast/uncontended path
-rather than its 100 ms worst case. 15 ms was picked as a plausible
-mid-range value, not measured against a real negotiated interval.
+Reasoning from item 2's `hvn_qsize=1` fact: pacing slower than the
+negotiated BLE connection interval gives the previous chunk a realistic
+chance to have already been ACKed before the next send attempt, keeping
+`getHvnPacket()` in its fast/uncontended path rather than its 100 ms worst
+case. *(Upgraded 2026-07-28 from "plausible guess" to "derived": Apple's
+Accessory Design Guidelines require peripheral connection intervals in
+multiples of 15 ms, floor 15 ms for non-HID accessories — so against an
+iPhone the interval is ≥15 ms and one chunk per interval is the physical
+ceiling regardless of pacing.)* Still to measure on the bench: the interval
+Bluefy and the Garmin watch actually negotiate, and whether dump throughput
+warrants requesting a shorter interval or a bigger `hvn_qsize`.
 
 **Verify:** log (or infer from throughput) the actual connection interval
 Bluefy/the web app/a Garmin watch negotiate; if it's smaller than 15 ms,

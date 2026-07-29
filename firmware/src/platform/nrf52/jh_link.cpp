@@ -210,12 +210,18 @@ size_t   s_txq_head = 0, s_txq_tail = 0;
 uint32_t s_last_chunk_us = 0;
 // Paced send interval. hvn_qsize defaults to 1 (see file comment) — only
 // one notification per connection may be in flight at a time — so pacing
-// slower than a typical negotiated BLE connection interval (commonly
-// low-tens of ms) gives the previous chunk a realistic chance to have
-// already been ACKed by the time we send the next one, keeping the
-// getHvnPacket() wait in the OFTEN-EMPTY case rather than the 100 ms worst
-// case. VERIFY the actual connection interval Bluefy/Garmin negotiate and
-// retune if the bench trace shows sample gaps (SENSE_FIRST_BOOT.md).
+// slower than the negotiated BLE connection interval gives the previous
+// chunk a realistic chance to have already been ACKed by the time we send
+// the next one, keeping the getHvnPacket() wait in the OFTEN-EMPTY case
+// rather than the 100 ms worst case. 15 ms is not arbitrary: Apple's
+// "Accessory Design Guidelines for Apple Devices" (Bluetooth LE chapter,
+// connection-parameter rules) requires peripheral-requested connection
+// intervals to be multiples of 15 ms (floor 15 ms for non-HID
+// accessories), so against an iPhone — Bluefy IS the primary client — the
+// interval will be ≥15 ms and one chunk per interval is the physical
+// ceiling anyway. Pacing faster buys nothing and risks the blocking path.
+// VERIFY on the bench: log the interval Bluefy/Garmin actually negotiate
+// and retune if the trace shows sample gaps (SENSE_FIRST_BOOT.md #3).
 const uint32_t CHUNK_GAP_US = 15000;
 
 size_t txqSize() { return (s_txq_head + TX_CAP - s_txq_tail) % TX_CAP; }
