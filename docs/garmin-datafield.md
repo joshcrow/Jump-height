@@ -403,11 +403,15 @@ repo (same no-binaries rule as firmware).
 The question everyone asks (store reviewers included), answered once: the
 airtime method detects **free-fall**, and a wing rider's wrist never
 free-falls — the wing is lifting through the arms for the whole jump, so
-the wrist stays loaded while the *board* is the thing that falls. Add
-Connect IQ's ~25 Hz app-accelerometer cap (the puck samples at 200 Hz) and
-wing airs being short (0.4-1.5 s vs the 3-10 s kite jumps that wrist-only
-apps detect), and the division of labor is physics, not preference: the
-board wears the sensor; the wrist wears the display.
+the wrist stays loaded while the *board* is the thing that falls. Wing
+airs are also short (0.4-1.5 s vs the 3-10 s kite jumps that wrist-only
+apps detect). *(Corrected 2026-07-29: this section previously also leaned
+on Connect IQ's ~25 Hz accelerometer cap — that cap is gone on newer
+watches: Garmin unlocked 100 Hz raw access for Surfr, Instinct 3 Solar
+included ([research.md](research.md) §3). The argument stands on physics
+alone — a loaded wrist never free-falls; wakeboard wrist trackers work
+precisely because those wrists do.)* The division of labor is physics,
+not preference: the board wears the sensor; the wrist wears the display.
 
 ## 13. Out of scope (explicitly)
 

@@ -303,6 +303,11 @@ duty cycle) and replace this table with numbers.
 
 ## 9. Jump-starts — existing tools, code, and papers *(researched 2026-07-28)*
 
+> Expanded 2026-07-29 by the four-agent deep pass in
+> **[research.md](research.md)** — market map, literature verdicts on
+> every design choice, nautical-science transfers, and the OSS adoption
+> list with licenses verified.
+
 Standing on shoulders for the bench milestones, so nothing below gets
 hand-rolled that doesn't need to be:
 

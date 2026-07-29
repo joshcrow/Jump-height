@@ -170,7 +170,12 @@ upward (wave-trough baselines) — when video-calibrating height_scale, keep
 the honest number; that pressure will arrive. Strategically: WOO retreated
 to kite-only in 2024 and concedes simpler tools suffice for personal
 measurement — wing foil is exactly the orphaned ground this project stands
-on.
+on. *(Update 2026-07-29, deep research pass: WOO's current site markets
+"wingfoilers" again, and the "~60 % chest" figure could not be
+re-verified — WOO's own site shows a ≈25 % board-vs-chest example. The
+sharpened, still-true thesis — "nobody serves wing foil with an open,
+inexpensive, board-mounted, independently video-validated sensor" — and
+all citations live in [research.md](research.md).)*
 
 **New output surface — Garmin watch data field**: fully scoped with user
 stories, interaction design, architecture, milestones, and acceptance

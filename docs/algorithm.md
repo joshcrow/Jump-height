@@ -57,6 +57,19 @@ That's the entire measurement. Everything else is just detecting `T` cleanly.
   percentage off — commercial units live with it.
 - **The sensor is the thing that flies.** You're measuring how high *the board*
   went, which is exactly the number people care about (and what the Woo reports).
+- **The reference is the takeoff point, not "sea level."** Naval architecture
+  hit this exact ambiguity and resolved it the same way (ITTC "relative wave
+  elevation" — height against the local, instantaneous water surface): our
+  number is honestly *flight height above the takeoff point*. See
+  [research.md §4](research.md).
+- **Ballistic flight — verified for free-fall, open for a flown wing.** The
+  method is peer-validated where flight is truly ballistic (ICC up to 0.997 vs
+  force plates), and kite jumps are the proven exception (sustained kite lift
+  makes ballistic math overpredict ~2.3×, Simons 2025). A hand-held wing has no
+  tether mechanism, so wing airs should sit near-ballistic — but whether an
+  aggressively-flown wing adds measurable lift mid-air has **zero literature**;
+  the Phase 2 video calibration is the experiment that answers it. Full
+  citations and the design-verdicts table: [research.md §2](research.md).
 
 ## The signal
 
