@@ -36,8 +36,8 @@ the air**.
 
 You might expect to measure height by integrating acceleration twice (accel →
 velocity → position). **Don't.** Tiny sensor errors accumulate into meters of
-drift within seconds. Every commercial device (Woo, Surfr, Sherpa) sidesteps this
-with the **airtime method**:
+drift within seconds. Commercial devices (Woo, Surfr) sidestep this with the
+**airtime method**:
 
 1. When the board leaves the water, it's a projectile in **free-fall** — an
    accelerometer riding on it reads **~0 g**.
@@ -118,7 +118,7 @@ Jump-height/
 │   ├── algorithm.md          ← the physics + detection state machine, in detail
 │   ├── garmin-datafield.md   ← the Garmin watch data-field spec
 │   ├── hardware.md           ← bill of materials, wiring, power, waterproofing
-│   ├── ota.md                ← over-the-air update scope (ESP32 OTA; Sense uses Nordic DFU)
+│   ├── ota.md                ← retired ESP32 OTA spec (tombstone — the Sense updates via Nordic DFU)
 │   ├── research.md           ← literature/market synthesis backing the design choices
 │   ├── roadmap.md            ← phased build plan (bench → firmware → water → app → v2)
 │   └── sense.md              ← v2 (XIAO nRF52840 Sense) port spec + gap analysis
@@ -162,14 +162,12 @@ python3 sim/run.py --csv data/my_session.csv
 
 ## Hardware quick start
 
-Minimum viable prototype, ~US$15–25:
+Two supported builds, ~US$15–30 in parts:
 
-| Part | Suggested | Why |
-|------|-----------|-----|
-| MCU | **ESP32** dev board (e.g. ESP32-C3/S3 mini) | WiFi + BLE, cheap, low-power sleep, Arduino-friendly |
-| IMU | **MPU-6050** (start) → **ICM-20948 / LSM6DSO** (better) | 6-axis accel+gyro over I²C |
-| Power | 1× LiPo + TP4056 USB-C charger, or a board with charging built in | a few hours of runtime |
-| Enclosure | waterproof box + potting/conformal coat, o-ring seal | it's going in the ocean |
+| Build | Parts | Status |
+|-------|-------|--------|
+| **v1 (validated)** | DFRobot FireBeetle 2 ESP32-E + MPU-6050 + 2500 mAh LiPo + waterproof capsule | Hardware-validated on the bench; flies the first water sessions. Feature-frozen (bugfix-only, DECISIONS #27). |
+| **v2 (build-ahead done)** | Seeed XIAO nRF52840 Sense (IMU on board — no wiring) + 500 mAh LiPo | Firmware compiles and is published as a drag-and-drop `.uf2`; awaiting the physical board. See [`docs/sense.md`](docs/sense.md). |
 
 Full BOM, wiring diagram, power budget, and **waterproofing notes** (the part that
 actually kills these projects) are in [`docs/hardware.md`](docs/hardware.md).
@@ -180,7 +178,8 @@ actually kills these projects) are in [`docs/hardware.md`](docs/hardware.md).
 
 - **Phase 0 — Prove the algorithm (no hardware):** run the simulator. ✅ **complete**
 - **Phase 1 — Bench firmware:** ESP32 + IMU on a breadboard, self-test, desk test,
-  drop calibration. ✅ **complete**, hardware-validated.
+  drop calibration. ✅ **complete**, hardware-validated. The ESP32/FireBeetle
+  build is feature-frozen as of 2026-07-29 (bugfix-only; DECISIONS #27).
 - **Phase 2 — On the water:** waterproof it, log raw CSV, capture real sessions,
   tune thresholds offline against video ground truth. 🌊 **next** — the water day.
 - **Phase 3 — App:** BLE + a browser app for live stats, session history, and
