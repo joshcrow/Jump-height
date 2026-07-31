@@ -48,6 +48,15 @@ expects actually matches what ships on the board.
 UF2 drag-drop path, item 16) against the real board; a boot banner over USB
 serial at 115200 baud is the first sign everything lines up.
 
+**CONFIRMED 2026-07-31 (first power-on):** the real board's bootloader
+reports `Board-ID: Seeed_XIAO_nRF52840_Sense`, `UF2 Bootloader 0.6.1`,
+`SoftDevice: S140 version 7.3.0` (INFO_UF2.TXT) — exactly the variant and
+SoftDevice this pinned fork targets. Both flash paths worked: the UF2
+drag-drop (first flash) and `pio run ... -t upload` serial DFU via
+adafruit-nrfutil (second flash — "Device programmed"). Firmware boots,
+enumerates as `/dev/cu.usbmodem101`, prints the self-test and `READY` at
+115200. Everything about this item lines up on real silicon.
+
 ## 2. BLEUart/BLECharacteristic can genuinely block up to ~100 ms per notify
 
 **File:** `firmware/src/platform/nrf52/jh_link.cpp`'s file-level comment
@@ -128,6 +137,13 @@ the file's own comment on this exact risk) are both right. A wrong scale
 factor would show up as "self-test WARN/FAIL, mean far from 1.0 g"
 immediately.
 
+**CONFIRMED 2026-07-31 (first power-on):** `accel PASS` at 0.979–1.021 g
+across four boots (runtime gravity normalization absorbs the ~2% unit
+offset, exactly as designed), `noise` 0.0016–0.0018 g at true rest —
+register map, ±16 g scale factor, and little-endian byte order all correct.
+(Early `noise` readings of 0.14 g / 0.057 g were the board being handled /
+desk vibration, not the sensor: same boot, board left alone, 0.0018 g.)
+
 ## 5. WHO_AM_I reads 0x6A, not 0x68 — an EXPECTED self-test WARN, not a bug
 
 **File:** `firmware/src/platform/nrf52/lsm6ds3_min.h`'s `whoAmI()` comment;
@@ -147,6 +163,10 @@ alarming.
 **Verify:** nothing to verify here — confirm the WARN reads `0x6A` (not
 some other, genuinely-wrong value) on first boot, and move on.
 
+**CONFIRMED 2026-07-31:** first boot read `whoami WARN detail=0x6A`, with
+the (inapplicable, as predicted) clone-MPU-6050 hint text. Cosmetic, as
+documented. Moved on.
+
 ## 6. Dual-probe self-test address mapping: `i2c PASS detail=0x68` is a placeholder, not the real address
 
 **File:** `firmware/src/platform/nrf52/jh_imu.cpp`'s file comment.
@@ -162,6 +182,10 @@ that log line and passing it back into `begin()`, which ignores it too).
 
 **Verify:** nothing behavioral to check; just don't be surprised the log
 says 0x68.
+
+**CONFIRMED 2026-07-31:** `i2c PASS detail=0x68` on every boot, exactly as
+described. The real 0x6A transaction underneath works (the accel row's
+1 g reading is the proof).
 
 ## 7. IMU power-rail boot-settle delay — RESOLVED-BY-DATASHEET (35 ms found; margin now 40 ms)
 
@@ -185,9 +209,10 @@ intermittently right after a fresh power-on regardless, that would point at
 something OTHER than this delay (wiring, the rail itself, a different
 board revision).
 
-## 8. QSPI deep power-down (0xB9/0xAB) — wired in, current draw and wake delay unmeasured
+## 8. QSPI deep power-down (0xB9/0xAB) — BIT ON FIRST POWER-ON; wake-before-begin was a no-op (fixed); current draw still unmeasured
 
-**File:** `firmware/src/platform/nrf52/jh_store.cpp`, `flashWake()`/`flashSleep()`.
+**File:** `firmware/src/platform/nrf52/jh_store.cpp`, `flashWake()`/`flashSleep()`,
+and `init()`'s mount-retry.
 
 `Adafruit_FlashTransport_QSPI::runCommand()` was confirmed to compile and
 to issue a genuine single-byte custom QSPI instruction (traced into the
@@ -200,7 +225,36 @@ hasn't been confirmed on real silicon, though it's standard, generally-safe
 SPI-NOR practice; (c) the actual µA delta this buys (docs/sense.md §3.6's
 whole reason for existing) is completely unmeasured.
 
-**Verify:** a USB power meter (S0 milestone) with the device idle
+**THIS ITEM BIT, FIRST — the port's first real silicon bug (2026-07-31):**
+first power-on self-test read `flash FAIL detail=mount_failed`, every boot,
+warm or otherwise — because the chip was ALREADY in deep power-down (left
+there by Seeed's factory firmware; USB power had never been removed since
+unboxing), and `init()`'s original `flashWake()`-before-`begin()` was a
+**silent no-op every boot**: `runCommand()` calls `nrfx_qspi_cinstr_xfer()`
+directly, which errors out unless the QSPI peripheral has been initialized —
+and only `begin()`'s transport setup does that. So the release never
+reached the chip, the JEDEC probe read garbage, and the mount failed. A
+cold power cycle (unplug, 5 s, replug — DPD does not survive power removal)
+confirmed the diagnosis: mount + first-boot format immediately succeeded.
+That made the latent half obvious: our OWN `flashSleep()` at the end of
+every successful `init()` re-arms the same trap for every subsequent warm
+reset (reset tap, watchdog, DFU cycle) — storage would only ever have
+worked on cold boots. **Fix (same day):** `init()` now attempts the mount
+first, and on failure — the failed `begin()` having configured the QSPI
+peripheral, a JEDEC miss not tearing it down (confirmed in the installed
+`Adafruit_SPIFlashBase.cpp`: `_trans->begin()` runs before the probe) —
+issues the wake and retries once. **Verified on silicon:** after a serial-DFU
+reflash (a warm reset; the bootloader never touches QSPI, so the chip was
+provably still in DPD), `flash PASS 2085376B_free` — and since the
+factory-DPD boots proved `begin()` cannot succeed against a sleeping chip,
+that pass MUST have come through the wake-retry path. Stored data survived
+the cycle. Also answers (b) for the only case that matters now: the retry
+path's 0xAB goes to a chip that genuinely is asleep; the bracketing
+`flashWake()` calls elsewhere run against an initialized peripheral and
+remain standard-practice safe.
+
+**Verify (remaining):** (a) the 100 µs post-wake delay vs the P25Q16H
+datasheet's tRDP, and (c) a USB power meter with the device idle
 (recording paused, no BLE commands): confirm current drops noticeably
 between write bursts vs. a build with `flashWake()`/`flashSleep()`
 temporarily stubbed out.
@@ -263,6 +317,13 @@ it. No code change was needed or made.
 finds the board's port automatically on macOS; if `pyserial` is installed
 its own `list_ports` path is used instead and should need nothing extra
 either.
+
+**CONFIRMED 2026-07-31:** the board enumerates as `/dev/cu.usbmodem101`
+and `./tools/jump selftest` found it automatically, first try, no flags.
+One stale-text note: the CLI's "the board resets when the port opens —
+normal" banner is ESP32-era — opening this board's CDC port does NOT reset
+it (four selftest connects in a row left the same boot running). Harmless,
+just inaccurate here.
 
 ## 11. Boot-time trace scan cost scales with how full the trace region is
 
@@ -375,6 +436,18 @@ citation) but was never performed against the real board.
 **Verify (docs/sense.md §7 item 9):** the actual drag-and-drop flash cycle,
 end to end, ideally right after first unboxing (S0 milestone).
 
+**CONFIRMED 2026-07-31, with field notes:** the first flash went exactly as
+described — 1200-baud touch (a plain `stty -f <port> 1200` sufficed) →
+`XIAO-SENSE` drive → `cp` the `.uf2` → board reboots into the app. The
+SECOND bootloader entry was flakier: the stty touch didn't take (a
+pyserial open-at-1200 + DTR toggle did), and that time the bootloader's
+mass-storage side never mounted on macOS (device present in `ioreg` as the
+bootloader, VID 0x2886 / PID 0x0045, but no disk ever appeared). No fight
+needed: `pio run -e xiaoblesense_adafruit -t upload` (adafruit-nrfutil
+serial DFU over the bootloader's CDC port) programmed it cleanly in ~23 s.
+Practical takeaway: UF2 drag-drop is real but macOS's automount is not to
+be trusted twice in a row; serial DFU is the reliable scripted path.
+
 ## 17. PDM microphone rail — never measured
 
 **File:** not touched by this port at all (deliberately: no PDM code
@@ -463,6 +536,10 @@ is itself the scale-factor verification — if the range/sensitivity pair
 were mismatched (e.g. 0x54 with the ±8 g LSB), rest would read ~0.5 g or
 ~2 g and the self-test would WARN/FAIL immediately. Confirm rest reads
 ≈1.0 g and a hard table slap exceeds 8 g in the trace.
+
+**HALF-CONFIRMED 2026-07-31:** rest reads 0.979–1.021 g across boots
+(item 4) — the range/sensitivity pair is right. The >8 g table-slap trace
+check hasn't been run yet.
 
 ## 21. Interrupted ERASE during first-boot format / `clear()` — an unmodeled corruption shape (bench awareness note)
 

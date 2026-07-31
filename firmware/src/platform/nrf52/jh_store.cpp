@@ -514,10 +514,24 @@ void produceNextUnit() {
 
 // ------------------------------------------------------------------- init
 bool init(void (*announce)(const char* line)) {
-  flashWake();
-
   static SPIFlash_Device_t s_devices[] = {P25Q16H};
   s_fs_ok = s_flash.begin(s_devices, 1);
+  if (!s_fs_ok) {
+    // Mount fails when the chip is sitting in deep power-down: DPD survives
+    // every warm reset (only power removal clears it), and both our own
+    // flashSleep() below and Seeed's factory firmware leave the chip that
+    // way (found live on first power-on, 2026-07-31 — see
+    // SENSE_FIRST_BOOT.md item 8). Waking BEFORE begin() cannot work:
+    // runCommand() needs the QSPI peripheral configured, and only begin()
+    // does that (nrfx_qspi_cinstr_xfer errors out on an uninitialized
+    // peripheral — this function's original pre-begin flashWake() was a
+    // silent no-op every boot). The failed begin() above HAS configured the
+    // peripheral (its transport begin runs before the JEDEC probe, and a
+    // probe miss doesn't tear it down), so the release can genuinely reach
+    // the chip now: wake, then retry the mount once.
+    flashWake();
+    s_fs_ok = s_flash.begin(s_devices, 1);
+  }
   if (!s_fs_ok) return false;
 
   s_flash_total_bytes  = s_flash.size();  // P25Q16H: 2,097,152 (2 MiB)
