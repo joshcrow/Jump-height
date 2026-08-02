@@ -53,6 +53,30 @@ the project. They should not be your first joints of the day.
 - At 4 V there is **no shock hazard to you**. Every precaution here protects
   the parts.
 
+### 1.05 First: do the two connectors actually mate?
+
+Before any measuring, confirm the pigtail's JST housing mates with the cell's.
+**Ignore the words "male" and "female"** — sellers, datasheets, and listings
+all use them inconsistently and there is no authority to appeal to. The only
+property that matters is whether the two halves plug together.
+
+Look into the mouth of each housing: metal **pins protruding** past the
+plastic is one half, metal **sockets recessed inside** is the other. One of
+each = they mate; two of the same = they don't. Then test it: bare pigtail
+ends held **apart**, push the housings together with light pressure — they
+should click. **Never force it.** JST housings are keyed, and forcing a
+mismatched or misaligned pair breaks the housing.
+
+If they don't mate, **order the mating half** (~$7). Do *not* cut the
+connector off the battery to work around it: stripping two leads on a charged
+cell is the most dangerous cut in this build, and it permanently welds the
+cell to the board — no unplugging for soldering, storage, or a swap. The
+pigtail's entire reason for existing is that the cell can be absent while the
+iron is hot.
+
+Nothing about S0 ([sense.md §6](sense.md)) needs a battery — the board runs
+from USB — so a wrong connector blocks S2 only, not the bring-up.
+
 ### 1.1 The three measurements
 
 In this order. The whole point is that **JST wire colours
