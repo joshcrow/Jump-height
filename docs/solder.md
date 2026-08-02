@@ -67,7 +67,20 @@ ends held **apart**, push the housings together with light pressure — they
 should click. **Never force it.** JST housings are keyed, and forcing a
 mismatched or misaligned pair breaks the housing.
 
-If they don't mate, **order the mating half** (~$7). Do *not* cut the
+**Buying the mating half — read what it mates *with*, not its gender.** Worked
+example, both from vendor pages, 2026-08: Adafruit **261** is titled "JST PH
+2-Pin Cable — **Female** Connector" and says *"Matches up nicely with our
+Lipoly **chargers**"*; Adafruit **3814** is titled "**Male Header**" and says
+*"Plugs in nicely all with our Li-Poly **batteries**"*. DigiKey's listing for
+261 meanwhile calls it a male header — same part, opposite label, two
+reputable vendors. **3814 is the one that mates with a cell** (bare tinned
+wires on the other end, 200 mm, trim before stripping). The gender word is
+unreliable; "plugs into batteries" is a physical claim a vendor can't get
+backwards. Confirm against the cell in your hand regardless: sockets recessed
+on the battery ⇒ buy the pin half; pins protruding ⇒ buy the socket half.
+
+If they don't mate, **order the mating half** (~$1–7; buying both halves
+retires the question for the price of shipping). Do *not* cut the
 connector off the battery to work around it: stripping two leads on a charged
 cell is the most dangerous cut in this build, and it permanently welds the
 cell to the board — no unplugging for soldering, storage, or a swap. The
