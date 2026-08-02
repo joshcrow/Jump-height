@@ -121,6 +121,14 @@ is the cable path. Revisit only if we ever swap bootloaders.)*
   reversed cell kills the charger IC. Step-by-step (iron temperature,
   tinning, the bridge check, strain relief):
   **[solder.md §2](solder.md)**.
+- **The pigtail part, specifically** *(learned the hard way, 2026-08)*:
+  the cell ships with the **socket** half, so the pigtail must be the
+  **pin** half — Adafruit **3814** ("Male Header", *"plugs in nicely
+  with our Li-Poly batteries"*), NOT Adafruit **261** ("Female
+  Connector", mates with *chargers*), which is a twin of the cell's own
+  connector and will not mate with it. Buy by what the vendor says it
+  mates *with*: the gender word is inconsistent between vendors on this
+  exact part ([solder.md §1.05](solder.md)).
 - **Charge current is a choice**: default 50 mA ≈ 11 h for the 500 mAh
   cell. Firmware drives P0.13 low → 100 mA ≈ 5–6 h. Plan on overnight
   charging; the red P0.17 LED shows charge-in-progress.
