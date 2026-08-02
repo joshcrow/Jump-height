@@ -32,7 +32,30 @@ the project. They should not be your first joints of the day.
 
 ## 1. The multimeter comes first
 
-Three measurements, in this order. The whole point is that **JST wire colours
+### 1.0 Never used one? Sixty seconds of setup
+
+- **Black probe → `COM` jack, and it never moves.** Red probe → the `VΩmA`
+  jack. **The `10A` jack is never used in this project** — leave it empty.
+- **The one rule that kills meters and cells:** in voltage mode the meter is a
+  *wall* (safe across anything); in **current** mode (`A`/`mA`) it is a
+  *wire*, and touching its probes across a battery is a dead short through the
+  meter. Nothing here needs current mode. Keep the dial off `A`.
+- **Three dial positions matter:** DC volts (`V⎓` / `DCV`), continuity (the
+  soundwave icon), and `Ω`. On a manual-ranging meter's DCV fan, pick **20**
+  for anything in this build.
+- **Prove the meter before trusting it:** dial to continuity, touch the two
+  probe tips together — it should beep and read ~`0.0`. Pull apart: **`OL`**.
+  That's *open loop*, i.e. "not connected" — not an error. You've now verified
+  meter battery, jacks, and dial in five seconds.
+- **A minus sign just means the probes are swapped** — same magnitude,
+  reversed. That inverted reading is the entire mechanism behind measurement
+  #2 below.
+- At 4 V there is **no shock hazard to you**. Every precaution here protects
+  the parts.
+
+### 1.1 The three measurements
+
+In this order. The whole point is that **JST wire colours
 are not standardized** — the plug fits either way, and the board cannot tell
 you it's about to die.
 
@@ -40,7 +63,7 @@ you it's about to die.
 |---|---|---|---|---|
 | 1 | Battery voltage | DC V (20 V range, or auto) | Probe tips into the battery's JST housing — red probe to the red-wire contact, black to the black | **3.6–4.0 V** (shipping storage charge). A positive number also confirms the cell's own colours are honest. |
 | 2 | Which pigtail wire is **+** | DC V | Plug the battery into the pigtail. Hold the two bare pigtail ends **well apart**. Red probe on one end, black on the other. | A **positive** reading ⇒ the wire under the red probe is **+**. Negative ⇒ it's the other one. Mark it *immediately* with tape, then unplug the battery. |
-| 3 | No bridge (after soldering, §2.7) | Continuity / Ω | Probes on BAT+ and BAT− pads, battery **unplugged** | **No beep.** A dead short (≈0 Ω, continuous beep) means a bridge — rework before anything else touches this board. |
+| 3 | No bridge (after soldering, §2.7) | Continuity / Ω | Probes on BAT+ and BAT− pads, battery **unplugged** | **No beep** / `OL`. A brief chirp that goes quiet is just the board's capacitors charging off the meter's test current — normal. A *sustained* beep (≈0 Ω) is a bridge: rework before anything else touches this board. |
 
 > ⚠️ **The two bare pigtail ends must never touch each other.** A shorted
 > 500 mAh LiPo is a fire, not a spark, and it gets there in seconds. Measure,
