@@ -108,6 +108,49 @@ mAh cell for the puck proper.** Verify a protection PCB is present — small
 cells often omit it, and the low-voltage System OFF backstop
 ([sense.md §3.4](sense.md)) isn't built yet.
 
+## 6.5 The part — Hammond 1551WHBK *(chosen 2026-08)*
+
+60 × 35 × 22 mm external, black polycarbonate, IP68, preformed silicone
+gasket, 4 self-tapping screws, moulded PCB standoffs in the base. ~$8–9 from
+DigiKey/Mouser/RS. **The smallest enclosure in the 1551W series** — §5
+disqualified it for the 500 mAh cell (30 mm wide vs ~29 mm internal), and the
+§6 switch to a 20 mm-wide 250 mAh cell is exactly what brought it back into
+play. The cell decision and the enclosure decision are one decision.
+
+| Check | Required | 1551WHBK | |
+|---|---|---|---|
+| Internal | 46 × 26 × 15 mm | ~54 × 29 × 17 **(estimated)** | ok, ~3 mm on the tight axis |
+| Rating | IP67 min | IP68 | ok |
+| Material | RF-transparent | polycarbonate | ok |
+| Float (§3) | cm³ > g | 46 cm³ vs ~31 g | ok, ~16 g margin |
+
+**Two estimated numbers, flagged honestly:** the internal dimensions and the
+enclosure's mass. Hammond's datasheet 403s to automated fetches and no
+reseller publishes either — internal size is derived from typical 1551-series
+wall thickness, mass from polycarbonate volume. **Fallback if it arrives
+tight: 1551WKBK** (80 × 40 × 22, next size up). The bucket test, not this
+table, decides the float question.
+
+**Plain lid, not the flanged (`…FLBK`) variant.** The flange ears look like
+free tether points, but they're part of the *lid* — tethering to them routes
+a yank through the lid screws and into the seal. Strap a zip tie around the
+whole body through the GoPro mount fingers instead (v1's approach,
+[BUILD.md](../BUILD.md)): the load path stays in the box, not the gasket.
+
+**Also buy:** a spare gasket (likely `1551WHGASKET` — verify the part number)
+and a small tube of silicone grease. §4 makes this case open regularly to
+charge, so the gasket is the wear item and grease is what makes repeated
+resealing survivable.
+
+**Check on arrival:** where the moulded PCB standoffs fall. They're unused
+here and will make the floor uneven under a flat cell — nest the cell between
+them or shim with foam, so it never takes landing impacts through one hard
+point.
+
+**Not Amazon, for this one:** at this size the generic junction boxes are
+mostly IP65 (splash, not immersion) and start around 63 × 58 × 35 mm — larger
+*and* worse-sealed. Small-and-genuinely-submersible is Hammond's niche.
+
 ## 7. Rejected, with reasons
 
 | Option | Why not |
