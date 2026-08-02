@@ -121,6 +121,7 @@ Jump-height/
 │   ├── ota.md                ← retired ESP32 OTA spec (tombstone — the Sense updates via Nordic DFU)
 │   ├── research.md           ← literature/market synthesis backing the design choices
 │   ├── roadmap.md            ← phased build plan (bench → firmware → water → app → v2)
+│   ├── solder.md             ← iron + multimeter runbook (headers; the Sense's battery pigtail)
 │   └── sense.md              ← v2 (XIAO nRF52840 Sense) port spec + gap analysis
 ├── firmware/            ← shared core + per-platform seams (PlatformIO)
 │   ├── platformio.ini

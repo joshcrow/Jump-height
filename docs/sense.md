@@ -118,7 +118,9 @@ is the cable path. Revisit only if we ever swap bootloaders.)*
 - **No connector on the board**: the JST pigtail gets soldered to the
   underside BAT pads. **JST battery polarity is NOT standardized —
   meter the battery leads before plugging** (red→+, black→−); a
-  reversed cell kills the charger IC.
+  reversed cell kills the charger IC. Step-by-step (iron temperature,
+  tinning, the bridge check, strain relief):
+  **[solder.md §2](solder.md)**.
 - **Charge current is a choice**: default 50 mA ≈ 11 h for the 500 mAh
   cell. Firmware drives P0.13 low → 100 mA ≈ 5–6 h. Plan on overnight
   charging; the red P0.17 LED shows charge-in-progress.
@@ -258,7 +260,8 @@ duty cycle) and replace this table with numbers.
   protocol + self-test running; **binary trace v2 storage with CSV on
   the wire**; desk test + autopsy through the wizard, untethered; parity
   replay on a Sense-recorded trace; drop calibration on the Sense build.
-- **S2 — power + battery**: solder the pigtail (meter polarity first!);
+- **S2 — power + battery**: solder the pigtail ([solder.md §2](solder.md) —
+  meter polarity first!);
   100 mA charge select; VBAT telemetry + low-voltage System OFF;
   sleep/wake on the IMU interrupt; QSPI deep power-down; LED language;
   measure everything and update §5.
