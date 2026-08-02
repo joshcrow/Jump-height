@@ -275,7 +275,9 @@ duty cycle) and replace this table with numbers.
   measure everything and update §5.
 - **S3 — update path**: BLEDfu + nRF Connect OTA proven from the
   iPhone; UF2 recovery drill written into BUILD.md; CI publishes `.uf2`.
-- **S4 — the puck**: housing (Hammond 1551W-class), mount, antenna
+- **S4 — the puck**: housing ([housing.md](housing.md) — sizing math, the
+  float rule, and the finding that the smallest 1551W does NOT fit the
+  500 mAh cell), mount, antenna
   range check, bucket test — then the same water gauntlet v1 passed.
 - **S5 — the metrics ladder** (§4) once real water traces exist to tune
   against.

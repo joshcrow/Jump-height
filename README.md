@@ -118,6 +118,7 @@ Jump-height/
 │   ├── algorithm.md          ← the physics + detection state machine, in detail
 │   ├── garmin-datafield.md   ← the Garmin watch data-field spec
 │   ├── hardware.md           ← bill of materials, wiring, power, waterproofing
+│   ├── housing.md            ← v2 puck enclosure sizing: the float rule, why the cell sets the size
 │   ├── ota.md                ← retired ESP32 OTA spec (tombstone — the Sense updates via Nordic DFU)
 │   ├── research.md           ← literature/market synthesis backing the design choices
 │   ├── roadmap.md            ← phased build plan (bench → firmware → water → app → v2)
