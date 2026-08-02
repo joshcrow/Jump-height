@@ -1,0 +1,152 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 1240" font-family="-apple-system, 'Helvetica Neue', Arial, sans-serif">
+  <!-- Jump Height — v2 puck internal layout. Ink-on-white; colour only where it
+       carries meaning (battery leads red/black, RF keep-out blue).
+       Companion to docs/housing.md. Drawn at 9 px/mm unless noted. -->
+  <rect x="0" y="0" width="900" height="1240" fill="#ffffff"/>
+
+  <!-- Header -->
+  <text x="60" y="62" font-size="26" font-weight="700" fill="#0b0b0b">Puck layout — XIAO Sense + 250 mAh cell</text>
+  <text x="60" y="90" font-size="15" fill="#4a4a46">Two rules set this drawing: the antenna needs air, and the whole stack must move as one rigid lump.</text>
+  <line x1="60" y1="110" x2="840" y2="110" stroke="#e4e4e1" stroke-width="1"/>
+
+  <!-- ================= Panel 1: TOP VIEW ================= -->
+  <text x="60" y="150" font-size="18" font-weight="600" fill="#0b0b0b">1 · Top view, lid off — internal cavity 46 × 26 mm</text>
+
+  <!-- cavity: 46 x 26 mm at 9 px/mm = 414 x 234, origin (150, 190) -->
+  <rect x="150" y="190" width="414" height="234" fill="#ffffff" stroke="#0b0b0b" stroke-width="2"/>
+  <text x="357" y="182" font-size="12" fill="#767672" text-anchor="middle">case wall (inside face)</text>
+
+  <!-- RF keep-out zone: x 36-46 mm -> 150+324=474 to 564 -->
+  <rect x="474" y="190" width="90" height="234" fill="#eef4fb" stroke="#2a78d6" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="519" y="264" font-size="12" font-weight="600" fill="#2a78d6" text-anchor="middle">RF</text>
+  <text x="519" y="280" font-size="12" font-weight="600" fill="#2a78d6" text-anchor="middle">KEEP</text>
+  <text x="519" y="296" font-size="12" font-weight="600" fill="#2a78d6" text-anchor="middle">OUT</text>
+  <text x="519" y="318" font-size="11" fill="#2a78d6" text-anchor="middle">no cell,</text>
+  <text x="519" y="332" font-size="11" fill="#2a78d6" text-anchor="middle">no foil,</text>
+  <text x="519" y="346" font-size="11" fill="#2a78d6" text-anchor="middle">no screws</text>
+
+  <!-- battery: x 6-36 mm, y 3-23 mm -> 204..474 , 217..397 -->
+  <rect x="204" y="217" width="270" height="180" fill="#f7f7f5" stroke="#0b0b0b" stroke-width="1.5"/>
+  <text x="300" y="292" font-size="13" font-weight="600" fill="#0b0b0b">250 mAh cell</text>
+  <text x="300" y="310" font-size="12" fill="#4a4a46">30 × 20 × 5 mm</text>
+  <text x="300" y="328" font-size="12" fill="#4a4a46">(502030)</text>
+
+  <!-- board: x 21-42 mm, y 4.1-21.9 -> 339..528, 227..387 -->
+  <rect x="339" y="227" width="189" height="160" fill="#ffffff" stroke="#0b0b0b" stroke-width="2"/>
+  <text x="433" y="212" font-size="13" font-weight="600" fill="#0b0b0b" text-anchor="middle">XIAO Sense</text>
+  <text x="433" y="352" font-size="12" fill="#4a4a46" text-anchor="middle">21 × 17.8 mm</text>
+
+  <!-- antenna block on board, at the overhang end -->
+  <rect x="486" y="280" width="34" height="54" fill="#2a78d6" opacity="0.85"/>
+  <text x="503" y="356" font-size="11" fill="#2a78d6" text-anchor="middle">antenna</text>
+
+  <!-- USB-C on same end -->
+  <rect x="520" y="242" width="16" height="30" fill="#0b0b0b" opacity="0.75"/>
+  <text x="556" y="252" font-size="11" fill="#4a4a46">USB-C</text>
+  <text x="556" y="266" font-size="11" fill="#4a4a46">(charge access)</text>
+
+  <!-- overhang bracket -->
+  <line x1="474" y1="404" x2="474" y2="440" stroke="#767672" stroke-width="1"/>
+  <line x1="528" y1="404" x2="528" y2="440" stroke="#767672" stroke-width="1"/>
+  <line x1="474" y1="434" x2="528" y2="434" stroke="#767672" stroke-width="1"/>
+  <text x="501" y="456" font-size="12" fill="#4a4a46" text-anchor="middle">6 mm overhang</text>
+  <text x="501" y="472" font-size="12" fill="#4a4a46" text-anchor="middle">board past cell</text>
+
+  <!-- JST + slack zone: x 0-6 mm -> 150..204 -->
+  <rect x="150" y="190" width="54" height="234" fill="#faf9f6" stroke="#c9c9c4" stroke-width="1" stroke-dasharray="3 3"/>
+  <text x="177" y="300" font-size="11" fill="#4a4a46" text-anchor="middle" transform="rotate(-90 177 300)">JST + wire slack</text>
+
+  <!-- battery leads -->
+  <path d="M 204 250 C 190 250, 182 262, 182 290" fill="none" stroke="#c8321e" stroke-width="3"/>
+  <path d="M 204 268 C 194 268, 190 276, 190 296" fill="none" stroke="#0b0b0b" stroke-width="3"/>
+
+  <!-- foam callout -->
+  <text x="600" y="205" font-size="13" font-weight="600" fill="#0b0b0b">Foam</text>
+  <text x="600" y="223" font-size="12" fill="#4a4a46">fills every gap except</text>
+  <text x="600" y="239" font-size="12" fill="#4a4a46">the blue zone. Nothing</text>
+  <text x="600" y="255" font-size="12" fill="#4a4a46">may shift or rattle —</text>
+  <text x="600" y="271" font-size="12" fill="#4a4a46">the sensor reads every</text>
+  <text x="600" y="287" font-size="12" fill="#4a4a46">internal wobble as signal.</text>
+
+  <text x="600" y="325" font-size="13" font-weight="600" fill="#0b0b0b">Why the cell stops short</text>
+  <text x="600" y="343" font-size="12" fill="#4a4a46">A LiPo pouch is metal. Park</text>
+  <text x="600" y="359" font-size="12" fill="#4a4a46">it under the antenna and you</text>
+  <text x="600" y="375" font-size="12" fill="#4a4a46">detune the only radio on the</text>
+  <text x="600" y="391" font-size="12" fill="#4a4a46">board. Hence the overhang.</text>
+
+  <!-- scale bar: 10 mm = 90 px -->
+  <line x1="150" y1="500" x2="240" y2="500" stroke="#0b0b0b" stroke-width="2"/>
+  <line x1="150" y1="494" x2="150" y2="506" stroke="#0b0b0b" stroke-width="2"/>
+  <line x1="240" y1="494" x2="240" y2="506" stroke="#0b0b0b" stroke-width="2"/>
+  <text x="252" y="505" font-size="12" fill="#4a4a46">10 mm</text>
+
+  <line x1="60" y1="540" x2="840" y2="540" stroke="#e4e4e1" stroke-width="1"/>
+
+  <!-- ================= Panel 2: SIDE SECTION ================= -->
+  <text x="60" y="580" font-size="18" font-weight="600" fill="#0b0b0b">2 · Side section — stack order matters</text>
+
+  <!-- case outline: internal 46 x 14 mm -> 414 x 126, origin (150, 620) -->
+  <rect x="150" y="620" width="414" height="126" fill="#ffffff" stroke="#0b0b0b" stroke-width="2"/>
+  <line x1="150" y1="636" x2="564" y2="636" stroke="#767672" stroke-width="1" stroke-dasharray="4 3"/>
+  <text x="576" y="632" font-size="11" fill="#767672">lid + gasket</text>
+
+  <!-- battery slab: x 6-36mm, 5mm tall, sitting on floor -->
+  <rect x="204" y="701" width="270" height="45" fill="#f7f7f5" stroke="#0b0b0b" stroke-width="1.5"/>
+  <text x="330" y="729" font-size="12" fill="#0b0b0b" text-anchor="middle">cell — 5 mm</text>
+
+  <!-- foam pad 1mm -->
+  <rect x="204" y="692" width="270" height="9" fill="#efeee9" stroke="#c9c9c4" stroke-width="1"/>
+
+  <!-- board 3.5mm: x 21-42mm -> 339..528 -->
+  <rect x="339" y="660" width="189" height="32" fill="#ffffff" stroke="#0b0b0b" stroke-width="2"/>
+  <text x="400" y="681" font-size="12" fill="#0b0b0b" text-anchor="middle">board — 3.5 mm</text>
+
+  <!-- antenna in free air -->
+  <rect x="486" y="672" width="34" height="20" fill="#2a78d6" opacity="0.85"/>
+  <rect x="474" y="692" width="90" height="54" fill="#eef4fb" stroke="#2a78d6" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="519" y="724" font-size="11" fill="#2a78d6" text-anchor="middle">air, not cell</text>
+
+  <!-- deck below -->
+  <rect x="150" y="770" width="414" height="26" fill="#f2f1ec" stroke="#767672" stroke-width="1.5"/>
+  <text x="357" y="788" font-size="12" fill="#4a4a46" text-anchor="middle">adhesive mount base + board deck (often carbon — conductive)</text>
+
+  <!-- up arrow -->
+  <path d="M 640 746 L 640 640" fill="none" stroke="#2a78d6" stroke-width="2"/>
+  <path d="M 640 632 l -7 14 l 14 0 z" fill="#2a78d6"/>
+  <text x="656" y="672" font-size="12" font-weight="600" fill="#2a78d6">to the watch</text>
+  <text x="656" y="688" font-size="12" fill="#4a4a46">Cell on the bottom, board</text>
+  <text x="656" y="704" font-size="12" fill="#4a4a46">on top: never put the cell</text>
+  <text x="656" y="720" font-size="12" fill="#4a4a46">between antenna and sky.</text>
+
+  <text x="656" y="756" font-size="12" fill="#4a4a46">Carbon decks absorb RF, so</text>
+  <text x="656" y="772" font-size="12" fill="#4a4a46">everything radiates upward.</text>
+
+  <line x1="60" y1="828" x2="840" y2="828" stroke="#e4e4e1" stroke-width="1"/>
+
+  <!-- ================= Panel 3: VERIFY + RULES ================= -->
+  <text x="60" y="868" font-size="18" font-weight="600" fill="#0b0b0b">3 · Before you commit to this orientation</text>
+
+  <rect x="150" y="890" width="690" height="86" fill="#fdf6e3" stroke="#b58900" stroke-width="1.5"/>
+  <text x="170" y="916" font-size="13" font-weight="700" fill="#0b0b0b">VERIFY — which end is the antenna?</text>
+  <text x="170" y="938" font-size="12.5" fill="#4a4a46">Seeed's wiki says only "onboard antenna" and does not publish the position; the forum calls it "the blue BT</text>
+  <text x="170" y="956" font-size="12.5" fill="#4a4a46">chip". Find the ceramic block on your board, then point THAT end into the blue zone — mirror this drawing if</text>
+  <text x="170" y="974" font-size="12.5" fill="#4a4a46">it sits at the opposite end. The rule is the rule; only the handedness of the drawing is in question.</text>
+
+  <g font-size="13" fill="#4a4a46">
+    <circle cx="162" cy="1016" r="3" fill="#0b0b0b"/>
+    <text x="178" y="1021"><tspan font-weight="600" fill="#0b0b0b">Keep the USB-C end free too.</tspan> There is no charge port — you open the case to charge, so that end</text>
+    <text x="178" y="1039">wants clear access. If antenna and USB-C share an end, one clear end buys you both.</text>
+
+    <circle cx="162" cy="1068" r="3" fill="#0b0b0b"/>
+    <text x="178" y="1073"><tspan font-weight="600" fill="#0b0b0b">Foam is packing, not suspension.</tspan> Pack it tight enough that nothing moves. A puck that jiggles inside its</text>
+    <text x="178" y="1091">case reports the jiggle as acceleration, and the detector cannot tell that from a landing.</text>
+
+    <circle cx="162" cy="1120" r="3" fill="#0b0b0b"/>
+    <text x="178" y="1125"><tspan font-weight="600" fill="#0b0b0b">Nothing metal in the blue zone, ever.</tspan> No foil tape, no steel screw, no zip-tie with a metal core, and</text>
+    <text x="178" y="1143">not the mount's hardware either. Check what is on the OUTSIDE of that wall as well as the inside.</text>
+
+    <circle cx="162" cy="1172" r="3" fill="#0b0b0b"/>
+    <text x="178" y="1177"><tspan font-weight="600" fill="#0b0b0b">Range-test before sealing for real.</tspan> Puck on the deck, watch on the wrist, walk it out — that is the S4</text>
+    <text x="178" y="1195">check, and it is the one that tells you whether this layout actually works.</text>
+  </g>
+</svg>

@@ -34,6 +34,26 @@ radius) needs a corner (~10 mm).
 | Packed assembly | ~50 × 30 × 11 mm | ~42 × 22 × 11 mm |
 | **Internal needed** (+2 mm foam all round) | **≥ 54 × 34 × 15 mm** | **≥ 46 × 26 × 15 mm** |
 
+**The layout, drawn:** [img/puck-layout.svg](img/puck-layout.svg) — top view,
+side section, and the RF keep-out zone, at 9 px/mm.
+
+Two placement rules the drawing encodes:
+
+- **The cell stops short of the antenna end**, with the board overhanging it
+  by ~6 mm. A LiPo pouch is metal; parked under the antenna it detunes the
+  only radio on the board.
+- **Cell on the bottom, board on top.** The puck sits on a deck that is often
+  carbon — conductive, and RF-absorbing. Everything useful radiates *upward*
+  toward the wrist, so the cell must never sit between the antenna and the
+  sky.
+
+**VERIFY (open):** which end of the XIAO the antenna occupies. Seeed's wiki
+states only "onboard antenna" and doesn't publish the position; the Seeed
+forum calls it "the blue BT chip" without naming an end. Identify the ceramic
+block on the physical board and point that end into the keep-out zone —
+mirror the drawing if it sits at the other end. The rule holds either way;
+only the handedness is in question.
+
 ## 3. The float rule
 
 A big air-filled case (v1's Pelican-class capsule) floats trivially. A
