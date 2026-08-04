@@ -24,7 +24,7 @@ using Toybox.Graphics;
 using Toybox.System;
 using Toybox.Application;
 using Toybox.Attention;
-using Toybox.Lang;
+import Toybox.Lang;
 
 class JumpFieldView extends WatchUi.DataField {
 
@@ -247,6 +247,14 @@ class JumpFieldView extends WatchUi.DataField {
         if (uiState == UI_SEARCHING) { return "finding puck"; }
         if (uiState == UI_RECONNECTING) { return "reconnecting"; }
         if (uiState == UI_NO_BLE) { return "BLE unavailable"; }
+        // Connected: the puck's battery, if it reports one (Sense-class
+        // firmware only — docs/sense.md §3.4: the puck is sealed, this line
+        // and the phone are its only gauges). Doubles as live-link proof.
+        var bp = _model.puckBattPct();
+        if (bp != null) {
+            if (_model.puckCharging()) { return "puck charging"; }
+            return "puck " + bp + "%";
+        }
         return "";
     }
 

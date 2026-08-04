@@ -20,7 +20,7 @@
 // substring per completed line, one per token. No per-character allocation
 // (tokenize() walks a single toCharArray(), not repeated 1-char substrings).
 
-using Toybox.Lang;
+import Toybox.Lang;
 
 module Protocol {
 
@@ -99,7 +99,10 @@ module Protocol {
     // equivalent of web/app.js's `line.trim().split(/\s+/).filter(Boolean)`.
     // No regex engine in Monkey C, so this walks characters once via
     // toCharArray() rather than calling substring() per character.
-    hidden function _tokenize(line as String) as Array {
+    // NOT `hidden`: that modifier is class-member-only — at module scope the
+    // compiler rejects it (found on the first real build, 2026-08-04); the
+    // underscore prefix carries the private-by-convention intent instead.
+    function _tokenize(line as String) as Array {
         var tokens = [];
         if (line == null) {
             return tokens;

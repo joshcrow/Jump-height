@@ -15,18 +15,21 @@
 -->
 <iq:manifest version="3" xmlns:iq="http://www.garmin.com/xml/connectiq">
     <iq:application entry="JumpFieldApp" id="873B577243574E27AB454C3FF165E7B4"
-                     name="@Strings.AppName" type="datafield" minSdkVersion="3.1.0">
+                     name="@Strings.AppName" type="datafield" minSdkVersion="3.1.0"
+                     launcherIcon="@Drawables.LauncherIcon">
         <!--
           Instinct 3 Solar only for M0-M4 (spec §5.1: "Instinct correctness
           first"); Fenix/Epix/Forerunner families are added at M5 once the
-          simulator layout passes on this device. See FIRST_COMPILE.md #1 —
-          instinct3solar50mm's existence as a DISTINCT product id (vs. one id
-          covering both case sizes) is unconfirmed; verify before first
-          build and delete the line if the compiler rejects it.
+          simulator layout passes on this device. FIRST_COMPILE.md #1
+          CONFIRMED (2026-08-04, first real monkeyc run, SDK 9.2.0):
+          instinct3solar50mm is NOT a real product id — the compiler rejects
+          it ("Invalid device id"), and the SDK's own Devices/ directory has
+          no such folder; one id covers both case sizes. launcherIcon:
+          FIRST_COMPILE.md #8's "if the compiler demands one" branch is the
+          one that happened — same run, "A launcher icon must be specified".
         -->
         <iq:products>
             <iq:product id="instinct3solar45mm"/>
-            <iq:product id="instinct3solar50mm"/>
         </iq:products>
         <iq:permissions>
             <!-- BLE central: scan/connect/subscribe to the puck's NUS profile. -->

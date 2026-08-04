@@ -1,0 +1,11 @@
+<!--
+  Exists solely because the compiler REQUIRES a launcher icon on every app
+  type, data fields included (FIRST_COMPILE.md #8's "if the compiler demands
+  one" branch — it did, first real build, SDK 9.2.0, 2026-08-04). The icon
+  is a 161-byte generated PNG (a rising arc of dots over a waterline —
+  tools-free, spec §5.6's zero-hand-drawn-bitmaps spirit); the watch only
+  shows it in the Connect IQ app list, never on the data screen itself.
+-->
+<drawables>
+    <bitmap id="LauncherIcon" filename="launcher_icon.png" />
+</drawables>

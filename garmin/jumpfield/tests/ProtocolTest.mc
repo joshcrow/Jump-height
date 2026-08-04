@@ -11,7 +11,7 @@
 // the exact build+run commands (monkeyc -t, then monkeydo -t).
 
 using Toybox.Test;
-using Toybox.Lang;
+import Toybox.Lang;
 
 // ---------------------------------------------------------- line reassembly
 
@@ -56,7 +56,7 @@ function testReassembly_splitOneByteAtATime(logger) {
     // tokens.
     var r = new Protocol.LineReader();
     var src = "JUMP n=4\n";
-    var out = [];
+    var out = [] as Array;
     for (var i = 0; i < src.length(); i += 1) {
         var piece = src.substring(i, i + 1);
         var lines = r.feed(piece);
@@ -102,7 +102,7 @@ function testParseKV_jumpLine(logger) {
     Test.assertEqual(kv.get("height_m"), "1.316");
     Test.assertEqual(kv.get("height_ft"), "4.3");
     Test.assertEqual(kv.get("best_m"), "1.316");
-    var args = kv.get("_args");
+    var args = kv.get("_args") as Array;  // get() types as Object-or-Null
     Test.assertEqual(args.size(), 0);
     return true;
 }
@@ -125,7 +125,7 @@ function testParseKV_statsLine(logger) {
 function testParseKV_readyLine(logger) {
     var kv = Protocol.parseKV("READY");
     Test.assertEqual(kv.get("_tag"), "READY");
-    var args = kv.get("_args");
+    var args = kv.get("_args") as Array;  // get() types as Object-or-Null
     Test.assertEqual(args.size(), 0);
     return true;
 }
@@ -137,7 +137,7 @@ function testParseKV_chatterLine(logger) {
     // no special-case in the tokenizer, and this test pins that on purpose.
     var kv = Protocol.parseKV("# hint: almost a jump");
     Test.assertEqual(kv.get("_tag"), "#");
-    var args = kv.get("_args");
+    var args = kv.get("_args") as Array;  // get() types as Object-or-Null
     Test.assertEqual(args.size(), 4);
     Test.assertEqual(args[0], "hint:");
     Test.assertEqual(args[1], "almost");
@@ -152,7 +152,7 @@ function testParseKV_bareArgsGoToArgsArray(logger) {
     // web/app.js's parseKV doc comment exactly.
     var kv = Protocol.parseKV("STATE recording");
     Test.assertEqual(kv.get("_tag"), "STATE");
-    var args = kv.get("_args");
+    var args = kv.get("_args") as Array;  // get() types as Object-or-Null
     Test.assertEqual(args.size(), 1);
     Test.assertEqual(args[0], "recording");
     Test.assertEqual(kv.hasKey("recording"), false);
@@ -163,13 +163,13 @@ function testParseKV_bareArgsGoToArgsArray(logger) {
 function testParseKV_okAndErrTerminators(logger) {
     var ok = Protocol.parseKV("OK stats");
     Test.assertEqual(ok.get("_tag"), "OK");
-    var okArgs = ok.get("_args");
+    var okArgs = ok.get("_args") as Array;
     Test.assertEqual(okArgs.size(), 1);
     Test.assertEqual(okArgs[0], "stats");
 
     var err = Protocol.parseKV("ERR bad command");
     Test.assertEqual(err.get("_tag"), "ERR");
-    var errArgs = err.get("_args");
+    var errArgs = err.get("_args") as Array;
     Test.assertEqual(errArgs.size(), 2);
     Test.assertEqual(errArgs[0], "bad");
     Test.assertEqual(errArgs[1], "command");
@@ -180,7 +180,7 @@ function testParseKV_okAndErrTerminators(logger) {
 function testParseKV_emptyLine(logger) {
     var kv = Protocol.parseKV("");
     Test.assertEqual(kv.get("_tag"), "");
-    var args = kv.get("_args");
+    var args = kv.get("_args") as Array;  // get() types as Object-or-Null
     Test.assertEqual(args.size(), 0);
     return true;
 }

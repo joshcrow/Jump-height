@@ -17,7 +17,7 @@
 // four spec §4.2 states — Model never needs to know PuckLink's state names.
 
 using Toybox.System;
-using Toybox.Lang;
+import Toybox.Lang;
 
 module Model {
 
@@ -39,6 +39,18 @@ module Model {
         hidden var _staleSinceMs;             // set by markStale(); informational
         hidden var _flashUntilMs as Number;
         hidden var _newJumpPending as Boolean;
+        hidden var _puckBattPct;              // null until a STATS carries
+                                              // batt_pct — the vbat_mv/
+                                              // batt_pct/chg adder keys
+                                              // (docs/sense.md §3.4) only
+                                              // exist on battery-sensing
+                                              // pucks; a v1 device never
+                                              // sends them and this stays
+                                              // null forever (View shows
+                                              // nothing, spec §5.2
+                                              // tolerate-unknown rule in
+                                              // reverse)
+        hidden var _puckCharging as Boolean;
 
         function initialize() {
             _lastHeightM = 0.0;
@@ -48,6 +60,8 @@ module Model {
             _jumpCount = 0;
             _lastUpdateMs = null;
             _staleSinceMs = null;
+            _puckBattPct = null;
+            _puckCharging = false;
             _flashUntilMs = 0;
             _newJumpPending = false;
         }
@@ -106,6 +120,8 @@ module Model {
         function sessionBestM() as Float { return _sessionBestM; }
         function bestAirtimeS() as Float { return _bestAirtimeS; }
         function jumpCount() as Number { return _jumpCount; }
+        function puckBattPct() { return _puckBattPct; }  // Number or null
+        function puckCharging() as Boolean { return _puckCharging; }
 
         hidden function _applyJump(kv as Dictionary) as Void {
             var h = _toFloat(kv.get("height_m"));
@@ -139,6 +155,11 @@ module Model {
             var b = _toFloat(kv.get("session_best_m"));
             if (n != null) { _jumpCount = n; }
             if (b != null) { _sessionBestM = b; }
+            // Battery adder keys (absent on v1 pucks — leave prior state).
+            var bp = _toNumber(kv.get("batt_pct"));
+            if (bp != null) { _puckBattPct = bp; }
+            var chg = _toNumber(kv.get("chg"));
+            if (chg != null) { _puckCharging = (chg == 1); }
             _lastUpdateMs = System.getTimer();
             // STATS never arms the flash or the vibrate latch: a reconnect
             // reseed is quiet by design, only a live JUMP is "news".

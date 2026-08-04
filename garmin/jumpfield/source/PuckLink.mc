@@ -26,7 +26,7 @@
 using Toybox.BluetoothLowEnergy as Ble;
 using Toybox.System;
 using Toybox.StringUtil;
-using Toybox.Lang;
+import Toybox.Lang;
 
 class PuckLink extends Ble.BleDelegate {
 
@@ -55,13 +55,16 @@ class PuckLink extends Ble.BleDelegate {
 
     // Public state values (JumpFieldView polls state() against these to pick
     // one of spec §4.2's four UI states, combined with Model.hasData()).
-    const STATE_IDLE = 0;
-    const STATE_SCANNING = 1;
-    const STATE_PAIRING = 2;
-    const STATE_DISCOVERING = 3;
-    const STATE_SUBSCRIBING = 4;
-    const STATE_LIVE = 5;
-    const STATE_DEAD = 6;
+    // `static` so JumpFieldView can read them as PuckLink.STATE_* — plain
+    // class consts are instance-scoped and the compiler rejects class-level
+    // access (found on the first real build, 2026-08-04).
+    static const STATE_IDLE = 0;
+    static const STATE_SCANNING = 1;
+    static const STATE_PAIRING = 2;
+    static const STATE_DISCOVERING = 3;
+    static const STATE_SUBSCRIBING = 4;
+    static const STATE_LIVE = 5;
+    static const STATE_DEAD = 6;
 
     hidden var _model;             // Model.State -- where parsed lines go
     hidden var _reader;            // Protocol.LineReader -- line reassembly
@@ -171,7 +174,7 @@ class PuckLink extends Ble.BleDelegate {
         var result = scanResults.next();
         while (result != null) {
             if (_matchesPuck(result)) {
-                var rssi = result.getRssi();
+                var rssi = (result as Ble.ScanResult).getRssi();  // next() types as Object
                 if (best == null || (rssi != null && (bestRssi == null || rssi > bestRssi))) {
                     best = result;
                     bestRssi = rssi;

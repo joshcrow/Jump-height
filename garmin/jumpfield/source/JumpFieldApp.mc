@@ -7,6 +7,7 @@
 // the scan fresh in onStart() every time is required, not just tidy.
 
 using Toybox.Application;
+import Toybox.Lang;  // bare type names (Array, Void) resolve via import, not using
 
 class JumpFieldApp extends Application.AppBase {
 
@@ -31,7 +32,10 @@ class JumpFieldApp extends Application.AppBase {
     // Data fields return a single-element view array (no input delegate --
     // a data field isn't driven by button/touch input the way a widget or
     // app is).
-    function getInitialView() as Array {
+    function getInitialView() {  // annotation dropped: the SDK's own
+        // signature is a typed tuple ([Views] or [Views, InputDelegates]);
+        // `as Array` is a different type and overriding rejects it
+
         _view = new JumpFieldView();
         return [ _view ];
     }

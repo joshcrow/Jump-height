@@ -9,7 +9,7 @@
 // symbol (Protocol.mc has none).
 
 using Toybox.Test;
-using Toybox.Lang;
+import Toybox.Lang;
 
 (:test)
 function testJump_updatesAllFieldsFromExactSpecLine(logger) {
@@ -136,5 +136,28 @@ function testMissingFieldsLeavePriorValueInPlace(logger) {
     m.onLine(Protocol.parseKV("JUMP n=2"));  // height_m/airtime_s/best_m absent
     Test.assertEqual(m.jumpCount(), 2);      // n= still updates
     Test.assertEqual(m.lastHeightM(), 0.3);  // but height retains the prior value
+    return true;
+}
+
+(:test)
+function testStats_batteryAdderKeysCapturedAndAbsentKeysRetain(logger) {
+    var m = new Model.State();
+    Test.assert(m.puckBattPct() == null);      // v1 puck: never any battery
+    // (plain assert: assertEqual dereferences its operands and throws on null)
+    // A Sense-class STATS (docs/sense.md §3.4 adder keys).
+    m.onLine(Protocol.parseKV(
+        "STATS session_jumps=0 session_best_m=0.000 stored_jumps=0 stored_best_m=0.000 trace_bytes=0 vbat_mv=3920 batt_pct=68 chg=0"));
+    Test.assertEqual(m.puckBattPct(), 68);
+    Test.assertEqual(m.puckCharging(), false);
+    // Charging flips the flag; pct still tracks.
+    m.onLine(Protocol.parseKV(
+        "STATS session_jumps=0 session_best_m=0.000 stored_jumps=0 stored_best_m=0.000 trace_bytes=0 vbat_mv=4160 batt_pct=95 chg=1"));
+    Test.assertEqual(m.puckBattPct(), 95);
+    Test.assertEqual(m.puckCharging(), true);
+    // An old-firmware STATS (no battery keys) must NOT blank known state.
+    m.onLine(Protocol.parseKV(
+        "STATS session_jumps=1 session_best_m=0.4 stored_jumps=1 stored_best_m=0.4 trace_bytes=10"));
+    Test.assertEqual(m.puckBattPct(), 95);
+    Test.assertEqual(m.puckCharging(), true);
     return true;
 }

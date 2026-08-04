@@ -13,7 +13,13 @@ download) or a simulator, so every API call was researched as carefully as
 possible but not compiler-checked. That file is the punch list for exactly
 where a guess might need a one-line fix.
 
-Status: source complete, never yet compiled. You are M0.
+Status: **compiles clean and all 24 unit tests PASS in the simulator**
+(2026-08-04, SDK 9.2.0 — see FIRST_COMPILE.md's dated findings block for
+everything the first real build demanded). The field also displays the
+puck's battery when the firmware reports it (the `batt_pct`/`chg` adder
+keys, docs/sense.md §3.4) as a `puck 68%` sub-line — the sealed puck's
+gauge, on your wrist. You are M2: sideload to the real watch (§5 below)
+and scan for the real puck.
 
 ---
 

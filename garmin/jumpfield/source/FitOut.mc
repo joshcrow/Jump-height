@@ -17,7 +17,7 @@
 // without checking whether a real saved activity already used the old ID.
 
 using Toybox.FitContributor;
-using Toybox.Lang;
+import Toybox.Lang;
 
 class FitOut {
 

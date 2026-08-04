@@ -13,7 +13,7 @@
 // was a deliberate lower-risk choice, not an oversight.
 
 using Toybox.System;
-using Toybox.Lang;
+import Toybox.Lang;
 
 module UnitsFmt {
 

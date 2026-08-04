@@ -24,6 +24,48 @@ first compile.
 
 ---
 
+## THE FIRST COMPILE HAPPENED — 2026-08-04, SDK 9.2.0, five rounds to green
+
+`BUILD SUCCESSFUL` for both the shipping `.prg` and the `-t` test build;
+**all 24 unit tests PASS in the real simulator** (`monkeydo … -t`). Every
+compile failure landed inside this file's predicted blast radius, plus a
+handful of small Monkey C realities nobody's docs spell out. The complete
+list of what the compiler actually demanded:
+
+1. **Item 1 confirmed exactly**: `instinct3solar50mm` is not a real id —
+   "Invalid device id" warning, and no such folder in the SDK's own
+   `Devices/` directory. Deleted from the manifest; one id covers both
+   case sizes. (Also: `monkeyc` needs a Java runtime on PATH — `brew
+   install openjdk` — the SDK does not bundle one.)
+2. **Item 8's "if the compiler demands one" branch happened**: a launcher
+   icon is REQUIRED for data fields too ("A launcher icon must be
+   specified"). Fix as prescribed: generated PNG (62×62 for this device —
+   a 40×40 draft got a scaling warning naming the real size) +
+   `resources/drawables/drawables.xml` + `launcherIcon=` attribute.
+3. **`using Toybox.Lang` does not put bare type names in scope** — every
+   `as String/Float/Number/…` annotation failed to resolve until the
+   files said `import Toybox.Lang;` instead (`using` keeps them
+   qualified as `Lang.String`). Swapped across all sources and tests.
+4. **`hidden` is class-member-only** — the module-scope
+   `Protocol._tokenize` declaration was rejected; dropped the modifier
+   (underscore naming carries the intent).
+5. **Class-level constant access needs `static`** — `PuckLink.STATE_*`
+   from the View failed until the consts became `static const`.
+6. **`getInitialView() as Array` cannot override the SDK's typed-tuple
+   signature** (`[Views] or [Views, InputDelegates]`) — annotation
+   dropped.
+7. **`ScanResult` comes back typed as `Object`** from `next()` — the
+   `getRssi()` call needed an `as Ble.ScanResult` cast.
+8. **Test-code strictness**: `Dictionary.get()` types as
+   `Object-or-Null`, so `.size()` on `_args` needed `as Array` casts;
+   and `Test.assertEqual(x, null)` ERRORs at runtime (it dereferences
+   its operands) — null expectations use plain `Test.assert(x == null)`.
+
+Items below are kept for the history of what was and wasn't guessed
+right; the annotations above are the ground truth as compiled.
+
+---
+
 ## 1. `instinct3solar50mm` may not be a real, separate device id
 
 **File:** `garmin/jumpfield/manifest.xml:29` (also noted in a comment at line 23)

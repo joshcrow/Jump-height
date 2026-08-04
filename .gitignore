@@ -31,3 +31,10 @@ Thumbs.db
 # Plots
 *.png
 !docs/**/*.png
+
+# Connect IQ build output (garmin/README.md §3) — like the firmware
+# binaries, built fresh, never committed.
+garmin/jumpfield/bin/
+# …except the Connect IQ launcher icon: a 192-byte generated source asset,
+# required by the compiler (FIRST_COMPILE.md findings #2), not a screenshot.
+!garmin/jumpfield/resources/drawables/launcher_icon.png
