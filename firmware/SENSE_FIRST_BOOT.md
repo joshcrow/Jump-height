@@ -659,6 +659,29 @@ No firmware change: on the water the puck is strapped to a board and this
 sensitivity is what you want. Bench expectation: a tethered bare board on
 a live desk WILL record intermittently — that's the gate working.
 
+## 24. Battery telemetry ADC accuracy — built 2026-08-04, never checked against a meter
+
+**File:** `firmware/src/platform/nrf52/jh_power.cpp` (the whole file — the
+jh_power seam's real implementation).
+
+Written without the board on the desk (the S0 pattern, again): pins read
+out of the installed variant (D14/P0.14 divider enable, D32/P0.31 VBAT,
+D23/P0.17 ~CHG), the 1 MΩ/510 kΩ divider ratio and the
+AR_INTERNAL_2_4/12-bit recipe from Seeed's own published battery example.
+The known soft spot, called out in the file's own header: the divider's
+~340 kΩ Thevenin source impedance is high for the SAADC's default
+acquisition time, which the Adafruit core doesn't expose per-read — the
+mitigations (1 ms settle, one throwaway read, 4-read average) are
+reasoned, not measured.
+
+**Verify:** with the battery attached and USB unplugged, compare
+`vbat_mv` from a `stats` (over BLE) against a multimeter across the cell.
+Within ~2% → done, edit this item. Reading consistently LOW by more →
+the SAADC acquisition-time theory is confirmed; the fix is core-level
+TACQ configuration, not divider-constant tweaks. Also confirm `chg`
+flips to 1 on USB attach and back to 0 on detach, and that `batt_pct`
+roughly tracks the charge state over a full charge cycle.
+
 ---
 
 ## Explicitly out of scope for this pass (not bugs, not forgotten)

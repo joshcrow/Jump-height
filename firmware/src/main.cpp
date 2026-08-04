@@ -53,6 +53,7 @@
 #include "platform/jh_imu.h"
 #include "platform/jh_link.h"
 #include "platform/jh_persist.h"
+#include "platform/jh_power.h"
 #include "platform/jh_store.h"
 
 #define FW_VERSION "0.4.3"
@@ -355,9 +356,21 @@ static void handleCommand(const String& cmd) {
     emitLine("OK help");
   } else if (cmd == "stats") {
     flushTrace();  // so trace_bytes matches what a `dump` would actually deliver
-    emitf("STATS session_jumps=%lu session_best_m=%.3f stored_jumps=%lu stored_best_m=%.3f trace_bytes=%lu\n",
-          (unsigned long)session_jumps, session_best,
-          (unsigned long)stored_jumps, stored_best, (unsigned long)jh_store::trace_bytes());
+    // Battery keys are APPENDED, and only on platforms that can measure
+    // (jh_power seam; docs/sense.md §3.4/§4 "adder" rule): absent keys mean
+    // an unsupported platform, and clients that predate the keys skip them
+    // — either direction, nothing else on this line may move.
+    const int vbat = jh_power::vbat_mv();
+    if (vbat >= 0) {
+      emitf("STATS session_jumps=%lu session_best_m=%.3f stored_jumps=%lu stored_best_m=%.3f trace_bytes=%lu vbat_mv=%d batt_pct=%d chg=%d\n",
+            (unsigned long)session_jumps, session_best,
+            (unsigned long)stored_jumps, stored_best, (unsigned long)jh_store::trace_bytes(),
+            vbat, jh_power::batt_pct(), jh_power::charging());
+    } else {
+      emitf("STATS session_jumps=%lu session_best_m=%.3f stored_jumps=%lu stored_best_m=%.3f trace_bytes=%lu\n",
+            (unsigned long)session_jumps, session_best,
+            (unsigned long)stored_jumps, stored_best, (unsigned long)jh_store::trace_bytes());
+    }
     emitLine("OK stats");
   } else if (cmd == "jumps") {
     flushTrace();
@@ -413,9 +426,19 @@ static void handleCommand(const String& cmd) {
   } else if (cmd == "info") {
     // ble=1 advertises the capability (this firmware speaks BLE); the runtime
     // health of the radio is the self-test's `ble` row, not this flag.
-    emitf("INFO fw=%s sample_hz=%d log_hz=%d motion_thresh_g=%.2f "
-          "idle_timeout_s=%d ble=1\n", FW_VERSION, JH_SAMPLE_HZ, JH_LOG_HZ,
-          (double)JH_MOTION_THRESH_G, (int)JH_IDLE_TIMEOUT_S);
+    // Battery keys appended only where measurable — same adder rule as STATS.
+    const int vbat = jh_power::vbat_mv();
+    if (vbat >= 0) {
+      emitf("INFO fw=%s sample_hz=%d log_hz=%d motion_thresh_g=%.2f "
+            "idle_timeout_s=%d ble=1 vbat_mv=%d batt_pct=%d chg=%d\n",
+            FW_VERSION, JH_SAMPLE_HZ, JH_LOG_HZ,
+            (double)JH_MOTION_THRESH_G, (int)JH_IDLE_TIMEOUT_S,
+            vbat, jh_power::batt_pct(), jh_power::charging());
+    } else {
+      emitf("INFO fw=%s sample_hz=%d log_hz=%d motion_thresh_g=%.2f "
+            "idle_timeout_s=%d ble=1\n", FW_VERSION, JH_SAMPLE_HZ, JH_LOG_HZ,
+            (double)JH_MOTION_THRESH_G, (int)JH_IDLE_TIMEOUT_S);
+    }
     emitLine("PARAMS " JH_PARAMS_SUMMARY);
     // Effective calibration (PARAMS above shows compiled defaults).
     emitf("CAL airtime_offset_s=%.4f height_scale=%.3f source=%s\n",
@@ -451,6 +474,7 @@ void setup() {
   emitLine("# JumpHeight fw v" FW_VERSION);  // serial-only here: BLE isn't up yet
 
   jh_imu::init();
+  jh_power::init();
 
   // Mount storage. jh_store handles format-on-fail internally and resumes any
   // existing trace.csv/jumps.csv state (byte count, header-written flags, cap

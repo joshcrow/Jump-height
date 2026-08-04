@@ -67,6 +67,7 @@ class FakeDevice:
         self.rng = random.Random(args.seed)
         self.buf = b""
         self.cal_from_nvs = False  # mirrors the firmware's `set` persistence flag
+
         # Scripted "physical" events. The CLI (in --fake mode) advances them
         # deterministically by sending `_sim next` at each point where a human
         # would act — no wall-clock races.
@@ -85,6 +86,19 @@ class FakeDevice:
                 self.events.append(f"jump:{raw:.4f}")
 
     # ------------------------------------------------------------ helpers
+    def battery_suffix(self) -> str:
+        """The battery keys appended to STATS/INFO, or '' when emulating a
+        no-telemetry (v1/ESP32) device — mirroring main.cpp's adder rule
+        exactly: keys present iff the platform can measure. Percent uses
+        the host seam's linear 3300→0..4200→100 curve (calibration realism
+        is not what rehearsals assert; key plumbing is)."""
+        if self.args.no_battery:
+            return ""
+        mv = self.args.vbat_mv
+        pct = max(0, min(100, (mv - 3300) * 100 // 900))
+        chg = 1 if self.args.charging else 0
+        return f" vbat_mv={mv} batt_pct={pct} chg={chg}"
+
     def _preload_session(self):
         """Populate storage exactly as a real logged session would."""
         times, mag = synth_session(DEMO_JUMPS, fs_hz=50.0, seed=3)
@@ -202,7 +216,7 @@ class FakeDevice:
                       f"session_best_m={self.session_best:.3f} "
                       f"stored_jumps={len(self.jumps_rows)} "
                       f"stored_best_m={stored_best:.3f} "
-                      f"trace_bytes={trace_bytes}")
+                      f"trace_bytes={trace_bytes}{self.battery_suffix()}")
             self.send("OK stats")
         elif cmd == "jumps":
             self.send_file("jumps.csv", "n,takeoff_s,airtime_raw_s,airtime_s,height_m",
@@ -274,7 +288,8 @@ class FakeDevice:
             self.send(f"INFO fw={FW_VERSION} sample_hz={fw_cfg['sample_hz']} "
                       f"log_hz={fw_cfg['log_hz']} "
                       f"motion_thresh_g={fw_cfg['motion_thresh_g']:.2f} "
-                      f"idle_timeout_s={fw_cfg['idle_timeout_s']} ble=1")
+                      f"idle_timeout_s={fw_cfg['idle_timeout_s']} ble=1"
+                      f"{self.battery_suffix()}")
             self.send("PARAMS " + summary)
             self.send(f"CAL airtime_offset_s={self.params.airtime_offset_s:.4f} "
                       f"height_scale={self.params.height_scale:.3f} "
@@ -326,6 +341,16 @@ def main() -> int:
     ap.add_argument("--height-cm", type=float, default=100.0)
     ap.add_argument("--drops", type=int, default=5)
     ap.add_argument("--seed", type=int, default=1)
+    # Battery telemetry (jh_power seam, docs/sense.md §3.4): the fake
+    # emulates a Sense-class device, so the keys are PRESENT by default —
+    # --no-battery rehearses the other half of the adder rule (v1/ESP32
+    # devices, where the keys are byte-absent). Values are fixed, not
+    # drifting: tests and rehearsals want determinism, not realism.
+    ap.add_argument("--vbat-mv", type=int, default=3920,
+                    help="reported battery voltage (default 3920 ≈ 68%%)")
+    ap.add_argument("--charging", action="store_true", help="report chg=1")
+    ap.add_argument("--no-battery", action="store_true",
+                    help="emulate a no-battery-telemetry (v1/ESP32) device")
     args = ap.parse_args()
     try:
         FakeDevice(args).run()

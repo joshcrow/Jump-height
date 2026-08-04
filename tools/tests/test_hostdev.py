@@ -123,11 +123,14 @@ class HostDevice:
     tools/jump's own Device class, minus the pyserial/pty plumbing (plain
     pipes suffice: the C++ side's Serial shim is unbuffered stdin/stdout)."""
 
-    def __init__(self, binp: Path, host_dir: Path, script_path: Path):
+    def __init__(self, binp: Path, host_dir: Path, script_path: Path,
+                 extra_env: dict | None = None):
         host_dir.mkdir(parents=True, exist_ok=True)
         env = dict(os.environ)
         env["JH_HOST_DIR"] = str(host_dir)
         env["JH_IMU_SCRIPT"] = str(script_path)
+        if extra_env:
+            env.update(extra_env)
         self.proc = subprocess.Popen(
             [str(binp)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             cwd=str(REPO), env=env)
@@ -399,6 +402,51 @@ class TestPtyBridge(HostDevTestCase):
                 bridge.wait(timeout=5)
             except Exception:
                 bridge.kill()
+
+
+class TestBatteryTelemetry(HostDevTestCase):
+    """The jh_power seam's adder-rule contract (docs/sense.md §3.4):
+    battery keys appear on INFO/STATS exactly when the platform can
+    measure — scripted here via JH_VBAT_MV/JH_CHG (the host seam's env
+    hooks, src/platform/host/jh_power.cpp) — and are BYTE-ABSENT
+    otherwise, keeping the pre-battery protocol untouched for the ESP32
+    build and every v1 client."""
+
+    def _line(self, dev: HostDevice, cmd: str, prefix: str) -> str:
+        lines = dev.command(cmd)
+        line = next((ln for ln in lines if ln.startswith(prefix)), None)
+        self.assertIsNotNone(line, f"no {prefix!r} line in {lines}")
+        return line
+
+    def test_keys_absent_by_default(self) -> None:
+        script = write_script(self.tmp_path / "script.txt", "rest 5.0\n")
+        dev = HostDevice(self.host_binary, self.tmp_path / "hostdir", script)
+        try:
+            dev.drain_boot()
+            for cmd, prefix in (("stats", "STATS "), ("info", "INFO ")):
+                kv = parse_kv(self._line(dev, cmd, prefix))
+                for key in ("vbat_mv", "batt_pct", "chg"):
+                    self.assertNotIn(key, kv,
+                                     f"{prefix.strip()} grew {key!r} without battery support")
+        finally:
+            dev.close()
+
+    def test_keys_present_and_sane_when_scripted(self) -> None:
+        script = write_script(self.tmp_path / "script.txt", "rest 5.0\n")
+        dev = HostDevice(self.host_binary, self.tmp_path / "hostdir", script,
+                         extra_env={"JH_VBAT_MV": "3870", "JH_CHG": "1"})
+        try:
+            dev.drain_boot()
+            for cmd, prefix in (("stats", "STATS "), ("info", "INFO ")):
+                kv = parse_kv(self._line(dev, cmd, prefix))
+                self.assertEqual(kv["vbat_mv"], "3870")
+                # Host curve is linear 3300→0 .. 4200→100 (see the host
+                # seam's own comment): 3870 ⇒ 63. Pinned exactly so an
+                # accidental curve/plumbing change fails loudly.
+                self.assertEqual(kv["batt_pct"], "63")
+                self.assertEqual(kv["chg"], "1")
+        finally:
+            dev.close()
 
 
 if __name__ == "__main__":

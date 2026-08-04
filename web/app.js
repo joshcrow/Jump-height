@@ -265,6 +265,11 @@ let themeMode = 'light';   // 'light' | 'dark' (seeded from the OS until first t
 const liveJumps = [];      // per-jump data for this session's live mini-chart
 let lastStored = { jumps: 0, bestM: 0 };  // last STATS stored_* seen (for the banner)
 let lastTraceBytes = NaN;  // optional STATS trace_bytes, for a real sync %
+// Battery telemetry (vbat_mv/batt_pct/chg on INFO/STATS, docs/sense.md
+// §3.4): only battery-sensing devices (the Sense) send these keys — on a
+// v1/ESP32 device they never arrive and the battery UI never shows. The
+// puck is sealed: this readout is the only battery gauge the product has.
+const battery = { pct: NaN, mv: NaN, chg: NaN };
 let syncState = null;      // { bytes, expected, kind } while a sync is running
 let lastSynced = null;     // the session object shown in the inline result panel
 let wakeLock = null;       // Screen Wake Lock sentinel while connected
@@ -429,7 +434,34 @@ function onJump(kv) {
   $('live-empty').hidden = true;
 }
 
+/** Capture the optional battery keys (INFO and STATS both carry them) and
+    refresh the pill. Absent keys leave prior state — a STATS from an old
+    firmware must not blank a battery level INFO already reported. */
+function captureBattery(kv) {
+  let changed = false;
+  if (kv.batt_pct != null) { battery.pct = parseInt(kv.batt_pct, 10); changed = true; }
+  if (kv.vbat_mv != null)  { battery.mv = parseInt(kv.vbat_mv, 10);  changed = true; }
+  if (kv.chg != null)      { battery.chg = parseInt(kv.chg, 10);     changed = true; }
+  if (changed) renderBattery();
+}
+
+/** The header battery pill — the beach-glanceable "charge before this
+    session?" answer. Hidden until a battery key has ever arrived. */
+function renderBattery() {
+  const p = $('batt-pill');
+  if (!p || Number.isNaN(battery.pct)) return;
+  p.hidden = false;
+  const charging = battery.chg === 1;
+  const icon = charging ? '⚡' : (battery.pct <= 20 ? '🪫' : '🔋');
+  // While charging the voltage floats high and pct reads optimistic (the
+  // seam's own caveat) — lead with the state, keep the number secondary.
+  p.textContent = charging ? `${icon} charging` : `${icon} ${battery.pct}%`;
+  p.title = Number.isNaN(battery.mv) ? '' : `battery ${(battery.mv / 1000).toFixed(2)} V`;
+  p.className = 'pill ' + (charging ? 'pill-on' : (battery.pct <= 20 ? 'pill-off' : 'pill-on'));
+}
+
 function onStats(kv) {
+  captureBattery(kv);
   const sj = parseInt(kv.session_jumps, 10);
   const sb = pf(kv.session_best_m);
   if (!Number.isNaN(sj)) live.count = sj;
@@ -503,6 +535,7 @@ function resetLiveSession() {
 // -------------------------------------------------------- device info + self-test
 
 function onInfo(kv) {
+  captureBattery(kv);
   deviceInfo.fw = kv.fw; deviceInfo.sample_hz = kv.sample_hz; deviceInfo.ble = kv.ble;
   renderDeviceInfo();
 }
@@ -533,6 +566,10 @@ function renderDeviceInfo() {
   if (deviceInfo.fw) bits.push('Firmware v' + deviceInfo.fw);
   if (deviceInfo.sample_hz) bits.push(deviceInfo.sample_hz + ' Hz sampling');
   if (deviceInfo.ble != null) bits.push('Bluetooth: ' + (deviceInfo.ble === '1' ? 'yes' : 'no'));
+  if (!Number.isNaN(battery.pct)) {
+    bits.push('Battery: ' + (battery.chg === 1 ? 'charging ⚡' : battery.pct + '%')
+              + (Number.isNaN(battery.mv) ? '' : ' (' + (battery.mv / 1000).toFixed(2) + ' V)'));
+  }
   c.append(el('div', { class: 'info-line', text: bits.join('  ·  ') || 'Device connected' }));
   if (deviceInfo.cal) c.append(el('div', { class: 'info-line', text: deviceInfo.cal }));
   if (deviceInfo.params) c.append(el('div', { class: 'muted small mono', text: deviceInfo.params }));

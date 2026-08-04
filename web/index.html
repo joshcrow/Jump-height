@@ -58,6 +58,9 @@
       <span class="brand-name">Jump Height</span>
     </div>
     <div class="conn">
+      <!-- Battery pill (Sense-class devices only — appears when the first
+           vbat_mv/batt_pct key arrives; a sealed puck has no other gauge). -->
+      <span id="batt-pill" data-testid="battery" class="pill" hidden></span>
       <span id="conn-status" data-testid="connect" class="pill pill-off">Disconnected</span>
       <button id="btn-disconnect" class="btn btn-ghost btn-sm" type="button" hidden>Disconnect</button>
       <!-- One tap flips light/dark; the icon shows what a tap gives you. -->

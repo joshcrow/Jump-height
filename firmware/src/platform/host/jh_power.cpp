@@ -1,0 +1,48 @@
+// jh_power seam, host build — unsupported by default, scriptable for CI.
+//
+// Mirrors the other host seams' environment-variable pattern (see
+// jh_imu.cpp's JH_IMU_SCRIPT): with no environment set, every accessor
+// returns -1 and main.cpp emits no battery keys — the host build behaves
+// exactly like the ESP32 build and every pre-battery test stays valid.
+//
+// Set JH_VBAT_MV (e.g. "3870") to make the host device report battery
+// telemetry like a Sense would: vbat_mv() returns the value verbatim,
+// batt_pct() derives from the SAME curve shape the nrf52 impl uses (kept
+// deliberately simple here — linear 3300→0 .. 4200→100 — because what the
+// host tests assert is key PRESENCE and plumbing, not curve calibration),
+// and charging() reports JH_CHG ("0"/"1", default 0). This is what lets
+// tools/tests/test_hostdev.py exercise the emit path in CI with no
+// hardware anywhere.
+//
+// SPDX-License-Identifier: MIT
+
+#include <cstdlib>
+#include "platform/jh_power.h"
+
+namespace jh_power {
+
+namespace {
+int env_int(const char* name, int fallback) {
+  const char* v = std::getenv(name);
+  return (v && v[0]) ? std::atoi(v) : fallback;
+}
+}  // namespace
+
+void init() {}
+
+int vbat_mv() { return env_int("JH_VBAT_MV", -1); }
+
+int batt_pct() {
+  const int mv = vbat_mv();
+  if (mv < 0) return -1;
+  if (mv >= 4200) return 100;
+  if (mv <= 3300) return 0;
+  return (mv - 3300) * 100 / (4200 - 3300);
+}
+
+int charging() {
+  if (vbat_mv() < 0) return -1;
+  return env_int("JH_CHG", 0) ? 1 : 0;
+}
+
+}  // namespace jh_power

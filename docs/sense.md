@@ -122,13 +122,23 @@ is the cable path. Revisit only if we ever swap bootloaders.)*
 - **Charge current is a choice**: default 50 mA ≈ 11 h for the 500 mAh
   cell. Firmware drives P0.13 low → 100 mA ≈ 5–6 h. Plan on overnight
   charging; the red P0.17 LED shows charge-in-progress.
-- **Battery telemetry**: today's firmware reports NOTHING about its
-  battery. Add: VBAT sampling (enable P0.14 → read P0.31 → disable),
-  `vbat=`/`batt_pct=` keys on INFO/STATS, a low-battery LED pattern,
-  and a **low-voltage System OFF at ~3.45 V** so the cell can't be
-  over-discharged. The app and the Garmin field display it — the puck
-  is sealed, the number has to travel. Confirm the 500 mAh cell carries
-  a protection PCB (Adafruit's do). VERIFY at S2.
+- **Battery telemetry**: ~~today's firmware reports NOTHING about its
+  battery~~ **BUILT 2026-08-04 (telemetry half)**: the `jh_power` seam
+  samples VBAT exactly as planned (P0.14 low → P0.31/AIN7 → divider back
+  off), reads charger state from P0.17 (~CHG), and appends
+  `vbat_mv=`/`batt_pct=`/`chg=` to INFO/STATS **only where measurable**
+  (absent on ESP32/host-default → v1 protocol byte-identical; host build
+  scripts values via `JH_VBAT_MV`/`JH_CHG` for CI). The web app shows a
+  header battery pill + the device card line; the fake device emulates
+  the keys (`--vbat-mv/--charging/--no-battery`). Bench-pending:
+  vbat-vs-multimeter check (SENSE_FIRST_BOOT item 24 — SAADC acquisition
+  time vs the ~340 kΩ divider impedance). Still to build (deliberately,
+  with the sleep milestone where they belong): the low-battery LED
+  pattern and the **low-voltage System OFF at ~3.45 V**. Note the cell
+  actually installed (2026-08) is **250 mAh**, not the 500 mAh this
+  section originally planned — the BQ25101's 50 mA default is 0.2C for
+  it, so the P0.13 charge-current select stays untouched. Confirm the
+  cell carries a protection PCB. VERIFY at S2.
 
 ### 3.5 Sleep/wake is a design, not a checkbox
 

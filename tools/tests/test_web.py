@@ -524,5 +524,39 @@ class TestWebApp(unittest.TestCase):
         expect(card).to_contain_text("Saved into the device")
 
 
+    def test_battery_pill_appears_and_updates(self):
+        """The vbat_mv/batt_pct/chg adder keys (docs/sense.md §3.4) drive the
+        header battery pill: hidden until a battery key ever arrives (v1
+        devices never send one), % display when discharging, 'charging' when
+        chg=1, low-battery icon at <=20%."""
+        self._open()
+        pill = self.page.get_by_test_id("battery")
+        expect(pill).to_be_hidden()  # no battery key seen yet
+
+        # A STATS with battery keys (what a Sense sends): pill shows percent.
+        self._feed("STATS session_jumps=0 session_best_m=0 stored_jumps=0 "
+                   "stored_best_m=0 trace_bytes=0 vbat_mv=3920 batt_pct=68 chg=0")
+        expect(pill).to_be_visible()
+        expect(pill).to_contain_text("68%")
+
+        # Charging: state leads, the optimistic float-voltage % steps back.
+        self._feed("STATS session_jumps=0 session_best_m=0 stored_jumps=0 "
+                   "stored_best_m=0 trace_bytes=0 vbat_mv=4160 batt_pct=95 chg=1")
+        expect(pill).to_contain_text("charging")
+
+        # Low battery: percent again, with the empty-battery icon.
+        self._feed("STATS session_jumps=0 session_best_m=0 stored_jumps=0 "
+                   "stored_best_m=0 trace_bytes=0 vbat_mv=3620 batt_pct=12 chg=0")
+        expect(pill).to_contain_text("12%")
+        expect(pill).to_contain_text("🪫")
+
+        # INFO carries the keys too (connect-time snapshot) and the device
+        # card shows the voltage.
+        self._feed("INFO fw=0.4.3 sample_hz=200 log_hz=50 motion_thresh_g=0.12 "
+                   "idle_timeout_s=20 ble=1 vbat_mv=3620 batt_pct=12 chg=0")
+        card = self.page.locator("#device-info")
+        expect(card).to_contain_text("Battery: 12% (3.62 V)")
+
+
 if __name__ == "__main__":
     unittest.main()
