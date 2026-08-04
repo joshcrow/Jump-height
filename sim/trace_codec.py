@@ -173,7 +173,11 @@ def decode(data: bytes, log_hz: int) -> tuple[list[Sample], int]:
     """Decode every complete block in `data`, front to back, stopping at
     (and never reading past) the first incomplete/corrupt one. Returns
     (samples, bytes_consumed) — bytes_consumed == len(data) iff every block
-    was whole and valid."""
+    was whole and valid.
+
+    This is the CODEC-layer walk: blocks packed back to back, byte-granular,
+    mirroring trace_codec.h's own decode contract. A raw FLASH REGION as
+    jh_store.cpp lays it out is NOT packed — see decode_region()."""
     samples: list[Sample] = []
     off = 0
     while off < len(data):
@@ -183,6 +187,31 @@ def decode(data: bytes, log_hz: int) -> tuple[list[Sample], int]:
         samples.extend(r.samples)
         off += r.bytes_consumed
     return samples, off
+
+
+def decode_region(data: bytes, log_hz: int) -> tuple[list[Sample], int]:
+    """Decode a raw TRACE-REGION image the way jh_store.cpp's own scan does:
+    blocks start on 4-byte boundaries, because the nRF52840 QSPI peripheral
+    silently rounds unaligned flash addresses down, so the writer advances
+    its append offset with align4() and every reader steps identically
+    (learned on real silicon 2026-07-31 — see align4()'s comment in
+    firmware/src/platform/nrf52/jh_store.cpp). The 0-3 pad bytes between
+    blocks are never written (0xFF on flash) and belong to no block."""
+    samples: list[Sample] = []
+    off = 0
+    while off < len(data):
+        r = decode_one_block(data[off:], log_hz)
+        if not r.ok:
+            break
+        samples.extend(r.samples)
+        off = (off + r.bytes_consumed + 3) & ~3  # align4: mirror the C++ writer
+    return samples, min(off, len(data))
+
+
+def decode_region_to_csv(data: bytes, log_hz: int) -> str:
+    """decode_region(), formatted as the wire CSV rows (see decode_to_csv())."""
+    samples, _consumed = decode_region(data, log_hz)
+    return "".join(f"{s.t_s:.3f},{s.mag_g:.3f}\n" for s in samples)
 
 
 def decode_to_csv(data: bytes, log_hz: int) -> str:

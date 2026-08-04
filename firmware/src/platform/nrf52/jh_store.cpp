@@ -196,6 +196,25 @@ bool jumpRecordValid(const JumpRecord& rec) {
 // genuinely blank, never-written flash, as opposed to bytes a write landed
 // on (whether that write completed, was torn by a power cut partway
 // through, or the result was corrupted afterward).
+// The nRF52840 QSPI peripheral requires WORD-ALIGNED flash addresses for
+// its bulk READ/WRITE ops, and nothing in the stack above it compensates:
+// nrfx_qspi_write()/read() validate only the RAM-side pointer, then load
+// the flash address into READ.SRC/WRITE.DST, where the low 2 bits are
+// silently dropped by the hardware — a transfer aimed at offset 54 lands
+// at 52, clobbering its neighbor's tail. Found on real silicon 2026-07-31
+// (S0 bench day): byte-packed trace blocks appended at arbitrary offsets
+// read back ~98% torn — see SENSE_FIRST_BOOT.md item 22. The fix: every
+// trace-region offset the code ever hands to readBuffer()/writeBuffer()
+// is quantized to 4 bytes with align4(), on BOTH the write path
+// (closeAndWriteBlock) and every scan/read path, so writer and reader step
+// identically. The 0–3 pad bytes between blocks are simply never written
+// (0xFF, erased) — read back as part of no block, and compatible with the
+// torn-write/erased-hole recovery which already treats 0xFF specially.
+// Jump records never needed this: JUMP_RECORD_BYTES is 32, so those
+// offsets are word-aligned by construction (a lucky accident, now a load-
+// bearing invariant — static_assert'd at jumps_append()).
+uint32_t align4(uint32_t off) { return (off + 3u) & ~3u; }
+
 bool isErasedBytes(const uint8_t* buf, size_t len) {
   for (size_t i = 0; i < len; ++i) {
     if (buf[i] != 0xFF) return false;
@@ -358,19 +377,20 @@ void findTraceAppendPoint() {
     }
 
     uint8_t full[trace_codec::block_size(trace_codec::MAX_SAMPLES_PER_BLOCK)];
-    // Reuse the header peek above instead of re-reading those same 5 bytes
-    // (review-store.md finding #6 / this port's optional fix K) — only the
-    // payload+crc bytes beyond the header are still unread.
-    memcpy(full, block_buf, trace_codec::HEADER_BYTES);
-    s_flash.readBuffer(s_trace_region_start + off + trace_codec::HEADER_BYTES,
-                       full + trace_codec::HEADER_BYTES, need - trace_codec::HEADER_BYTES);
+    // One whole-block read from the ALIGNED block start — NOT a header-reuse
+    // + payload read at off+HEADER_BYTES, which hands the QSPI peripheral an
+    // unaligned flash address it silently rounds down (see align4()'s
+    // comment; this exact "optimization" was one of the four unaligned call
+    // sites the 2026-07-31 bench session found). Re-reading 5 bytes costs
+    // nothing next to reading back corrupted data.
+    s_flash.readBuffer(s_trace_region_start + off, full, need);
     const trace_codec::BlockResult r =
         trace_codec::decode_one_block(full, need, JH_LOG_HZ, csvByteCounter, &csv_total);
     if (!r.ok) {
       if (traceScanHitDamage(&off, full, need)) continue;
       break;
     }
-    off += r.bytes_consumed;
+    off = align4(off + r.bytes_consumed);  // writer advances identically
   }
   s_trace_append_off = off;
   s_trace_csv_bytes  = off > 0 ? csv_total + 6 /* "t,mag\n" header */ : 0;
@@ -491,11 +511,11 @@ void produceNextUnit() {
       }
 
       uint8_t full[trace_codec::block_size(trace_codec::MAX_SAMPLES_PER_BLOCK)];
-      // Reuse the header peek above instead of re-reading those same 5
-      // bytes (review-store.md finding #6 / this port's optional fix K).
-      memcpy(full, hdr, trace_codec::HEADER_BYTES);
-      s_flash.readBuffer(s_trace_region_start + s_read_src_cursor + trace_codec::HEADER_BYTES,
-                         full + trace_codec::HEADER_BYTES, need - trace_codec::HEADER_BYTES);
+      // One whole-block read from the ALIGNED cursor — not header-reuse +
+      // a payload read at cursor+HEADER_BYTES, an unaligned flash address
+      // the QSPI peripheral silently rounds down (align4()'s comment; the
+      // mirror of findTraceAppendPoint()'s identical fix).
+      s_flash.readBuffer(s_trace_region_start + s_read_src_cursor, full, need);
       s_read_pending_len = 0;
       const trace_codec::BlockResult r =
           trace_codec::decode_one_block(full, need, JH_LOG_HZ, appendCsvLineToPending, nullptr);
@@ -504,7 +524,7 @@ void produceNextUnit() {
         s_read_src_cursor = skipPastTornWrite(s_read_src_cursor, kMaxTraceBlockBytes, s_read_src_used);
         continue;
       }
-      s_read_src_cursor += r.bytes_consumed;
+      s_read_src_cursor = align4(s_read_src_cursor + r.bytes_consumed);  // writer advances identically
       return;
     }
   }
@@ -581,6 +601,11 @@ void jumps_append(uint32_t n, float takeoff_s, float airtime_raw_s,
   rec.airtime_s = airtime_s;
   rec.height_m = height_m;
   rec.crc = trace_codec::crc8((const uint8_t*)&rec, offsetof(JumpRecord, crc));
+  // Jump-record offsets are word-aligned only because the record size is a
+  // multiple of 4 — a QSPI hardware requirement (align4()'s comment), not
+  // a style choice. Anyone resizing JumpRecord must keep it that way.
+  static_assert(JUMP_RECORD_BYTES % 4 == 0,
+                "QSPI flash addresses must stay word-aligned (see align4())");
   const uint32_t written = s_flash.writeBuffer(
       s_jumps_region_start + s_jumps_append_off, (const uint8_t*)&rec, sizeof(rec));
   flashSleep();
@@ -669,7 +694,11 @@ bool closeAndWriteBlock() {
     if (newly_full) s_trace_full = true;
     return newly_full;
   }
-  s_trace_append_off += (uint32_t)n;
+  // Advance to the next WORD-ALIGNED offset, never byte-packed — the QSPI
+  // peripheral silently rounds unaligned addresses down (align4()'s
+  // comment). The 0–3 skipped bytes stay erased (0xFF) forever; every scan/
+  // read path steps with the identical align4() so writer and readers agree.
+  s_trace_append_off = align4(s_trace_append_off + (uint32_t)n);
 
   // "Full" means no further block could ever fit, not merely "this exact
   // byte is the last one" — checking only `>= s_trace_region_bytes` lets

@@ -405,6 +405,13 @@ time; confirm both see `JUMP`/`STATE` lines live, both can send commands,
 and disconnecting either one leaves the puck still advertising and still
 serving the other.
 
+**HALF-CONFIRMED 2026-07-31:** the single-central path is fully proven —
+Bluefy connected, ran a self-test over BLE (commands in, rows out), showed
+the live INFO readout, and BLE + serial were served simultaneously all
+morning. The genuinely-two-BLE-centrals test (and advertising restart
+after the first connect) remains open — needs a second phone/iPad or the
+Garmin field.
+
 ## 15. NUS UUID + name are in the advertisement/scan response — never scanned-for by a real central
 
 **File:** `firmware/src/platform/nrf52/jh_link.cpp`, `begin()`'s advertising
@@ -418,6 +425,14 @@ shows up as the name.
 
 **Verify (docs/sense.md §7 item 2):** scan for the device with nRF Connect
 or similar; confirm the NUS UUID is listed and the name reads `JumpHeight`.
+
+**CONFIRMED 2026-07-31 (S0 day, first central ever):** Bluefy on iPhone
+found `JumpHeight` in its scan sheet (Bluefy filters on the NUS service
+UUID, so its appearance alone proves the UUID is in the advertisement and
+the name in the scan response), connected, and the web app rendered the
+full `INFO` readout — firmware version, 200 Hz, params, calibration —
+without knowing the chip underneath had changed. Advertising → connect →
+notify round-trip all working against a real central.
 
 ## 16. UF2 flashing procedure — never actually dragged a file onto a real Sense board
 
@@ -593,6 +608,56 @@ host test harness (`mock_flash.h` only interrupts WRITEs, by design — see
 that file's own scope note) — a future harness mode that can also tear
 down mid-`eraseSector()`/`eraseChip()` call would be the natural way to
 cover this without needing real hardware.
+
+## 22. QSPI flash addresses MUST be word-aligned — found on silicon, fixed, now modeled in the host harness *(added 2026-07-31)*
+
+**File:** `firmware/src/platform/nrf52/jh_store.cpp` (`align4()` and every
+trace-region offset), `firmware/test/store_host/mock_flash.cpp`
+(`roundDownUnaligned()`), `sim/trace_codec.py` (`decode_region()`).
+
+Not one of the original 21 items — real silicon added it to the list. The
+nRF52840 QSPI peripheral requires WORD-ALIGNED flash addresses for bulk
+READ/WRITE, and nothing in the stack compensates: `nrfx_qspi_write()`/
+`read()` validate only the RAM-side pointer, then load the flash address
+into `WRITE.DST`/`READ.SRC`, where the hardware silently drops the low
+2 bits — a transfer aimed at offset 54 lands at 52, clobbering its
+neighbor's tail. The byte-packed trace append log hit this on nearly every
+block: the S0 bench symptom was a 10-minute session reading back as **274
+of ~14,000 samples** (two surviving islands, everything between skipped as
+torn), while `trace_bytes()`'s CSV estimate grew at the full rate. Jump
+records were immune by accident (32-byte records ⇒ always aligned — now a
+`static_assert`ed invariant).
+
+**Fix, verified on silicon same day:** every trace-region offset is
+quantized with `align4()` on the write path AND every scan/read path
+(writer and readers step identically; the 0–3 pad bytes between blocks
+stay erased 0xFF, compatible with the existing torn-write recovery); the
+two `off + HEADER_BYTES` payload reads became single whole-block reads
+from the aligned block start. The Python mirror gained `decode_region()`
+(same align4 stepping — `decode()` keeps byte-packed CODEC semantics, the
+distinction is now explicit), and the host mock now MODELS the hardware's
+silent round-down with a stderr note, so any future byte-packed access
+pattern corrupts in CI the same way it corrupts on the bench. After the
+fix: a 14,402-sample session read back complete at a metronomic 20.0 ms
+cadence, zero loss.
+
+## 23. The motion gate is honest — a bare board on a USB cable is a seismometer *(bench note, 2026-07-31)*
+
+**File:** none — no code change; this is a bench-environment finding.
+
+S0's longest-lived false alarm: the motion gate appeared "stuck recording"
+on a still board for most of the morning (trace estimate growing ~continuously
+while the board sat untouched). Full-rate (200 Hz log) captures settled it:
+the trips are genuine, multi-sample ~20 Hz mechanical oscillations
+occasionally cresting the 0.12 g threshold — the 2.8 g board dangling on
+its USB-C cable rings like a mass on a spring at every footstep, phone
+set-down, or fan ramp on the same desk, and ONE crest legally buys
+`JH_IDLE_TIMEOUT_S` = 20 s of recording. A genuinely quiet minute reads
+`trace_bytes=0`; gate enter/exit mechanics verified exact (idle at trip
++20.0 s). BLE was exonerated (a connected phone link contributed nothing).
+No firmware change: on the water the puck is strapped to a board and this
+sensitivity is what you want. Bench expectation: a tethered bare board on
+a live desk WILL record intermittently — that's the gate working.
 
 ---
 

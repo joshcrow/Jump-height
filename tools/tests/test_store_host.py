@@ -368,9 +368,14 @@ class TestStoreHost(unittest.TestCase):
         # free_bytes() tracks PHYSICAL flash consumed, not the CSV-equivalent
         # estimate — the whole point of binary trace v2 (see jh_store.cpp's
         # own DEVIATION comment) is that these two differ: one new 2-sample
-        # binary block (trace_codec.block_size(2) bytes) plus one new 32-byte
-        # jump record, regardless of how many CSV bytes that block decodes to.
-        self.assertEqual(free1 - free3, JUMP_RECORD_BYTES + trace_codec.block_size(2))
+        # binary block (trace_codec.block_size(2) bytes, rounded up to the
+        # next word boundary — the writer advances with align4() because the
+        # QSPI peripheral requires word-aligned flash addresses; see
+        # jh_store.cpp align4()'s comment) plus one new 32-byte jump record,
+        # regardless of how many CSV bytes that block decodes to.
+        align4 = lambda n: (n + 3) & ~3
+        self.assertEqual(free1 - free3,
+                         JUMP_RECORD_BYTES + align4(trace_codec.block_size(2)))
         # The dump must show ALL THREE jumps in order, not just the new one —
         # proof the append landed after, not instead of, the first two.
         dump = r3.read_alls[0]
@@ -1034,7 +1039,7 @@ class TestStoreHost(unittest.TestCase):
         raw = backing.read_bytes()
         self.assertEqual(len(raw), CHIP_SIZE)
         raw_trace_region = raw[TRACE_REGION_START:]
-        csv = trace_codec.decode_to_csv(raw_trace_region, log_hz=LOG_HZ)
+        csv = trace_codec.decode_region_to_csv(raw_trace_region, log_hz=LOG_HZ)
 
         # trace_bytes() additionally counts the 6-byte "t,mag\n" CSV header
         # (added once — see jh_store.cpp's trace_append(), s_trace_csv_
@@ -1082,7 +1087,7 @@ class TestStoreHost(unittest.TestCase):
 
             raw = backing.read_bytes()
             raw_trace_region = raw[TRACE_REGION_START:]
-            csv = trace_codec.decode_to_csv(raw_trace_region, log_hz=LOG_HZ)
+            csv = trace_codec.decode_region_to_csv(raw_trace_region, log_hz=LOG_HZ)
             expected = "".join(f"{t:.3f},{m:.3f}\n" for t, m in samples)
             self.assertEqual(csv, expected, f"multi-hour parity failed at t0={t0}")
 

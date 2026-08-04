@@ -125,8 +125,28 @@ bool Adafruit_SPIFlashBase::begin(SPIFlash_Device_t const* flash_devs, size_t co
 
 uint32_t Adafruit_SPIFlashBase::size(void) { return total_size_; }
 
+// QSPI word-alignment modeling (learned from real silicon, 2026-07-31 —
+// jh_store.cpp align4()'s comment has the full story): the nRF52840 QSPI
+// peripheral silently DROPS the low 2 bits of the flash address on bulk
+// READ/WRITE ops, and nothing in nrfx/the Adafruit transport compensates,
+// so an unaligned transfer lands up to 3 bytes early. The real bench
+// symptom was ~98% of byte-packed trace blocks reading back torn. Model
+// that same round-down here (with a stderr note for instant diagnosis)
+// so any future byte-packed access pattern corrupts in the harness the
+// exact way it corrupts on the bench — pre-silicon, where it's cheap.
+static uint32_t roundDownUnaligned(const char* who, uint32_t address) {
+  if ((address & 3u) == 0) return address;
+  std::fprintf(stderr,
+               "mock_flash: %s at UNALIGNED flash address 0x%08x — real QSPI "
+               "hardware silently rounds down to 0x%08x (see jh_store.cpp "
+               "align4()); modeling that.\n",
+               who, address, address & ~3u);
+  return address & ~3u;
+}
+
 uint32_t Adafruit_SPIFlashBase::readBuffer(uint32_t address, uint8_t* buffer, uint32_t len) {
   if (!g_ram) return 0;
+  address = roundDownUnaligned("readBuffer", address);
   abortIfOutOfBounds("readBuffer", address, len);
   std::memcpy(buffer, g_ram + address, len);
   return len;
@@ -134,6 +154,7 @@ uint32_t Adafruit_SPIFlashBase::readBuffer(uint32_t address, uint8_t* buffer, ui
 
 uint32_t Adafruit_SPIFlashBase::writeBuffer(uint32_t address, uint8_t const* buffer, uint32_t len) {
   if (!g_ram) return 0;
+  address = roundDownUnaligned("writeBuffer", address);
   abortIfOutOfBounds("writeBuffer", address, len);
 
   // Non-fatal short-write injection (mock_flash_test::arm_write_short_
