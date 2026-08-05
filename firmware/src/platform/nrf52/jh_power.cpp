@@ -33,6 +33,9 @@
 // SPDX-License-Identifier: MIT
 
 #include <Arduino.h>
+#include <nrf_soc.h>  // sd_power_system_off — the SoftDevice is up
+                      // (Bluefruit), so the sd_ call is mandatory; the
+                      // raw register write below is only the fallback.
 #include "platform/jh_power.h"
 
 namespace jh_power {
@@ -95,5 +98,31 @@ int batt_pct() {
 }
 
 int charging() { return digitalRead(PIN_CHG_STATE) == LOW ? 1 : 0; }
+
+bool system_off() {
+  // The LSM6DS3 is the one always-on consumer System OFF doesn't kill by
+  // itself: its rail is power-gated by D15/P1.08 (jh_imu.cpp owns that pin
+  // during normal life — read the pin fact there; overriding it here is
+  // deliberate, this is the power domain's shutdown path and jh_imu is
+  // about to lose power anyway). GPIO output states are RETAINED through
+  // System OFF, so the rail stays cut while asleep. The VBAT divider is
+  // already parked off (vbat_mv() always re-disables it), and the QSPI
+  // flash sits in deep power-down between operations (jh_store's
+  // wake/sleep bracketing) — nothing else needs telling.
+  pinMode(15, OUTPUT);
+  digitalWrite(15, LOW);
+  delay(5);
+
+  // Wake sources after this line: USB/VBUS attach or the reset button —
+  // and the charger chip keeps charging a plugged cell with the CPU off.
+  // BENCH-VERIFY (SENSE_FIRST_BOOT item 25): actual off-current, and
+  // whether entry works with USB already attached (VBUS wake may fire
+  // immediately — harmless either way, the cable case is bench-only).
+  if (sd_power_system_off() != NRF_SUCCESS) {
+    NRF_POWER->SYSTEMOFF = 1;  // SoftDevice not up after all — go direct
+  }
+  while (true) {}  // not reached (debug-emulated System OFF can return)
+  return true;
+}
 
 }  // namespace jh_power

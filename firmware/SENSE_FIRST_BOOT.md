@@ -682,6 +682,38 @@ TACQ configuration, not divider-constant tweaks. Also confirm `chg`
 flips to 1 on USB attach and back to 0 on detach, and that `batt_pct`
 roughly tracks the charge state over a full charge cycle.
 
+## 25. Soft power-off (`off` → System OFF) — entry PROVEN on-cable; wake paths and off-current pending *(added 2026-08-04)*
+
+**File:** `firmware/src/platform/nrf52/jh_power.cpp` `system_off()`,
+`firmware/src/main.cpp`'s `off` command.
+
+Built the same bench day as the battery telemetry (the S2 sleep design's
+smallest useful slice — a battery-powered board with no off switch runs
+until the cell is flat): `off` flushes the open trace block, farewells
+(`OK off` BEFORE the silence, so clients never hang into a timeout), cuts
+the LSM6DS3's power rail (P1.08 low — GPIO states are retained through
+System OFF, so the rail stays cut), then `sd_power_system_off()`.
+
+**PROVEN on silicon, same day:** `off` over USB serial → farewell → `OK
+off` → the CDC port died mid-read → no usbmodem device at all 3 s later.
+Notably this answers the "entry with VBUS present" question: System OFF
+engages fine with the cable in (VBUS wake did not immediately re-fire).
+
+**Reset-tap wake CONFIRMED (same day):** tap → normal boot (blue
+advertising blink returns after the usual boot seconds — don't panic
+early) → stats healthy, stored jumps intact. Every System OFF wake is
+also a live re-test of item 8's DPD mount-retry: power never dropped, so
+the QSPI chip is asleep at every wake.
+
+**Verify (remaining):** (b) the beach path — `off` over BLE from the
+phone, USB unplugged, then wake on a LATER USB attach (VBUS rising edge —
+untestable while the cable is already in); (c) actual off-current with a
+meter (spec says < 5 µA System OFF + the IMU rail cut; the charger's own
+quiescent draw on the cell is whatever the BQ25101 datasheet says, not
+firmware's doing); (d) that charging genuinely proceeds while off
+(hardware says yes — BQ25101 needs no CPU — but watch the red LED once
+for the record).
+
 ---
 
 ## Explicitly out of scope for this pass (not bugs, not forgotten)

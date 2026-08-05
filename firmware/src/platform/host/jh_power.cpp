@@ -45,4 +45,18 @@ int charging() {
   return env_int("JH_CHG", 0) ? 1 : 0;
 }
 
+bool system_off() {
+  // Mirrors the capability rule main.cpp keys on (vbat_mv() >= 0 means
+  // "battery platform" means "off is real"): with JH_VBAT_MV scripted the
+  // host device IS emulating a Sense, so `off` must not return — the
+  // process exits cleanly, and a harness sees exactly what a serial client
+  // of the real board sees: farewell, OK, then silence/EOF. Unscripted
+  // (v1-like) it stays unsupported and the command answers ERR — never a
+  // mixed OK-then-ERR, which would corrupt client framing.
+  if (vbat_mv() >= 0) {
+    std::exit(0);
+  }
+  return false;
+}
+
 }  // namespace jh_power

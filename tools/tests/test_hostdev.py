@@ -449,5 +449,51 @@ class TestBatteryTelemetry(HostDevTestCase):
             dev.close()
 
 
+class TestOffCommand(HostDevTestCase):
+    """`off` (jh_power::system_off): on a battery platform it must farewell,
+    terminate with OK, then go silent — never return; on a v1-like platform
+    it answers a clean ERR. Never a mixed OK-then-ERR (client framing)."""
+
+    def test_off_unsupported_answers_err(self) -> None:
+        script = write_script(self.tmp_path / "script.txt", "rest 5.0\n")
+        dev = HostDevice(self.host_binary, self.tmp_path / "hostdir", script)
+        try:
+            dev.drain_boot()
+            lines = dev.command("off")
+            self.assertTrue(any(ln.startswith("ERR off_unsupported") for ln in lines),
+                            f"expected ERR off_unsupported, got {lines}")
+            self.assertFalse(any(ln.startswith("OK off") for ln in lines),
+                             f"OK and ERR must never both appear: {lines}")
+        finally:
+            dev.close()
+
+    def test_off_on_battery_platform_farewells_then_exits(self) -> None:
+        script = write_script(self.tmp_path / "script.txt", "rest 5.0\n")
+        dev = HostDevice(self.host_binary, self.tmp_path / "hostdir", script,
+                         extra_env={"JH_VBAT_MV": "3900"})
+        try:
+            dev.drain_boot()
+            dev.write_line("off")
+            got: list[str] = []
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                ln = dev.read_line(timeout=0.5)
+                if ln is None:
+                    if dev.proc.poll() is not None:
+                        break  # EOF + process gone: the intended silence
+                    continue
+                got.append(ln)
+                if ln.strip() == "OK off":
+                    break
+            joined = "\n".join(got)
+            self.assertIn("powering down", joined)
+            self.assertTrue(any(ln.strip() == "OK off" for ln in got), joined)
+            dev.proc.wait(timeout=5)
+            self.assertEqual(dev.proc.returncode, 0,
+                             "off must end the host device cleanly (exit 0)")
+        finally:
+            dev.close()
+
+
 if __name__ == "__main__":
     unittest.main()

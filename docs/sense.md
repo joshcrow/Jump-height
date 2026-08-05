@@ -142,6 +142,14 @@ is the cable path. Revisit only if we ever swap bootloaders.)*
 
 ### 3.5 Sleep/wake is a design, not a checkbox
 
+> **First slice built 2026-08-04:** a manual `off` command (serial + BLE —
+> the phone can shut the sealed puck down) that cuts the IMU rail and
+> enters System OFF; wake = USB attach or reset tap, charging works while
+> off. Entry proven on the bench even with USB attached
+> (SENSE_FIRST_BOOT.md item 25 has the remaining wake/current VERIFYs).
+> Everything below — motion wake via the IMU interrupt, auto-off timers,
+> the low-voltage cutoff — remains the actual design work.
+
 The whole "most efficient" prize: idle timeout → **System OFF
 (< 5 µA)**, wake on the IMU's hardware motion interrupt (its activity
 detector runs at µA with the MCU fully off) or on charger attach.

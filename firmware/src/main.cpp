@@ -343,7 +343,7 @@ static bool runSelfTest() {
 
 // ---------------- Commands ----------------
 static void printHelp() {
-  emitLine("# commands: help | stats | jumps | trace | dump | clear | selftest | info");
+  emitLine("# commands: help | stats | jumps | trace | dump | clear | selftest | info | off");
   emitLine("#           set <airtime_offset_s|height_scale> <value|default>");
 }
 
@@ -445,6 +445,24 @@ static void handleCommand(const String& cmd) {
           detector.params().airtime_offset_s, detector.params().height_scale,
           cal_from_nvs ? "device" : "defaults");
     emitLine("OK info");
+  } else if (cmd == "off") {
+    // Soft power-off (jh_power seam; the S2 sleep design's manual slice).
+    // Farewell BEFORE the attempt: on a supporting platform system_off()
+    // never returns, and the sender — a phone at the beach, most likely —
+    // deserves to know the silence that follows is intentional. The OK
+    // terminator also goes first for the same reason (a client waiting on
+    // OK/ERR would otherwise hang into its timeout on every clean off).
+    if (jh_power::vbat_mv() >= 0) {  // supported platforms measure vbat too
+      flushTrace();  // recording stops here — don't strand the open block
+      emitLine("# powering down — plug in USB or tap reset to wake");
+      emitLine("OK off");
+      delay(250);            // let USB CDC + BLE actually push those bytes
+      jh_power::system_off();  // does not return (seam contract: vbat
+                               // support implies real off — nrf52 sleeps,
+                               // host exits)
+      return;  // contract violated? still never OK-then-ERR — just stop
+    }
+    emitLine("ERR off_unsupported this build has no soft-off");
   } else {
     // Help BEFORE the ERR terminator: clients stop reading at OK/ERR, so
     // anything after it would sit in their buffer and corrupt the framing

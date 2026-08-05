@@ -51,4 +51,17 @@ int batt_pct();
 // -1 = unknown/unsupported.
 int charging();
 
+// Soft power-off — the `off` command's engine (docs/sense.md §3.5's
+// smallest useful slice, built 2026-08-04 because a battery-powered board
+// with no sleep otherwise runs until the cell is flat). On the Sense:
+// cuts the IMU's power rail, then enters nRF System OFF (~µA) — wake is
+// USB attach or a reset tap, charging works while off regardless (the
+// BQ25101 needs no CPU). DOES NOT RETURN on platforms that support it.
+// Returns false where unsupported (ESP32 — feature-frozen; host default —
+// the fake/CI device shouldn't kill its own process): the caller answers
+// ERR instead. The full sleep design (motion wake via the IMU interrupt,
+// auto-off timers, low-voltage cutoff) remains the S2 milestone — this is
+// only the manual switch.
+bool system_off();
+
 }  // namespace jh_power
