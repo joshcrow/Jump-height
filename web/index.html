@@ -105,6 +105,16 @@
         <button id="btn-selftest" data-testid="btn-selftest" class="btn btn-ghost" type="button">Run self-test</button>
       </div>
       <p class="muted small">The same five-second wiring check the device runs at boot.</p>
+
+      <!-- Power section: only shown for battery-reporting (Sense-class)
+           pucks — the button appears alongside the battery pill. -->
+      <div id="power-section" class="row-between mt" hidden>
+        <h3>Power</h3>
+        <button id="btn-power-off" data-testid="btn-power-off" class="btn btn-ghost" type="button">Power off puck</button>
+      </div>
+      <p id="power-help" class="muted small" hidden>Months of standby instead of
+      a day. Wakes when USB is plugged in or reset is tapped — <strong>a sealed
+      puck means opening the case</strong>, so don't power off mid-session.</p>
       <div id="selftest-card" data-testid="selftest" class="card" hidden></div>
 
       <div class="mt">

@@ -451,6 +451,9 @@ function renderBattery() {
   const p = $('batt-pill');
   if (!p || Number.isNaN(battery.pct)) return;
   p.hidden = false;
+  // Battery keys prove a Sense-class puck → it has the `off` command too.
+  const ps = $('power-section');
+  if (ps) { ps.hidden = false; $('power-help').hidden = false; }
   const charging = battery.chg === 1;
   const icon = charging ? '⚡' : (battery.pct <= 20 ? '🪫' : '🔋');
   // While charging the voltage floats high and pct reads optimistic (the
@@ -1657,6 +1660,29 @@ function initConnectTab() {
   $('btn-connect-ble').addEventListener('click', connectBle);
   $('btn-connect-usb').addEventListener('click', connectUsb);
   $('btn-selftest').addEventListener('click', () => { if (requireDevice()) send('selftest'); });
+  // Two-tap confirm for power-off: a sealed puck wakes only by opening the
+  // case (USB/reset), so one stray beach-tap must not kill the session.
+  // The armed state self-clears after 4 s of hesitation.
+  let offArmedUntil = 0;
+  $('btn-power-off').addEventListener('click', () => {
+    if (!requireDevice()) return;
+    const btn = $('btn-power-off');
+    const now = Date.now();
+    if (now > offArmedUntil) {
+      offArmedUntil = now + 4000;
+      btn.textContent = 'Tap again to power off';
+      setTimeout(() => {
+        if (Date.now() > offArmedUntil) btn.textContent = 'Power off puck';
+      }, 4200);
+      return;
+    }
+    offArmedUntil = 0;
+    btn.textContent = 'Power off puck';
+    send('off');
+    // The device farewells with "OK off" and goes silent; the BLE link then
+    // drops and the normal disconnect path takes the UI back to square one.
+    // No capture needed — the farewell lines land in the device console.
+  });
   $('btn-bench-toss').addEventListener('click', () => benchStart('toss'));
   $('btn-bench-drop').addEventListener('click', () => benchStart('drop'));
 }

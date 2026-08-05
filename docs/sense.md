@@ -251,6 +251,29 @@ break, new clients grow tiles.
 - The Garmin field renders what it recognizes; FIT developer fields
   grow alongside ([garmin-datafield.md §5.5](garmin-datafield.md)).
 
+### 4.1 The Garmin-only endgame — what if the web app goes away? *(direction note, 2026-08-04)*
+
+The product statement already says it: the puck is a **Garmin data-field
+adder**, phone as the *second* screen. Taken to its conclusion, the web
+app stops being user-facing entirely — and the architecture already
+accounts for it, because every web-app job has a Garmin-native successor:
+
+| Web app job today | Garmin-only successor |
+|---|---|
+| Live jumps on the beach | The data field — already its whole purpose |
+| Session archive (sync → CSV) | **The FIT file.** The field writes jumps/bests into the saved activity; Garmin Connect becomes the session record. The on-board trace demotes to a tuning/debug artifact, pulled on the bench, not by users. |
+| Calibration (drop flow, `set …`) | **CIQ app settings.** The field already reads properties (puck name, units); calibration terms become settings edited in the Garmin Connect app, which the field pushes to the puck as the same `set` commands. (A data field can't do guided flows — no button input — so the *measured-drop* procedure stays a bench activity; only the resulting numbers need to travel.) |
+| Power off (`off` button) | **No off button at all.** The real S2 design — motion wake + idle auto-off — dissolves the question; interim, the field can send `off` from `onStop()` when the activity is saved. |
+| Firmware updates | Never was the web app's job on this board: Nordic DFU via the nRF Connect app (§3.3), UF2 by cable as fallback. |
+| Self-test / diagnostics | Stays bench tooling (Mac/CLI), like the flasher. |
+
+Two design rules keep this path open at zero ongoing cost: everything
+speaks the **same line protocol** (a Garmin-only future changes which
+client renders it, not what the puck says), and new capabilities land as
+**adder keys** first, UI second — so no client is ever load-bearing for
+the data itself. The web app then retires the way the ESP32 web flasher
+will (#27): quietly, into a bench tool, with nothing to migrate.
+
 ## 5. Power & runtime, honest *(estimates until S0/S2 measurements)*
 
 | State | Estimate | 500 mAh means |

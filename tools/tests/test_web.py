@@ -558,5 +558,26 @@ class TestWebApp(unittest.TestCase):
         expect(card).to_contain_text("Battery: 12% (3.62 V)")
 
 
+    def test_power_off_needs_two_taps_and_sends_off(self):
+        """The Power section appears only for battery-reporting pucks, and
+        the off button is two-tap (a sealed puck wakes only by opening the
+        case — one stray tap must not kill a session)."""
+        self._open()
+        section = self.page.locator("#power-section")
+        expect(section).to_be_hidden()  # no battery keys yet → no power UI
+
+        self._feed("STATS session_jumps=0 session_best_m=0 stored_jumps=0 "
+                   "stored_best_m=0 trace_bytes=0 vbat_mv=3920 batt_pct=68 chg=0")
+        expect(section).to_be_visible()
+
+        btn = self.page.get_by_test_id("btn-power-off")
+        btn.click()
+        expect(btn).to_contain_text("Tap again")
+        self.assertNotIn("off", self._sent(), "first tap must only arm")
+
+        btn.click()
+        self.assertIn("off", self._sent(), f"second tap sends off; sent={self._sent()}")
+
+
 if __name__ == "__main__":
     unittest.main()
