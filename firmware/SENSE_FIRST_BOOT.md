@@ -500,6 +500,53 @@ serial DFU over the bootloader's CDC port) programmed it cleanly in ~23 s.
 Practical takeaway: UF2 drag-drop is real but macOS's automount is not to
 be trusted twice in a row; serial DFU is the reliable scripted path.
 
+## 16b. OTA DFU — the sealed box's only firmware path, and it is NOT yet trustworthy
+
+**Files:** `firmware/src/platform/nrf52/jh_link.cpp` (`BLEDfu` service +
+`reboot_to_dfu()` / the `dfu` command), `tools/otadfu.py` (legacy DFU over
+CoreBluetooth from the Mac).
+
+**Why this outranks nearly everything else:** measured on silicon
+2026-08-11 — in OTA-DFU mode the board exposes **no USB at all**. No CDC
+port, no UF2 drive. Once the capsule is sealed, this path is not a
+convenience; it is the only rescue there is.
+
+**What is PROVEN on silicon (2026-08-11, first bench night):**
+- The app-side `dfu` command reboots into the bootloader and `AdaDFU`
+  appears on the air. (First attempt used GPREGRET=0xB1 and bounced
+  straight back into the app — 0xB1 is `DFU_MAGIC_OTA_APPJUM`, the
+  "app jumped here with the SoftDevice live" handshake, false through a
+  full reset. The reset path wants 0xA8 = `DFU_MAGIC_OTA_RESET`; the core's
+  own `enterOTADfu()` does exactly this and is what ships.)
+- The legacy DFU protocol implementation is essentially right: one run
+  streamed the full 157 KB image to 98%.
+- Stale-state recovery (control opcode 0x06 = system reset) works — **but
+  only with USB out.** With USB attached the plain reset lands in
+  UF2/serial mode and OTA never reappears.
+- Two tool bugs found and fixed: packet-receipt notifications report
+  BYTES (comparing `acked * CHUNK` made the flow-control window look ~20×
+  emptier than it was — 157 KB firehosed into a bootloader that
+  flash-writes per packet, error 0x06 at 98%); and a retry wrapper that
+  double-sent START across two connections.
+
+**What FAILED, and must gate the tape:** a transfer died mid-stream
+(receipts stalled at 4,380 bytes; macOS CoreBluetooth notification
+delivery is the suspected flake) and the bootloader came back **DARK** —
+20 s of active scanning found no `AdaDFU`, no DFU service UUID, no NUS,
+nothing connectable. A sealed box in that state is a paperweight until the
+battery dies. Radio-only recovery failed; the cable was the way out.
+
+**VERIFY before sealing (docs/sense.md §3.3's own AC, sharpened):** the
+complete loop — app → `dfu` → transfer → validate → activate → app back on
+the air — **twice consecutively, USB out, via `tools/otadfu.py`**, plus
+once via nRF Connect on a phone (the known-good client, and the beach
+fallback). Additionally worth knowing: what state the bootloader is in
+after a mid-transfer disconnect (dark? timeout? does it recover on its
+own after N minutes?) — that answer decides whether a failed beach OTA is
+"retry" or "go home".
+
+Until every box above is checked, **do not seal the capsule.**
+
 ## 17. PDM microphone rail — never measured
 
 **File:** not touched by this port at all (deliberately: no PDM code
