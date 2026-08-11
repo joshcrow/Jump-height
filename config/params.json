@@ -8,7 +8,7 @@
     "landing_settle_s": 0.5,
     "min_airtime_s": 0.25,
     "max_airtime_s": 3.0,
-    "airtime_offset_s": 0.0,
+    "airtime_offset_s": 0.0257,
     "height_scale": 1.0,
     "spin_lever_m": 0.0
   },
