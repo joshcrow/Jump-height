@@ -5,30 +5,38 @@ to the [Woo](https://www.woosports.com/). Stick a small waterproof sensor on the
 board, go send it, and find out **how high you jumped** and **how long you were in
 the air**.
 
-> Status: **Phases 0/1/3 complete; Phase 2 (the water day) is next.** Building
-> it is wires-and-glue only — every software step is one command via
-> `./tools/jump` (guided wizard, flash, wiring self-test, desk test, drop-test
-> calibration, session sync, video-ground-truth validation), all
-> **rehearsable with zero hardware** against a simulated device. The firmware
-> — a shared core plus thin per-platform seams — compiles clean for the ESP32
-> (shipping) and the tiny XIAO nRF52840 Sense (v2, all-in; see
-> [`docs/sense.md`](docs/sense.md)), and speaks its protocol over **Bluetooth**
-> to a phone, a Garmin watch ([`garmin/`](garmin/)), or the **browser app**
-> (`./tools/jump web`) built sunlight-first for the beach: live jump stats via
-> Web Bluetooth (feet-or-meters, glare-readable), one-tap **Sync** with real
-> progress, per-session charts, a shareable session card, backup/restore, and
-> in-browser flashing via ESP Web Tools. Start with **[BUILD.md](BUILD.md)**
-> (the runbook) and **[DECISIONS.md](DECISIONS.md)** (what was chosen and why).
->
-> ```bash
-> ./tools/jump wizard           # plug in and follow along: setup → flash →
->                               # wiring check → desk test → calibration
-> ./tools/jump wizard --fake    # rehearse the exact same flow today, no hardware
-> ./tools/jump validate         # on the water: video ground-truth calibration +
->                               # a publishable error-bar report
-> ./tools/jump report           # stuck? one file with everything Claude needs
->                               # to troubleshoot remotely (logs, config, self-test)
-> ```
+Every software step is one command via `./tools/jump`, and all of it is
+**rehearsable with zero hardware** against a simulated device:
+
+```bash
+./tools/jump wizard --fake    # rehearse the whole flow today, no hardware
+./tools/jump wizard           # the real thing: setup → flash → wiring check →
+                              # desk test → drop calibration
+./tools/jump validate         # on the water: video ground truth + an error-bar report
+./tools/jump report           # stuck? one bundle with everything needed to debug
+```
+
+New here? **[BUILD.md](BUILD.md)** is the hardware runbook,
+**[DECISIONS.md](DECISIONS.md)** is what was chosen and why.
+
+---
+
+## Status at a glance
+
+| Piece | State |
+|---|---|
+| **Detection algorithm** | ✅ Proven in sim and on the bench. Shared C++ core, mirrored in Python. |
+| **v1 puck** — FireBeetle ESP32 + MPU-6050 | ✅ Hardware-validated. **Feature-frozen** (bugfix-only, DECISIONS #27) — it is the rig that goes in the water first. |
+| **v2 puck** — XIAO nRF52840 Sense | ✅ On silicon. Bring-up milestone S0 complete: two real QSPI bugs found and fixed on hardware, battery telemetry, soft power-off proven both directions. |
+| **Browser app** | ✅ Live BLE stats, session sync, charts, in-browser flashing. |
+| **Garmin watch field** | 🟡 **Live on the wrist** (Epix Gen 2, 2026-08-11) — a real toss registered. Numbers are **not yet trustworthy**: see the open bug below. |
+| **Phase 2 — the water day** | 🌊 **Next.** Nothing here has been in the ocean yet. |
+
+**Open bug, stated plainly:** with a second BLE central connected, the watch
+displays values the puck never sent (a count of 64 when the device reported 1).
+Cause not yet found; two confident diagnoses were already wrong and are recorded
+as dead ends in [`garmin/FIRST_COMPILE.md`](garmin/FIRST_COMPILE.md). Don't trust
+numbers on the watch face until that closes.
 
 ---
 
@@ -62,8 +70,13 @@ So the whole problem reduces to **reliably detecting the takeoff and landing
 instants** in a noisy accelerometer signal. That's a solvable signal-processing
 problem — and it's what the code in this repo does.
 
-See [`docs/algorithm.md`](docs/algorithm.md) for the full derivation, assumptions,
-and edge cases.
+**Does it hold for a wing?** A kite pulls you through the arc, so the parabola
+lies — commercial kite devices overshoot by ~2.3×. A wing is close to ballistic.
+Simulated across a realistic population of jumps, the method overshoots by only
+**1.0–1.07×**: [`docs/wing-ballistic-sim.md`](docs/wing-ballistic-sim.md).
+
+Full derivation, assumptions and edge cases:
+[`docs/algorithm.md`](docs/algorithm.md).
 
 ---
 
@@ -71,32 +84,96 @@ and edge cases.
 
 ```mermaid
 flowchart LR
-    IMU1["IMU (accel+gyro)\nMPU-6050"] -->|I²C ~200 Hz| ESP32
+    IMU1["IMU (accel+gyro)\nMPU-6050"] -->|I²C ~200 Hz| ESP32["FireBeetle 2 ESP32-E\n(v1, frozen)"]
     ESP32 -->|jump-detection\nstate machine| ESP32
-    ESP32 -->|BLE notify — NUS| Phone["Phone / laptop\n(Web Bluetooth app / Bluefy)"]
-    ESP32 -->|BLE notify — NUS| Watch["Garmin watch\n(jumpfield data field)"]
+    ESP32 -->|BLE notify — NUS| Phone["Phone / laptop\n(web app, Bluefy, blecmd.py)"]
     ESP32 -->|CSV log| Flash["On-board flash"]
-    Bat1["LiPo + charger"] --> ESP32
+    Bat1["2500 mAh LiPo"] --> ESP32
 
     IMU2["IMU (accel+gyro)\nLSM6DS3TR-C"] -->|I²C ~200 Hz| Sense["XIAO nRF52840\nSense (v2)"]
     Sense -->|jump-detection\nstate machine| Sense
-    Sense -->|BLE notify — NUS/Bluefruit| Phone
-    Sense -->|BLE notify — NUS/Bluefruit| Watch
+    Sense -->|BLE notify — NUS| Phone
+    Sense -->|BLE notify — NUS| Watch["Garmin watch\n(garmin/jumpfield)"]
     Sense -->|binary trace| QSPI["External QSPI flash"]
-    Bat2["500 mAh LiPo"] --> Sense
+    Bat2["250 mAh LiPo"] --> Sense
 ```
 
-The same detection algorithm runs in two places, kept intentionally in sync:
+One detector, three places it runs, kept deliberately in sync:
 
 - **[`firmware/`](firmware/)** — the shared C++ detector
   (`include/jump_detector.h`) runs unmodified on every board; a thin platform
   seam (`src/platform/{esp32,nrf52,host}/`) supplies the IMU/BLE/storage glue
-  per chip — ESP32 (FireBeetle 2 + MPU-6050, shipping) and nRF52 (XIAO Sense +
-  LSM6DS3TR-C, v2 build-ahead); `host` compiles the real firmware core
-  natively for the test suite, no board required.
+  per chip. `host` compiles the real firmware core natively for the test suite,
+  so most bugs die without a board.
 - **[`sim/`](sim/)** — a pure-Python mirror (`detector.py`) plus a synthetic-data
-  generator, so you can develop and tune the algorithm **without hardware** and
-  replay real captured sessions offline.
+  generator and a physics model of a wing jump, so the algorithm can be developed,
+  tuned and *statistically characterised* with no hardware at all.
+- **[`garmin/`](garmin/)** — a Connect IQ data field that speaks the same
+  protocol. No phone in the loop: the puck talks straight to your wrist.
+
+Everything tunable lives in **`config/params.json`** — one file feeds firmware,
+simulator and analysis, so they cannot drift apart.
+
+---
+
+## Quick start — no hardware needed (2 minutes)
+
+Requires only Python 3.8+, no dependencies:
+
+```bash
+git clone <this-repo>
+cd Jump-height
+python3 sim/run.py
+```
+
+The detector picks synthetic jumps out of a synthetic signal and scores itself
+against known ground truth (`RESULT: PASS ✅`). Tweak thresholds in
+`config/params.json`, re-run, see the effect immediately.
+
+```bash
+python3 sim/run.py --csv data/my_session.csv   # replay a real capture
+./tools/jump simtest                            # the full suite, still no hardware
+```
+
+---
+
+## Hardware
+
+Two builds, ~US$15–30 in parts:
+
+| Build | Parts | State |
+|-------|-------|-------|
+| **v1 — FireBeetle** | DFRobot FireBeetle 2 ESP32-E + MPU-6050 + 2500 mAh LiPo + waterproof capsule | Bench-validated and **feature-frozen**. Stays the water-day rig until v2 passes the same gauntlet. |
+| **v2 — Sense** | Seeed XIAO nRF52840 Sense (IMU on board, no wiring) + 250 mAh LiPo | Bring-up S0 complete on real silicon. Drives the Garmin field. See [`docs/sense.md`](docs/sense.md). |
+
+The v2 cell is **250 mAh** as actually installed — much of `docs/sense.md`'s
+power arithmetic still assumes the 500 mAh part that was originally ordered
+(noted at `docs/sense.md:138`), so halve those runtimes when reading it.
+
+Full BOM, wiring, power budget and **waterproofing notes** (the part that
+actually kills these projects): [`docs/hardware.md`](docs/hardware.md).
+
+---
+
+## How this repo handles being wrong
+
+Two files are load-bearing and unusual enough to call out. When code is written
+that hardware hasn't yet contradicted, every guess gets numbered up front, then
+edited in place once silicon answers it:
+
+- **[`firmware/SENSE_FIRST_BOOT.md`](firmware/SENSE_FIRST_BOOT.md)** — every
+  assumption the nRF52 port made before the board existed.
+- **[`garmin/FIRST_COMPILE.md`](garmin/FIRST_COMPILE.md)** — the same for the
+  Connect IQ field, written with no SDK in hand.
+
+It earns its keep. The bug that killed the watch field on its first live
+connection was **predicted, by line number, as item #3** — and the fix listed
+there is the fix that shipped. Both files also record *dead ends*, so a wrong
+theory only costs the repo once.
+
+If you're debugging the watch: it writes its own crash log to
+`GARMIN/Apps/TEMP/CIQ_LOG.YML` with file, line and function. Read that before
+theorising.
 
 ---
 
@@ -105,102 +182,53 @@ The same detection algorithm runs in two places, kept intentionally in sync:
 ```
 Jump-height/
 ├── README.md            ← you are here
-├── BUILD.md             ← the hardware-day runbook + shopping list (start here to build)
-├── DECISIONS.md         ← the v1 design decisions and why
-├── config/params.json   ← ALL tunable settings — one file feeds firmware + sim + analysis
+├── BUILD.md             ← the hardware-day runbook + shopping list
+├── DECISIONS.md         ← the design decisions and why
+├── config/params.json   ← ALL tunable settings — feeds firmware + sim + analysis
 ├── tools/
-│   ├── jump             ← the one-command interface: wizard/flash/selftest/desktest/drop/sync/validate/eval/web/report
-│   ├── fake_device.py   ← simulated device (rehearse + test everything with no hardware)
-│   └── gen_params.py    ← bakes config/params.json into a firmware header
-├── web/                 ← browser app: live BLE stats, sessions/CSV over USB, in-browser flasher
-├── .github/workflows/   ← CI: full test suite + firmware build, publishes ESP32 binaries + the Sense .uf2 to Pages
-├── docs/
-│   ├── algorithm.md           ← the physics + detection state machine, in detail
-│   ├── data-pipeline.md       ← capture → label → evaluate → improve loop (labels.csv/session.json schemas)
-│   ├── garmin-datafield.md    ← the Garmin watch data-field spec
-│   ├── gyro-prior-art.md      ← gyro trick-metrics prior-art (rotation counting, fusion libs, patents)
-│   ├── gyro-sim-plan.md       ← desk gyro-sims to run before the gyro flagship
-│   ├── hardware.md            ← bill of materials, wiring, power, waterproofing
-│   ├── ota.md                 ← retired ESP32 OTA spec (tombstone — the Sense updates via Nordic DFU)
-│   ├── research.md            ← literature/market synthesis backing the design choices
-│   ├── riding-dynamics-map.md ← on-water (non-airborne) riding-metric map
-│   ├── roadmap.md             ← phased build plan (bench → firmware → water → app → v2)
-│   ├── sense.md               ← v2 (XIAO nRF52840 Sense) port spec + gap analysis
-│   └── wing-ballistic-sim.md  ← sim: is the airtime method valid for wings? (near-ballistic — yes)
-├── firmware/            ← shared core + per-platform seams (PlatformIO)
-│   ├── platformio.ini
+│   ├── jump             ← the one-command interface (wizard/flash/selftest/desktest/
+│   │                      drop/sync/validate/replay/eval/web/report)
+│   ├── blecmd.py        ← talk to the puck over BLE from the laptop (no phone)
+│   ├── chargelog.py     ← battery logging over serial → CSV
+│   └── fake_device.py   ← simulated device: rehearse and test with no hardware
+├── web/                 ← browser app: live BLE stats, session sync, flasher
+├── .github/workflows/   ← CI: full test suite + firmware build; publishes the
+│                          ESP32 binaries and the Sense .uf2 to Pages
+├── firmware/
 │   ├── include/jump_detector.h          ← portable detection state machine
-│   └── src/platform/{esp32,nrf52,host}/ ← IMU/BLE/storage glue per board (host = tests, no board)
-├── garmin/               ← Connect IQ data field (jumpfield/) — the watch as a display surface
-├── sim/                  ← develop & test the algorithm with no hardware (tests in tools/tests/, incl. test_evaluate.py)
-│   ├── detector.py     ← Python mirror of the firmware detector
-│   ├── evaluate.py     ← score the detector over labeled sessions (./tools/jump eval)
-│   ├── generate.py     ← synthesize IMU sessions with known jumps
-│   ├── wing_model.py   ← ballistic wing-jump physics model (arm-force ceiling)
-│   ├── sensor_model.py ← synthetic IMU incl. gyro / ω²r for spun jumps
-│   ├── selfdiag.py     ← airborne median-|a| non-ballistic self-diagnostic
-│   ├── run.py          ← run detector on synthetic or captured data
-│   └── experiments/    ← sim batteries behind the docs (wing-ballistic, gyro)
-└── data/                 ← captured/example session CSVs
+│   ├── src/platform/{esp32,nrf52,host}/ ← per-board glue (host = tests, no board)
+│   └── SENSE_FIRST_BOOT.md              ← the nRF52 doubt list (see above)
+├── garmin/
+│   ├── jumpfield/       ← the Connect IQ data field
+│   └── FIRST_COMPILE.md ← the Connect IQ doubt list + open bugs
+├── sim/
+│   ├── detector.py      ← Python mirror of the firmware detector
+│   ├── wing_model.py    ← ballistic wing-jump physics
+│   ├── sensor_model.py  ← synthetic IMU incl. gyro / ω²r for spun jumps
+│   ├── selfdiag.py      ← airborne median-|a| non-ballistic self-diagnostic
+│   ├── evaluate.py      ← score the detector over labeled sessions
+│   └── experiments/     ← the sim batteries behind the docs
+├── docs/                ← algorithm, hardware, sense (v2), garmin field, roadmap,
+│                          research, gyro prior-art + sim plan, data pipeline
+└── data/                ← captured/example session CSVs
 ```
-
----
-
-## Quick start — no hardware needed (2 minutes)
-
-Prove the concept on your laptop. Requires only Python 3.8+ (no dependencies):
-
-```bash
-git clone <this-repo>
-cd Jump-height
-python3 sim/run.py
-```
-
-You'll see the detector pick out synthetic jumps and compare its height estimates
-against the known ground truth. This is your development sandbox: tweak thresholds
-in **`config/params.json`** (the single source of truth for firmware, simulator, and
-analysis alike), re-run, and see the effect instantly. The same detector logic is
-already ported to `firmware/include/jump_detector.h` and consumes the same config.
-
-Replay a real capture (once you have hardware logging CSVs):
-
-```bash
-python3 sim/run.py --csv data/my_session.csv
-```
-
----
-
-## Hardware quick start
-
-Two supported builds, ~US$15–30 in parts:
-
-| Build | Parts | Status |
-|-------|-------|--------|
-| **v1 (validated)** | DFRobot FireBeetle 2 ESP32-E + MPU-6050 + 2500 mAh LiPo + waterproof capsule | Hardware-validated on the bench; flies the first water sessions. Feature-frozen (bugfix-only, DECISIONS #27). |
-| **v2 (build-ahead done)** | Seeed XIAO nRF52840 Sense (IMU on board — no wiring) + 500 mAh LiPo | Firmware compiles and is published as a drag-and-drop `.uf2`; awaiting the physical board. See [`docs/sense.md`](docs/sense.md). |
-
-Full BOM, wiring diagram, power budget, and **waterproofing notes** (the part that
-actually kills these projects) are in [`docs/hardware.md`](docs/hardware.md).
 
 ---
 
 ## Roadmap
 
-- **Phase 0 — Prove the algorithm (no hardware):** run the simulator. ✅ **complete**
-- **Phase 1 — Bench firmware:** ESP32 + IMU on a breadboard, self-test, desk test,
-  drop calibration. ✅ **complete**, hardware-validated. The ESP32/FireBeetle
-  build is feature-frozen as of 2026-07-29 (bugfix-only; DECISIONS #27).
-- **Phase 2 — On the water:** waterproof it, log raw CSV, capture real sessions,
-  tune thresholds offline against video ground truth. 🌊 **next** — the water day.
-- **Phase 3 — App:** BLE + a browser app for live stats, session history, and
-  in-browser flashing. ✅ **complete**, hardware-validated.
-- **Phase 4 — Real hardware:** custom PCB or an off-the-shelf shortcut, better IMU,
-  GPS for speed/distance, sleep modes, potted enclosure. **ALL-IN** on the XIAO
-  nRF52840 Sense as the v2 board — the software build-ahead is done
-  ([`docs/sense.md`](docs/sense.md)); it takes over water-day duty once it
-  passes the same bench → bucket → water gauntlet the ESP32 rig already did.
+- **Phase 0 — Prove the algorithm (no hardware).** ✅ complete
+- **Phase 1 — Bench firmware.** ✅ complete, hardware-validated (ESP32 frozen 2026-07-29)
+- **Phase 2 — On the water.** 🌊 **next.** Waterproof it, log raw CSV, capture real
+  sessions, tune against video ground truth. *Nothing in this repo has been in the
+  ocean yet — every accuracy number so far is bench or simulation.*
+- **Phase 3 — App.** ✅ complete, hardware-validated
+- **Phase 4 — v2 hardware.** 🚧 In progress on the XIAO nRF52840 Sense. Bring-up S0
+  done on silicon; the Garmin field is live on the wrist. It takes over water duty
+  once it passes the same bench → drop-cal → bucket → water gauntlet the ESP32 rig
+  already survived.
 
-Details and acceptance criteria per phase: [`docs/roadmap.md`](docs/roadmap.md).
+Acceptance criteria per phase: [`docs/roadmap.md`](docs/roadmap.md).
 
 ---
 
