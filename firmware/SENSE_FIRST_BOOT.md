@@ -851,6 +851,39 @@ firmware's doing); (d) that charging genuinely proceeds while off
 (hardware says yes — BQ25101 needs no CPU — but watch the red LED once
 for the record).
 
+**(c) DO IT AS AN OVERNIGHT VOLTAGE DELTA, not a meter in series.**
+Meter-in-series needs the cell's positive line broken between a JST plug
+(battery) and a JST socket (board) — pigtails of BOTH genders, or solder.
+It also invites the classic own-goal: starting on the µA range (the awake
+board draws mA and pegs it or blows the fuse), or switching ranges
+mid-test, which on most meters moves a lead, breaks the circuit and
+reboots the board.
+
+None of that is needed to answer the question that matters, which is
+"microamps or milliamps?" — a 100× gap. On the 250 mAh cell in its upper
+range the curve in `jh_power.cpp` gives ≈**3.2 mV of resting voltage per
+mAh** (4060→3980 mV spans 90→80%, i.e. 80 mV per 25 mAh). Over 12 h off:
+
+| off-current | expected drop | verdict |
+|---|---|---|
+| ~100 µA | ~4 mV (invisible) | months — ship it |
+| ~500 µA | ~19 mV | weeks — worth chasing |
+| ~2 mA | ~77 mV | `off` is NOT working; a real bug |
+
+Procedure: read `vbat` → `python3 tools/blecmd.py off` → **unplug USB**
+(else the cable holds it up and you measure nothing) → leave overnight →
+USB attach (which is also the wake, so it doubles as the (b) test) → read
+`vbat`.
+
+**No meter required, and the ADC's known ~1.8% residual does not matter
+here**: it is a GAIN error, so it cancels in a before/after difference —
+a 77 mV drop reads as 77 mV ±1.4 mV. The very error item 24 chased is
+irrelevant to a delta measurement.
+
+Only if this comes back showing milliamps is the meter-in-series version
+worth its fiddliness — at that point you need to know *what* is still
+awake, not just that something is.
+
 ## 26. Gyro spin correction + self-calibrating lever arm — built 2026-08-10, ZERO silicon time *(added 2026-08-10)*
 
 **Files:** `firmware/include/jump_detector.h` (`correct_for_spin`),
