@@ -24,10 +24,20 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import wing_model as wm, sensor_model as sm, selfdiag as sd
 from detector import Detector, Params
 
-N = 5000
+# N and OUT are env-overridable so a tail-resolution run needs no code edit:
+#
+#   E2_N=200000 E2_OUT=/tmp/e2_200k.csv python3 sim/experiments/e2_montecarlo.py
+#
+# Defaults are unchanged, and the master seed draws parameters serially by
+# index, so jump i is identical at any N — a bigger run REPRODUCES a smaller
+# one row for row and only appends. (Verified 2026-08-11: the first 5000 rows
+# of a 200k run are bit-identical to the committed 5000-row CSV.)
+N = int(os.environ.get("E2_N", "5000"))
 MASTER_SEED = 12345
 DT = 2e-5
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "out", "e2_montecarlo.csv")
+OUT = os.environ.get(
+    "E2_OUT",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "out", "e2_montecarlo.csv"))
 
 TECHNIQUES = ["sheeted_out", "mixed", "lofted", "constant"]
 TECH_WEIGHTS = [0.60, 0.25, 0.12, 0.03]

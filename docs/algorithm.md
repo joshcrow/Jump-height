@@ -162,6 +162,17 @@ error (`dh/dT = g·T/4`). 100–200 Hz is plenty.
   to subtract per-sample `ω²r` from `|a|` before the state machine, which makes the
   gyro a **detector hot-path input** (not an optional extra) and requires a
   mount/lever-arm calibration for `r`. See [gyro-sim-plan.md](gyro-sim-plan.md) (g4).
+- **Sustained lift makes a jump invisible (silent miss).** If mid-flight specific
+  force never drops below `freefall_enter_g` (0.35 g), takeoff is never detected
+  and the jump is never reported — nothing on the watch, nothing in the log, no
+  flag. Measured over 200,000 simulated jumps: **5 misses (2.5×10⁻⁵)**, all in
+  never-depower ("constant") technique at 20–21 m/s wind, and the boundary is
+  exactly the gate — every jump at ≥0.35 g was missed, the one at 0.34–0.35 g was
+  caught. This is the kite exception in miniature: hold enough lift and a wing
+  stops being ballistic. Deliberately **not** fixed by lowering the gate, which
+  would trade a rare silent miss for common false takeoffs on chop (DECISIONS #30).
+  Real-world exposure is unmeasured — sim puts p99 mid-flight force at 0.067 g,
+  comfortably clear, but that is a model.
 - **Air-drag & asymmetric landings** cause a slight systematic under/over-read.
   The calibration factors ship in the formula now — `height_scale` (multiplicative)
   and `airtime_offset_s` (additive), fit against video/bench ground truth — so this

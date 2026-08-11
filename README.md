@@ -117,10 +117,18 @@ so it got tested rather than asserted.
 
 A **kite** pulls you through the arc, so the parabola lies and kite devices
 overshoot by **2.31×**. A **wing** can't: your arms cap how much vertical lift you
-can add mid-air, which keeps the flight near-ballistic. Monte-Carlo over 5,000
+can add mid-air, which keeps the flight near-ballistic. Monte-Carlo over **200,000**
 simulated jumps — varying wind, wing coefficient, technique, rider mass and jump
-size — puts the overshoot at **mean 1.013×, p99 1.064×**, with a method
-physics-floor **RMSE of 4.2 cm**.
+size — puts the overshoot at **mean 1.013×, p99 1.062×**, with a method
+physics-floor **RMSE of 4.6 cm**.
+
+It also found the method's edge, which is worth stating plainly: **5 jumps in
+200,000 are missed entirely** — silently, with nothing shown and nothing logged.
+All five are the same case, a wing sheeted constant in 40-knot wind holding enough
+lift that free-fall never registers. The boundary is exactly the detector's 0.35 g
+gate. That's the kite exception showing up in miniature, so it confirms the theory
+rather than denting it — but a silent miss is the worst failure class there is, so
+it's documented rather than rounded away ([DECISIONS #30](DECISIONS.md)).
 
 For scale, published field accuracy for commercial kite jump devices runs
 **0.51–0.95 m** (Marčiš 2021). Those are real-world numbers and ours is a
