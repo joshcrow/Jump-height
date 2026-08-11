@@ -105,11 +105,20 @@ the theory rather than undermining it.**
 **0.52%** of jumps reach E5's danger-band floor (≥0.09 g) and **0.003%** reach
 hard-blind. Simulated, not measured — the water check in §5 still stands.
 
-Raw summary + distribution: [`../sim/experiments/out/e2_stdout_200k.txt`](../sim/experiments/out/e2_stdout_200k.txt).
-The 48 MB per-jump CSV is not committed; regenerate with
-`E2_N=200000 E2_OUT=/tmp/e2_200k.csv python3 sim/experiments/e2_montecarlo.py`
-(~5 h). Jump *i* is seeded by index, so a big run reproduces a small one row for
-row — the first 5000 rows were verified bit-identical.
+**Reproducing it.** `sim/experiments/out/` is gitignored — experiment outputs are
+local artifacts and these documents are where the numbers live, so every figure
+above is stated inline rather than linked to a file you won't have. Regenerate
+with:
+
+```bash
+E2_N=200000 E2_OUT=/tmp/e2_200k.csv python3 sim/experiments/e2_montecarlo.py
+```
+
+~5 h on 5 cores; the per-jump CSV is ~48 MB. Jump *i* is seeded by index, so a
+big run **reproduces a small one row for row and only appends** — verified
+bit-identical for the first 5000 rows against the committed-era N=5000 output,
+and again at N=60 after the env-override change. A local run of this file at the
+default N=5000 still reproduces the E2 row above exactly.
 
 ## 4. Roadmap impact
 
