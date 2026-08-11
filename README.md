@@ -1,9 +1,15 @@
 # Jump Height 🪂🌊
 
-**An open-source, open-hardware jump tracker for wing foiling.** Stick a
-thumb-sized waterproof puck on the board, go send it, and find out **how high you
-jumped** and **how long you were in the air** — read out live on your watch, your
-phone, or in the browser. About US$20 in parts.
+**An open-source, open-hardware motion instrument for wing foiling.** Stick a
+thumb-sized waterproof puck on the board and it measures what the board actually
+does, reading out live on your watch — no phone in the loop. About US$20 in parts.
+
+It starts with the jump — **how high, how long in the air** — because that's the
+metric with a clean answer and a market to check against. But the puck is a
+6-axis IMU on the deck of a foilboard, and the roadmap is the rest of what that
+can see: spins, carves, lean angle, turn radius, time on foil. New measurements
+ship as new keys on the same protocol, so every client picks them up without a
+rewrite.
 
 Every software step is one command via `./tools/jump`, and all of it is
 **rehearsable with zero hardware** against a simulated device:
@@ -40,6 +46,37 @@ numbers on the watch face until that closes.
 
 ---
 
+## What it measures
+
+Three honest tiers. Only the first one is real today.
+
+**Running on hardware.** Jump height, airtime, jump count and session best —
+detected on the puck itself, streamed live over BLE, logged to onboard flash, and
+displayed on the watch alongside the puck's own battery level.
+
+**Validated in simulation, not yet on silicon.** Spins. An accel-only detector
+*fails* on a spinning jump: at ~300 dps the rotation holds |a| above the free-fall
+gate and by ~518 dps it trips the false-landing test, giving height errors of
+−80…−97%. The fix — per-sample ω²r subtraction on the detector hot path, plus a
+lever-arm calibration — is designed and sim-proven, and is why the gyro became a
+hard requirement rather than a recording extra
+([DECISIONS #29](DECISIONS.md), [`docs/gyro-sim-plan.md`](docs/gyro-sim-plan.md)).
+
+**Mapped, and deliberately waiting on water.** Carve-g, yaw turn-rate, turn
+segmentation and count, rail/lean angle, turn radius without GPS, ride smoothness,
+chop exposure, time on foil, crash counter, landing quality
+([`docs/riding-dynamics-map.md`](docs/riding-dynamics-map.md)). The measurement
+kernels are closed-form rigid-body kinematics and buildable at a desk; the
+*thresholds* are not. Guessing at a desk what foiling feels like to a sensor
+produces fiction, so those wait for one labeled, video-synced session.
+
+The reason this list can grow at all is the protocol: every reading is a
+`key=value` on the same newline-terminated stream, and every client already
+ignores keys it doesn't recognise. A new metric is a new key — no client rewrite,
+no version negotiation, no breakage for the puck you already built.
+
+---
+
 ## The one idea that makes this work
 
 You might expect to measure height by integrating acceleration twice (accel →
@@ -70,13 +107,40 @@ So the whole problem reduces to **reliably detecting the takeoff and landing
 instants** in a noisy accelerometer signal. That's a solvable signal-processing
 problem — and it's what the code in this repo does.
 
-**Does it hold for a wing?** A kite pulls you through the arc, so the parabola
-lies — commercial kite devices overshoot by ~2.3×. A wing is close to ballistic.
-Simulated across a realistic population of jumps, the method overshoots by only
-**1.0–1.07×**: [`docs/wing-ballistic-sim.md`](docs/wing-ballistic-sim.md).
-
 Full derivation, assumptions and edge cases:
 [`docs/algorithm.md`](docs/algorithm.md).
+
+### Does that actually hold for a wing?
+
+This is the assumption everything rests on, and it had no literature behind it —
+so it got tested rather than asserted.
+
+A **kite** pulls you through the arc, so the parabola lies and kite devices
+overshoot by **2.31×**. A **wing** can't: your arms cap how much vertical lift you
+can add mid-air, which keeps the flight near-ballistic. Monte-Carlo over 5,000
+simulated jumps — varying wind, wing coefficient, technique, rider mass and jump
+size — puts the overshoot at **mean 1.013×, p99 1.064×**, with a method
+physics-floor **RMSE of 4.2 cm**.
+
+For scale, published field accuracy for commercial kite jump devices runs
+**0.51–0.95 m** (Marčiš 2021). Those are real-world numbers and ours is a
+simulated floor — not the same kind of measurement — but it does say the *method*
+is nowhere near the accuracy bottleneck. Mounting and calibration are.
+
+**None of it has been in the ocean.** The sim de-risks the water day; it doesn't
+replace it.
+
+### Where the evidence lives
+
+| | |
+|---|---|
+| [`docs/algorithm.md`](docs/algorithm.md) | The physics, the signal, the detection state machine, tunables, known limits |
+| [`docs/wing-ballistic-sim.md`](docs/wing-ballistic-sim.md) | Is the airtime method valid for wings? The study behind the numbers above |
+| [`docs/research.md`](docs/research.md) | Literature and market synthesis, what the sea teaches, open-source triage, reading list — including a section correcting this project's own earlier claims |
+| [`docs/gyro-sim-plan.md`](docs/gyro-sim-plan.md) | Why spins break an accel-only detector, and the one sim worth running |
+| [`docs/gyro-prior-art.md`](docs/gyro-prior-art.md) | Rotation counting, fusion libraries, patents |
+| [`docs/riding-dynamics-map.md`](docs/riding-dynamics-map.md) | The on-water metric map: measurement kernels vs thresholds |
+| [`sim/experiments/`](sim/experiments/) | The runnable batteries behind all of the above |
 
 ---
 
