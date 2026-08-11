@@ -90,6 +90,40 @@ trace timestamps. For jumps: takeoff time + true height from counted airtime fra
 Start with a spreadsheet; a scrub-and-tag tool is only worth building once volume
 justifies it.
 
+#### How good does the sync marker have to be? (measured, 2026-08-11)
+
+`evaluate.py`'s `MATCH_WINDOW_S = 1.0` — a detected takeoff within 1.0 s of a
+labeled one is "the same jump". Dress-rehearsed end to end (8 sim jumps through
+the real detector as `jumps.csv`, true apexes as `labels.csv`) with the labels
+deliberately shifted:
+
+| video↔trace error | jumps matched | what you see |
+|---|---|---|
+| ±0.5 s | 8/8 | identical RMSE — harmless |
+| +0.8 s | 8/8 | still fine |
+| **+1.0 s** | **5/8** | **partial — the dangerous one** |
+| ≥1.2 s, or −1.0 s | 0/8 | total, and obvious |
+
+**So: land the sync marker inside ~±0.8 s and nothing is lost.** A firm triple-tap
+visible on both video and trace clears that easily. The window is asymmetric
+(−1.0 s already fails while +1.0 s partly works) because detection lags takeoff
+slightly, so a negative shift eats the window from the near side.
+
+**THE DIAGNOSTIC THAT MATTERS — `missed ≈ spurious` means SYNC, not the detector.**
+A sync error reports *both* "missed 8" *and* "spurious 8": every true jump goes
+unmatched while every real detection is orphaned. A detector genuinely missing
+jumps does **not** simultaneously invent an equal number of spurious ones. On
+water-day evening the naive reading of "matched 0/8" is "the device doesn't
+work" — panic — when it is a column offset in a spreadsheet.
+
+The partial case is the trap: at 1.0 s you get 5/8 and a perfectly plausible RMSE
+computed from a silent subset, with detection rate reading 0.625 and making the
+detector look broken. Check missed-vs-spurious before believing any detection
+rate.
+
+Credit where due: `eval` reports `RMSE —` rather than a number when nothing
+matched, so it never fabricates an accuracy figure out of zero samples.
+
 ### Evaluate + regression-gate
 ```
 ./tools/jump eval --verbose                 # score the whole labeled corpus
