@@ -63,6 +63,7 @@ DFU_PACKET  = "00001532-1212-efde-1523-785feabcd123"   # write-without-response
 # NUS, for the app-side `dfu` trigger.
 NUS_SERVICE = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 NUS_RX      = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
+NUS_TX      = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
 
 # Control-point opcodes (legacy protocol).
 OP_START_DFU          = 0x01
@@ -103,18 +104,69 @@ async def find(name, seconds=10.0):
 
 
 async def trigger_app_dfu():
-    """If the app is running, ask it to reboot into the bootloader."""
-    dev = await find("JumpHeight", 6.0)
-    if dev is None:
-        return False
-    print(f"app is up ({dev.address}) — sending `dfu`")
-    try:
-        async with BleakClient(dev, timeout=15.0) as c:
-            await c.write_gatt_char(NUS_RX, b"dfu\n", response=True)
-            await asyncio.sleep(1.0)   # farewell + reboot
-    except Exception:
-        pass  # the reboot kills the connection mid-write; that's success
-    return True
+    """Ask the running app to reboot into the bootloader — VERIFIED.
+
+    Hard lesson (2026-08-11): a whole evening of "the trigger is flaky" was
+    macOS transport flakiness — BLE writes and serial lines that silently
+    never arrived, each one misread as firmware bouncing back to the app.
+    Every trigger whose delivery was CONFIRMED (the `OK dfu` farewell seen)
+    entered the bootloader. So: a trigger does not count as sent until
+    `OK dfu` is observed on the reply stream. Up to 3 attempts, fresh
+    connection each; serial fallback when a CDC port exists.
+    """
+    import glob
+    for attempt in range(3):
+        dev = await find("JumpHeight", 6.0)
+        if dev is None:
+            return False
+        got = asyncio.Event()
+        buf = bytearray()
+        def on_rx(_, data):
+            buf.extend(data)
+            if b"OK dfu" in buf:
+                got.set()
+        try:
+            async with BleakClient(dev, timeout=15.0) as c:
+                await c.start_notify(NUS_TX, on_rx)
+                await c.write_gatt_char(NUS_RX, b"dfu\n", response=True)
+                try:
+                    await asyncio.wait_for(got.wait(), 4.0)
+                    print(f"trigger CONFIRMED over BLE (attempt {attempt+1}): OK dfu seen")
+                    return True
+                except asyncio.TimeoutError:
+                    print(f"attempt {attempt+1}: no OK dfu observed — retrying")
+        except Exception as e:
+            # a dropped link right after the farewell IS the success path;
+            # only trust it if the farewell was seen
+            if got.is_set():
+                print(f"trigger CONFIRMED over BLE (attempt {attempt+1}, link died post-farewell)")
+                return True
+            print(f"attempt {attempt+1}: link error before confirmation ({type(e).__name__})")
+        await asyncio.sleep(3.0)
+
+    # Serial fallback — deterministic delivery when a cable happens to be in.
+    ports = glob.glob("/dev/cu.usbmodem*")
+    if ports:
+        try:
+            import serial as pyserial
+            sp = pyserial.Serial(ports[0], 115200, timeout=0.5)
+            t0 = time.time()
+            while time.time() - t0 < 2:
+                sp.read(500)
+            sp.write(b"dfu\n")
+            out = b""
+            t0 = time.time()
+            while time.time() - t0 < 5:
+                try:
+                    out += sp.read(500)
+                except Exception:
+                    break  # port dies when the reset fires
+            if b"OK dfu" in out:
+                print("trigger CONFIRMED over serial: OK dfu seen")
+                return True
+        except Exception as e:
+            print(f"serial fallback failed: {e}")
+    return False
 
 
 async def dfu(zip_path):
