@@ -91,8 +91,44 @@ to check first" below before anything else.
 
 ### 5. Sideload to the real watch (spec §11.1)
 
-The Instinct 3 Solar is MTP-only (most current Garmin models are) — macOS
-has no native MTP support:
+**Headless path — this is the one that works (proven 2026-08-10, Epix
+Gen 2).** No GUI, no drag-and-drop:
+
+```bash
+brew install libmtp                      # once
+mtp-detect | head -20                    # confirm the watch answers
+mtp-folders | grep -i apps               # get GARMIN/Apps folder id
+```
+
+`mtp-sendfile` **fails on Garmin** with `get_suggested_storage_id():
+could not get storage id from parent id` — libmtp cannot resolve the
+parent folder to a storage. The fix is to set both ids explicitly, which
+needs ~30 lines of C against `libmtp.h` (`f->parent_id`, `f->storage_id`,
+then `LIBMTP_Send_File_From_File`); build it with
+`-I/opt/homebrew/opt/libmtp/include -L/opt/homebrew/opt/libmtp/lib -lmtp`
+(there is no `pkg-config` on this Mac). Storage on the Epix is a single
+read/write `0x00020001`. Verify the push with
+`mtp-files | grep -A6 'File ID: <id>'` — check the size matches the local
+`.prg` and `Parent ID` is the Apps folder.
+
+Also: `monkeyc` needs the JDK **prepended** to `PATH`
+(`export PATH="/opt/homebrew/opt/openjdk/bin:$PATH"`), not appended —
+appending leaves macOS's `/usr/bin/java` stub first and the build dies
+with "Unable to locate a Java Runtime."
+
+**Which watch is which:** the bench watch is the owner's **Epix Gen 2**
+(`epix2`, part number 006-B3943-00); the **Instinct 3 Solar** is his
+brother's and is only intermittently available. Both product ids are in
+the manifest — build the one matching the watch in your hand, since a
+`.prg` is per-device and the wrong one simply will not appear on the
+watch. Confirm identity by pulling `GARMIN/GarminDevice.xml` off the
+device (`mtp-getfile <id> ./GarminDevice.xml`) and reading `<Description>`.
+
+---
+
+The GUI alternative (OpenMTP) — the Instinct 3 Solar and Epix are both
+MTP-only, as most current Garmin models are, and macOS has no native MTP
+support:
 
 1. Build a release `.prg` for the device (same command as step 3 — a
    data field sideloads as a single per-device `.prg`, not a multi-device

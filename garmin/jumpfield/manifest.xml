@@ -30,6 +30,19 @@
         -->
         <iq:products>
             <iq:product id="instinct3solar45mm"/>
+            <!--
+              epix2 added 2026-08-10 ahead of the M5 schedule for a plain
+              hardware reason: the watch actually on the bench is an Epix
+              Gen 2 (GarminDevice.xml: part number 006-B3943-00, "EPIX",
+              sw 2609), not the Instinct 3 Solar the spec assumes. A .prg
+              is per-device, so the Instinct build cannot sideload here.
+              Layout caveat: JumpFieldView's FULL_MIN_H/HALF_MIN_H tiers
+              were guessed against Instinct's 176x176 MIP; this is a
+              416x416 AMOLED, so the field will render but the tier
+              breakpoints are unvalidated on it (README "three things to
+              check first" #1 applies again for this device).
+            -->
+            <iq:product id="epix2"/>
         </iq:products>
         <iq:permissions>
             <!-- BLE central: scan/connect/subscribe to the puck's NUS profile. -->
