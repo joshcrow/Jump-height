@@ -1066,9 +1066,31 @@ def _drop_analyze(raws: list[float], expected: float, args, p,
         print("⚠️  spread is high — results may be sloppy. Consider re-running "
               "with more careful, stiller drops.")
 
-    write = args.yes
-    if not write and sys.stdin.isatty() and not getattr(args, "fake", False):
-        write = input("\nWrite this into config/params.json? [y/N] ").strip().lower() == "y"
+    # A --fake rehearsal writing a config is DELIBERATE and tested (DECISIONS
+    # #17: the whole calibration experience is rehearsable and regression-
+    # tested without hardware) — but only into an isolated config. The CLI
+    # tests copy params.json to a tempdir and point JH_CONFIG at it.
+    #
+    # What must not happen is a rehearsal writing the REPO's params.json, the
+    # single source of truth for firmware, simulator and analysis alike. On
+    # 2026-08-11 `jump drop --fake --drops 3 --yes` did exactly that, printing
+    # "✅ saved" and storing airtime_offset_s=-0.0204 from invented drops. The
+    # old guard covered only the interactive prompt, so --yes walked past it,
+    # and the result is indistinguishable from a real calibration afterwards.
+    #
+    # So: fake may write an ISOLATED config, never the default one.
+    faking = getattr(args, "fake", False)
+    default_config = not os.environ.get("JH_CONFIG")
+    if faking and default_config:
+        write = False
+        print("\n(--fake: refusing to write the repo's config/params.json from "
+              "simulated drops — that file drives firmware, sim and analysis "
+              "alike. Set JH_CONFIG=<path> to rehearse the save into a scratch "
+              "copy, or drop for real without --fake.)")
+    else:
+        write = args.yes
+        if not write and sys.stdin.isatty() and not faking:
+            write = input("\nWrite this into config/params.json? [y/N] ").strip().lower() == "y"
     if write:
         with open(CONFIG_PATH) as f:
             cfg = json.load(f)
@@ -1100,6 +1122,12 @@ def _drop_analyze(raws: list[float], expected: float, args, p,
             return 1
         else:
             print("Run  ./tools/jump flash  to bake it into the device.")
+    elif getattr(args, "fake", False):
+        # Don't tell a rehearsal to "re-run with --yes" — --yes is exactly what
+        # is being ignored here, and pointing at it is how someone concludes
+        # the tool is broken (or worse, goes looking for a way around it).
+        print("(rehearsal complete — run without --fake, on the real device, "
+              "to calibrate for real)")
     else:
         print("(not saved — re-run with --yes to save automatically)")
     return 0
