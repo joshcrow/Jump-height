@@ -971,6 +971,12 @@ def cmd_drop(args) -> int:
         print(f"Physics: a drop from {args.height_cm:.0f} cm free-falls for exactly "
               f"{expected:.3f}s.\nWe compare what the device measures against that "
               "to find its timing bias.\n")
+        print("⚠️  DROP IT IN ITS CASE, not as a bare board.")
+        print("   Safety: a bare LiPo taking repeated impacts can be damaged")
+        print("   invisibly and fail later. Not worth it for a calibration.")
+        print("   Accuracy: this measures DETECTION LATENCY — how the landing")
+        print("   impulse reaches the sensor — so it must be calibrated in the")
+        print("   configuration you actually ride, which is sealed in the case.\n")
         print("Setup: hold the device so its BOTTOM is exactly at your measured")
         print(f"height ({args.height_cm:.0f} cm above a cushion/pillow), then let go —")
         print("don't throw it. Keep still for a second before each drop.\n")
