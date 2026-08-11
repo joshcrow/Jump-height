@@ -131,11 +131,23 @@ function testMarkStale_retainsDataRatherThanClearingIt(logger) {
 (:test)
 function testMissingFieldsLeavePriorValueInPlace(logger) {
     // A malformed/partial JUMP line must not blank a good number to zero.
+    //
+    // BEHAVIOUR CHANGED 2026-08-11, deliberately. This test used to assert
+    // that a partial line was HALF-APPLIED — `n` updated, height retained —
+    // and that is the exact mechanism that put a jump count of 64 on the
+    // wrist next to a stale height while the puck reported 1. Firmware emits
+    // every JUMP field from a single emitf (main.cpp), so a JUMP missing
+    // fields is not "partial", it is DAMAGED, and the count it carries is no
+    // more trustworthy than the height it lost.
+    //
+    // The original intent — never blank a good number to zero — is satisfied
+    // more strongly now: the line is dropped whole, so nothing changes at all.
     var m = new Model.State();
     m.onLine(Protocol.parseKV("JUMP n=1 airtime_s=0.5 height_m=0.3 best_m=0.3"));
     m.onLine(Protocol.parseKV("JUMP n=2"));  // height_m/airtime_s/best_m absent
-    Test.assertEqual(m.jumpCount(), 2);      // n= still updates
-    Test.assertEqual(m.lastHeightM(), 0.3);  // but height retains the prior value
+    Test.assertEqual(m.jumpCount(), 1);      // n= is NOT trusted either
+    Test.assertEqual(m.lastHeightM(), 0.3);  // and the good number survives
+    Test.assertEqual(m.rejectedCount(), 1);
     return true;
 }
 
@@ -159,5 +171,107 @@ function testStats_batteryAdderKeysCapturedAndAbsentKeysRetain(logger) {
         "STATS session_jumps=1 session_best_m=0.4 stored_jumps=1 stored_best_m=0.4 trace_bytes=10"));
     Test.assertEqual(m.puckBattPct(), 95);
     Test.assertEqual(m.puckCharging(), true);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Corruption gate (2026-08-11). These encode the failure seen on the wrist:
+// the watch displayed 64 jumps / best 0.3 ft while the puck itself reported
+// session_jumps=1 session_best_m=0.164. Lost bytes — including the ones
+// carrying a '\n' — let LineReader glue fragments into a line that parses
+// PERFECTLY and is therefore believed. Each test below is a line that cannot
+// have come intact off the wire, and the assertion is always the same: prior
+// good state survives untouched, and nothing invented reaches the screen.
+
+(:test)
+function testCorrupt_truncatedJumpIsRejectedNotHalfApplied(logger) {
+    var m = new Model.State();
+    m.onLine(Protocol.parseKV("JUMP n=1 airtime_s=0.36 height_m=0.164 best_m=0.164"));
+    Test.assertEqual(m.jumpCount(), 1);
+
+    // Tail lost: no best_m, no airtime_s. The old code applied n and height_m
+    // anyway, which is exactly how a wrong count reached the glass.
+    m.onLine(Protocol.parseKV("JUMP n=64 height_m=0.9"));
+    Test.assertEqual(m.jumpCount(), 1);                 // NOT 64
+    Test.assertEqual(m.lastHeightM(), 0.164);           // NOT 0.9
+    Test.assertEqual(m.rejectedCount(), 1);
+    return true;
+}
+
+(:test)
+function testCorrupt_bestBelowLastIsImpossible(logger) {
+    // Firmware updates session_best BEFORE emitting the line it rides on, so
+    // best_m < height_m cannot happen on the wire. This single invariant
+    // would have caught the observed corruption on its first frame.
+    var m = new Model.State();
+    m.onLine(Protocol.parseKV("JUMP n=1 airtime_s=0.36 height_m=0.164 best_m=0.164"));
+    m.onLine(Protocol.parseKV("JUMP n=2 airtime_s=0.40 height_m=0.152 best_m=0.091"));
+    Test.assertEqual(m.jumpCount(), 1);
+    Test.assertEqual(m.sessionBestM(), 0.164);
+    Test.assertEqual(m.rejectedCount(), 1);
+    return true;
+}
+
+(:test)
+function testCorrupt_gluedJumpAndStatsIsRejected(logger) {
+    // Two lines merged by a lost newline: a JUMP tag carrying STATS-only keys.
+    // parseKV is last-key-wins, so this parses cleanly — the key SETS are the
+    // only evidence that it is two lines.
+    var m = new Model.State();
+    m.onLine(Protocol.parseKV("JUMP n=1 airtime_s=0.36 height_m=0.164 best_m=0.164"));
+    m.onLine(Protocol.parseKV(
+        "JUMP n=7 airtime_s=0.5 height_m=0.3 best_m=0.4 session_jumps=64 stored_jumps=8"));
+    Test.assertEqual(m.jumpCount(), 1);
+    Test.assertEqual(m.rejectedCount(), 1);
+    return true;
+}
+
+(:test)
+function testCorrupt_gluedStatsAndJumpIsRejected(logger) {
+    // Mirror case, and the worse one: a bad STATS reseeds count AND best at
+    // once (US6), poisoning the display until the next reconnect.
+    var m = new Model.State();
+    m.onLine(Protocol.parseKV("STATS session_jumps=3 session_best_m=1.2"));
+    Test.assertEqual(m.jumpCount(), 3);
+    m.onLine(Protocol.parseKV("STATS session_jumps=64 session_best_m=0.09 height_m=0.5 best_m=0.5"));
+    Test.assertEqual(m.jumpCount(), 3);
+    Test.assertEqual(m.sessionBestM(), 1.2);
+    Test.assertEqual(m.rejectedCount(), 1);
+    return true;
+}
+
+(:test)
+function testCorrupt_physicallyImpossibleValuesRejected(logger) {
+    var m = new Model.State();
+    m.onLine(Protocol.parseKV("JUMP n=1 airtime_s=0.36 height_m=0.164 best_m=0.164"));
+    // 91 m jump.
+    m.onLine(Protocol.parseKV("JUMP n=2 airtime_s=0.5 height_m=91.0 best_m=91.0"));
+    // 40 s of airtime.
+    m.onLine(Protocol.parseKV("JUMP n=3 airtime_s=40.0 height_m=0.2 best_m=0.3"));
+    // Negative height.
+    m.onLine(Protocol.parseKV("JUMP n=4 airtime_s=0.4 height_m=-1.0 best_m=0.3"));
+    Test.assertEqual(m.jumpCount(), 1);
+    Test.assertEqual(m.lastHeightM(), 0.164);
+    Test.assertEqual(m.rejectedCount(), 3);
+    return true;
+}
+
+(:test)
+function testCorrupt_gateDoesNotRejectRealTraffic(logger) {
+    // The gate must never eat a line the firmware actually emits. This is the
+    // exact wire format from main.cpp's emitf, and the spec §5.2 sample.
+    var m = new Model.State();
+    m.onLine(Protocol.parseKV(
+        "JUMP n=4 airtime_raw_s=1.021 airtime_s=1.036 height_m=1.316 height_ft=4.3 best_m=1.316"));
+    Test.assertEqual(m.jumpCount(), 4);
+    Test.assertEqual(m.lastHeightM(), 1.316);
+    m.onLine(Protocol.parseKV(
+        "STATS session_jumps=4 session_best_m=1.316 stored_jumps=9 stored_best_m=1.316 trace_bytes=182031 vbat_mv=3870 batt_pct=63 chg=0"));
+    Test.assertEqual(m.jumpCount(), 4);
+    Test.assertEqual(m.puckBattPct(), 63);
+    // Equal best and height must pass (every session's first jump is this).
+    m.onLine(Protocol.parseKV("JUMP n=5 airtime_s=0.4 height_m=0.2 best_m=0.2"));
+    Test.assertEqual(m.jumpCount(), 5);
+    Test.assertEqual(m.rejectedCount(), 0);
     return true;
 }

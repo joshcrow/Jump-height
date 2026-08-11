@@ -23,6 +23,56 @@ module Model {
 
     const FLASH_MS = 5000;  // new-jump invert-flash duration (spec §4.2)
 
+    // ---- corruption gate -----------------------------------------------
+    //
+    // "The device is the source of truth" (spec §5.2) is only true of a line
+    // that ARRIVED INTACT. If bytes go missing mid-stream — including the
+    // bytes carrying a '\n' — LineReader glues the surviving fragments into a
+    // single line, and because parseKV is last-key-wins that merge parses
+    // PERFECTLY. The result is a syntactically valid JUMP holding values the
+    // device never sent together, which the Model then displays as fact.
+    //
+    // Observed on the wrist 2026-08-11: a jump count of 64 and a best of
+    // 0.3 ft at a moment the puck itself reported session_jumps=1 and
+    // session_best_m=0.164. Silently wrong is the worst failure class there
+    // is, so every line now has to prove itself first.
+    //
+    // Every check below is either a protocol invariant or a physical
+    // impossibility — NOT a tuned threshold. Nothing here can reject a line
+    // the firmware would actually emit.
+
+    const MAX_HEIGHT_M  = 30.0;  // ~5x any real wing jump; rejects nonsense only
+    const MAX_AIRTIME_S = 6.0;   // 6 s of airtime is a 44 m jump
+
+    // best_m is computed from session_best, which firmware updates BEFORE
+    // emitting the line it appears on (main.cpp: `if (ev.height_m >
+    // session_best) session_best = ev.height_m;` immediately precedes the
+    // emitf). So best_m >= height_m is guaranteed on the wire, and a line
+    // where best < last is proof of corruption. Epsilon covers the %.3f
+    // rounding, nothing more.
+    const BEST_EPS_M = 0.0015;
+
+    // Keys that belong to exactly ONE line type. A line carrying keys from
+    // two types is not a line — it is two lines glued by a lost newline.
+    // This is the sharpest detector available and it has no tunable knob.
+    // Deliberately excludes the battery adder keys (vbat_mv/batt_pct/chg),
+    // which legitimately ride on more than one line type (docs/sense.md §3.4).
+    function _hasAnyKey(kv as Dictionary, keys as Array) as Boolean {
+        for (var i = 0; i < keys.size(); i += 1) {
+            if (kv.get(keys[i]) != null) { return true; }
+        }
+        return false;
+    }
+
+    function _statsOnlyKeys() as Array {
+        return ["session_jumps", "session_best_m", "stored_jumps",
+                "stored_best_m", "trace_bytes"];
+    }
+
+    function _jumpOnlyKeys() as Array {
+        return ["airtime_raw_s", "airtime_s", "height_m", "height_ft", "best_m"];
+    }
+
     class State {
 
         hidden var _lastHeightM as Float;
@@ -51,6 +101,9 @@ module Model {
                                               // tolerate-unknown rule in
                                               // reverse)
         hidden var _puckCharging as Boolean;
+        hidden var _rejected as Number;       // lines dropped by the corruption
+                                               // gate; a nonzero value means the
+                                               // link is delivering damaged data
 
         function initialize() {
             _lastHeightM = 0.0;
@@ -58,6 +111,7 @@ module Model {
             _sessionBestM = 0.0;
             _bestAirtimeS = 0.0;
             _jumpCount = 0;
+            _rejected = 0;
             _lastUpdateMs = null;
             _staleSinceMs = null;
             _puckBattPct = null;
@@ -122,8 +176,46 @@ module Model {
         function jumpCount() as Number { return _jumpCount; }
         function puckBattPct() { return _puckBattPct; }  // Number or null
         function puckCharging() as Boolean { return _puckCharging; }
+        function rejectedCount() as Number { return _rejected; }
+
+        // Returns true if this JUMP line cannot have come intact off the wire.
+        // Compatible with spec §5.2's "tolerate unknown lines/keys (skip)":
+        // unknown keys still pass through untouched — what gets skipped here
+        // is a line that CONTRADICTS ITSELF, which is a corrupt line, not an
+        // unknown one.
+        hidden function _jumpIsCorrupt(kv as Dictionary) as Boolean {
+            var h = _toFloat(kv.get("height_m"));
+            var a = _toFloat(kv.get("airtime_s"));
+            var b = _toFloat(kv.get("best_m"));
+            var n = _toNumber(kv.get("n"));
+
+            // 1. Completeness. Firmware emits all of these on every JUMP
+            //    (main.cpp's single emitf), so a missing one means bytes were
+            //    lost, and the surviving fragment must not be half-applied.
+            if (h == null || a == null || b == null || n == null) {
+                return true;
+            }
+            // 2. Two lines glued by a lost newline: STATS-only keys riding on
+            //    a JUMP tag.
+            if (Model._hasAnyKey(kv, Model._statsOnlyKeys())) {
+                return true;
+            }
+            // 3. Physically impossible.
+            if (h < 0.0 || h > Model.MAX_HEIGHT_M) { return true; }
+            if (a < 0.0 || a > Model.MAX_AIRTIME_S) { return true; }
+            if (n < 0) { return true; }
+            // 4. The wire invariant: session_best is updated before the line
+            //    is emitted, so best can never be below the jump it reports.
+            //    This one alone would have caught the 2026-08-11 corruption.
+            if (b + Model.BEST_EPS_M < h) { return true; }
+            return false;
+        }
 
         hidden function _applyJump(kv as Dictionary) as Void {
+            if (_jumpIsCorrupt(kv)) {
+                _rejected += 1;
+                return;  // drop the whole line: one lost jump beats a wrong one
+            }
             var h = _toFloat(kv.get("height_m"));
             var a = _toFloat(kv.get("airtime_s"));
             var b = _toFloat(kv.get("best_m"));
@@ -148,6 +240,20 @@ module Model {
         }
 
         hidden function _applyStats(kv as Dictionary) as Void {
+            // Same glue test, mirrored: JUMP-only keys riding a STATS tag mean
+            // two lines were merged. A corrupt STATS is worse than a corrupt
+            // JUMP — it reseeds count AND best in one go (US6), so a bad one
+            // poisons the whole session display until the next reconnect.
+            if (Model._hasAnyKey(kv, Model._jumpOnlyKeys())) {
+                _rejected += 1;
+                return;
+            }
+            var sb = _toFloat(kv.get("session_best_m"));
+            if (sb != null && (sb < 0.0 || sb > Model.MAX_HEIGHT_M)) {
+                _rejected += 1;
+                return;
+            }
+
             // Reconnect/late-join reseed only (US6). session_* fields only —
             // stored_* describes the device's flash archive, not this live
             // session, and is deliberately ignored (spec §5.2).
