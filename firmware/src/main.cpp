@@ -50,6 +50,7 @@
 #include "params.gen.h"
 #include "gyro_bias.h"
 #include "jump_detector.h"
+#include "lever_arm.h"
 #include "platform/jh_clock.h"
 #include "platform/jh_imu.h"
 #include "platform/jh_link.h"
@@ -66,6 +67,7 @@ static const uint32_t IDLE_TIMEOUT_MS    = (uint32_t)JH_IDLE_TIMEOUT_S * 1000UL;
 
 jump::Detector detector;
 jump::GyroBias gyro_bias;
+jump::LeverArm lever_arm;
 
 static bool sensor_ok = false;
 static bool fs_ok     = false;
@@ -581,9 +583,23 @@ void loop() {
   const bool have_gyro = jh_imu::read_gyro_dps(gx, gy, gz);
   bool jumped;
   if (have_gyro) {
-    const float omega_dps =
-        gyro_bias.update(gx, gy, gz, detector.state() == jump::State::RIDING);
+    const bool riding = detector.state() == jump::State::RIDING;
+    const float omega_dps = gyro_bias.update(gx, gy, gz, riding);
+
+    // Self-calibrating lever arm (lever_arm.h). In flight the board is in free
+    // fall, so `mag` — the RAW, uncorrected magnitude — IS the rotation's own
+    // omega^2*r term, and r falls out of it. Feeding the raw value is essential:
+    // the corrected one would be circular.
+    const bool was_airborne = detector.state() == jump::State::AIRBORNE;
+    if (was_airborne) lever_arm.observe(mag, omega_dps);
+
     jumped = detector.update(t, mag, omega_dps, ev);
+
+    // Flight over (jump or reject — a rejected flight still carries perfectly
+    // good rotation data). Fold in this flight's estimate for the NEXT jump.
+    if (was_airborne && detector.state() != jump::State::AIRBORNE) {
+      if (lever_arm.commit()) detector.set_spin_lever_m(lever_arm.value());
+    }
   } else {
     jumped = detector.update(t, mag, ev);
   }

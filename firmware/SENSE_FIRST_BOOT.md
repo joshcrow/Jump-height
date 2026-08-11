@@ -782,6 +782,70 @@ firmware's doing); (d) that charging genuinely proceeds while off
 (hardware says yes — BQ25101 needs no CPU — but watch the red LED once
 for the record).
 
+## 26. Gyro spin correction + self-calibrating lever arm — built 2026-08-10, ZERO silicon time *(added 2026-08-10)*
+
+**Files:** `firmware/include/jump_detector.h` (`correct_for_spin`),
+`firmware/include/gyro_bias.h`, `firmware/include/lever_arm.h`,
+`firmware/src/platform/nrf52/lsm6ds3_min.h` (gyro now ON: `CTRL2_G=0x5C`,
+LPF via `CTRL4_C=0x02`/`CTRL6_C=0x00`/`CTRL7_G=0x00`).
+
+Implements DECISIONS.md #29. Everything here is validated **against the
+simulator only** — the sim's own sensor model, its own assumed spin
+profile. No gyro sample from real silicon has ever been through it. The
+whole feature is inert until a lever arm is estimated (`spin_lever_m`
+defaults to 0 = exact identity), so the risk of shipping it dark is low,
+but nothing below is a silicon fact.
+
+**The precision constraint, which is the surprise and the thing to
+re-check first.** A mis-set lever arm leaves a free-fall residual of
+`rot_g·√(1−k²)` where `k = r_assumed/r_true`. The square root amplifies
+small errors brutally: `k=0.99` leaves **14%** of `rot_g`. At r=0.5 m and
+600 dps, `rot_g` is 5.6 g, so that residual is 0.79 g — more than twice
+the 0.35 g free-fall gate. Takeoff gets re-pinned mid-flight and height
+reads ≈−95% low. Required precision, computed:
+
+| mount | spin | rot_g | k must exceed | tolerance |
+|---|---|---|---|---|
+| 0.2 m | 300 dps | 0.56 g | 0.780 | 22% |
+| 0.3 m | 600 dps | 3.35 g | 0.995 | 0.55% |
+| 0.5 m | 600 dps | 5.59 g | 0.998 | 0.20% |
+| 0.8 m | 600 dps | 8.95 g | 0.999 | 0.08% |
+
+**0.08% at the far end.** No tape measure reaches that, which is precisely
+why the lever arm is measured per-jump from flight data rather than
+entered by hand.
+
+**A rule this file's sibling comment got BACKWARDS, now fixed.** g4's
+landing-erasure probe said an over-estimated r erases the touchdown, so
+`jump_detector.h` originally advised "err SHORT." Measured: a deliberate
+5% short-shave broke **5 of 8** lever×spin cases; removing it fixed all 8
+at +0.0% error. The two errors push in *opposite* directions — under
+breaks the free-fall gate, over erases the landing — so there is no safe
+side and the target is UNBIASED. `kSafetyFactor` is 1.0 and lowering it is
+not a free safety margin.
+
+**Verify on silicon, in this order:**
+1. **Gyro reads at all** — `selftest`, or add a raw gyro row. Stationary
+   should read ≈0 dps per axis after `gyro_bias` settles; rotating the
+   board by hand should track sensibly. Byte-order errors here look like a
+   plausible-but-wrong rate, not an obvious failure (same little-endian
+   trap as the accel burst — see `lsm6ds3_min.h`).
+2. **Real `rot_g` magnitudes.** The table above assumes the sim's spin
+   profile. Spin the board on a string/turntable at a known radius and
+   check the measured `|a|` against `ω²r/g`. This is also the first honest
+   check of whether the ±16 g accel range clips: r=0.8 m at 600 dps is
+   ~9 g, and real tricks reportedly reach 900+ dps.
+3. **Lever-arm estimate on a real jump.** Does it converge, and to
+   something physically sensible for where the puck actually sits?
+4. **Power.** Gyro is now always-on at ~0.9 mA against a ~2 mA idle
+   baseline (item 25's drain finding) — measure the real delta before
+   deciding whether duty-cycling is worth the settle-time risk.
+
+**Deliberately NOT done:** duty-cycling the gyro (the free-fall gate
+confirms in 80 ms and the LSM6DS3's gyro settle is the same order —
+measure before attempting), and any use of the gyro for rotation counting
+or trick metrics (that is the S5 metrics ladder, still deferred).
+
 ---
 
 ## Explicitly out of scope for this pass (not bugs, not forgotten)

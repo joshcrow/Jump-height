@@ -85,8 +85,23 @@ class Detector {
   // The max(0,...) clamp is load-bearing and two-sided (g4's landing-erasure
   // probe): an OVER-estimated r drives the argument negative on the landing
   // spike itself, clamps it to zero, and the detector never sees the
-  // touchdown — the jump runs away or is lost entirely. An UNDER-estimated r
-  // merely leaves a residual. When calibrating the lever arm, err SHORT.
+  // touchdown — the jump runs away or is lost entirely.
+  //
+  // CORRECTION (2026-08-10): this comment used to end "so err SHORT," which is
+  // WRONG and was measured wrong. Under-estimating is not the safe direction —
+  // it leaves a free-fall residual of rot_g*sqrt(1-k^2), and the sqrt amplifies
+  // small errors badly: k=0.99 leaves 14% of rot_g. At r=0.5 m and 600 dps
+  // that is 0.79 g against this 0.35 g gate, so takeoff is re-pinned
+  // mid-flight and height reads ~-95% low. A deliberate 5% short-shave broke 5
+  // of 8 lever x spin cases; removing it fixed all 8 at +0.0% error.
+  //
+  // The two errors push in opposite directions and there is no safe side. Aim
+  // UNBIASED. See lever_arm.h design note 3 and tools/tests/test_lever_arm.py.
+  //
+  // The precision this demands is the real constraint, and it is steep: at
+  // r=0.5 m / 600 dps the residual stays under the gate only for k > 0.998.
+  // That is why the lever arm is measured per-jump from flight data rather
+  // than entered by hand — no tape measure reaches 0.2%.
   //
   // spin_lever_m = 0 (the default) makes this exactly the identity, so an
   // uncalibrated device behaves precisely as it did before.
