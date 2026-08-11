@@ -1,9 +1,9 @@
 # Jump Height 🪂🌊
 
-**An open-source, open-hardware jump tracker for wing foiling** — a DIY alternative
-to the [Woo](https://www.woosports.com/). Stick a small waterproof sensor on the
-board, go send it, and find out **how high you jumped** and **how long you were in
-the air**.
+**An open-source, open-hardware jump tracker for wing foiling.** Stick a
+thumb-sized waterproof puck on the board, go send it, and find out **how high you
+jumped** and **how long you were in the air** — read out live on your watch, your
+phone, or in the browser. About US$20 in parts.
 
 Every software step is one command via `./tools/jump`, and all of it is
 **rehearsable with zero hardware** against a simulated device:
@@ -26,8 +26,8 @@ New here? **[BUILD.md](BUILD.md)** is the hardware runbook,
 | Piece | State |
 |---|---|
 | **Detection algorithm** | ✅ Proven in sim and on the bench. Shared C++ core, mirrored in Python. |
-| **v1 puck** — FireBeetle ESP32 + MPU-6050 | ✅ Hardware-validated. **Feature-frozen** (bugfix-only, DECISIONS #27) — it is the rig that goes in the water first. |
-| **v2 puck** — XIAO nRF52840 Sense | ✅ On silicon. Bring-up milestone S0 complete: two real QSPI bugs found and fixed on hardware, battery telemetry, soft power-off proven both directions. |
+| **The puck** — XIAO nRF52840 Sense | ✅ On silicon. Bring-up milestone S0 complete: two real QSPI bugs found and fixed on hardware, battery telemetry, soft power-off proven both directions. |
+| **v1 prototype** — FireBeetle ESP32 | 🧊 **Feature-frozen**, bugfix-only (DECISIONS #27). Bench-validated, and still the rig booked for the first water day until the Sense passes the same gauntlet — then it retires to spare. |
 | **Browser app** | ✅ Live BLE stats, session sync, charts, in-browser flashing. |
 | **Garmin watch field** | 🟡 **Live on the wrist** (Epix Gen 2, 2026-08-11) — a real toss registered. Numbers are **not yet trustworthy**: see the open bug below. |
 | **Phase 2 — the water day** | 🌊 **Next.** Nothing here has been in the ocean yet. |
@@ -44,7 +44,7 @@ numbers on the watch face until that closes.
 
 You might expect to measure height by integrating acceleration twice (accel →
 velocity → position). **Don't.** Tiny sensor errors accumulate into meters of
-drift within seconds. Commercial devices (Woo, Surfr) sidestep this with the
+drift within seconds. Commercial jump trackers sidestep this with the
 **airtime method**:
 
 1. When the board leaves the water, it's a projectile in **free-fall** — an
@@ -84,18 +84,18 @@ Full derivation, assumptions and edge cases:
 
 ```mermaid
 flowchart LR
-    IMU1["IMU (accel+gyro)\nMPU-6050"] -->|I²C ~200 Hz| ESP32["FireBeetle 2 ESP32-E\n(v1, frozen)"]
-    ESP32 -->|jump-detection\nstate machine| ESP32
-    ESP32 -->|BLE notify — NUS| Phone["Phone / laptop\n(web app, Bluefy, blecmd.py)"]
-    ESP32 -->|CSV log| Flash["On-board flash"]
-    Bat1["2500 mAh LiPo"] --> ESP32
-
-    IMU2["IMU (accel+gyro)\nLSM6DS3TR-C"] -->|I²C ~200 Hz| Sense["XIAO nRF52840\nSense (v2)"]
+    IMU2["IMU (accel+gyro)\nLSM6DS3TR-C"] -->|I²C ~200 Hz| Sense["XIAO nRF52840 Sense\n(the puck)"]
     Sense -->|jump-detection\nstate machine| Sense
-    Sense -->|BLE notify — NUS| Phone
     Sense -->|BLE notify — NUS| Watch["Garmin watch\n(garmin/jumpfield)"]
+    Sense -->|BLE notify — NUS| Phone["Phone / laptop\n(web app, Bluefy, blecmd.py)"]
     Sense -->|binary trace| QSPI["External QSPI flash"]
     Bat2["250 mAh LiPo"] --> Sense
+
+    IMU1["IMU (accel only)\nMPU-6050"] -->|I²C ~200 Hz| ESP32["FireBeetle 2 ESP32-E\n(v1 prototype, frozen)"]
+    ESP32 -->|jump-detection\nstate machine| ESP32
+    ESP32 -->|BLE notify — NUS| Phone
+    ESP32 -->|CSV log| Flash["On-board flash"]
+    Bat1["2500 mAh LiPo"] --> ESP32
 ```
 
 One detector, three places it runs, kept deliberately in sync:
@@ -104,7 +104,9 @@ One detector, three places it runs, kept deliberately in sync:
   (`include/jump_detector.h`) runs unmodified on every board; a thin platform
   seam (`src/platform/{esp32,nrf52,host}/`) supplies the IMU/BLE/storage glue
   per chip. `host` compiles the real firmware core natively for the test suite,
-  so most bugs die without a board.
+  so most bugs die without a board. The two-board split is why: keeping the
+  detector chip-neutral is what let the project change chips without rewriting
+  the thing that actually measures jumps.
 - **[`sim/`](sim/)** — a pure-Python mirror (`detector.py`) plus a synthetic-data
   generator and a physics model of a wing jump, so the algorithm can be developed,
   tuned and *statistically characterised* with no hardware at all.
@@ -139,16 +141,26 @@ python3 sim/run.py --csv data/my_session.csv   # replay a real capture
 
 ## Hardware
 
-Two builds, ~US$15–30 in parts:
+**Build this one** — Seeed XIAO nRF52840 Sense + a 250 mAh LiPo, ~US$15–20.
+The IMU is on the board, so there is no sensor wiring at all: a thumb-sized
+puck, bring-up complete on real silicon, and the only build that talks to a
+Garmin watch. Spec and gap analysis: [`docs/sense.md`](docs/sense.md).
 
-| Build | Parts | State |
-|-------|-------|-------|
-| **v1 — FireBeetle** | DFRobot FireBeetle 2 ESP32-E + MPU-6050 + 2500 mAh LiPo + waterproof capsule | Bench-validated and **feature-frozen**. Stays the water-day rig until v2 passes the same gauntlet. |
-| **v2 — Sense** | Seeed XIAO nRF52840 Sense (IMU on board, no wiring) + 250 mAh LiPo | Bring-up S0 complete on real silicon. Drives the Garmin field. See [`docs/sense.md`](docs/sense.md). |
+<details>
+<summary><b>v1 prototype — FireBeetle ESP32 + MPU-6050</b> (frozen; kept honest, not recommended for new builds)</summary>
 
-The v2 cell is **250 mAh** as actually installed — much of `docs/sense.md`'s
-power arithmetic still assumes the 500 mAh part that was originally ordered
-(noted at `docs/sense.md:138`), so halve those runtimes when reading it.
+DFRobot FireBeetle 2 ESP32-E + MPU-6050 + 2500 mAh LiPo + waterproof capsule.
+This is the rig the algorithm was actually proven on, and it is **feature-frozen
+— bugfix-only** (DECISIONS #27). It keeps water-day duty until the Sense clears
+the identical bench → drop-cal → bucket → water gauntlet, then retires to spare:
+measurement continuity over novelty (DECISIONS #24). Accel-only, ±8 g, and it
+does not drive the watch.
+
+</details>
+
+Note on power: the Sense cell is **250 mAh** as actually installed, while much of
+`docs/sense.md`'s power arithmetic still assumes the 500 mAh part originally
+ordered (flagged at `docs/sense.md:138`) — halve those runtimes when reading it.
 
 Full BOM, wiring, power budget and **waterproofing notes** (the part that
 actually kills these projects): [`docs/hardware.md`](docs/hardware.md).
@@ -218,15 +230,15 @@ Jump-height/
 ## Roadmap
 
 - **Phase 0 — Prove the algorithm (no hardware).** ✅ complete
-- **Phase 1 — Bench firmware.** ✅ complete, hardware-validated (ESP32 frozen 2026-07-29)
+- **Phase 1 — Bench firmware.** ✅ complete, hardware-validated on the v1 prototype
+  (which was frozen 2026-07-29 once it had done its job)
 - **Phase 2 — On the water.** 🌊 **next.** Waterproof it, log raw CSV, capture real
   sessions, tune against video ground truth. *Nothing in this repo has been in the
   ocean yet — every accuracy number so far is bench or simulation.*
 - **Phase 3 — App.** ✅ complete, hardware-validated
-- **Phase 4 — v2 hardware.** 🚧 In progress on the XIAO nRF52840 Sense. Bring-up S0
-  done on silicon; the Garmin field is live on the wrist. It takes over water duty
-  once it passes the same bench → drop-cal → bucket → water gauntlet the ESP32 rig
-  already survived.
+- **Phase 4 — The Sense puck.** 🚧 Where the work is. Bring-up S0 done on silicon;
+  the Garmin field is live on the wrist. It takes over water duty once it clears the
+  same bench → drop-cal → bucket → water gauntlet the v1 rig already survived.
 
 Acceptance criteria per phase: [`docs/roadmap.md`](docs/roadmap.md).
 
@@ -237,5 +249,3 @@ Acceptance criteria per phase: [`docs/roadmap.md`](docs/roadmap.md).
 Contributions welcome — this is meant to be a community project. Software/firmware is
 **MIT** licensed; hardware files (when added) target **CERN-OHL-S** and docs
 **CC BY-SA 4.0**. See [`LICENSE`](LICENSE).
-
-Not affiliated with or endorsed by Woo Sports. "Woo" is referenced only as prior art.
