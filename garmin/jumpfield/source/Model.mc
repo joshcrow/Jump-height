@@ -52,26 +52,20 @@ module Model {
     // rounding, nothing more.
     const BEST_EPS_M = 0.0015;
 
-    // Keys that belong to exactly ONE line type. A line carrying keys from
-    // two types is not a line — it is two lines glued by a lost newline.
-    // This is the sharpest detector available and it has no tunable knob.
-    // Deliberately excludes the battery adder keys (vbat_mv/batt_pct/chg),
-    // which legitimately ride on more than one line type (docs/sense.md §3.4).
-    function _hasAnyKey(kv as Dictionary, keys as Array) as Boolean {
-        for (var i = 0; i < keys.size(); i += 1) {
-            if (kv.get(keys[i]) != null) { return true; }
-        }
-        return false;
-    }
-
-    function _statsOnlyKeys() as Array {
-        return ["session_jumps", "session_best_m", "stored_jumps",
-                "stored_best_m", "trace_bytes"];
-    }
-
-    function _jumpOnlyKeys() as Array {
-        return ["airtime_raw_s", "airtime_s", "height_m", "height_ft", "best_m"];
-    }
+    // The glue test (a JUMP carrying STATS-only keys, or the reverse) is
+    // written as plain inline kv.get() chains inside State below — NOT as
+    // module-level helpers taking an array of key names.
+    //
+    // Two reasons, both learned the hard way on 2026-08-11:
+    //   1. The array-of-names version allocated two Arrays on EVERY received
+    //      line. Spec §5.6 budgets NO per-callback allocations in steady
+    //      state, and a data field is the one place that budget is real.
+    //   2. It reached module scope from inside the nested State class
+    //      (Model._hasAnyKey(...)). That resolved fine in the simulator and
+    //      the device answered with `System Error: Failed invoking <symbol>`
+    //      on the first line it received — the same simulator-vs-silicon
+    //      divergence class as FIRST_COMPILE.md #3.
+    // Inline kv.get() chains allocate nothing and cross no scope boundary.
 
     class State {
 
@@ -196,10 +190,14 @@ module Model {
                 return true;
             }
             // 2. Two lines glued by a lost newline: STATS-only keys riding on
-            //    a JUMP tag.
-            if (Model._hasAnyKey(kv, Model._statsOnlyKeys())) {
-                return true;
-            }
+            //    a JUMP tag. Battery adder keys are deliberately absent from
+            //    this list — they legitimately ride on more than one line
+            //    type (docs/sense.md §3.4).
+            if (kv.get("session_jumps") != null) { return true; }
+            if (kv.get("session_best_m") != null) { return true; }
+            if (kv.get("stored_jumps") != null) { return true; }
+            if (kv.get("stored_best_m") != null) { return true; }
+            if (kv.get("trace_bytes") != null) { return true; }
             // 3. Physically impossible.
             if (h < 0.0 || h > Model.MAX_HEIGHT_M) { return true; }
             if (a < 0.0 || a > Model.MAX_AIRTIME_S) { return true; }
@@ -244,7 +242,9 @@ module Model {
             // two lines were merged. A corrupt STATS is worse than a corrupt
             // JUMP — it reseeds count AND best in one go (US6), so a bad one
             // poisons the whole session display until the next reconnect.
-            if (Model._hasAnyKey(kv, Model._jumpOnlyKeys())) {
+            if (kv.get("airtime_raw_s") != null || kv.get("airtime_s") != null
+             || kv.get("height_m") != null || kv.get("height_ft") != null
+             || kv.get("best_m") != null) {
                 _rejected += 1;
                 return;
             }
