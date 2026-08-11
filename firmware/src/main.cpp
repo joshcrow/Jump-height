@@ -180,13 +180,25 @@ static void bleGreet() {
 // them when present.
 static bool cal_from_nvs = false;
 
+static float cal_vbat_scale = 1.0f;
+
 static void loadCalibration() {
-  float off, scale;
-  cal_from_nvs = jh_persist::load(JH_AIRTIME_OFFSET_S, JH_HEIGHT_SCALE, off, scale);
+  bool a = false, b = false, c = false;
+  const float off   = jh_persist::load(jh_persist::Key::AirtimeOffsetS,
+                                       JH_AIRTIME_OFFSET_S, &a);
+  const float scale = jh_persist::load(jh_persist::Key::HeightScale,
+                                       JH_HEIGHT_SCALE, &b);
+  // vbat_scale's default is 1.0 — the identity — not a params.gen.h value.
+  // It is a property of THIS board's divider resistors, so there is no
+  // sensible compiled default other than "assume nominal".
+  cal_vbat_scale = jh_persist::load(jh_persist::Key::VbatScale, 1.0f, &c);
+
+  cal_from_nvs = a || b || c;
   detector.set_calibration(off, scale);
+  jh_power::set_vbat_scale(cal_vbat_scale);
   if (cal_from_nvs) {
     emitf("# calibration from device memory: airtime_offset_s=%.4f "
-          "height_scale=%.3f\n", off, scale);
+          "height_scale=%.3f vbat_scale=%.4f\n", off, scale, cal_vbat_scale);
   }
 }
 
@@ -369,7 +381,7 @@ static bool runSelfTest() {
 // ---------------- Commands ----------------
 static void printHelp() {
   emitLine("# commands: help | stats | jumps | trace | dump | clear | selftest | info | off");
-  emitLine("#           set <airtime_offset_s|height_scale> <value|default>");
+  emitLine("#           set <airtime_offset_s|height_scale|vbat_scale> <value|default>");
   emitLine("#           vbatscan  (bench: battery ADC vs acquisition time)");
   emitLine("#           gyro      (bench: raw + bias-corrected rate, 2 s)");
 }
@@ -456,24 +468,35 @@ static void handleCommand(const String& cmd) {
     key.trim(); val.trim();
     const bool is_off   = key == "airtime_offset_s";
     const bool is_scale = key == "height_scale";
-    if (!is_off && !is_scale) {
-      emitLine("ERR set_unknown_key (airtime_offset_s | height_scale)");
-    } else if (val == "default") {
-      jh_persist::clear(is_off);
-      loadCalibration();
-      emitLine("# reverted to the compiled default");
-      emitLine("OK set");
+    // vbat_scale: the PER-UNIT battery-divider correction (jh_power.h). Its
+    // rail is deliberately tight — resistor and reference tolerance produce a
+    // few percent, so anything outside ±20% is a typo, not a calibration, and
+    // accepting it would make the gauge confidently absurd.
+    const bool is_vbat  = key == "vbat_scale";
+    if (!is_off && !is_scale && !is_vbat) {
+      emitLine("ERR set_unknown_key (airtime_offset_s | height_scale | vbat_scale)");
     } else {
-      const float f = val.toFloat();
-      const bool sane = is_off ? (f >= -0.5f && f <= 0.5f)
-                               : (f >= 0.5f && f <= 2.0f);
-      if (!sane) {
-        emitf("ERR set_out_of_range %s=%s\n", key.c_str(), val.c_str());
-      } else {
-        jh_persist::save(is_off, f);
+      const jh_persist::Key k = is_off   ? jh_persist::Key::AirtimeOffsetS
+                              : is_scale ? jh_persist::Key::HeightScale
+                                         : jh_persist::Key::VbatScale;
+      if (val == "default") {
+        jh_persist::clear(k);
         loadCalibration();
-        emitLine("# saved to device memory — survives reboot and reflash");
+        emitLine("# reverted to the compiled default");
         emitLine("OK set");
+      } else {
+        const float f = val.toFloat();
+        const bool sane = is_off   ? (f >= -0.5f && f <= 0.5f)
+                        : is_scale ? (f >= 0.5f && f <= 2.0f)
+                                   : (f >= 0.8f && f <= 1.25f);
+        if (!sane) {
+          emitf("ERR set_out_of_range %s=%s\n", key.c_str(), val.c_str());
+        } else {
+          jh_persist::save(k, f);
+          loadCalibration();
+          emitLine("# saved to device memory — survives reboot and reflash");
+          emitLine("OK set");
+        }
       }
     }
   } else if (cmd == "info") {
@@ -494,9 +517,18 @@ static void handleCommand(const String& cmd) {
     }
     emitLine("PARAMS " JH_PARAMS_SUMMARY);
     // Effective calibration (PARAMS above shows compiled defaults).
-    emitf("CAL airtime_offset_s=%.4f height_scale=%.3f source=%s\n",
-          detector.params().airtime_offset_s, detector.params().height_scale,
-          cal_from_nvs ? "device" : "defaults");
+    // vbat_scale appended only when it is doing something (!= 1.0), keeping
+    // the adder-key rule: a board with nominal divider resistors emits the
+    // exact line every existing client already parses.
+    if (cal_vbat_scale != 1.0f) {
+      emitf("CAL airtime_offset_s=%.4f height_scale=%.3f source=%s vbat_scale=%.4f\n",
+            detector.params().airtime_offset_s, detector.params().height_scale,
+            cal_from_nvs ? "device" : "defaults", cal_vbat_scale);
+    } else {
+      emitf("CAL airtime_offset_s=%.4f height_scale=%.3f source=%s\n",
+            detector.params().airtime_offset_s, detector.params().height_scale,
+            cal_from_nvs ? "device" : "defaults");
+    }
     emitLine("OK info");
   } else if (cmd == "off") {
     // Soft power-off (jh_power seam; the S2 sleep design's manual slice).

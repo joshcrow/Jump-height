@@ -19,6 +19,8 @@ int  batt_pct() { return -1; }
 int  charging() { return -1; }
 // No battery sensing on this board at all, so no acquisition-time question.
 int  vbat_mv_tacq(int) { return -1; }
+// No battery sensing here, so nothing to scale.
+void set_vbat_scale(float) {}
 
 // Feature-frozen board (DECISIONS #27): no soft-off — deep sleep was an
 // explicitly deferred v1 item and stays that way. `off` answers ERR.

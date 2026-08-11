@@ -45,6 +45,10 @@ int charging() {
   return env_int("JH_CHG", 0) ? 1 : 0;
 }
 
+// The host mock reports JH_VBAT_MV verbatim; scaling it would make the
+// env var lie about what it set. No-op on purpose.
+void set_vbat_scale(float) {}
+
 int vbat_mv_tacq(int tacq_code) {
   // There is no ADC here to have an acquisition time. Returning the SAME value
   // for every valid code is the honest mock: it models a board whose reading

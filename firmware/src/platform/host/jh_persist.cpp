@@ -62,41 +62,38 @@ void writeAll(const std::map<std::string, std::string>& kv) {
 
 void init() { jh_host::ensure_dir(); }
 
-bool load(float default_offset_s, float default_scale, float& out_offset_s,
-          float& out_scale) {
+namespace {
+// File key names. "offset"/"scale" unchanged so an existing host cal file
+// keeps loading; "vbat" is simply absent there and falls back to 1.0.
+const char* keyName(Key k) {
+  switch (k) {
+    case Key::AirtimeOffsetS: return "offset";
+    case Key::HeightScale:    return "scale";
+    case Key::VbatScale:      return "vbat";
+  }
+  return "offset";
+}
+}  // namespace
+
+float load(Key k, float def, bool* from_store) {
   const auto kv = readAll();
-  bool any = false;
-
-  const auto off_it = kv.find("offset");
-  if (off_it != kv.end()) {
-    out_offset_s = std::strtof(off_it->second.c_str(), nullptr);
-    any = true;
-  } else {
-    out_offset_s = default_offset_s;
-  }
-
-  const auto scale_it = kv.find("scale");
-  if (scale_it != kv.end()) {
-    out_scale = std::strtof(scale_it->second.c_str(), nullptr);
-    any = true;
-  } else {
-    out_scale = default_scale;
-  }
-
-  return any;  // true if EITHER value came from the persisted file
+  const auto it = kv.find(keyName(k));
+  const bool have = it != kv.end();
+  if (from_store) *from_store = have;
+  return have ? std::strtof(it->second.c_str(), nullptr) : def;
 }
 
-void save(bool is_offset, float value) {
+void save(Key k, float value) {
   auto kv = readAll();
   char buf[32];
   std::snprintf(buf, sizeof(buf), "%.6f", (double)value);
-  kv[is_offset ? "offset" : "scale"] = buf;
+  kv[keyName(k)] = buf;
   writeAll(kv);
 }
 
-void clear(bool is_offset) {
+void clear(Key k) {
   auto kv = readAll();
-  kv.erase(is_offset ? "offset" : "scale");
+  kv.erase(keyName(k));
   writeAll(kv);
 }
 

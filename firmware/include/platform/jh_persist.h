@@ -5,12 +5,13 @@
 // calibration survives reboot AND reflash without a rebuild — a phone over
 // BLE becomes a complete calibration tool. Compiled params.json values
 // (params.gen.h) stay the defaults; persisted values override them when
-// present. Exactly two keys exist: airtime_offset_s ("offset") and
-// height_scale ("scale") — the same two, and only two, the `set` command and
-// the CAL protocol line ever touch.
+// present. The keys are the `Key` enum below: airtime_offset_s ("offset"),
+// height_scale ("scale"), and — since 2026-08-11 — vbat_scale ("vbat"), the
+// per-unit battery-divider correction.
 //
 // Units: airtime_offset_s in seconds, height_scale unitless (a multiplier) —
 // same units as jump_detector.h's Params fields of the same names.
+// vbat_scale is unitless, multiplying jh_power::vbat_mv()'s reading.
 // Error returns: load() always succeeds (falls back to the given compiled
 // defaults for a key that was never saved); save()/clear() are fire-and-
 // forget, matching today's Preferences calls (main.cpp already range-checks
@@ -29,23 +30,31 @@
 
 namespace jh_persist {
 
+// The calibration keys. This was a `bool is_offset` until 2026-08-11 — a
+// two-keys-forever shape that could not express a third. It had to grow
+// because vbat_scale is a genuinely PER-UNIT number (this board's divider
+// resistors read ~1.8% low; another board's differ), so it cannot live in
+// params.json without making every other unit wrong.
+//
+// docs/data-pipeline.md's "calibration record (per physical unit)" already
+// names more of these coming — gyro bias, gyro scale-factor, the mount
+// lever arm. An enum takes them; a boolean never could.
+enum class Key { AirtimeOffsetS, HeightScale, VbatScale };
+
 // Bring up the calibration store. Call once from setup(), before load().
 void init();
 
-// Load persisted calibration, falling back to the given compiled defaults
-// for whichever key was never saved. Returns true if EITHER value came from
-// persisted storage (vs. both being compiled defaults) — main.cpp uses this
-// for the CAL `source=device|defaults` field and the boot-time banner.
-bool load(float default_offset_s, float default_scale,
-          float& out_offset_s, float& out_scale);
+// Load one persisted value, falling back to `def` if that key was never
+// saved. Sets *from_store (when non-null) to whether the value came from
+// storage rather than the default — main.cpp ORs these for the CAL line's
+// `source=device|defaults` field and the boot banner.
+float load(Key k, float def, bool* from_store = nullptr);
 
-// Persist one calibration value. `is_offset` selects airtime_offset_s
-// (true) vs height_scale (false), mirroring the `set <key> <value>`
-// command's own key selection.
-void save(bool is_offset, float value);
+// Persist one calibration value, mirroring `set <key> <value>`.
+void save(Key k, float value);
 
-// Revert one calibration value to its compiled default: removes it from
-// persisted storage, so the next load() falls back to the default again.
-void clear(bool is_offset);
+// Revert one value to its compiled default: removes it from persisted
+// storage, so the next load() falls back to the default again.
+void clear(Key k);
 
 }  // namespace jh_persist

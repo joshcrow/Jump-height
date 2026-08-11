@@ -87,10 +87,20 @@ void init() {
 // not the extreme.
 const int kTacqDefault = 3;  // index into the sweep: 0=3µs 1=5µs 2=10µs 3=15µs
 
+float s_vbat_scale = 1.0f;  // per-unit; overridden from NVS at boot
+
+void set_vbat_scale(float scale) {
+  // Guard the range: a scale far from 1.0 is a typo or a bad calibration,
+  // and silently accepting 10x would make the gauge confidently absurd.
+  if (scale > 0.8f && scale < 1.25f) s_vbat_scale = scale;
+}
+
 int vbat_mv() {
   // One implementation, shared with the diagnostic below, so the number this
   // returns in the field can never drift from the number the sweep measured.
-  return vbat_mv_tacq(kTacqDefault);
+  const int raw = vbat_mv_tacq(kTacqDefault);
+  if (raw < 0) return -1;
+  return (int)(raw * s_vbat_scale + 0.5f);
 }
 
 int vbat_mv_tacq(int tacq_code) {

@@ -52,10 +52,16 @@ const char* kTmpPath = "/jh_cal.bin.tmp";
 // a security boundary; a version byte lets us change the record shape
 // later without misreading an old one as garbage.
 const uint32_t kMagic       = 0x4C43484AUL;
-const uint8_t  kFormatVer   = 1;
+// v1 = offset+scale. v2 adds vbat_scale (the per-unit battery-divider
+// correction). readRecord() below MIGRATES v1 files rather than discarding
+// them: a shorter file is a v1 record, not a corrupt one, and silently
+// dropping a hard-won drop calibration on a firmware update would be a
+// nasty way to learn that.
+const uint8_t  kFormatVer   = 2;
+const uint8_t  kFormatVerV1 = 1;
 
 #pragma pack(push, 1)
-struct CalRecord {
+struct CalRecordV1 {
   uint32_t magic;
   uint8_t  format_version;
   uint8_t  has_offset;
@@ -63,6 +69,16 @@ struct CalRecord {
   uint8_t  _reserved;
   float    offset;
   float    scale;
+};
+struct CalRecord {
+  uint32_t magic;
+  uint8_t  format_version;
+  uint8_t  has_offset;
+  uint8_t  has_scale;
+  uint8_t  has_vbat;
+  float    offset;
+  float    scale;
+  float    vbat;
 };
 #pragma pack(pop)
 
@@ -75,11 +91,39 @@ bool readRecord(CalRecord& rec) {
   Adafruit_LittleFS_Namespace::File f =
       InternalFS.open(kPath, Adafruit_LittleFS_Namespace::FILE_O_READ);
   if (!f) return false;
-  const int n = f.read(&rec, sizeof(rec));
+  uint8_t buf[sizeof(CalRecord) > sizeof(CalRecordV1) ? sizeof(CalRecord)
+                                                      : sizeof(CalRecordV1)];
+  memset(buf, 0, sizeof(buf));
+  const int n = f.read(buf, sizeof(buf));
   f.close();
-  if (n != (int)sizeof(rec)) return false;
-  if (rec.magic != kMagic || rec.format_version != kFormatVer) return false;
-  return true;
+  if (n < (int)sizeof(CalRecordV1)) return false;
+
+  uint32_t magic; uint8_t ver;
+  memcpy(&magic, buf, sizeof(magic));
+  memcpy(&ver, buf + sizeof(magic), sizeof(ver));
+  if (magic != kMagic) return false;
+
+  if (ver == kFormatVer && n >= (int)sizeof(CalRecord)) {
+    memcpy(&rec, buf, sizeof(rec));
+    return true;
+  }
+  if (ver == kFormatVerV1) {
+    // MIGRATE, don't discard. A v1 file is a shorter valid record, not a
+    // corrupt one; treating it as "nothing saved" would throw away a drop
+    // calibration on a routine firmware update.
+    CalRecordV1 old;
+    memcpy(&old, buf, sizeof(old));
+    rec.magic          = old.magic;
+    rec.format_version = kFormatVer;
+    rec.has_offset     = old.has_offset;
+    rec.has_scale      = old.has_scale;
+    rec.has_vbat       = 0;          // never existed in v1
+    rec.offset         = old.offset;
+    rec.scale          = old.scale;
+    rec.vbat           = 1.0f;
+    return true;
+  }
+  return false;
 }
 
 // Atomic save (review-nrf52.md finding #2): the OLD approach here was
@@ -134,35 +178,44 @@ void init() {
                        // seam's contract (jh_persist.h), unlike jh_store's.
 }
 
-bool load(float default_offset_s, float default_scale,
-          float& out_offset_s, float& out_scale) {
+float load(Key k, float def, bool* from_store) {
   CalRecord rec;
-  const bool have_file = readRecord(rec);
-  const bool has_offset = have_file && rec.has_offset;
-  const bool has_scale  = have_file && rec.has_scale;
-
-  out_offset_s = has_offset ? rec.offset : default_offset_s;
-  out_scale    = has_scale  ? rec.scale  : default_scale;
-  return has_offset || has_scale;
+  const bool have = readRecord(rec);
+  bool has = false; float val = def;
+  if (have) {
+    switch (k) {
+      case Key::AirtimeOffsetS: has = rec.has_offset; val = rec.offset; break;
+      case Key::HeightScale:    has = rec.has_scale;  val = rec.scale;  break;
+      case Key::VbatScale:      has = rec.has_vbat;   val = rec.vbat;   break;
+    }
+  }
+  if (from_store) *from_store = has;
+  return has ? val : def;
 }
 
-void save(bool is_offset, float value) {
+void save(Key k, float value) {
   CalRecord rec;
   if (!readRecord(rec)) {
     memset(&rec, 0, sizeof(rec));
     rec.magic          = kMagic;
     rec.format_version = kFormatVer;
   }
-  if (is_offset) { rec.offset = value; rec.has_offset = 1; }
-  else           { rec.scale  = value; rec.has_scale  = 1; }
+  switch (k) {
+    case Key::AirtimeOffsetS: rec.offset = value; rec.has_offset = 1; break;
+    case Key::HeightScale:    rec.scale  = value; rec.has_scale  = 1; break;
+    case Key::VbatScale:      rec.vbat   = value; rec.has_vbat   = 1; break;
+  }
   writeRecord(rec);
 }
 
-void clear(bool is_offset) {
+void clear(Key k) {
   CalRecord rec;
   if (!readRecord(rec)) return;  // nothing saved: already "cleared"
-  if (is_offset) rec.has_offset = 0;
-  else           rec.has_scale  = 0;
+  switch (k) {
+    case Key::AirtimeOffsetS: rec.has_offset = 0; break;
+    case Key::HeightScale:    rec.has_scale  = 0; break;
+    case Key::VbatScale:      rec.has_vbat   = 0; break;
+  }
   writeRecord(rec);
 }
 

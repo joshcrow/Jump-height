@@ -18,19 +18,28 @@ void init() {
   s_prefs.begin("jumpcal", false);
 }
 
-bool load(float default_offset_s, float default_scale,
-          float& out_offset_s, float& out_scale) {
-  out_offset_s = s_prefs.getFloat("offset", default_offset_s);
-  out_scale    = s_prefs.getFloat("scale",  default_scale);
-  return s_prefs.isKey("offset") || s_prefs.isKey("scale");
+namespace {
+// NVS key names. "offset"/"scale" are unchanged so existing calibration on a
+// FireBeetle keeps loading; "vbat" is simply absent on those units and falls
+// back to its default of 1.0.
+const char* keyName(Key k) {
+  switch (k) {
+    case Key::AirtimeOffsetS: return "offset";
+    case Key::HeightScale:    return "scale";
+    case Key::VbatScale:      return "vbat";
+  }
+  return "offset";
+}
+}  // namespace
+
+float load(Key k, float def, bool* from_store) {
+  const char* n = keyName(k);
+  if (from_store) *from_store = s_prefs.isKey(n);
+  return s_prefs.getFloat(n, def);
 }
 
-void save(bool is_offset, float value) {
-  s_prefs.putFloat(is_offset ? "offset" : "scale", value);
-}
+void save(Key k, float value) { s_prefs.putFloat(keyName(k), value); }
 
-void clear(bool is_offset) {
-  s_prefs.remove(is_offset ? "offset" : "scale");
-}
+void clear(Key k) { s_prefs.remove(keyName(k)); }
 
 }  // namespace jh_persist

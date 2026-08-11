@@ -47,6 +47,21 @@ int vbat_mv();
 // 0..100 resting-voltage estimate (see header comment), or -1.
 int batt_pct();
 
+// PER-UNIT correction multiplying vbat_mv()'s reading. Default 1.0.
+//
+// The divider resistors and the ADC reference both carry real tolerance, and
+// the resulting error is a GAIN error — proportional, not an offset. On the
+// first Sense it measured 1.8% low (4090 mV read vs 4165 measured), i.e. a
+// scale of ~1.018. That number belongs to THAT BOARD: correcting it in the
+// compiled constants would make every other unit wrong by its neighbour's
+// error, which is why it is a persisted per-unit term (jh_persist::Key::
+// VbatScale) rather than an edit to jh_power.cpp's divider maths.
+//
+// Deliberately NOT applied by vbat_mv_tacq(): that is the raw instrument for
+// the acquisition-time sweep, and a calibration multiplier riding on it
+// would quietly rescale a diagnostic meant to show the sensor as it is.
+void set_vbat_scale(float scale);
+
 // BENCH DIAGNOSTIC, SENSE_FIRST_BOOT item 24. Same measurement as vbat_mv()
 // but with the ADC's acquisition time forced to a chosen setting:
 //   0=3us 1=5us 2=10us 3=15us 4=20us 5=40us
