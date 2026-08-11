@@ -11,9 +11,21 @@ device that starts knowing NOTHING about its mount, ships with the correction
 inert (r=0), and converges to correct heights on its own. That is the whole
 point; everything else here guards a way it could go quietly wrong.
 
-The over-estimate hazard is the one to watch. The estimate comes out biased
-high (the wing is not perfectly ballistic), and high erases landing spikes, so
-SAFETY_FACTOR shaves it. test_estimate_is_shaved_below_truth pins that.
+The UNDER-estimate hazard is the one to watch, which is the opposite of what
+this file first assumed. g4's "an over-estimated r erases the landing spike"
+led to a 5% safety shave; that shave broke 5 of 8 lever x spin cases, because
+an under-estimate leaves a free-fall residual of rot_g*sqrt(1-k**2) and the
+sqrt amplifies small errors — 0.79 g against a 0.35 g gate at r=0.5 m /
+600 dps. The two errors push in opposite directions and there is no safe side,
+so the target is UNBIASED. test_no_deliberate_shave and
+test_a_five_percent_short_shave_would_break_it pin both the constant and the
+reasoning.
+
+Second way it goes quietly wrong, found by experiment g5: a saturated
+accelerometer. Past the ±16 g range a sample's magnitude is a floor, not a
+measurement, and a floor makes r read LOW — the dangerous direction. At
+r=0.8 m / 900 dps (20.1 g) the unguarded estimator returned k=0.849, the only
+case of twelve outside the usable band. CLIP_GUARD_G rejects those samples.
 
 SPDX-License-Identifier: MIT
 """
@@ -32,7 +44,7 @@ sys.path.insert(0, os.path.join(ROOT, "sim"))
 import sensor_model as sm  # noqa: E402
 import wing_model as wm  # noqa: E402
 from detector import Detector, Params  # noqa: E402
-from lever_arm import SAFETY_FACTOR, LeverArm  # noqa: E402
+from lever_arm import CLIP_GUARD_G, SAFETY_FACTOR, LeverArm  # noqa: E402
 
 SEED = 20260805
 TAKEOFF = 2.0
@@ -270,6 +282,49 @@ def test_absurd_lever_arms_are_rejected():
         arm.observe(9.0, 151.0)   # implies r well over 3 m
     assert arm.pending_samples() == 0
     assert not arm.commit()
+
+
+def test_clipped_samples_are_rejected():
+    """A railed accelerometer reports a FLOOR, not a measurement, and a floor
+    makes r read LOW — the direction that re-pins takeoff.
+
+    Found by experiment g5: at r=0.8 m / 900 dps the true centripetal term is
+    20.1 g, past the ±16 g range, and the unguarded estimator returned k=0.849
+    — the only case of twelve that fell outside the usable band. With the guard
+    it returns k=1.0012.
+    """
+    arm = LeverArm()
+    for _ in range(30):
+        arm.observe(CLIP_GUARD_G + 0.1, 900.0)     # railed
+    assert arm.pending_samples() == 0, "clipped samples were accepted"
+    assert not arm.commit()
+
+    arm = LeverArm()
+    for _ in range(30):
+        arm.observe(CLIP_GUARD_G - 0.1, 900.0)     # just under the rail
+    assert arm.pending_samples() == 30, "unclipped samples were wrongly rejected"
+
+
+def test_clip_guard_sits_below_the_configured_accel_range():
+    """Tied to CTRL1_XL's ±16 g in lsm6ds3_min.h. If the range changes, this
+    must change with it — pinned so the coupling is not silent."""
+    assert 14.0 < CLIP_GUARD_G < 16.0
+
+
+@pytest.mark.parametrize("true_r,peak_dps", [(0.8, 900)])
+def test_saturating_spin_still_estimates_correctly(flight, true_r, peak_dps):
+    """End-to-end version of the above, on a rendered flight that genuinely
+    saturates the ±16 g range (rot_g = 20.1 g at the peak)."""
+    arm = LeverArm()
+    times, mags, spin_fn = _render(flight, peak_dps, lever_m=true_r)
+    assert max(mags) >= 15.5, "this flight was expected to rail the accel range"
+    for t, a in zip(times, mags):
+        dt = t - TAKEOFF
+        if 0.0 < dt < flight.true_airtime_s:
+            arm.observe(a, 360.0 * spin_fn(dt))
+    assert arm.commit()
+    k = arm.value() / true_r
+    assert 1.0 <= k < 1.10, f"saturating flight gave k={k:.4f}"
 
 
 def test_reset_forgets_a_previous_mount(flight):

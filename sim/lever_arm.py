@@ -42,6 +42,14 @@ MIN_DPS = 150.0
 SAFETY_FACTOR = 1.0  # unbiased on purpose — see module docstring note 3
 BLEND = 0.35
 
+# Accelerometer saturation guard, tied to the ±16 g CTRL1_XL setting in
+# lsm6ds3_min.h. A railed sample's magnitude is a FLOOR, not a measurement, and
+# a floor makes r read LOW — the direction that re-pins takeoff. Found by
+# experiment g5: at r=0.8 m / 900 dps the true centripetal term is 20.1 g and
+# the unguarded estimator returned k=0.849, the only case of twelve outside the
+# usable band. If the accel range changes, this must change with it.
+CLIP_GUARD_G = 15.5
+
 
 class LeverArm:
     """Streaming per-flight estimator. Mirror of jump::LeverArm."""
@@ -60,6 +68,8 @@ class LeverArm:
         """
         if gyro_mag_dps < MIN_DPS:
             return
+        if accel_mag_g_raw >= CLIP_GUARD_G:
+            return  # railed: a floor, not a reading
         w = gyro_mag_dps * 0.017453292519943295  # rad/s
         r = (accel_mag_g_raw * G) / (w * w)
         if not (r > 0.0) or r > 3.0:  # NaN-safe; 3 m is absurd for a mount

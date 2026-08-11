@@ -824,6 +824,27 @@ breaks the free-fall gate, over erases the landing — so there is no safe
 side and the target is UNBIASED. `kSafetyFactor` is 1.0 and lowering it is
 not a free safety margin.
 
+**Accelerometer SATURATION is a real failure mode here, not a footnote**
+*(experiment g5, `sim/experiments/g5_lever_tolerance.py`)*. `rot_g` grows
+as `ω²r`, and it passes the ±16 g range faster than intuition suggests:
+r=0.8 m at 900 dps is **20.1 g**. Past the rail a sample's magnitude is a
+floor, not a measurement, so the lever-arm estimate reads LOW — the
+dangerous direction. Unguarded, that case returned k=0.849, the only one
+of twelve outside the usable band; `lever_arm.h`'s `kClipGuardG` (15.5 g)
+discards railed samples and it returns k=1.001. **On silicon, check
+whether real tricks actually rail the accel** — if they routinely do,
+the range choice itself (item 20's deliberate ±16 g) needs revisiting.
+
+**The usable band is strongly ASYMMETRIC** — measured, not assumed. Across
+all twelve lever×spin cases the band runs from ≈1.00 up to at least 1.20
+(the sweep ceiling): over-estimating r by 20% was survivable everywhere
+tested, while under-estimating by 1-2% was fatal at high `rot_g`. Note
+this does NOT reproduce g4's landing-erasure at +20%, because g4 used a
+LATE spin burst (peak at 98% of airtime, still spinning at touchdown) and
+g5 uses a mid-flight burst. **Both are assumed profiles; the real
+distribution is a silicon question.** Treat "over is safe" as true for
+mid-flight spins and unproven for spins that persist through landing.
+
 **Verify on silicon, in this order:**
 1. **Gyro reads at all** — `selftest`, or add a raw gyro row. Stationary
    should read ≈0 dps per axis after `gyro_bias` settles; rotating the

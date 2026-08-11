@@ -62,15 +62,9 @@ def main():
     args = p.parse_args()
 
     csv = None
-    if args.out:
-        new = True
-        try:
-            new = open(args.out).read(1) == ""
-        except FileNotFoundError:
-            pass
-        csv = open(args.out, "a", buffering=1)
-        if new:
-            csv.write("iso_time,vbat_mv,batt_pct,chg\n")
+    cols: list[str] = []
+    prev: dict = {}
+    plateau = 0
 
     print(f"logging {args.port} every {args.every:.0f}s — ^C to stop")
     while True:
@@ -82,6 +76,7 @@ def main():
             # not the end of it — the whole point is to outlive the session.
             print(f"[{stamp}] port error ({type(e).__name__}: {e})")
             kv = None
+
         if kv is None:
             # NEVER silent. An earlier version printed nothing here, and a
             # board that had been sitting in the UF2 bootloader for six
@@ -90,13 +85,43 @@ def main():
             print(f"[{stamp}] NO REPLY — port opens but no STATS line. "
                   f"App not running? (UF2 bootloader mounts /Volumes/XIAO-SENSE; "
                   f"single-tap reset to leave it)")
-        elif "vbat_mv" in kv:
-            mv, pct, chg = kv["vbat_mv"], kv.get("batt_pct", ""), kv.get("chg", "")
-            print(f"[{stamp}] vbat_mv={mv} batt_pct={pct} chg={chg}")
-            if csv:
-                csv.write(f"{stamp},{mv},{pct},{chg}\n")
+            time.sleep(args.every)
+            continue
+
+        # Log EVERY key the device reports, not just the battery ones: run
+        # long enough and this doubles as a soak record (does the firmware
+        # survive the night?) and a trace-fill watch, for free.
+        if csv is None and args.out:
+            cols = list(kv.keys())
+            fresh = True
+            try:
+                fresh = open(args.out).read(1) == ""
+            except FileNotFoundError:
+                pass
+            csv = open(args.out, "a", buffering=1)
+            if fresh:
+                csv.write("iso_time," + ",".join(cols) + "\n")
+        if csv:
+            csv.write(stamp + "," + ",".join(kv.get(c, "") for c in cols) + "\n")
+
+        print(f"[{stamp}] " + " ".join(f"{k}={v}" for k, v in kv.items()))
+
+        # Call out the transitions worth waking up to, so a long log does not
+        # have to be read line by line in the morning.
+        for key, label in (("chg", "CHARGE STATE"), ("stored_jumps", "STORED JUMPS")):
+            if key in kv and key in prev and kv[key] != prev[key]:
+                print(f"[{stamp}] *** {label} {prev[key]} -> {kv[key]} ***")
+        tb = kv.get("trace_bytes")
+        if tb is not None and tb == prev.get("trace_bytes"):
+            plateau += 1
+            if plateau == 3:
+                print(f"[{stamp}] *** TRACE STOPPED GROWING at {tb} — "
+                      f"trace_is_full() on real silicon, or the motion gate "
+                      f"went idle. Check `stats` and the '# trace log full' "
+                      f"narration. ***")
         else:
-            print(f"[{stamp}] STATS had no battery keys — not a Sense-class board?")
+            plateau = 0
+        prev = kv
         time.sleep(args.every)
 
 

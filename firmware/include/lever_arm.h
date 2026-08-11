@@ -100,11 +100,27 @@ class LeverArm {
 
   static constexpr float kG = 9.80665f;
 
+  // Accelerometer saturation guard. lsm6ds3_min.h configures CTRL1_XL for
+  // ±16 g; a sample at or near that rail is CLIPPED, so its magnitude is a
+  // floor rather than a measurement — and a floor makes r read LOW, which is
+  // the direction that re-pins takeoff and destroys the height.
+  //
+  // Found by experiment g5 (sim/experiments/g5_lever_tolerance.py): at
+  // r=0.8 m and 900 dps the true centripetal term is 20.1 g, well past the
+  // rail, and the unguarded estimator returned k=0.849 — a 15% under-estimate,
+  // the only case out of twelve that fell outside the usable band. Discarding
+  // railed samples leaves the highest UNCLIPPED ones, which are still the
+  // sharpest available (error ~ 1/omega^2).
+  //
+  // If the accel range ever changes, this must change with it.
+  static constexpr float kClipGuardG = 15.5f;
+
   // Feed one sample taken while AIRBORNE.
   //   accel_mag_g_raw : UNCORRECTED accelerometer magnitude, in g
   //   gyro_mag_dps    : bias-corrected angular rate magnitude, in deg/s
   void observe(float accel_mag_g_raw, float gyro_mag_dps) {
     if (gyro_mag_dps < kMinDps) return;
+    if (accel_mag_g_raw >= kClipGuardG) return;  // railed: a floor, not a reading
     const float w = gyro_mag_dps * 0.017453292519943295f;  // rad/s
     const float r = (accel_mag_g_raw * kG) / (w * w);
     if (!(r > 0.0f) || r > 3.0f) return;  // NaN-safe; 3 m is absurd for a mount
