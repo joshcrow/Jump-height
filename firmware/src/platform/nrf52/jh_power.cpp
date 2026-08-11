@@ -21,14 +21,23 @@
 // internal reference (AR_INTERNAL_2_4 — 0.6 V ref × 1/4 gain), the
 // combination the Seeed wiki's own battery example uses.
 //
-// BENCH-VERIFY (SENSE_FIRST_BOOT.md item 24): the divider's source
-// impedance (~340 kΩ Thevenin) is high for the SAADC's default
-// acquisition time, which the Adafruit core does not expose per-read.
-// Mitigations here: 1 ms settle after enabling the divider, one discarded
-// throwaway read, then a 4-read average. Compare vbat_mv against a
-// multimeter on the real cell once — if it reads low by more than ~2%,
-// the fix is raising the SAADC acquisition time (core-level TACQ config),
-// not tweaking the divider constants.
+// BENCH-VERIFIED 2026-08-11 (SENSE_FIRST_BOOT.md item 24) — the source
+// impedance worry was RIGHT, and it was not the whole story.
+//
+// The prediction: the divider's ~340 kΩ Thevenin source is high for the
+// SAADC's default acquisition time, which the Adafruit core does not expose
+// per-read. Confirmed by sweeping TACQ directly (`vbatscan`): the reading
+// climbs 4044 -> 4085 mV and flattens at 15 µs. So this file now drives the
+// SAADC through raw registers at 15 µs instead of using analogRead().
+//
+// What that does NOT fix: at the plateau the reading is still ~75 mV (1.8%)
+// below a multimeter (4085 vs 4160 measured). That residual is a GAIN error
+// — divider resistor tolerance (a 1.043 MΩ top leg instead of 1 MΩ does it,
+// inside 5% parts) or the internal reference's own spread. It is
+// PER-UNIT, so it must NOT be corrected by editing the constants below:
+// doing so would make every other board wrong. It belongs in the per-unit
+// calibration record (docs/data-pipeline.md), and whether it is genuinely
+// per-unit or systematic is settled by measuring a SECOND board.
 //
 // SPDX-License-Identifier: MIT
 
@@ -64,22 +73,24 @@ void init() {
   pinMode(PIN_CHG_STATE, INPUT_PULLUP); // ~CHG is open-drain: pullup, LOW=charging
 }
 
+// Acquisition time for the production read: 15 µs (SAADC_CH_CONFIG_TACQ_15us).
+//
+// MEASURED, not chosen (SENSE_FIRST_BOOT item 24, `vbatscan` on a rested
+// cell): 3 µs 4044 | 5 µs 4056 | 10 µs 4077 | 15 µs 4082 | 20 µs 4082 |
+// 40 µs 4085. The reading climbs and then FLATTENS at 15 µs — that is the
+// SAADC finally getting long enough to charge through the divider's ~340 kΩ
+// source impedance, which the file header predicted and nothing had tested
+// because the Adafruit core does not expose TACQ per-read.
+//
+// 15 µs rather than 40 µs deliberately: the curve is flat from 15 on (40 µs
+// buys 3 mV, inside the noise), and this runs on battery. Taking the knee,
+// not the extreme.
+const int kTacqDefault = 3;  // index into the sweep: 0=3µs 1=5µs 2=10µs 3=15µs
+
 int vbat_mv() {
-  digitalWrite(PIN_DIVIDER_EN, LOW);
-  delay(1);  // divider + SAADC input settle (see header BENCH-VERIFY note)
-
-  analogReference(AR_INTERNAL_2_4);
-  analogReadResolution(12);
-  (void)analogRead(PIN_VBAT_ADC);  // throwaway: first sample after mux/ref change
-  uint32_t sum = 0;
-  for (int i = 0; i < 4; ++i) sum += analogRead(PIN_VBAT_ADC);
-  const uint32_t raw = sum / 4;
-
-  digitalWrite(PIN_DIVIDER_EN, HIGH);  // divider back off — no idle drain
-
-  // tap_mv = raw × 2400 / 4095; vbat = tap × 1510 / 510.
-  const uint32_t tap_mv = (raw * 2400UL) / 4095UL;
-  return (int)((tap_mv * 1510UL) / 510UL);
+  // One implementation, shared with the diagnostic below, so the number this
+  // returns in the field can never drift from the number the sweep measured.
+  return vbat_mv_tacq(kTacqDefault);
 }
 
 int vbat_mv_tacq(int tacq_code) {
@@ -121,27 +132,66 @@ int vbat_mv_tacq(int tacq_code) {
       (SAADC_CH_CONFIG_MODE_SE       << SAADC_CH_CONFIG_MODE_Pos)   |
       (SAADC_CH_CONFIG_BURST_Disabled << SAADC_CH_CONFIG_BURST_Pos);
 
+  // Every wait below is BOUNDED. The first cut of this used bare
+  // `while (!EVENTS_x) {}`, and that wedged the board on real silicon: the
+  // radio still accepted BLE connections (the SoftDevice runs under us) while
+  // loop() sat spinning forever, so it looked alive and answered nothing.
+  //
+  // vbat_mv() is on the `stats`/`info` path, so ANY unbounded spin here is a
+  // whole-device hang, not a bad reading. A conversion is ~2 µs + TACQ; 5 ms
+  // is four orders of magnitude of headroom and still imperceptible. Bailing
+  // out returns -1, which every caller already handles as "unsupported".
+  const uint32_t kSpinTimeoutUs = 5000;
   int32_t sum = 0;
   const int kReads = 8;
   volatile int16_t buf = 0;
-  for (int i = 0; i < kReads + 1; ++i) {  // +1: first sample is a throwaway
+  bool timed_out = false;
+
+  // Clear stale events BEFORE the first start, not just between iterations —
+  // a leftover EVENTS_STARTED would let the first wait fall straight through.
+  NRF_SAADC->EVENTS_STARTED = 0;
+  NRF_SAADC->EVENTS_END = 0;
+  NRF_SAADC->EVENTS_STOPPED = 0;
+
+  for (int i = 0; i < kReads + 1 && !timed_out; ++i) {  // +1: throwaway first
     NRF_SAADC->RESULT.PTR = (uint32_t)&buf;
     NRF_SAADC->RESULT.MAXCNT = 1;
+
+    NRF_SAADC->EVENTS_STARTED = 0;
     NRF_SAADC->EVENTS_END = 0;
     NRF_SAADC->TASKS_START = 1;
-    while (!NRF_SAADC->EVENTS_STARTED) {}
-    NRF_SAADC->EVENTS_STARTED = 0;
+    uint32_t t0 = micros();
+    while (!NRF_SAADC->EVENTS_STARTED) {
+      if (micros() - t0 > kSpinTimeoutUs) { timed_out = true; break; }
+    }
+    if (timed_out) break;
+
     NRF_SAADC->TASKS_SAMPLE = 1;
-    while (!NRF_SAADC->EVENTS_END) {}
-    NRF_SAADC->EVENTS_END = 0;
-    NRF_SAADC->TASKS_STOP = 1;
-    while (!NRF_SAADC->EVENTS_STOPPED) {}
+    t0 = micros();
+    while (!NRF_SAADC->EVENTS_END) {
+      if (micros() - t0 > kSpinTimeoutUs) { timed_out = true; break; }
+    }
+    if (timed_out) break;
+
     NRF_SAADC->EVENTS_STOPPED = 0;
+    NRF_SAADC->TASKS_STOP = 1;
+    t0 = micros();
+    while (!NRF_SAADC->EVENTS_STOPPED) {
+      if (micros() - t0 > kSpinTimeoutUs) { timed_out = true; break; }
+    }
+    if (timed_out) break;
+
     if (i > 0) sum += (buf < 0) ? 0 : buf;  // SAADC can report small negatives
   }
   NRF_SAADC->ENABLE = 0;  // leave it off so the next analogRead() re-inits cleanly
 
-  digitalWrite(PIN_DIVIDER_EN, HIGH);
+  digitalWrite(PIN_DIVIDER_EN, HIGH);  // divider back off — no idle drain
+
+  // A timed-out conversion is NOT a reading. Report -1 ("unsupported"), which
+  // callers already handle, rather than an average of however many samples
+  // happened to land — the same rule the rest of this session kept relearning:
+  // a measurement that did not happen must never be dressed up as a value.
+  if (timed_out) return -1;
 
   const uint32_t raw = (uint32_t)(sum / kReads);
   const uint32_t tap_mv = (raw * 2400UL) / 4095UL;   // same recipe as vbat_mv()

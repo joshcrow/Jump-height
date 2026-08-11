@@ -719,6 +719,26 @@ TACQ configuration, not divider-constant tweaks. Also confirm `chg`
 flips to 1 on USB attach and back to 0 on detach, and that `batt_pct`
 roughly tracks the charge state over a full charge cycle.
 
+**FIX (1) APPLIED AND VERIFIED ON SILICON 2026-08-11.** `vbat_mv()` now
+drives the SAADC through raw registers at 15 µs instead of `analogRead()`.
+Same cell, `chg=0`, before → after: **4035–4044 → 4079–4082 mV**,
+`batt_pct` **86–88 → 91**. Residual against the 4160 mV meter reading is
+**78 mV / 1.88%** — the sweep predicted 75 mV / 1.80%, so the split is
+confirmed to better than 5 mV. Fix (2), the per-unit gain error, is
+untouched and still belongs in the calibration record, not here.
+
+**A HANG I INTRODUCED AND FIXED THE SAME HOUR — read this before writing
+any more register-level code here.** The first cut of `vbat_mv_tacq()`
+used bare `while (!NRF_SAADC->EVENTS_x) {}` spin-waits. Harmless while it
+only ran on an explicit `vbatscan`; a whole-device hang the moment
+`vbat_mv()` was routed through it, because that sits on the `stats`/`info`
+path. The symptom is deceptive: **BLE still accepts connections** (the
+SoftDevice runs beneath `loop()`), so the puck looks alive and answers
+nothing. Every wait is now bounded at 5 ms and a timeout returns -1
+("unsupported"), which every caller already handles — never a partial
+average. Stale `EVENTS_*` are also cleared before the FIRST conversion,
+not just between them, or the first wait falls straight through.
+
 **RESOLVED 2026-08-11 — BOTH causes are real, in a ~40/60 split.** Two
 meter points plus an acquisition-time sweep on silicon (`vbatscan`
 command, `jh_power::vbat_mv_tacq()`):
