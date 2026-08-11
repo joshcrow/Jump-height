@@ -182,11 +182,21 @@ meter the delta at S2.
   interrupt batches samples while the CPU naps between drains, and
   hardware activity-detect replaces the software motion gate. The port
   starts as a plain poll loop — correctness before elegance.
-- **Gyro policy**: off by default (~0.6 mA when running). Carve G is
-  accel-only (a hard carve shows as sustained elevated |a|). Spins need
-  the gyro → duty-cycle it on only while moving, when that metric
-  ships. VERIFY the LSM6DS3TR-C FIFO size (4 KB-class per datasheet
-  family) when the FIFO architecture lands.
+- **Gyro policy**: carve G stays accel-only (a hard carve shows as
+  sustained elevated |a|). Spins are different — sim **g4** promoted the
+  gyro from a "duty-cycle-it-on-while-moving recording extra" to a
+  **detector hot-path input**: an accel-only detector false-lands and
+  truncates airtime on a spun jump at **~300 dps** peak (the ω²r term
+  re-pins the free-fall gate / fakes a ~2.5 g landing), and only
+  per-sample **ω²r subtraction inlined into `jump_detector.h`** recovers
+  it — so on any jump with spin the gyro must be powered and *settled by
+  takeoff*, and it needs a mount/lever-arm calibration
+  ([gyro-sim-plan.md](gyro-sim-plan.md); roadmap Tier C). Cost is
+  **~0.9 mA HP / ~0.45 mA normal** for the combined accel+gyro (not the
+  ~0.6 mA once penciled here, nor the ESP32-era ~3.6 mA MPU-6050). A free
+  guard rides along: **median airborne |a| > 0.12 g** flags a
+  non-ballistic (spun/kited) jump. VERIFY the LSM6DS3TR-C FIFO size
+  (4 KB-class per datasheet family) when the FIFO architecture lands.
 
 ### 3.8 Calibration persistence: NVS is ESP32-only
 
@@ -247,7 +257,8 @@ break, new clients grow tiles.
 - **The ladder**: **v2.0** jump feed (parity with today) → **v2.1**
   time on foil (`foil_s=` on STATS; accel-only smoothness classifier,
   tuned on the first real water traces) → **v2.2** carve G (`carve_g=`
-  window peak; accel-only) → **v2.3** spins (gyro, duty-cycled).
+  window peak; accel-only) → **v2.3** spins (gyro — now a detector
+  hot-path input for spun jumps, not a duty-cycled recording extra; §3.7).
 - The Garmin field renders what it recognizes; FIT developer fields
   grow alongside ([garmin-datafield.md §5.5](garmin-datafield.md)).
 
@@ -279,7 +290,7 @@ will (#27): quietly, into a bench tool, with nothing to migrate.
 | State | Estimate | 500 mAh means |
 |---|---|---|
 | Recording — naive poll loop, accel on, BLE connected, periodic writes | ~3–8 mA | **~60–160 h**: weekends per charge, not hours |
-| + gyro on (duty-cycled, only once a gyro metric ships) | +~0.6 mA | still tens of hours |
+| + gyro on (required for spun-jump detection, §3.7) | +~0.9 mA HP / ~0.45 mA normal | still tens of hours |
 | Awake idle (advertising, no motion) | ~1–3 mA | days |
 | System OFF + IMU motion-watch + QSPI deep power-down | ~5–15 µA | **months** |
 

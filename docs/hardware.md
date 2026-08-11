@@ -33,7 +33,13 @@ upgrade as you go.
 
 ### Phase 4 — "real" device (optional)
 
-- Custom PCB integrating ESP32 module + IMU + charger + fuel gauge (MAX17048).
+> **Superseded:** v2 real hardware is now the **XIAO nRF52840 Sense** — a thumb-sized
+> board with an onboard **LSM6DS3TR-C** IMU, BLE-only, that runs the same chip-neutral
+> protocol (DECISIONS #24; port spec + gap analysis in **[sense.md](sense.md)**). A
+> from-scratch ESP32 PCB is now the fallback, not the plan.
+
+- ~~Custom PCB integrating ESP32 module + IMU + charger + fuel gauge (MAX17048).~~
+  Fallback only — the Sense integrates IMU + charging + BLE on a stock board.
 - **GPS** (u-blox NEO-M9N / MAX-M10) for speed and distance.
 - Barometer (BMP388) — *not* for jump height (too imprecise at this scale) but useful
   for other telemetry.

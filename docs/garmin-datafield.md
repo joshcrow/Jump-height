@@ -1,6 +1,11 @@
 # Garmin wrist companion — deep scope & build spec
 
-**Status:** scoped, not started. Build AFTER water validation (Phase 2).
+**Status:** scaffold built and integrated; **first compile succeeded 2026-08-04**
+(SDK 9.2.0, `BUILD SUCCESSFUL`, **24/24 simulator unit tests pass**,
+five rounds to green — see [../garmin/FIRST_COMPILE.md](../garmin/FIRST_COMPILE.md)).
+**M1 (protocol core, simulator-only) met**; the next gate is on-watch
+render/install (M0's real-device AC + M2 live link). Field trial still
+follows water validation (Phase 2).
 **Priority:** the DATA FIELD is the product. The custom "Wing Foil activity"
 app is a stretch goal with a separate go/no-go decision (see §8).
 **Executor note:** this document is written to be decision-complete — an
@@ -150,7 +155,7 @@ for reconnects or state changes.
 The watch is READ-mostly. It must tolerate unknown lines/keys (skip).
 
     JUMP n=4 airtime_raw_s=1.021 airtime_s=1.036 height_m=1.316 height_ft=4.3 best_m=1.316
-    STATS session_jumps=4 session_best_m=1.316 stored_jumps=9 stored_best_m=1.316 trace_bytes=182031
+    STATS session_jumps=4 session_best_m=1.316 stored_jumps=9 stored_best_m=1.316 trace_bytes=182031 vbat_mv=3870 batt_pct=63 chg=0
     READY
     # anything starting with '#' is chatter — ignore
     OK stats / ERR ... — terminators for commands the watch sends
@@ -162,6 +167,11 @@ Field usage:
   which makes reconnects free).
 - `STATS`: on (re)connect the watch writes `stats\n` to RX once; the reply
   seeds count/best (US6). `session_*` fields only; `stored_*` ignored.
+- Battery adder keys `vbat_mv=`/`batt_pct=`/`chg=` are appended to
+  `STATS` (and `INFO`) **only on Sense-class hardware that measures vbat**
+  — absent on the ESP32/FireBeetle build by design. The field parses
+  `batt_pct`/`chg` (`Model.mc`) and draws a puck-battery glyph
+  (`JumpFieldView.mc`); unknown-key tolerance means their absence is a no-op.
 - `STATE recording|idle` exists but the MVP ignores it.
 
 ### 5.3 Source layout (new top-level dir; owns its own toolchain)
@@ -265,16 +275,18 @@ AC: US1-US6 each verified true on the water, or filed as issues.
 
 ## 7. Firmware companions (OUR repo)
 
-- **Two concurrent BLE centrals — PREREQUISITE for M6, not a nicety**
-  *(adversarial-review promotion)*: the most likely field trial is the
-  rider wearing the watch while the owner holds the phone. Today the puck
-  accepts one central AND stops advertising while connected — the second
-  client can't even see it. Work: NimBLE max-connections = 2, restart
-  advertising after each connect while a slot remains, test watch + phone
-  simultaneously live. Must land before M6.
-- **Battery telemetry** (optional): add `batt_pct=` to `INFO`/`STATS` once
-  the FireBeetle's battery-sense pin is wired/validated; the field would
-  show a puck-battery glyph. Needs its own small hardware validation.
+- **Two concurrent BLE centrals — ✅ DONE (firmware v0.4.2)**, no longer an
+  M6 blocker. The puck now accepts two centrals subscribed at once (the app
+  re-advertises after each connect while `getConnectedCount() < 2`, capping
+  effective use at two — NimBLE's own default max is 3), so the rider's watch
+  and the beach phone can read jumps simultaneously — tested watch + phone
+  live. A single `notify()` reaches every subscribed client, so the same
+  protocol lines fan out to both.
+- **Battery telemetry — ✅ DONE end-to-end (2026-08-04)**: the Sense
+  `jh_power` seam appends `vbat_mv=`/`batt_pct=`/`chg=` to `INFO`/`STATS`
+  (Sense-only adder keys — absent on the ESP32 build by design, §5.2); the
+  field parses `batt_pct`/`chg` (`Model.mc`) and draws a puck-battery glyph
+  (`JumpFieldView.mc`). Bench-pending only the vbat-to-percent calibration.
 
 ## 8. Stretch: the "Wing Foil activity" device app — scope & verdict
 

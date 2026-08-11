@@ -109,28 +109,38 @@ Jump-height/
 ├── DECISIONS.md         ← the v1 design decisions and why
 ├── config/params.json   ← ALL tunable settings — one file feeds firmware + sim + analysis
 ├── tools/
-│   ├── jump             ← the one-command interface: wizard/flash/selftest/desktest/drop/sync/validate/web/report
+│   ├── jump             ← the one-command interface: wizard/flash/selftest/desktest/drop/sync/validate/eval/web/report
 │   ├── fake_device.py   ← simulated device (rehearse + test everything with no hardware)
 │   └── gen_params.py    ← bakes config/params.json into a firmware header
 ├── web/                 ← browser app: live BLE stats, sessions/CSV over USB, in-browser flasher
 ├── .github/workflows/   ← CI: full test suite + firmware build, publishes ESP32 binaries + the Sense .uf2 to Pages
 ├── docs/
-│   ├── algorithm.md          ← the physics + detection state machine, in detail
-│   ├── garmin-datafield.md   ← the Garmin watch data-field spec
-│   ├── hardware.md           ← bill of materials, wiring, power, waterproofing
-│   ├── ota.md                ← retired ESP32 OTA spec (tombstone — the Sense updates via Nordic DFU)
-│   ├── research.md           ← literature/market synthesis backing the design choices
-│   ├── roadmap.md            ← phased build plan (bench → firmware → water → app → v2)
-│   └── sense.md              ← v2 (XIAO nRF52840 Sense) port spec + gap analysis
+│   ├── algorithm.md           ← the physics + detection state machine, in detail
+│   ├── data-pipeline.md       ← capture → label → evaluate → improve loop (labels.csv/session.json schemas)
+│   ├── garmin-datafield.md    ← the Garmin watch data-field spec
+│   ├── gyro-prior-art.md      ← gyro trick-metrics prior-art (rotation counting, fusion libs, patents)
+│   ├── gyro-sim-plan.md       ← desk gyro-sims to run before the gyro flagship
+│   ├── hardware.md            ← bill of materials, wiring, power, waterproofing
+│   ├── ota.md                 ← retired ESP32 OTA spec (tombstone — the Sense updates via Nordic DFU)
+│   ├── research.md            ← literature/market synthesis backing the design choices
+│   ├── riding-dynamics-map.md ← on-water (non-airborne) riding-metric map
+│   ├── roadmap.md             ← phased build plan (bench → firmware → water → app → v2)
+│   ├── sense.md               ← v2 (XIAO nRF52840 Sense) port spec + gap analysis
+│   └── wing-ballistic-sim.md  ← sim: is the airtime method valid for wings? (near-ballistic — yes)
 ├── firmware/            ← shared core + per-platform seams (PlatformIO)
 │   ├── platformio.ini
 │   ├── include/jump_detector.h          ← portable detection state machine
 │   └── src/platform/{esp32,nrf52,host}/ ← IMU/BLE/storage glue per board (host = tests, no board)
 ├── garmin/               ← Connect IQ data field (jumpfield/) — the watch as a display surface
-├── sim/                  ← develop & test the algorithm with no hardware
-│   ├── detector.py      ← Python mirror of the firmware detector
-│   ├── generate.py      ← synthesize IMU sessions with known jumps
-│   └── run.py           ← run detector on synthetic or captured data
+├── sim/                  ← develop & test the algorithm with no hardware (tests in tools/tests/, incl. test_evaluate.py)
+│   ├── detector.py     ← Python mirror of the firmware detector
+│   ├── evaluate.py     ← score the detector over labeled sessions (./tools/jump eval)
+│   ├── generate.py     ← synthesize IMU sessions with known jumps
+│   ├── wing_model.py   ← ballistic wing-jump physics model (arm-force ceiling)
+│   ├── sensor_model.py ← synthetic IMU incl. gyro / ω²r for spun jumps
+│   ├── selfdiag.py     ← airborne median-|a| non-ballistic self-diagnostic
+│   ├── run.py          ← run detector on synthetic or captured data
+│   └── experiments/    ← sim batteries behind the docs (wing-ballistic, gyro)
 └── data/                 ← captured/example session CSVs
 ```
 

@@ -304,6 +304,7 @@ firmware. Run `./tools/jump sync` (and confirm the report looks right)
 | `./tools/jump drop` | guided timing calibration from measured drops |
 | `./tools/jump sync` | download session → analyze → report.md |
 | `./tools/jump web` | serve the browser app (live BLE stats, sessions, flasher) |
+| `./tools/jump eval` | score the detector over labeled sessions ([docs/data-pipeline.md](docs/data-pipeline.md)) |
 | `./tools/jump replay --csv f` | re-run the detector over any saved capture |
 | `./tools/jump monitor` | raw serial console (type `help`) |
 | `./tools/jump gen` | regenerate firmware settings from config/params.json |

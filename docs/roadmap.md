@@ -44,6 +44,11 @@ The real test — and where you get your answer.
 - [ ] Tune thresholds in **`config/params.json`** against the synced trace
       (`./tools/jump replay`), set `height_scale` from the video if needed, then
       `./tools/jump flash` — one file drives firmware, simulator, and analysis
+- [ ] **Score it, don't eyeball it:** tag the video-derived truth into
+      `labels.csv` and run **`./tools/jump eval`** (`sim/evaluate.py`) to score
+      the detector against a held-out `test` split — schemas + workflow in
+      **[data-pipeline.md](data-pipeline.md)**. The desk half is built and
+      exercised; the **first labeled water session gates everything downstream**.
 
 **Done when:** detected heights match video-derived heights within your accuracy
 goal (aim for ~10%). Now you actually know how high he jumps.
@@ -93,7 +98,9 @@ several of the tiers below (time on foil, chop meter, crash counter, pop
 strength, clip-that, landing quality) is gathered in
 [research.md §8](research.md); not restated per item here.
 
-**Tier A — trace mining, zero firmware change** *(build after water session 1)*
+**Tier A — trace mining, zero firmware change** *(build after water session 1;
+detector-vs-truth scoring already automated via `./tools/jump eval` — see
+[data-pipeline.md](data-pipeline.md), `sim/evaluate.py`)*
 - **Time on foil**: classify 1 s windows by vibration signature (foil flight
   is smooth, taxiing choppy, bobbing still) → % on foil, longest flight.
 - **Crash counter**: big spike with no preceding free-fall = impact; count,
@@ -110,14 +117,23 @@ strength, clip-that, landing quality) is gathered in
 - **Conditions fingerprint**: coarse chop-meter per session (glassy → rough)
   so day-to-day comparisons normalize.
 
-**Tier C — wake the MPU-6050's unused gyroscope**
+**Tier C — wake the LSM6DS3TR-C's unused gyroscope** (the Sense's 6-axis IMU;
+the ESP32-era MPU-6050 path was pruned, DECISIONS #27). Fully scoped + desk-
+validated in **[gyro-sim-plan.md](gyro-sim-plan.md)** and **[gyro-prior-art.md](gyro-prior-art.md)**.
 - **Spin detection**: integrate |ω| during airtime → 180/360 labels per jump.
-- **Carve analytics**: jibe/tack count, hardest-carve g.
+  Adopt quaternion AHRS (dlaidig/vqf MIT, or vendored xio Fusion); rotation
+  counting is published to ±8.18°/1.42% (Merz/Gorges 2025).
+- **Carve analytics**: jibe/tack count, hardest-carve g (see the broader
+  riding-metric map, [riding-dynamics-map.md](riding-dynamics-map.md)).
 - **Detector hardening**: rotation is exactly what hides free-fall from the
-  accel-only detector (bench toss 3 proved it); gyro-aware free-fall
-  detection removes the blind spot for spun jumps.
-- Cost note: gyro adds ~3.6 mA while on — enable during recording only;
-  revisit for the deep-sleep budget.
+  accel-only detector (bench toss 3 proved it; the **g4 sim** now quantifies it —
+  the raw detector fails at ~300 dps peak spin, and inlining a per-sample ω²r
+  subtraction into the detector recovers it, so the gyro is a **detector
+  hot-path input**, not a recording-only extra).
+- Cost note: gyro adds ~**0.9 mA** combined (accel+gyro, high-performance) /
+  ~0.45 mA normal — NOT the ~3.6 mA once assumed (that was the ESP32-era
+  MPU-6050). Config: ±2000 dps, ODR ≥208 Hz + LPF, with a mandatory pre-takeoff
+  bias subtraction. Enable during recording only.
 
 **Tier D — needs Phase 4 hardware**: GPS speed/distance/runs (the other half
 of the Woo/Surfr feature set); barometer stays rejected for jump height.
@@ -131,9 +147,12 @@ and our rigid-packing rule ("any wiggle room leads to inaccurate
 results"). Their sensor arms race (±32 g, 32 kHz, timing crystal, 6-axis
 factory cal, Kalman fusion) is the price of DOUBLE-INTEGRATING height for
 kites, whose jumps are not ballistic (their data: 15.5 m at 5.9 s airtime
-— free-fall math would say 42 m). Wing jumps are short and near-ballistic,
-and the airtime method never integrates — which is why a $2 mis-scaled
-sensor passes our bench. Adopted notes: (1) the ESP32 build's ±8 g range
+— free-fall math would say 42 m). Wing jumps are short and near-ballistic
+(simulation now backs this: realistic wing overshoot **1.00–1.07×** vs a
+kite's **2.31×**, the arm-force ceiling capping mid-air lift —
+[wing-ballistic-sim.md](wing-ballistic-sim.md), pending real-water
+confirmation), and the airtime method never integrates — which is why a $2
+mis-scaled sensor passes our bench. Adopted notes: (1) the ESP32 build's ±8 g range
 clips landing PEAKS (detection at 2.5 g unaffected) — the Sense already
 ships ±16 g from day one, research-backed ([research.md](research.md)
 §2/§6); crash-severity analytics remain future work on both platforms,
@@ -155,8 +174,10 @@ executed by a cheaper build agent. STATUS 2026-07: the complete scaffold
 is authored in `garmin/` (source, tests, manifest, README,
 FIRST_COMPILE.md with 14 verify-at-compile entries) by a Sonnet agent and
 integrated after review; firmware 0.4.2 shipped the two-central BLE
-prerequisite. Next gate: M0 — SDK install + first compile on the owner's
-Mac. The custom "Wing Foil activity" app remains a deliberate later
+prerequisite. **M0 met 2026-08-04**: first compile on the owner's Mac
+succeeded — SDK 9.2.0, `BUILD SUCCESSFUL`, all 24 sim unit tests PASS
+(`garmin/FIRST_COMPILE.md`). Next gate: M1 — on-watch install + live BLE
+link. The custom "Wing Foil activity" app remains a deliberate later
 decision (§8 there). Precedent: Surfr ships a Garmin companion.
 
 ## Phase 4 — "Real" hardware
@@ -176,11 +197,13 @@ decision (§8 there). Precedent: Surfr ships a Garmin companion.
       Nordic DFU replaces the ESP32 OTA plan, battery telemetry +
       System OFF sleep, metrics-layering architecture feeding the
       Garmin field). The FireBeetle stays the water-day rig until the
-      Sense passes the same bench → bucket → water gauntlet. Build-ahead
-      work the same day is already done: 0.4.3 platform seams and the
-      full nRF52 layer compile for the Sense, with CI publishing the
-      `.uf2` and bench unknowns numbered in
-      `firmware/SENSE_FIRST_BOOT.md`.
+      Sense passes the same bench → bucket → water gauntlet. Past
+      compile-only now: **S0 bench bring-up done 2026-07-31** — first
+      power-on fixed two QSPI silicon bugs (deep-power-down mount +
+      word-alignment), answered the `firmware/SENSE_FIRST_BOOT.md`
+      first-boot checklist on real silicon, and detected its first jumps.
+      Next on the Sense: battery solder-up, drop calibration, and the
+      two-central test on-board.
       Middle option if the WiFi decision ever revives: XIAO ESP32-C6
       (same thumbnail size, WiFi 6 + BLE, better efficiency than classic
       ESP32) — but NO onboard IMU (external sensor + wiring stays), and

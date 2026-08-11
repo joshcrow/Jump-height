@@ -2297,6 +2297,25 @@ def cmd_replay(args) -> int:
     return subprocess.run(cmd, cwd=str(REPO)).returncode
 
 
+# ----------------------------------------------------------------------- eval
+# Score the detector over LABELED sessions (video-derived ground truth) — the
+# continuous-improvement loop (docs/data-pipeline.md). Shells to sim/evaluate.py
+# the same way replay shells to sim/run.py.
+
+
+def cmd_eval(args) -> int:
+    cmd = [sys.executable, "sim/evaluate.py", "--split", args.split]
+    if args.root:
+        cmd += ["--root", os.path.abspath(args.root)]
+    if args.verbose:
+        cmd.append("--verbose")
+    if args.save:
+        cmd += ["--save", os.path.abspath(args.save)]
+    if args.baseline:
+        cmd += ["--baseline", os.path.abspath(args.baseline)]
+    return subprocess.run(cmd, cwd=str(REPO)).returncode
+
+
 # ----------------------------------------------------------------------- web
 # Serve web/ (the browser app) on localhost. WHY a local server and not just
 # opening the file: browsers only expose Web Bluetooth / Web Serial to a
@@ -2748,6 +2767,17 @@ def main() -> int:
     p = add("replay", cmd_replay, help="re-run detector over a capture CSV")
     p.add_argument("--csv", required=True)
     p.add_argument("--plot", action="store_true")
+
+    # eval scores over on-disk labeled sessions — no device, so register it
+    # directly (like web) to skip the serial --port that add() attaches.
+    p = sub.add_parser("eval", help="score detector over labeled sessions (docs/data-pipeline.md)")
+    p.set_defaults(fn=cmd_eval)
+    p.add_argument("--root", help="sessions root (default data/sessions)")
+    p.add_argument("--split", choices=["all", "train", "test", "unknown"], default="all",
+                   help="evaluate only sessions with this session.json split")
+    p.add_argument("--verbose", "-v", action="store_true", help="per-session table")
+    p.add_argument("--save", help="write summary metrics JSON (a regression baseline)")
+    p.add_argument("--baseline", help="compare vs a saved baseline; nonzero exit on regression")
 
     # web serves over HTTP, so its --port is the HTTP port — not the serial
     # --port that add() attaches to every other command. Register it directly.

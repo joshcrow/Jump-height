@@ -57,9 +57,18 @@ the per-agent raw digests informed it but are not committed.
 "parachute effect." Peer-reviewed proof of the exact failure mode our
 roadmap flagged from the WOO whitepaper. A hand-held wing has no tether
 mechanism, so wing jumps should sit near-ballistic — but whether an
-aggressively-flown wing adds measurable lift mid-air is an **open
-question with zero literature**; Phase 2 video calibration is the
-experiment that answers it (recorded in algorithm.md).
+aggressively-flown wing adds measurable lift mid-air was an open
+question with zero literature. **ANSWERED 2026-08 by simulation**
+([docs/wing-ballistic-sim.md](wing-ballistic-sim.md)): a physics-cored,
+adversarially re-verified six-experiment battery finds wing airs
+**near-ballistic** — realistic overshoot 1.00–1.07× (Monte-Carlo mean
+1.013×, p90 1.057×) vs the kite's 2.31×, because wing force is
+transmitted through the **arms** (a hard ~0.3–0.5-body-weight ceiling)
+not an uncapped harness, and the physics-floor height RMSE is **4.2 cm**
+(vs Marčiš'21 Surfr 51 cm). The airtime method holds for wings; what
+remains is **open to real-water measurement (sim-de-risked)** — Phase 2
+video calibration confirms the sim, no longer discovers the answer
+(recorded in algorithm.md).
 
 **Independent sensor-accuracy benchmark.** [Marčiš 2021](https://www.mdpi.com/1424-8220/21/24/8353)
 (4-camera videogrammetry, 0.03–0.09 m reference, 20 kite jumps > 3 m):
@@ -118,9 +127,13 @@ takeoff point**. algorithm.md now says this.
 - **E-foil**: Fliteboard shipped a **"foil active time" odometer**
   (time-on-foil demand is proven, not speculative); no e-foil product
   touches jumps.
-- **Cautionary tales**: Trace (ski) shipped flaky airtime and died;
-  Syrmo (skateboard puck with auto video clipping — precedent for our
-  clip-that gesture) is defunct.
+- **Cautionary tales**: Trace (ski) shipped flaky airtime and died —
+  yet its patent **US10408857B2** (AlpineReplay/Trace, gyro maneuver-ID)
+  survives as live, broad prior art; **FTO check, cite-don't-copy**
+  (implement via MIT VQF/Fusion + our own thresholds — see
+  [docs/gyro-prior-art.md](gyro-prior-art.md) §3/§4). Syrmo (skateboard
+  puck with auto video clipping — precedent for our clip-that gesture)
+  is defunct.
 
 **The bar to clear:** (1) one huge glanceable number first (our design
 already matches); (2) Surfr-style honest tiered-compatibility wording;
@@ -176,6 +189,15 @@ geometry; ranges only).
   (MIT, active) — AHRS for spins/carves at S5; plus
   [Mayitzin/ahrs](https://github.com/Mayitzin/ahrs) (MIT, pure Python)
   as the `sim/` parity twin — fits our C++/Python discipline.
+- **Gyro / trick-metrics stack** (full synthesis in
+  [docs/gyro-prior-art.md](gyro-prior-art.md) §2):
+  [dlaidig/vqf](https://github.com/dlaidig/vqf) (MIT, online gyro-bias
+  quaternion fusion, ~2.9° RMSE) — the shippable escape from the
+  no-license Madgwick/Mahony repos below;
+  [mikoff/imu-calib](https://github.com/mikoff/imu-calib) (MIT, in-situ
+  scale-factor + bias, <0.1 %, no rotating table); and Groh 2015's
+  axis-signature trick classifier (KDD, 97.8 %, classical features — no
+  deep learning).
 - [garmin/connectiq-apps](https://github.com/garmin/connectiq-apps)
   (Apache-2.0, official, includes Data Field samples) → M0 reference.
 - [python-fitparse](https://github.com/dtcooper/python-fitparse) /
