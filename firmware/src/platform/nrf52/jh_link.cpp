@@ -162,6 +162,7 @@ namespace jh_link {
 namespace {
 
 BLEUart s_bleuart;
+BLEDfu  s_bledfu;   // OTA DFU control service — see begin()
 
 const uint8_t kMaxPrphConnections = 2;
 
@@ -226,6 +227,32 @@ uint32_t s_last_chunk_us = 0;
 // and retune if the trace shows sample gaps (SENSE_FIRST_BOOT.md #3).
 const uint32_t CHUNK_GAP_US = 15000;
 
+// Pacing FLOOR, not the pacing itself. CHUNK_GAP_US was derived from Apple's
+// Accessory Design Guidelines (>=15 ms for a non-HID accessory), i.e. from the
+// iPhone case, and SENSE_FIRST_BOOT.md item 3 flagged it as unmeasured against
+// a real Garmin: "log the interval Bluefy/Garmin actually negotiate and
+// retune".
+//
+// MEASURED 2026-08-11, and the guess was wrong for this peer. A Connect IQ
+// data field on an Epix Gen 2 negotiates ATT_MTU 23 — the bare minimum — so
+// every 86-byte JUMP line needs FIVE notifications, and the watch was losing
+// roughly a third of them. The watch's own diagnostic caught a line reading
+//     height_m=1.623m=1.658
+// i.e. exactly the 20 characters " height_ft=5.3 best_" — precisely one
+// MTU-23 payload — missing from the middle. Lose any one of five packets and
+// the whole line is corrupt, which is why nothing survived intact.
+//
+// Sending one chunk every 15 ms into a link that only drains once per
+// connection interval overruns it whenever that interval is longer than
+// 15 ms. So the gap is now taken from the link itself, per connection,
+// refreshed every chunk (BLEConnection::getConnectionInterval() is kept
+// current through BLE_GAP_EVT_CONN_PARAM_UPDATE), and we pace to the
+// SLOWEST subscriber — the same "never wrong for the slow one" trade the
+// MTU logic above already makes.
+const uint32_t PACE_MAX_US = 100000;   // sanity cap: never stall a dump on a
+                                        // pathological negotiated interval
+uint32_t s_pace_us = CHUNK_GAP_US;      // recomputed in sendOneChunk()
+
 size_t txqSize() { return (s_txq_head + TX_CAP - s_txq_tail) % TX_CAP; }
 
 // Currently connected AND subscribed handles (at most kMaxPrphConnections).
@@ -250,11 +277,17 @@ void sendOneChunk() {
   // Chunk to the SMALLEST subscribed connection's own MTU (queried fresh —
   // see file comment on why no cached MTU-change callback is needed here).
   uint16_t min_mtu = 0xFFFF;
+  uint32_t pace_us = CHUNK_GAP_US;
   for (uint8_t i = 0; i < n_subs; ++i) {
     BLEConnection* c = Bluefruit.Connection(subs[i]);
     const uint16_t mtu = c ? c->getMtu() : 23;
     if (mtu < min_mtu) min_mtu = mtu;
+    // getConnectionInterval() is in raw 1.25 ms units (the library's own log
+    // line multiplies by 1.25f to print milliseconds).
+    const uint32_t iv_us = c ? (uint32_t)c->getConnectionInterval() * 1250UL : 0;
+    if (iv_us > pace_us) pace_us = iv_us;
   }
+  s_pace_us = (pace_us > PACE_MAX_US) ? PACE_MAX_US : pace_us;
   const size_t payload = (min_mtu > 3) ? (size_t)(min_mtu - 3) : 20;
 
   uint8_t buf[244];
@@ -321,6 +354,27 @@ bool begin(const char* name) {
   Bluefruit.setName(name);
   Bluefruit.Periph.setConnectCallback(onConnect);
   Bluefruit.Periph.setDisconnectCallback(onDisconnect);
+
+  // OTA DFU — the ONLY firmware path once the capsule is sealed.
+  //
+  // The Adafruit bootloader already speaks Nordic's legacy OTA DFU
+  // (docs/sense.md §3.3), but reaching it needed a physical double-tap on
+  // RESET, which lives inside the box. Starting BLEDfu here publishes the
+  // control characteristic while the app runs, so nRF Connect on a phone can
+  // reboot the puck into its bootloader and flash it wirelessly — no cable,
+  // no opening the capsule. Added 2026-08-11, deliberately BEFORE the box was
+  // taped shut: sealing without it would have frozen the firmware for good.
+  //
+  // Trade, unchanged from §3.3: this DFU is single-bank, so a transfer that
+  // dies mid-way leaves the device sitting in its bootloader — recoverable
+  // over BLE or USB, never bricked — rather than falling back to the old
+  // image. It is also unauthenticated: anyone in radio range with nRF Connect
+  // can flash this puck. Accepted for a personal device; revisit if these are
+  // ever handed out.
+  //
+  // Adafruit's own examples start BLEDfu FIRST, before other services, and
+  // that ordering is kept here.
+  if (s_bledfu.begin() != ERROR_NONE) return false;
 
   if (s_bleuart.begin() != ERROR_NONE) return false;
   s_bleuart.setNotifyCallback(onNotify);
@@ -392,7 +446,7 @@ void pump() {
   // notes already flagged 32-bit micros() wrap-tracking as chip-specific.
   (void)jh_clock::micros64();
 
-  if (txqSize() > 0 && (uint32_t)(micros() - s_last_chunk_us) >= CHUNK_GAP_US) {
+  if (txqSize() > 0 && (uint32_t)(micros() - s_last_chunk_us) >= s_pace_us) {
     sendOneChunk();
   }
 }
@@ -418,7 +472,7 @@ void write(const char* data, size_t len) {
       // a cheap, frequent reload, not a rate-limited one) so a dump-over-
       // BLE never watchdog-resets mid-transfer.
       wdtFeed();
-      while ((uint32_t)(micros() - s_last_chunk_us) < CHUNK_GAP_US) delay(1);
+      while ((uint32_t)(micros() - s_last_chunk_us) < s_pace_us) delay(1);
       sendOneChunk();
     }
     s_txq[s_txq_head] = data[i];
