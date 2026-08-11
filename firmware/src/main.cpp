@@ -350,6 +350,7 @@ static void printHelp() {
   emitLine("# commands: help | stats | jumps | trace | dump | clear | selftest | info | off");
   emitLine("#           set <airtime_offset_s|height_scale> <value|default>");
   emitLine("#           vbatscan  (bench: battery ADC vs acquisition time)");
+  emitLine("#           gyro      (bench: raw + bias-corrected rate, 2 s)");
 }
 
 // Handles one command line from EITHER transport (serial pollSerial() or BLE
@@ -486,6 +487,42 @@ static void handleCommand(const String& cmd) {
       return;  // contract violated? still never OK-then-ERR — just stop
     }
     emitLine("ERR off_unsupported this build has no soft-off");
+  } else if (cmd == "gyro") {
+    // BENCH DIAGNOSTIC, SENSE_FIRST_BOOT item 26 step 1: has the gyro ever
+    // been read on real silicon at all?
+    //
+    // This matters more than a spec-check. lever_arm.h SELF-ARMS the spin
+    // correction — after one spinning jump it sets spin_lever_m above zero
+    // and the correction goes live. So "ships inert" is only true until the
+    // first spun jump, and everything downstream then rests on a sensor
+    // nobody has looked at. Look at it.
+    //
+    // READ IT LIKE THIS: held still, |w| should settle near 0 dps once the
+    // planing baseline converges (gyro_bias.h, ~5 s). Rotate the board by
+    // hand and |w| should track — a slow turn is tens of dps, a brisk flick
+    // hundreds. A byte-order error would NOT look broken here; it would look
+    // like a plausible-but-wrong rate, so compare against something known.
+    float gx, gy, gz;
+    if (!jh_imu::read_gyro_dps(gx, gy, gz)) {
+      emitLine("ERR gyro_unsupported no gyro on this build");
+    } else {
+      emitLine("# gyro: 20 samples @ 10 Hz — hold still, then rotate the board");
+      for (int i = 0; i < 20; ++i) {
+        if (!jh_imu::read_gyro_dps(gx, gy, gz)) { emitLine("# read failed"); break; }
+        const float raw_mag = sqrtf(gx * gx + gy * gy + gz * gz);
+        // Report BOTH raw and bias-corrected: the pair is what shows whether
+        // the baseline estimator is doing anything, and a raw magnitude that
+        // never settles is a different fault from a bias that will not train.
+        const float corr = gyro_bias.update(gx, gy, gz,
+                                            detector.state() == jump::State::RIDING);
+        emitf("GYRO n=%d x=%.1f y=%.1f z=%.1f raw_dps=%.1f corr_dps=%.1f "
+              "bias=(%.1f,%.1f,%.1f)\n",
+              i, gx, gy, gz, raw_mag, corr,
+              gyro_bias.x(), gyro_bias.y(), gyro_bias.z());
+        delay(100);
+      }
+      emitLine("OK gyro");
+    }
   } else if (cmd == "vbatscan") {
     // BENCH DIAGNOSTIC, SENSE_FIRST_BOOT item 24. Reads the cell at every
     // ADC acquisition-time setting so the bench can see whether the known

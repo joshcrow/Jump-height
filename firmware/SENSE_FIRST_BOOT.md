@@ -914,8 +914,34 @@ g5 uses a mid-flight burst. **Both are assumed profiles; the real
 distribution is a silicon question.** Treat "over is safe" as true for
 mid-flight spins and unproven for spins that persist through landing.
 
+**STEP 1 DONE 2026-08-11 — the gyro is real, and so is the bias.** New
+`gyro` command (20 samples @ 10 Hz, raw + bias-corrected + the running
+baseline). At rest: `x=0.8 y=-2.9 z=1.0`, **|ω| = 3.1 dps** — a genuine
+zero-rate offset, comfortably inside the ±10 dps spec that motivated
+`gyro_bias.h`. The estimator converged on silicon to `(1.2, -2.5, 1.1)`
+and pulled 3.1 dps down to **0.5 dps**. Noise ±0.1 dps.
+
+Then rotated by hand: **peak 257.8 dps**, returning to rest after. That
+second half is not optional — a healthy gyro at rest and one STUCK at a
+constant offset produce identical readings, so the stationary test alone
+proves nothing.
+
+**Why this had to happen before any water session:** `lever_arm.h`
+SELF-ARMS. After one spinning jump it sets `spin_lever_m` above zero and
+the correction goes live, so "ships inert" was only ever true until the
+first spun jump — after which everything rested on a sensor nobody had
+looked at.
+
+**Gyro SCALE error does not threaten the height path** (worked out while
+checking this, worth not re-deriving): `r` is estimated from the same
+mis-scaled ω that later applies the correction, so a constant scale factor
+`s` cancels exactly — `r_est = r/s²`, then `rot_g = (sω)²·r_est/g = ω²r/g`.
+That leaves only bias (validated here) and range clipping (guarded by
+`kClipGuardG`). Scale still matters for rotation counting / trick metrics,
+which are S5 and unbuilt.
+
 **Verify on silicon, in this order:**
-1. **Gyro reads at all** — `selftest`, or add a raw gyro row. Stationary
+1. ~~**Gyro reads at all**~~ **DONE, above.** — `selftest`, or add a raw gyro row. Stationary
    should read ≈0 dps per axis after `gyro_bias` settles; rotating the
    board by hand should track sensibly. Byte-order errors here look like a
    plausible-but-wrong rate, not an obvious failure (same little-endian
