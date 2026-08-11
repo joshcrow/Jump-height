@@ -48,6 +48,7 @@
 #include <stdarg.h>
 #include <string.h>
 #include "params.gen.h"
+#include "gyro_bias.h"
 #include "jump_detector.h"
 #include "platform/jh_clock.h"
 #include "platform/jh_imu.h"
@@ -64,6 +65,7 @@ static const int      LOG_DECIMATE       = JH_SAMPLE_HZ / JH_LOG_HZ;
 static const uint32_t IDLE_TIMEOUT_MS    = (uint32_t)JH_IDLE_TIMEOUT_S * 1000UL;
 
 jump::Detector detector;
+jump::GyroBias gyro_bias;
 
 static bool sensor_ok = false;
 static bool fs_ok     = false;
@@ -569,13 +571,22 @@ void loop() {
   // boards, and the accel-only path below is what those have always used.
   // With spin_lever_m uncalibrated (0, the default) the two paths are
   // identical anyway — this costs nothing until a mount is measured.
+  // The gyro's zero-rate level is spec'd at ±10 dps and drifts with
+  // temperature, and the correction squares omega — so a raw magnitude would
+  // feed a 2*w*b cross-term straight into the height. gyro_bias.h keeps a
+  // planing baseline (updated only while RIDING, frozen in flight) and
+  // returns the corrected magnitude. Mandatory per docs/gyro-sim-plan.md §4.
   jump::JumpEvent ev;
   float gx, gy, gz;
   const bool have_gyro = jh_imu::read_gyro_dps(gx, gy, gz);
-  const bool jumped =
-      have_gyro
-          ? detector.update(t, mag, sqrtf(gx * gx + gy * gy + gz * gz), ev)
-          : detector.update(t, mag, ev);
+  bool jumped;
+  if (have_gyro) {
+    const float omega_dps =
+        gyro_bias.update(gx, gy, gz, detector.state() == jump::State::RIDING);
+    jumped = detector.update(t, mag, omega_dps, ev);
+  } else {
+    jumped = detector.update(t, mag, ev);
+  }
   if (jumped) {
     session_jumps++;
     stored_jumps++;

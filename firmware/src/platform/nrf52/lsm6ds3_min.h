@@ -69,6 +69,30 @@
 //                     order — so a duty-cycled gyro risks being unsettled
 //                     during the very window it is needed. Measure the
 //                     settle time on silicon before attempting it.
+//   0x13 CTRL4_C      LPF1_SEL_G (bit 1) = 1 — enable the gyro's digital
+//                     LPF1. DECISIONS.md #29 / docs/gyro-sim-plan.md §4
+//                     specify "digital LPF on"; this is the bit that does
+//                     it. Bit positions taken from ST's own register driver
+//                     (github.com/STMicroelectronics/lsm6ds3tr-c-pid,
+//                     lsm6ds3tr-c_reg.h), NOT from memory. Note bit 2 is
+//                     I2C_disable and MUST stay 0 — we are on I2C.
+//                     => CTRL4_C = 0x02.
+//   0x15 CTRL6_C      FTYPE[1:0] selects the LPF1 bandwidth. At our 208 Hz
+//                     ODR every FTYPE option lands at ~67 Hz (ST AN5130
+//                     Table 11 — the main datasheet's LPF1 table only lists
+//                     833 Hz/1.6/3.3/6.6 kHz ODRs, which is why this looks
+//                     unsupported at first glance; an ST moderator confirmed
+//                     Table 11 covers 208 Hz). So the choice is immaterial
+//                     here: FTYPE=00. ~67 Hz is a good place to sit anyway —
+//                     far above spin dynamics (a few Hz), well under the
+//                     104 Hz Nyquist. => CTRL6_C = 0x00.
+//   0x16 CTRL7_G      G_HM_MODE (bit 7) = 0 => gyro HIGH-PERFORMANCE mode.
+//                     Load-bearing, not decoration: AN5130 states LPF1 is
+//                     BYPASSED in low-power/normal mode regardless of
+//                     LPF1_SEL_G, so the LPF above only exists because of
+//                     this. 0x00 is also the reset value, but written
+//                     explicitly per this file's "configure every register
+//                     you depend on" rule. => CTRL7_G = 0x00.
 //   0x22 OUTX_L_G     gyro 6-byte burst, same little-endian-per-axis layout
 //                     as the accel block below.
 //   Sensitivity @ ±2000 dps: 70 mdps/LSB (ST's
@@ -116,6 +140,9 @@ class Lsm6ds3Min {
     ok &= writeReg(0x12, 0x44);  // CTRL3_C:  BDU=1, IF_INC=1
     ok &= writeReg(0x11, 0x5C);  // CTRL2_G:  208 Hz, ±2000 dps (see file comment)
     ok &= writeReg(0x10, 0x54);  // CTRL1_XL: 208 Hz, ±16 g (see file comment)
+    ok &= writeReg(0x16, 0x00);  // CTRL7_G:  gyro high-performance (LPF1 needs it)
+    ok &= writeReg(0x15, 0x00);  // CTRL6_C:  FTYPE=00 (~67 Hz LPF1 @ 208 Hz ODR)
+    ok &= writeReg(0x13, 0x02);  // CTRL4_C:  LPF1_SEL_G=1 — gyro digital LPF on
     return ok;
   }
 
