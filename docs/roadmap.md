@@ -176,8 +176,18 @@ FIRST_COMPILE.md with 14 verify-at-compile entries) by a Sonnet agent and
 integrated after review; firmware 0.4.2 shipped the two-central BLE
 prerequisite. **M0 met 2026-08-04**: first compile on the owner's Mac
 succeeded — SDK 9.2.0, `BUILD SUCCESSFUL`, all 24 sim unit tests PASS
-(`garmin/FIRST_COMPILE.md`). Next gate: M1 — on-watch install + live BLE
-link. The custom "Wing Foil activity" app remains a deliberate later
+(`garmin/FIRST_COMPILE.md`). **On-watch install + live BLE link achieved
+2026-08-11** — sideloaded to the owner's **Epix Gen 2** (not the Instinct,
+which is his brother's; `epix2` added to the manifest ahead of M5), and the
+full chain scan → pair → discover → subscribe → decode → render is proven
+on silicon, with a real toss registering (`session_jumps` 0 → 1,
+`stored_jumps` 7 → 8). **Not yet signed off as M1:** values on the glass
+are corrupt with a second BLE central subscribed (count and best wrong,
+airtime absent) — open bug, evidence and ruled-out causes in
+`garmin/FIRST_COMPILE.md`; the single-central control run is the next
+thing to do. Layout was also rebuilt for a 416x416 round AMOLED (the
+original absolute offsets were sized for Instinct's 176px MIP and drew the
+header off the glass entirely). The custom "Wing Foil activity" app remains a deliberate later
 decision (§8 there). Precedent: Surfr ships a Garmin companion.
 
 ## Phase 4 — "Real" hardware

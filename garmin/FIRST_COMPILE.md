@@ -61,6 +61,139 @@ list of what the compiler actually demanded:
    and `Test.assertEqual(x, null)` ERRORs at runtime (it dereferences
    its operands) — null expectations use plain `Test.assert(x == null)`.
 
+---
+
+## THE FIRST LIVE LINK — 2026-08-11, Epix Gen 2, four bugs deep
+
+`onCharacteristicChanged` fires, the puck's lines decode, and the field
+renders `0.0 ft` on the wrist. Scan → match → pair → discover → subscribe →
+decode all work on real silicon. Getting there took four fixes, and **three
+of the four were invisible on the glass**, which is the real lesson below.
+
+**READ THIS FIRST — the watch keeps its own crash log.** Pull
+`GARMIN/Apps/TEMP/CIQ_LOG.YML` over MTP (`mtp-getfile <id> ./CIQ_LOG.YML`).
+It names the error, the source FILE and LINE, the function, the firmware and
+Connect IQ version. It found bug 4 in one shot after a long stretch of
+guessing from photographs. Clear it (`mtp-delfile -n <id>`) before a test run
+so any new log is unambiguously from the build you just pushed. Do this
+BEFORE theorising about any field that misbehaves on hardware.
+
+1. **`onStart()` runs BEFORE `getInitialView()`** — so `_view` is null and
+   `JumpFieldApp`'s `if (_view != null)` guard dropped the start silently.
+   `PuckLink.start()` never ran: no profile registered, no scan ever begun.
+   Proven by `System.println()` in both hooks (visible on monkeydo's stdout).
+2. **Starting BLE from `getInitialView()` HANGS the field** — the obvious fix
+   for bug 1, and it is wrong. The watch sits on the Connect IQ loading
+   splash (app name + launcher icon) inside the activity and never renders.
+   Registering a BLE profile while the framework is still building the initial
+   view is too much work in the wrong place. The link is now started from
+   `JumpFieldView.compute()` behind an idempotent guard — the field's
+   guaranteed ~1 Hz clock, and reaching it proves the object graph is built.
+3. **Item 3 below CONFIRMED, exactly as predicted** —
+   `StringUtil.utf8ArrayToString()` takes an `Array<Number>`;
+   `onCharacteristicChanged` delivers a `ByteArray`. Compiles clean, works in
+   the simulator, throws `Unexpected Type Error: 'Failed invoking <symbol>'`
+   on hardware. It is NOT a `Lang.Exception`, so it escaped
+   `catch (ex instanceof Lang.Exception)` and killed the whole data field on
+   the first notification the puck sent. Fixed with `convertEncodedString`
+   (`REPRESENTATION_BYTE_ARRAY` → `REPRESENTATION_STRING_PLAIN_TEXT`, both
+   confirmed present in the SDK's `api.debug.xml`). The ingest path now uses
+   a BARE `catch` throughout: that is the boundary where another device's
+   bytes become control flow here, and it must never take the field down.
+4. **All three failures above look IDENTICAL on the glass.** `_uiState()`
+   maps every state except DEAD and LIVE to "finding puck", so a radio that
+   never started, a radio that is scanning, and a radio mid-pair are one
+   picture. Bugs 2 and 3 both showed the loading splash. If a hardware
+   symptom is ambiguous, go to the crash log or add state to the screen —
+   do not reason from the photograph.
+
+**Display findings from the same session** (see JumpFieldView.mc):
+
+- **`dc.drawText` paints the glyph cell's BACKGROUND** with the current
+  background colour, so a later row's cell silently ERASES part of an earlier
+  one. The big number's cell was wiping the descenders off the sub-text —
+  the "g" in "finding puck" lost its tail. Every text draw now passes
+  `Graphics.COLOR_TRANSPARENT`. (`TEXT_JUSTIFY_VCENTER` does NOT clip
+  descenders; that was a wrong guess, disproven by drawing one string three
+  ways in a single frame.)
+- **Round screens need chord math.** Usable width at row y is
+  `2*sqrt(R^2 - dy^2)`, not the field width. Absolute pixel offsets tuned for
+  Instinct's 176 px drew the header at x=20 on a 416 px Epix — entirely off
+  the glass, which is why "Jump Height" appeared as "eight".
+- **`FONT_NUMBER_*` has digits only, no letters.** `formatHeight()` returns
+  `"4.2 ft"`; the "ft" rendered as two tofu boxes. Digits and unit are now
+  drawn separately (`UnitsFmt.heightDigits()`).
+- **The simulator is a real iteration loop.** `connectiq` + `monkeydo`, then
+  screenshot the window by id with macOS `screencapture -l`. Feed the Model
+  fake lines via `onLine()` to render CONNECTED without hardware. Caveat:
+  it composites stale frames across reloads — kill and relaunch the
+  simulator before trusting a pixel-level judgement.
+
+**Not a bug:** ~60 s of "finding puck" before the first connect is the
+documented 5 s → 15 s backoff ladder (spec §5.4) climbing through a few
+rejected attempts. The puck serves TWO centrals by design
+(`Bluefruit.begin(2, 0)`), so a connected phone or `tools/blecmd.py` does
+not lock the watch out.
+
+---
+
+## OPEN BUG — corrupted values on the watch, cause NOT yet found
+
+**Status 2026-08-11: open. Do not trust numbers on the glass until this is
+closed.** Observed with the field LIVE and a second BLE central
+(`tools/blecmd.py --watch`, one persistent connection) also subscribed:
+
+| | puck's own `stats` | watch showed |
+|---|---|---|
+| count | `session_jumps=1` | **64** |
+| best | `session_best_m=0.164` (0.5 ft) | **0.3 ft** |
+| last | 0.164 m | 0.5 ft ✓ |
+| airtime | real | **0.00 s** |
+
+So `n` and `height_m` survive while `airtime_s` and `best_m` do not, and
+the count mutates to a value the device never emitted. That is the shape of
+**bytes going missing mid-line**: `Protocol.parseKV` and `Model._toFloat`
+treat every key identically, so a pure parse bug cannot explain one field
+working and its neighbour not. `LineReader` then glues the surviving
+fragments into something that still parses as a valid `JUMP`, and the Model
+applies it — a dropped chunk becomes a plausible wrong number rather than a
+visible error.
+
+**Two dead ends already walked, recorded so nobody repeats them:**
+- *Not* the ESP32 `s_mtu` adoption bug. That code is real and that failure
+  mode is real, but it is in `platform/esp32/jh_link.cpp` — the FireBeetle.
+  The Sense runs `platform/nrf52/jh_link.cpp`, which chunks to the minimum
+  MTU across subscribed connections, queried fresh per chunk, and writes
+  per-connection instead of broadcasting. Check the platform before
+  blaming the link layer.
+- *Not* the puck. `stats` over BLE from the Mac returns clean, correct,
+  complete lines at the same moment the watch is showing garbage.
+- *Not* a puck-side TX FIFO overflow either — the obvious suspect given
+  docs/sense.md §7 item 1 lists "TX FIFO depth under our line rates" as
+  unverified. `jh_link::write()` does not drop on a full ring: it applies
+  backpressure, draining inline (`wdtFeed()`, pace, `sendOneChunk()`) until
+  space exists. Bytes queued for TX are never silently discarded. (What
+  §7 item 1 should still worry about is that this blocks `loop()`, which is
+  a starvation risk, not a corruption one.)
+
+**Leading hypothesis (untested):** Connect IQ drops BLE notifications under
+load. Two subscribed centrals doubles the per-chunk work in `sendOneChunk`,
+and the second central's polling adds traffic; a dropped notification is
+silent on the CIQ side.
+
+**The experiment that settles it** — do this before writing any fix:
+render the raw received line (or just its length and tail) in the sub-text
+for one sideload and photograph it. That shows exactly what arrived. Guessing
+from rendered numbers is what produced both dead ends above.
+
+**Candidate hardening regardless of cause:** the ingest path currently trusts
+any line that parses. A `JUMP` missing `airtime_s`/`best_m`, or an `n` that
+jumps by more than 1, is corrupt on its face and should be dropped rather
+than applied. The device is the source of truth, but only when the line
+arrived intact.
+
+---
+
 Items below are kept for the history of what was and wasn't guessed
 right; the annotations above are the ground truth as compiled.
 
@@ -135,6 +268,11 @@ locally, not the live site) — or check a real open-source Connect IQ BLE
 project for its literal profile dictionary.
 
 ## 3. `StringUtil.utf8ArrayToString()` called with a `ByteArray`, not an `Array<Number>`
+
+> **CONFIRMED ON HARDWARE 2026-08-11 — this one was real, and it was fatal.**
+> The `convertEncodedString` fallback suggested below is the fix that shipped;
+> both representation constants exist. See the dated block at the top for the
+> failure signature and why the surrounding `catch` did not save us.
 
 **File:** `garmin/jumpfield/source/PuckLink.mc:352`
 

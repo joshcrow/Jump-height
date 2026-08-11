@@ -412,6 +412,43 @@ morning. The genuinely-two-BLE-centrals test (and advertising restart
 after the first connect) remains open — needs a second phone/iPad or the
 Garmin field.
 
+**TWO CENTRALS RAN FOR REAL, 2026-08-11 — and this item is now the prime
+suspect in an open bug.** The Garmin field (Epix Gen 2) and
+`tools/blecmd.py --watch` (Mac, one persistent connection) were subscribed
+simultaneously for over an hour.
+
+*What passed:* both centrals were served concurrently. The puck kept
+advertising while connected, the Mac's `stats` round-tripped correctly the
+whole time, and killing the Mac's central left the watch still connected.
+That is the core of this item's acceptance criterion, finally exercised
+against two real centrals rather than re-derived from library source.
+
+*What FAILED:* the watch's numbers were corrupt while both were subscribed
+— it displayed a jump count of 64 and a best of 0.3 ft at a moment the puck
+itself reported `session_jumps=1 session_best_m=0.164`. Fields went missing
+mid-line (`airtime_s`, `best_m`) while their neighbours (`n`, `height_m`)
+arrived fine. Full evidence table and the two ruled-out causes are in
+`garmin/FIRST_COMPILE.md` under "OPEN BUG — corrupted values on the watch".
+
+*Explicitly NOT the cause:* the `s_mtu` adopt-from-any-reporter bug in
+`platform/esp32/jh_link.cpp`. That is the FireBeetle's NimBLE path. This
+board runs `platform/nrf52/jh_link.cpp`, whose `sendOneChunk()` takes the
+MINIMUM MTU across subscribed connections, queries it fresh per chunk, and
+writes per-connection rather than broadcasting one buffer. Verified by
+reading it. (The ESP32 bug is still real and still worth fixing on that
+platform — it is just not this.)
+
+*Leading hypothesis:* Connect IQ silently dropping notifications, with two
+subscribers doubling per-chunk work in `sendOneChunk()` and the second
+central adding traffic. **Untested.** Settle it by rendering the raw
+received line on the watch for one sideload before changing any firmware —
+two confident wrong diagnoses were already produced by reasoning from
+rendered numbers instead of received bytes.
+
+*Still untested even now:* whether the corruption survives with the watch
+as the ONLY central. Until that single-central run happens, "two centrals"
+is a correlation, not the cause.
+
 ## 15. NUS UUID + name are in the advertisement/scan response — never scanned-for by a real central
 
 **File:** `firmware/src/platform/nrf52/jh_link.cpp`, `begin()`'s advertising

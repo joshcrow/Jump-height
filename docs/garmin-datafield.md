@@ -3,9 +3,18 @@
 **Status:** scaffold built and integrated; **first compile succeeded 2026-08-04**
 (SDK 9.2.0, `BUILD SUCCESSFUL`, **24/24 simulator unit tests pass**,
 five rounds to green — see [../garmin/FIRST_COMPILE.md](../garmin/FIRST_COMPILE.md)).
-**M1 (protocol core, simulator-only) met**; the next gate is on-watch
-render/install (M0's real-device AC + M2 live link). Field trial still
-follows water validation (Phase 2).
+**M1 (protocol core, simulator-only) met.** **On-watch install and the live
+BLE link are proven on silicon 2026-08-11** — on the owner's **Epix Gen 2**
+(`epix2`, added to the manifest ahead of M5; the Instinct 3 Solar is his
+brother's and only occasionally on hand). Scan → pair → discover →
+subscribe → decode → render all work, and a real toss registered on the
+wrist. **M2 is NOT signed off:** with a second BLE central subscribed the
+displayed values are corrupt — jump count and best wrong, airtime missing,
+while the puck's own `stats` is clean at the same moment. That open bug,
+its evidence table, and two confidently-wrong diagnoses already ruled out
+are in [../garmin/FIRST_COMPILE.md](../garmin/FIRST_COMPILE.md); the
+single-central control run is the next step and has not been done. Field
+trial still follows water validation (Phase 2).
 **Priority:** the DATA FIELD is the product. The custom "Wing Foil activity"
 app is a stretch goal with a separate go/no-go decision (see §8).
 **Executor note:** this document is written to be decision-complete — an
