@@ -52,6 +52,23 @@ module UnitsFmt {
         return feet ? "ft" : "m";
     }
 
+    // Digits only — "4.2" / "1.32", no unit. The big number on the glass is
+    // drawn in Graphics.FONT_NUMBER_*, and that family has glyphs for digits
+    // and separators ONLY: passing it "4.2 ft" renders the letters as two
+    // empty tofu boxes. Found 2026-08-10 the first time the CONNECTED state
+    // was ever rendered (simulator, epix2) — it had been latent since the
+    // field was written, invisible because SEARCHING draws "--" and every
+    // check until then had been in the SEARCHING state.
+    //
+    // Callers that draw in a TEXT font (footer, half/small tiers) should keep
+    // using formatHeight(); only the FONT_NUMBER_* path needs the split.
+    function heightDigits(meters as Float, feet as Boolean) as String {
+        if (feet) {
+            return (meters * M_TO_FT).format("%.1f");
+        }
+        return meters.format("%.2f");
+    }
+
     // "4.2 ft" / "1.32 m" — ft 1 decimal, m 2 decimals (spec §4.3).
     function formatHeight(meters as Float, feet as Boolean) as String {
         if (feet) {

@@ -355,14 +355,46 @@ class PuckLink extends Ble.BleDelegate {
     hidden function _ingest(value) as Void {
         var text;
         try {
-            text = StringUtil.utf8ArrayToString(value);
-        } catch (ex instanceof Lang.Exception) {
+            // NOT StringUtil.utf8ArrayToString(). onCharacteristicChanged
+            // delivers a Lang.ByteArray; that function takes an
+            // Array<Lang.Number>. The mismatch compiles clean and works in
+            // the simulator, then on real hardware throws
+            //
+            //     Unexpected Type Error: 'Failed invoking <symbol>'
+            //
+            // which is NOT a Lang.Exception, so it escaped the filtered catch
+            // below and killed the entire data field on the first notification
+            // the puck sent. Symptom on the wrist: the Connect IQ loading
+            // splash (app name + launcher icon) forever, inside the activity,
+            // looking for all the world like the field could not find the puck
+            // -- when in fact scan, pair, discover and subscribe had all
+            // already succeeded and real data was arriving.
+            //
+            // Diagnosed 2026-08-11 by pulling the watch's own crash log,
+            // GARMIN/Apps/TEMP/CIQ_LOG.YML, which named this exact line.
+            // Predicted, with this fix, as FIRST_COMPILE.md #3.
+            text = StringUtil.convertEncodedString(value, {
+                :fromRepresentation => StringUtil.REPRESENTATION_BYTE_ARRAY,
+                :toRepresentation => StringUtil.REPRESENTATION_STRING_PLAIN_TEXT
+            });
+        } catch (ex) {
             return;  // an undecodable chunk -- drop it; the next chunk still
                      // resyncs cleanly on the next '\n'
         }
-        var lines = _reader.feed(text);
-        for (var i = 0; i < lines.size(); i += 1) {
-            _model.onLine(Protocol.parseKV(lines[i]));
+        if (text == null) {
+            return;
+        }
+        // Bare catch, deliberately: this is the boundary where bytes chosen by
+        // another device become control flow here. Nothing arriving over the
+        // radio may ever take the field down again -- a dropped chunk costs
+        // one line, and the reader resyncs on the next '\n'.
+        try {
+            var lines = _reader.feed(text);
+            for (var i = 0; i < lines.size(); i += 1) {
+                _model.onLine(Protocol.parseKV(lines[i]));
+            }
+        } catch (ex) {
+            return;
         }
     }
 }

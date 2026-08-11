@@ -24,6 +24,7 @@ using Toybox.Graphics;
 using Toybox.System;
 using Toybox.Application;
 using Toybox.Attention;
+using Toybox.Math;
 import Toybox.Lang;
 
 class JumpFieldView extends WatchUi.DataField {
@@ -36,19 +37,32 @@ class JumpFieldView extends WatchUi.DataField {
     const UI_RECONNECTING = 2;
     const UI_NO_BLE = 3;
 
-    // Layout-tier breakpoints (spec §4.1's full/half/small) — heuristic
-    // pixel thresholds; verify against the real simulator preview for all
-    // three field sizes on instinct3solar45mm (M3 AC, and one of this
-    // task's "check first in the simulator" items — see FIRST_COMPILE.md).
+    // Layout-tier breakpoints (spec §4.1's full/half/small) — which of the
+    // three arrangements to draw. These stay absolute on purpose: they answer
+    // "is there room for three rows of content", which is a physical question.
+    // Everything *inside* a tier is proportional (see below).
     const FULL_MIN_H = 120;
     const HALF_MIN_H = 60;
 
     const EDGE_INSET_PX = 10;  // extra margin on an obscured (clipped) edge
 
+    // Row placement as a FRACTION of the field's height, never absolute
+    // pixels. 2026-08-10, first real sideload (Epix Gen 2, 416x416 full-screen
+    // field): the old absolute offsets — header at top+14, sub-text at top+32,
+    // footer at bottom-12 — were sized for Instinct's 176px. On a 416px field
+    // they crushed the whole header into the top 8% of the glass and left the
+    // big number stranded in the middle. Fractions render the same shape at
+    // any size.
+    const HEADER_Y_FRAC = 0.15f;
+    const SUB_Y_FRAC    = 0.29f;
+    const BIG_Y_FRAC    = 0.55f;
+    const FOOTER_Y_FRAC = 0.88f;
+
     hidden var _model;
     hidden var _puckLink;
     hidden var _fitOut;          // null if FitContributor setup ever throws
     hidden var _puckName as String;
+    hidden var _linkStarted = false;
 
     function initialize() {
         DataField.initialize();
@@ -71,11 +85,29 @@ class JumpFieldView extends WatchUi.DataField {
     // ---- lifecycle, wired from JumpFieldApp.onStart()/onStop() ----
 
     function onAppStart() as Void {
-        _puckLink.start();
+        _ensureLinkStarted();
     }
 
     function onAppStop() as Void {
         _puckLink.stop();
+        _linkStarted = false;  // a later activity start re-registers and rescans
+    }
+
+    // Idempotent, and called from BOTH the app lifecycle and compute().
+    //
+    // The app-lifecycle route alone is not trustworthy: onStart() fires before
+    // getInitialView() exists (proven — see JumpFieldApp.mc), so the original
+    // wiring never started the radio at all. Starting from getInitialView()
+    // fixes that but does BLE registration during view construction, which is
+    // a poor place for it. compute() is the honest answer: it is the field's
+    // guaranteed ~1 Hz clock, it only runs once the field is genuinely live in
+    // an activity, and reaching it means the whole object graph is built.
+    // The guard makes the extra call free.
+    hidden function _ensureLinkStarted() as Void {
+        if (!_linkStarted) {
+            _linkStarted = true;
+            _puckLink.start();
+        }
     }
 
     // ---- DataField overrides ----
@@ -85,6 +117,7 @@ class JumpFieldView extends WatchUi.DataField {
     // records. Called ~1 Hz regardless of which data screen is on-glass
     // (see PuckLink.mc's header) -- this is the field's only clock.
     function compute(info) {
+        _ensureLinkStarted();
         _puckLink.poll();
 
         var feet = UnitsFmt.isFeet(_readUnitOverride());
@@ -136,40 +169,76 @@ class JumpFieldView extends WatchUi.DataField {
     // │   best 5.1 ft · air 1.02s  │   footer row
     // └────────────────────────────┘
     hidden function _drawFull(dc, w, h, insets, fg, bg, feet, uiState) as Void {
-        var left = insets[2];
-        var right = w - insets[3];
         var top = insets[0];
         var bottom = h - insets[1];
-        var midX = (left + right) / 2;
+        var span = bottom - top;
+        var midX = (insets[2] + (w - insets[3])) / 2;
 
-        var headerY = top + 14;
-        _drawDot(dc, left + 8, headerY, 6, uiState, fg, bg);
+        var labelFont = _labelFont(h);
+        var dotR = _dotRadius(h);
+        var gap = h / 40 + 2;  // dot-to-text gap, ~12px on Epix, ~6 on Instinct
+
+        // Header. On a round display the usable width at this row is the
+        // circle's CHORD, not w — at 15% of a 416px full-screen field that is
+        // ~300px, not 416, which is exactly what clipped "Jump Height" down to
+        // "eight" on the first Epix sideload.
+        var headerY = (top + span * HEADER_Y_FRAC).toNumber();
+        var hHalf = _safeHalfWidth(w, h, headerY, insets);
+        var hLeft = midX - hHalf;
+        var hRight = midX + hHalf;
+
+        // Name and count are ONE typographic row: size them together, or they
+        // render at different fonts and collide (which is exactly what the
+        // first Epix render did). The header is secondary information — it
+        // deliberately starts a tier below the status line so the glanceable
+        // thing on the glass is the state, not the puck's name.
+        var countText = _model.jumpCount().toString() + " jumps";
+        var nameX = hLeft + dotR * 2 + gap;
+        var minGap = w / 16;
+        var headerFont = _fitPair(dc, _puckName, countText,
+            hRight - nameX - minGap, _fontLadder(_secondaryFont(h)));
+        var countW = dc.getTextDimensions(countText, headerFont)[0];
+        var nameMax = hRight - countW - minGap - nameX;
+
+        _drawDot(dc, hLeft + dotR, headerY, dotR, uiState, fg, bg);
         dc.setColor(fg, bg);
-        dc.drawText(left + 20, headerY, Graphics.FONT_XTINY, _puckName,
-            Graphics.TEXT_JUSTIFY_LEFT | Graphics.TEXT_JUSTIFY_VCENTER);
-        dc.drawText(right - 4, headerY, Graphics.FONT_XTINY, _model.jumpCount().toString() + " jumps",
-            Graphics.TEXT_JUSTIFY_RIGHT | Graphics.TEXT_JUSTIFY_VCENTER);
+        _drawVC(dc, nameX, headerY, headerFont,
+            _ellipsize(dc, _puckName, headerFont, nameMax),
+            Graphics.TEXT_JUSTIFY_LEFT, fg);
+        _drawVC(dc, hRight, headerY, headerFont, countText,
+            Graphics.TEXT_JUSTIFY_RIGHT, fg);
 
         var subText = _subText(uiState);
-        var bigY = (top + (bottom - top) * 0.52).toNumber();  // Dc coordinates
-                                                                // want Numbers,
-                                                                // not Floats
         if (!subText.equals("")) {
-            dc.drawText(midX, top + 32, Graphics.FONT_XTINY, subText,
-                Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
+            var subY = (top + span * SUB_Y_FRAC).toNumber();
+            var subFont = _fitFont(dc, subText,
+                _safeHalfWidth(w, h, subY, insets) * 2 - 8, _fontLadder(labelFont));
+            _drawVC(dc, midX, subY, subFont, subText, Graphics.TEXT_JUSTIFY_CENTER, fg);
         }
 
+        // Dc coordinates want Numbers, not Floats.
+        var bigY = (top + span * BIG_Y_FRAC).toNumber();
         var bigText = _bigNumberText(uiState, feet);
-        var fonts = [Graphics.FONT_NUMBER_HOT, Graphics.FONT_NUMBER_MEDIUM, Graphics.FONT_NUMBER_MILD];
-        var font = _fitFont(dc, bigText, right - left - 8, fonts);
-        _drawInvertible(dc, midX, bigY, bigText, font, fg, bg, uiState == UI_CONNECTED && _model.isFlashing());
+        var unitText = _bigUnitText(uiState, feet);
+        var unitFont = _secondaryFont(h);
+        var fonts = [Graphics.FONT_NUMBER_THAI_HOT, Graphics.FONT_NUMBER_HOT,
+                     Graphics.FONT_NUMBER_MEDIUM, Graphics.FONT_NUMBER_MILD];
+        var bigAvail = _safeHalfWidth(w, h, bigY, insets) * 2 - 8;
+        if (!unitText.equals("")) {
+            bigAvail -= dc.getTextDimensions(unitText, unitFont)[0] + 10;
+        }
+        var font = _fitFont(dc, bigText, bigAvail, fonts);
+        _drawBigValue(dc, midX, bigY, bigText, unitText, font, unitFont, fg, bg,
+            uiState == UI_CONNECTED && _model.isFlashing());
 
         if (uiState == UI_CONNECTED || uiState == UI_RECONNECTING) {
+            var footerY = (top + span * FOOTER_Y_FRAC).toNumber();
             var footer = "best " + UnitsFmt.formatHeight(_model.sessionBestM(), feet)
                 + " . air " + UnitsFmt.formatAirtime(_model.lastAirtimeS());
+            var footFont = _fitFont(dc, footer,
+                _safeHalfWidth(w, h, footerY, insets) * 2 - 8, _fontLadder(_secondaryFont(h)));
             dc.setColor(fg, bg);
-            dc.drawText(midX, bottom - 12, Graphics.FONT_XTINY, footer,
-                Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
+            _drawVC(dc, midX, footerY, footFont, footer, Graphics.TEXT_JUSTIFY_CENTER, fg);
         }
     }
 
@@ -187,25 +256,43 @@ class JumpFieldView extends WatchUi.DataField {
         var bottom = h - insets[1];
         var midX = (left + right) / 2;
 
-        var bigText = _bigNumberText(uiState, feet);
-        var bigY = (top + (bottom - top) * 0.38).toNumber();
-        var fonts = [Graphics.FONT_NUMBER_MEDIUM, Graphics.FONT_NUMBER_MILD, Graphics.FONT_SMALL];
-        var font = _fitFont(dc, bigText, right - left - 4, fonts);
-        _drawInvertible(dc, midX, bigY, bigText, font, fg, bg, uiState == UI_CONNECTED && _model.isFlashing());
+        var span = bottom - top;
+        var labelFont = _labelFont(h);
+        var dotR = _dotRadius(h);
 
-        var rowY = bottom - 12;
+        var bigText = _bigNumberText(uiState, feet);
+        var unitText = _bigUnitText(uiState, feet);
+        var unitFont = _secondaryFont(h);
+        var bigY = (top + span * 0.40).toNumber();
+        var fonts = [Graphics.FONT_NUMBER_HOT, Graphics.FONT_NUMBER_MEDIUM,
+                     Graphics.FONT_NUMBER_MILD, Graphics.FONT_SMALL];
+        var bigAvail = _safeHalfWidth(w, h, bigY, insets) * 2 - 6;
+        if (!unitText.equals("")) {
+            bigAvail -= dc.getTextDimensions(unitText, unitFont)[0] + 8;
+        }
+        var font = _fitFont(dc, bigText, bigAvail, fonts);
+        _drawBigValue(dc, midX, bigY, bigText, unitText, font, unitFont, fg, bg,
+            uiState == UI_CONNECTED && _model.isFlashing());
+
+        // Bottom row rides the same chord rule as _drawFull's footer: on a
+        // round face the last row is the narrowest line on the glass.
+        var rowY = (top + span * 0.85).toNumber();
+        var rHalf = _safeHalfWidth(w, h, rowY, insets);
+        var rLeft = midX - rHalf;
+        var rRight = midX + rHalf;
+
         dc.setColor(fg, bg);
         if (uiState == UI_CONNECTED || uiState == UI_RECONNECTING) {
-            dc.drawText(left, rowY, Graphics.FONT_XTINY, "^" + UnitsFmt.formatHeight(_model.sessionBestM(), feet),
-                Graphics.TEXT_JUSTIFY_LEFT | Graphics.TEXT_JUSTIFY_VCENTER);
-            dc.drawText(midX, rowY, Graphics.FONT_XTINY, "n" + _model.jumpCount().toString(),
-                Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
+            _drawVC(dc, rLeft, rowY, labelFont, "^" + UnitsFmt.formatHeight(_model.sessionBestM(), feet),
+                Graphics.TEXT_JUSTIFY_LEFT, fg);
+            _drawVC(dc, midX, rowY, labelFont, "n" + _model.jumpCount().toString(),
+                Graphics.TEXT_JUSTIFY_CENTER, fg);
         } else {
             var subText = _subText(uiState);
-            dc.drawText(left, rowY, Graphics.FONT_XTINY, subText,
-                Graphics.TEXT_JUSTIFY_LEFT | Graphics.TEXT_JUSTIFY_VCENTER);
+            var subFont = _fitFont(dc, subText, rHalf * 2 - dotR * 3, [labelFont, Graphics.FONT_XTINY]);
+            _drawVC(dc, rLeft, rowY, subFont, subText, Graphics.TEXT_JUSTIFY_LEFT, fg);
         }
-        _drawDot(dc, right - 8, rowY, 5, uiState, fg, bg);
+        _drawDot(dc, rRight - dotR, rowY, dotR, uiState, fg, bg);
     }
 
     // `4.2^5.1` + state dot. Nothing else (spec §4.1's quarter slot).
@@ -266,7 +353,51 @@ class JumpFieldView extends WatchUi.DataField {
         if (uiState == UI_SEARCHING || uiState == UI_NO_BLE) {
             return "--";
         }
-        return UnitsFmt.formatHeight(_model.lastHeightM(), feet);
+        return UnitsFmt.heightDigits(_model.lastHeightM(), feet);
+    }
+
+    // The unit is drawn separately, in a text font — see UnitsFmt.heightDigits.
+    // Placeholders carry no unit: "-- ft" claims a measurement we don't have.
+    hidden function _bigUnitText(uiState as Number, feet as Boolean) as String {
+        if (uiState == UI_SEARCHING || uiState == UI_NO_BLE) {
+            return "";
+        }
+        return UnitsFmt.unitLabel(feet);
+    }
+
+    // Draws the big value as a GROUP — digits in a FONT_NUMBER_* face, unit in
+    // a text face beside it, the pair centred together on cx.
+    hidden function _drawBigValue(dc, cx, cy, digits as String, unit as String,
+                                  numFont, unitFont, fg, bg, flashing as Boolean) as Void {
+        var nd = dc.getTextDimensions(digits, numFont);
+        var ud = null;
+        var uw = 0;
+        var gap = 0;
+        if (!unit.equals("")) {
+            ud = dc.getTextDimensions(unit, unitFont);
+            uw = ud[0];
+            gap = nd[0] / 12 + 4;
+        }
+        var total = nd[0] + gap + uw;
+        var x = cx - total / 2;
+
+        var textColor = fg;
+        if (flashing) {
+            var pad = 6;
+            dc.setColor(fg, fg);
+            dc.fillRectangle(x - pad, cy - nd[1] / 2 - pad / 2, total + pad * 2, nd[1] + pad);
+            textColor = bg;  // text reads out of the inverted block
+        }
+        _drawVC(dc, x, cy, numFont, digits, Graphics.TEXT_JUSTIFY_LEFT, textColor);
+        if (ud != null) {
+            // Sit the unit low against the digits rather than centred on them:
+            // a short lowercase word centred against tall digits reads as
+            // floating in the middle of the number.
+            var unitY = cy + nd[1] / 2 - ud[1] / 2 - nd[1] / 8;
+            _drawVC(dc, x + nd[0] + gap, unitY, unitFont, unit,
+                Graphics.TEXT_JUSTIFY_LEFT, textColor);
+        }
+        dc.setColor(fg, bg);
     }
 
     hidden function _drawDot(dc, cx, cy, r, uiState as Number, fg, bg) as Void {
@@ -294,12 +425,145 @@ class JumpFieldView extends WatchUi.DataField {
             dc.fillRectangle(cx - dims[0] / 2 - pad, cy - dims[1] / 2 - pad / 2,
                 dims[0] + pad * 2, dims[1] + pad);
             dc.setColor(bg, fg);
-            dc.drawText(cx, cy, font, text, Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
+            _drawVC(dc, cx, cy, font, text, Graphics.TEXT_JUSTIFY_CENTER, bg);
             dc.setColor(fg, bg);
         } else {
-            dc.setColor(fg, bg);
-            dc.drawText(cx, cy, font, text, Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
+            _drawVC(dc, cx, cy, font, text, Graphics.TEXT_JUSTIFY_CENTER, fg);
         }
+    }
+
+    // Vertically-centred drawText, with a transparent cell background.
+    //
+    // The transparency is the load-bearing part; the manual centring is just
+    // tidiness (TEXT_JUSTIFY_VCENTER was tested and does NOT clip descenders —
+    // that was a wrong first guess at the "g" bug, disproven by drawing the
+    // same string three ways in one frame).
+    hidden function _drawVC(dc, x, y, font, text as String, hJust, textColor) as Void {
+        // COLOR_TRANSPARENT is the whole point. Garmin's drawText paints the
+        // glyph cell's BACKGROUND with the current background colour, so a
+        // later row's cell silently ERASES whatever an earlier row put there.
+        // The big number's cell overlaps the bottom of the sub-text row, and
+        // its background fill was wiping out exactly the descenders — that is
+        // what cut the "g" in "finding puck" on the real Epix. Nothing was
+        // clipped and nothing was mispositioned; a neighbour painted over it.
+        dc.setColor(textColor, Graphics.COLOR_TRANSPARENT);
+        dc.drawText(x, y - Graphics.getFontHeight(font) / 2, font, text, hJust);
+    }
+
+    // Half of the horizontally usable width at local row `y`, honouring a
+    // ROUND display's curvature: the chord at vertical distance dy from the
+    // circle's centre is 2*sqrt(R^2 - dy^2), which near the top or bottom of
+    // the glass is dramatically less than the field's nominal width.
+    //
+    // We can only place a row against the circle when we know where the field
+    // sits on the screen, and the obscurity flags tell us exactly that: an
+    // OBSCURE_TOP field's top edge IS the screen's top edge, so local y is
+    // absolute y (mirrored for OBSCURE_BOTTOM). A strip touching neither is
+    // mid-screen, where the chord is within a few percent of full width and
+    // the nominal half-width is the honest answer.
+    //
+    // Only applied to full-width fields — a half-width field (Epix's 207px
+    // bottom pair) is horizontally offset by an amount we cannot query, and
+    // guessing would be worse than the small over-estimate of using w/2.
+    hidden function _safeHalfWidth(w, h, y, insets) as Number {
+        var nominal = (w - insets[2] - insets[3]) / 2;
+        var settings = System.getDeviceSettings();
+        if (settings.screenShape != System.SCREEN_SHAPE_ROUND) {
+            return nominal;
+        }
+        var screenW = settings.screenWidth;
+        if (w < screenW - 4) {
+            return nominal;  // not full-width: position unknown, don't guess
+        }
+
+        var flags = _obscurityFlags();
+        var atTop = (flags & WatchUi.DataField.OBSCURE_TOP) != 0;
+        var atBottom = (flags & WatchUi.DataField.OBSCURE_BOTTOM) != 0;
+
+        var r = screenW / 2.0;
+        var dy;
+        if (atTop && atBottom) {
+            dy = y - h / 2.0;             // field spans the full screen
+        } else if (atTop) {
+            dy = y - r;                    // field hugs the top: y is absolute
+        } else if (atBottom) {
+            dy = r - (h - y);              // field hugs the bottom
+        } else {
+            return nominal;                // mid-screen strip
+        }
+
+        var inside = r * r - dy * dy;
+        if (inside <= 1.0) {
+            return 8;                      // degenerate; keep something drawable
+        }
+        var chordHalf = Math.sqrt(inside).toNumber() - 4;  // 4px breathing room
+        return (chordHalf < nominal) ? chordHalf : nominal;
+    }
+
+    // Label/sub-text font scaled to the field's height. FONT_XTINY on a 416px
+    // Epix field is a rumour, not a readable line.
+    hidden function _labelFont(h) as Number {
+        if (h >= 300) { return Graphics.FONT_MEDIUM; }
+        if (h >= 180) { return Graphics.FONT_SMALL; }
+        if (h >= 110) { return Graphics.FONT_TINY; }
+        return Graphics.FONT_XTINY;
+    }
+
+    // One tier below _labelFont: header/footer metadata, not the glance line.
+    hidden function _secondaryFont(h) as Number {
+        if (h >= 300) { return Graphics.FONT_SMALL; }
+        if (h >= 180) { return Graphics.FONT_TINY; }
+        return Graphics.FONT_XTINY;
+    }
+
+    // Descending ladder starting at `top`, so _fitFont/_fitPair can step down.
+    hidden function _fontLadder(top as Number) as Array {
+        var all = [Graphics.FONT_MEDIUM, Graphics.FONT_SMALL,
+                   Graphics.FONT_TINY, Graphics.FONT_XTINY];
+        var out = [];
+        var started = false;
+        for (var i = 0; i < all.size(); i += 1) {
+            if (all[i] == top) { started = true; }
+            if (started) { out.add(all[i]); }
+        }
+        return started ? out : [Graphics.FONT_XTINY];
+    }
+
+    // Largest font at which BOTH strings fit side by side in maxWidth. Sizing
+    // them separately lets a short string keep a big font while its neighbour
+    // shrinks, which reads as a typo rather than a hierarchy.
+    hidden function _fitPair(dc, a as String, b as String, maxWidth as Number, fonts as Array) as Number {
+        for (var i = 0; i < fonts.size(); i += 1) {
+            var wa = dc.getTextDimensions(a, fonts[i])[0];
+            var wb = dc.getTextDimensions(b, fonts[i])[0];
+            if (wa + wb <= maxWidth) {
+                return fonts[i];
+            }
+        }
+        return fonts[fonts.size() - 1];
+    }
+
+    hidden function _dotRadius(h) as Number {
+        var r = h / 40;
+        if (r < 4) { return 4; }
+        if (r > 12) { return 12; }
+        return r;
+    }
+
+    // Trim with a trailing "." until it fits: a long puck name should lose its
+    // tail visibly rather than run off the round edge mid-word (which is how
+    // "Jump Height" became "eight" on the Epix).
+    hidden function _ellipsize(dc, text as String, font, maxWidth as Number) as String {
+        if (maxWidth <= 0) { return ""; }
+        if (dc.getTextDimensions(text, font)[0] <= maxWidth) { return text; }
+        var s = text;
+        while (s.length() > 1) {
+            s = s.substring(0, s.length() - 1);
+            if (dc.getTextDimensions(s + ".", font)[0] <= maxWidth) {
+                return s + ".";
+            }
+        }
+        return "";
     }
 
     // Largest font (by array order, biggest first) whose rendered width
@@ -318,13 +582,18 @@ class JumpFieldView extends WatchUi.DataField {
     // corner on the semi-octagon Instinct display (spec §5.1). Only valid to
     // read getObscurityFlags() during onUpdate() (per the DataField docs),
     // so this must be called from there, never from compute().
-    hidden function _edgeInsets() as Array {
-        var flags = 0;
+    // Only valid to read during onUpdate() (per the DataField docs), which is
+    // the only place either caller runs.
+    hidden function _obscurityFlags() as Number {
         try {
-            flags = getObscurityFlags();
+            return getObscurityFlags();
         } catch (ex instanceof Lang.Exception) {
-            flags = 0;
+            return 0;
         }
+    }
+
+    hidden function _edgeInsets() as Array {
+        var flags = _obscurityFlags();
         var top = 0;
         var bottom = 0;
         var left = 0;
