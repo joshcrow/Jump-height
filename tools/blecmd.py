@@ -73,8 +73,10 @@ async def find(name, seconds=10.0):
         timeout=seconds,
     )
     if dev is None:
-        sys.exit(f"no '{name}' found — is it awake and in range? "
-                 f"(try --scan; a puck in System OFF does not advertise)")
+        # Raised, not sys.exit()'d: under --watch this is a retryable gap
+        # (out of range, momentarily not advertising), not the end of the run.
+        raise RuntimeError(f"no '{name}' found — is it awake and in range? "
+                           f"(try --scan; a puck in System OFF does not advertise)")
     return dev
 
 
@@ -103,7 +105,8 @@ class Link:
         return list(self._lines)
 
 
-async def run(args):
+async def session(args):
+    """One connect-and-poll session. Returns when the link drops."""
     dev = await find(args.name)
     print(f"connecting to {dev.address} ({dev.name or args.name}) ...")
     async with BleakClient(dev) as client:
@@ -123,6 +126,23 @@ async def run(args):
             await asyncio.sleep(max(0.0, args.every - args.timeout))
 
 
+async def run(args):
+    """--watch is meant to outlive the link: a multi-hour charge log rides
+    through the disconnects a BLE link inevitably has, and a puck that goes
+    to sleep and comes back is a gap in the log, not the end of it. A
+    one-shot command still fails loudly."""
+    while True:
+        try:
+            await session(args)
+            return
+        except Exception as e:
+            if not args.watch:
+                raise
+            print(f"[{time.strftime('%H:%M:%S')}] link lost ({type(e).__name__}: {e})"
+                  f" — retrying in {args.every:.0f}s\n")
+            await asyncio.sleep(args.every)
+
+
 def main():
     p = argparse.ArgumentParser(description="Send a command to the puck over BLE.")
     p.add_argument("command", nargs="?", default="stats",
@@ -138,6 +158,8 @@ def main():
         asyncio.run(scan() if args.scan else run(args))
     except KeyboardInterrupt:
         print("\nstopped")
+    except RuntimeError as e:
+        sys.exit(str(e))
 
 
 if __name__ == "__main__":

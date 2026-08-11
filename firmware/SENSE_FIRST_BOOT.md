@@ -682,6 +682,37 @@ TACQ configuration, not divider-constant tweaks. Also confirm `chg`
 flips to 1 on USB attach and back to 0 on detach, and that `batt_pct`
 roughly tracks the charge state over a full charge cycle.
 
+**FIRST METER POINT, 2026-08-10 — reads LOW by 2.9%, one point only.**
+Meter across the cell 3490 mV; `vbat_mv` 3387–3393 over the same minute
+(charging, `chg=1`, USB in). Delta ≈ 100 mV low — past the ~2% line and
+in the direction the header predicted, so the acquisition-time theory
+stands.
+
+Deliberately taken WITH the cable in, against this item's own
+instruction, because the cell was at 1% and the unplugged/resting
+version was neither safe nor meaningful there — and it costs nothing:
+the meter and the divider tap the SAME node, so the ADC-vs-truth
+comparison is valid at any voltage. The `batt_pct`-tracks-the-curve
+clause genuinely does need the resting cell and is still open.
+
+**Do not fix on this point alone — it cannot tell the two errors apart.**
+A proportional error (sample cap not charging through the ~340 kΩ source
+— the TACQ theory) and a fixed offset (reference or divider constant)
+are indistinguishable at a single voltage. They diverge near 4.0 V:
+proportional predicts ~116 mV low, fixed predicts ~100 mV. Second meter
+point at full charge decides which, and only then which fix.
+
+Tooling built the same day for this: `tools/blecmd.py` (Nordic UART from
+the Mac via bleak — no phone, no Bluefy, the unplugged reads are
+scriptable now) and `tools/chargelog.py` (serial, hours-long, CSV).
+
+**Unplanned finding, same session — idle drain is real.** A cell charged
+to 4053 mV on 08-04 was at 3372 mV/1% on 08-10, six days later. Not
+self-discharge: the puck was left advertising. 250 mAh at ~2 mA idle ≈ 5
+days, which lands on the observed date. Makes item 25's `off` ritual a
+shipping requirement, not a convenience, and makes off-current (25c) the
+highest-value remaining measurement.
+
 ## 25. Soft power-off (`off` → System OFF) — entry PROVEN on-cable; wake paths and off-current pending *(added 2026-08-04)*
 
 **File:** `firmware/src/platform/nrf52/jh_power.cpp` `system_off()`,
