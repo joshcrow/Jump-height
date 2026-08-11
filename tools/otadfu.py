@@ -71,13 +71,16 @@ OP_RECEIVE_IMAGE      = 0x03
 OP_VALIDATE           = 0x04
 OP_ACTIVATE_RESET     = 0x05
 OP_SYS_RESET          = 0x06
+OP_REPORT_RECV_SIZE   = 0x07
 OP_PKT_RCPT_NOTIF_REQ = 0x08
 OP_RESPONSE           = 0x10
 OP_PKT_RCPT_NOTIF     = 0x11
 IMAGE_APPLICATION     = 0x04
 RESP_SUCCESS          = 0x01
 
-PKT_RCPT_INTERVAL = 10   # bootloader confirms every N packets (flow control)
+PKT_RCPT_INTERVAL = 10       # receipts still requested, consumed opportunistically
+PACKET_GAP_S      = 0.012    # fixed pace; 20 ms/pkt measured clean, 12 ms = margin'd bet
+CHECKPOINT_BYTES  = 10240    # 0x07 verification cadence
 CHUNK = 20               # legacy DFU streams the image in 20-byte writes
 
 DEFAULT_ZIP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
@@ -168,11 +171,31 @@ async def dfu(zip_path):
             "reset into UF2/serial mode instead; recover with "
             "`pio run -d firmware -e xiaoblesense_adafruit -t upload`")
 
+    class LinkDropped(Exception):
+        pass
+
     async def session(dev):
-        """One connection, the whole legacy-DFU procedure. Raises on refusal."""
+        """One connection, the whole legacy-DFU procedure. Raises on refusal.
+
+        Every failure before this version was blind on one axis: when
+        receipts stopped, we could not tell a dropped LINK from a dead
+        NOTIFICATION path. The disconnected_callback settles it — and the
+        two need opposite responses (reconnect vs re-subscribe), so the
+        attribution is not a nicety.
+        """
         nonlocal acked
         acked = 0
-        async with BleakClient(dev, timeout=20.0) as c:
+        dropped = asyncio.Event()
+
+        def on_disconnect(_):
+            dropped.set()
+
+        def check_link():
+            if dropped.is_set():
+                raise LinkDropped("link dropped mid-session")
+
+        async with BleakClient(dev, timeout=20.0,
+                               disconnected_callback=on_disconnect) as c:
             await c.start_notify(DFU_CONTROL, on_notify)
 
             # start(app) + image sizes (softdevice, bootloader, app)
@@ -193,29 +216,43 @@ async def dfu(zip_path):
                 bytes([OP_PKT_RCPT_NOTIF_REQ]) + struct.pack("<H", PKT_RCPT_INTERVAL), response=True)
             await c.write_gatt_char(DFU_CONTROL, bytes([OP_RECEIVE_IMAGE]), response=True)
 
+            # MEASURED DESIGN (bench, 2026-08-11, dfu_probe.py): packet-
+            # receipt notifications are UNRELIABLE under load — the
+            # bootloader's notify has a single-slot queue and silently skips
+            # a receipt when it is busy. At 20 ms/packet every receipt
+            # arrives; at 2 ms/packet the stream dies after the first one
+            # while the link stays up (disconnect callback proved the link
+            # was fine). So flow control must NOT hard-depend on receipts:
+            #
+            #   - fixed conservative pace (PACKET_GAP_S) does the real work
+            #   - receipts are consumed opportunistically when they arrive
+            #   - every CHECKPOINT_BYTES, opcode 0x07 (report received image
+            #     size) — a control-point exchange, reliable in every run —
+            #     verifies the bootloader actually HAS what we sent; any
+            #     shortfall is detected within one checkpoint instead of at
+            #     the final CRC.
             t0 = time.time()
-            sent = 0
-            window = CHUNK * PKT_RCPT_INTERVAL   # bytes in flight per receipt
+            next_ckpt = CHECKPOINT_BYTES
             for off in range(0, len(image), CHUNK):
+                check_link()
                 await c.write_gatt_char(DFU_PACKET, image[off:off + CHUNK], response=False)
-                sent += 1
-                # HARD flow control. `acked` is the byte count straight from
-                # the bootloader's receipt notification — it IS bytes, not
-                # packets. (First attempt compared `acked * CHUNK`, which made
-                # the window look ~20x emptier than it was: the wait never
-                # engaged, 157 KB firehosed at "88 KB/s" into a bootloader
-                # that flash-writes per packet, and it errored 0x06 at 98%.
-                # The receipts are the ONLY thing enforcing real pace.)
-                if sent % PKT_RCPT_INTERVAL == 0:
-                    deadline = time.time() + 30.0
-                    while acked < off + CHUNK - 2 * window:
-                        if time.time() > deadline:
-                            raise RuntimeError(f"receipts stalled at {acked}/{off} bytes")
-                        await asyncio.sleep(0.005)
-                if sent % 500 == 0:
-                    pct = 100.0 * off / len(image)
-                    rate = acked / max(time.time() - t0, 1e-9) / 1024
-                    print(f"  {pct:5.1f}%  {rate:5.1f} KB/s (acked {acked})", flush=True)
+                await asyncio.sleep(PACKET_GAP_S)
+                sent_bytes = min(off + CHUNK, len(image))  # final packet is partial
+                if sent_bytes >= next_ckpt or sent_bytes >= len(image):
+                    next_ckpt += CHECKPOINT_BYTES
+                    await c.write_gatt_char(DFU_CONTROL, bytes([OP_REPORT_RECV_SIZE]), response=True)
+                    r = await asyncio.wait_for(responses.get(), 10.0)
+                    if len(r) >= 7 and r[0] == OP_RESPONSE and r[1] == OP_REPORT_RECV_SIZE:
+                        have = struct.unpack("<I", r[3:7])[0]
+                        if have != sent_bytes:
+                            raise RuntimeError(
+                                f"byte loss detected at checkpoint: sent {sent_bytes}, "
+                                f"bootloader has {have}")
+                        pct = 100.0 * sent_bytes / len(image)
+                        rate = sent_bytes / max(time.time() - t0, 1e-9) / 1024
+                        print(f"  {pct:5.1f}%  {rate:5.1f} KB/s  verified {have} bytes", flush=True)
+                    else:
+                        raise RuntimeError(f"bad 0x07 response: {r.hex()}")
 
             await expect(OP_RECEIVE_IMAGE)
             print(f"image transferred in {time.time()-t0:.0f}s")
@@ -229,12 +266,24 @@ async def dfu(zip_path):
             except Exception:
                 pass  # activation resets the link mid-write; that's the success path
 
+    # Settle before first contact: the observed flake is a START whose
+    # response notification never arrives when connecting within ~1 s of the
+    # bootloader appearing; the one clean 157 KB run was against a bootloader
+    # that had been advertising for minutes.
+    await asyncio.sleep(6.0)
     try:
         await session(boot)
-    except RuntimeError as e:
-        if "refused op 0x1" not in str(e):
+    except (RuntimeError, asyncio.TimeoutError) as e:
+        # Either the bootloader refused START (stale DFU state from a dead
+        # transfer) or our START landed but the response never reached us
+        # (same net state: mid-DFU). Both recover identically: 0x06 reset —
+        # WHICH REQUIRES USB OUT; on USB the bootloader resets into
+        # UF2/serial mode instead and clean_reset explains that — then one
+        # more settled attempt.
+        if isinstance(e, RuntimeError) and "refused op 0x1" not in str(e) and "stalled" not in str(e):
             raise
         boot = await clean_reset(boot)
+        await asyncio.sleep(6.0)
         await session(boot)
 
     print("activated — bootloader is flashing and rebooting")

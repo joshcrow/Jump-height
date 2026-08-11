@@ -522,7 +522,24 @@ bool reboot_to_dfu() {
   // the app. The RESET path wants DFU_MAGIC_OTA_RESET (0xA8), which is
   // exactly what enterOTADfu() writes.
   delay(50);          // let the caller's farewell bytes reach USB/BLE
-  enterOTADfu();      // GPREGRET = 0xA8, NVIC_SystemReset(); does not return
+  // NOT the core's enterOTADfu(): that helper writes NRF_POWER->GPREGRET
+  // directly, and with the SoftDevice ENABLED that register is SD-owned —
+  // the raw write lands only sometimes. Measured on silicon 2026-08-11:
+  // three `dfu` commands entered the bootloader, then two in a row silently
+  // rebooted back into the app, same binary. The SD-aware calls are the
+  // reliable path; 0xA8 is DFU_MAGIC_OTA_RESET (wiring.c:28).
+  uint32_t rc1 = sd_power_gpregret_clr(0, 0xFF);
+  uint32_t rc2 = sd_power_gpregret_set(0, 0xA8);
+  uint32_t back = 0;
+  uint32_t rc3 = sd_power_gpregret_get(0, &back);
+  // DIAG (temporary): prove whether the magic actually sticks before reset.
+  char msg[64];
+  snprintf(msg, sizeof(msg), "# gpregret rc=%lu/%lu/%lu val=0x%02lx\n",
+           (unsigned long)rc1, (unsigned long)rc2, (unsigned long)rc3,
+           (unsigned long)back);
+  write(msg, strlen(msg));
+  for (int i = 0; i < 40; ++i) { pump(); delay(15); }  // flush over BLE/USB
+  NVIC_SystemReset();
   return true;        // not reached
 }
 

@@ -547,6 +547,43 @@ own after N minutes?) — that answer decides whether a failed beach OTA is
 
 Until every box above is checked, **do not seal the capsule.**
 
+**BENCH SESSION 2 (2026-08-11 evening) — transfer SOLVED, trigger now the
+open item.** The full loop passed once, end to end, wireless: 158,064 bytes
+in 112 s, every checkpoint byte-verified, validated, activated, app back on
+the air with calibration intact. What it took, and what remains:
+
+- **Packet-receipt notifications are UNRELIABLE under load — measured.**
+  At 20 ms/packet every receipt arrives; at 2 ms/packet the receipt stream
+  dies after ONE notification while the link stays up (disconnect callback
+  proved the link; control-point 0x07 probe proved the bootloader had
+  received every byte). The bootloader's notify has a single-slot queue and
+  silently skips receipts it cannot send. **Any DFU client that hard-blocks
+  on receipts will stall.** tools/otadfu.py therefore paces at a fixed
+  12 ms/packet, treats receipts as opportunistic, and verifies progress
+  every 10 KB via opcode 0x07 (report received image size) — a control
+  exchange, reliable in every run. Byte loss is detected within one
+  checkpoint instead of at the final CRC.
+- **The `dfu` trigger is INTERMITTENT, cause not yet isolated.** Same
+  binary: three entries into AdaDFU, then repeated bounces straight back
+  into the app. Both GPREGRET write forms behave identically (raw
+  NRF_POWER->GPREGRET via the core's enterOTADfu(), and SD-aware
+  sd_power_gpregret_set) — so the API-choice hypothesis is DEAD; the
+  correlate is something else (charging state? time-since-boot? SD radio
+  activity at reset?). The current build prints a GPREGRET readback line
+  (`# gpregret rc=../../.. val=0x..`) before resetting — capture it on the
+  next bench session; it decides write-failed vs bootloader-ignored.
+- Late in the session USB dropped entirely (no CDC, no drive; app fine on
+  battery) and macOS CoreBluetooth grew flaky after ~50 connect cycles —
+  scans intermittently blind to an advertising device. Bench sessions this
+  connect-heavy should expect that and re-scan patiently.
+- Iteration was STOPPED deliberately at that point: with no USB safety
+  net, one failed DFU entry = dark puck until physically reset. Next
+  session starts by re-seating the cable.
+
+Gate status: transfer loop **1 of 2 consecutive passes**; trigger
+reliability **open**; dark-state timeout characterization **open**
+(deferred — unsafe without USB attached); phone/nRF Connect run **open**.
+
 ## 17. PDM microphone rail — never measured
 
 **File:** not touched by this port at all (deliberately: no PDM code
