@@ -40,4 +40,17 @@ bool read_accel_g(float& ax, float& ay, float& az) {
   return s_imu.readAccelG(ax, ay, az);
 }
 
+bool read_gyro_dps(float&, float&, float&) {
+  // Deliberately unimplemented, NOT an oversight. The MPU-6050 on this board
+  // does have a gyro, but the FireBeetle rig is feature-frozen — it is the
+  // water-day-validated reference and stays that way until the Sense has
+  // passed desk -> drop-cal -> bucket -> water. Returning false makes
+  // main.cpp fall back to the accel-only detector path, which is exactly the
+  // behaviour this board has been validated with.
+  //
+  // Consequence, stated plainly: spun jumps read low on v1 hardware and
+  // always did. Only the Sense gets the correction.
+  return false;
+}
+
 }  // namespace jh_imu

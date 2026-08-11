@@ -18,6 +18,7 @@ Pure standard library — no numpy required.
 from __future__ import annotations
 
 import json
+import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,6 +40,7 @@ class Params:
     max_airtime_s: float = 3.00        # reject longer: physically absurd for wing jumps
     airtime_offset_s: float = 0.0      # calibration: added to raw airtime
     height_scale: float = 1.0          # calibration: multiplies computed height
+    spin_lever_m: float = 0.0          # calibration: mount lever arm, 0 = off
 
 
 def load_params(path: str | os.PathLike | None = None) -> Params:
@@ -87,8 +89,42 @@ class Detector:
         self.p.airtime_offset_s = airtime_offset_s
         self.p.height_scale = height_scale
 
-    def update(self, t_s: float, accel_mag_g: float) -> JumpEvent | None:
+    def set_spin_lever_m(self, spin_lever_m: float) -> None:
+        """Mirror of jump_detector.h: the lever arm is a MOUNT property, so it
+        gets its own setter — re-calibrating a mount must not disturb a
+        hard-won airtime offset / height scale."""
+        self.p.spin_lever_m = spin_lever_m
+
+    @staticmethod
+    def correct_for_spin(accel_mag_g: float, gyro_mag_dps: float,
+                         spin_lever_m: float, g: float) -> float:
+        """Mirror of jump_detector.h's correct_for_spin. Removes the rotation's
+        own centripetal term in quadrature:
+
+            a_corr = sqrt(max(0, |a|^2 - (omega^2 * r / g)^2))
+
+        Quadrature, not plain subtraction: the centripetal vector is
+        perpendicular to the specific force it contaminates. The max(0,...)
+        clamp is two-sided — an OVER-estimated r erases the landing spike
+        itself (g4's landing-erasure probe), an under-estimate only leaves a
+        residual, so err SHORT when calibrating. r = 0 is the identity.
+        """
+        if spin_lever_m <= 0.0:
+            return accel_mag_g
+        w_rad_s = gyro_mag_dps * 0.017453292519943295  # pi/180
+        rot_g = (w_rad_s * w_rad_s * spin_lever_m) / g
+        sq = accel_mag_g * accel_mag_g - rot_g * rot_g
+        return math.sqrt(sq) if sq > 0.0 else 0.0
+
+    def update(self, t_s: float, accel_mag_g: float,
+               gyro_mag_dps: float | None = None) -> JumpEvent | None:
+        """Feed one sample. Passing gyro_mag_dps spin-corrects it first —
+        the Python stand-in for jump_detector.h's gyro-aware update()
+        overload. Omitting it is the accel-only path a 3-axis v1 board has."""
         p = self.p
+        if gyro_mag_dps is not None:
+            accel_mag_g = self.correct_for_spin(
+                accel_mag_g, gyro_mag_dps, p.spin_lever_m, p.g)
         self.last_reject = None
         if self.state == RIDING:
             if accel_mag_g < p.freefall_enter_g:

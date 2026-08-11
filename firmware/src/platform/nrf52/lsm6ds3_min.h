@@ -39,10 +39,40 @@
 //                     format was given ±16 g headroom by design
 //                     (ota.md §4.5). Resolution cost: 0.488 vs 0.244
 //                     mg/LSB — noise floor, not signal, at our scales.
-//   0x11 CTRL2_G      gyro ODR + full-scale. Gyro stays OFF (power — see
-//                     docs/sense.md §3.7's gyro policy: carve-G is
-//                     accel-only, gyro is duty-cycled in later only when a
-//                     spins metric ships) — ODR_G=0000 (power-down) => 0x00.
+//   0x11 CTRL2_G      gyro ODR + full-scale. The gyro is now ON — 208 Hz
+//                     (ODR_G=0101, matching the accel so both axes of the
+//                     correction are sampled together) at ±2000 dps
+//                     (FS_G=11) => CTRL2_G = 0x5C.
+//
+//                     THIS REVERSES docs/sense.md §3.7's original policy
+//                     ("carve-G is accel-only, gyro is duty-cycled in later
+//                     only when a spins metric ships"). That policy assumed
+//                     the gyro was a trick-metric luxury. It is not:
+//                     sim/experiments/g4_spin_detector.py showed the
+//                     accel-only detector reads -93% low on height at 300
+//                     dps peak spin, and real wing spins run 240-360 mean /
+//                     500-900 peak. The gyro is a DETECTOR input — see
+//                     jump_detector.h's correct_for_spin().
+//
+//                     ±2000 dps, not the ±500 the ESP32 build used: peaks
+//                     of 500-900 dps would clip a ±500 range on exactly the
+//                     jumps the correction exists to fix, and a clipped
+//                     omega under-corrects silently.
+//
+//                     POWER, and an OPEN DECISION: the gyro costs ~0.9 mA
+//                     (combo mode — the old 3.6 mA figure was the retired
+//                     ESP32 MPU-6050). Always-on is what this does, because
+//                     it is unconditionally CORRECT. Duty-cycling it awake
+//                     only for flight would save that current, but the
+//                     free-fall gate confirms in 80 ms (JH_FREEFALL_CONFIRM_S)
+//                     and the LSM6DS3's gyro turn-on/settle is the same
+//                     order — so a duty-cycled gyro risks being unsettled
+//                     during the very window it is needed. Measure the
+//                     settle time on silicon before attempting it.
+//   0x22 OUTX_L_G     gyro 6-byte burst, same little-endian-per-axis layout
+//                     as the accel block below.
+//   Sensitivity @ ±2000 dps: 70 mdps/LSB (ST's
+//                     lsm6ds3tr_c_from_fs2000dps_to_mdps()).
 //   0x12 CTRL3_C      BDU (bit 6, Block Data Update — a multi-byte read
 //                     can't straddle a sensor update) and IF_INC (bit 2,
 //                     auto-increment the register address across a burst
@@ -77,14 +107,14 @@ class Lsm6ds3Min {
     return wire.endTransmission() == 0;
   }
 
-  // Configure ±16 g accel @ 208 Hz, BDU+auto-increment on, gyro powered down.
-  // Returns false only if an I2C write fails (wiring problem).
+  // Configure ±16 g accel and ±2000 dps gyro, both @ 208 Hz, BDU+auto-increment
+  // on. Returns false only if an I2C write fails (wiring problem).
   bool begin(TwoWire& wire, uint8_t addr) {
     wire_ = &wire;
     addr_ = addr;
     bool ok = true;
     ok &= writeReg(0x12, 0x44);  // CTRL3_C:  BDU=1, IF_INC=1
-    ok &= writeReg(0x11, 0x00);  // CTRL2_G:  gyro power-down (policy: off)
+    ok &= writeReg(0x11, 0x5C);  // CTRL2_G:  208 Hz, ±2000 dps (see file comment)
     ok &= writeReg(0x10, 0x54);  // CTRL1_XL: 208 Hz, ±16 g (see file comment)
     return ok;
   }
@@ -112,6 +142,25 @@ class Lsm6ds3Min {
     ax = x * g_per_lsb;
     ay = y * g_per_lsb;
     az = z * g_per_lsb;
+    return true;
+  }
+
+  // Read angular rate in deg/s. False on I2C failure.
+  //
+  // Same little-endian-per-axis trap as readAccelG — and worth restating,
+  // because a byte-swapped gyro does not look broken, it looks like a
+  // slightly wrong spin rate, which the correction then quietly turns into a
+  // slightly wrong height.
+  bool readGyroDps(float& gx, float& gy, float& gz) {
+    uint8_t b[6];
+    if (!readRegs(0x22, b, 6)) return false;  // OUTX_L_G
+    const int16_t x = (int16_t)((b[1] << 8) | b[0]);
+    const int16_t y = (int16_t)((b[3] << 8) | b[2]);
+    const int16_t z = (int16_t)((b[5] << 8) | b[4]);
+    const float dps_per_lsb = 0.070f;  // ±2000 dps range, 70 mdps/LSB
+    gx = x * dps_per_lsb;
+    gy = y * dps_per_lsb;
+    gz = z * dps_per_lsb;
     return true;
   }
 

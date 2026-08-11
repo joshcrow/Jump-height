@@ -169,4 +169,19 @@ bool read_accel_g(float& ax, float& ay, float& az) {
   return true;
 }
 
+bool read_gyro_dps(float& gx, float& gy, float& gz) {
+  // The host mock renders a NON-SPINNING board: the IMU script format
+  // (JH_IMU_SCRIPT) describes |a| over time and has no notion of rotation, so
+  // claiming a spin here would be inventing data the script never specified.
+  // Zero is the honest answer, and it makes the spin correction a provable
+  // no-op on this platform — which is what the host parity test wants, since
+  // it exists to prove the C++ and Python detectors agree, not to exercise
+  // rotation. Rotation is covered where the physics lives, in the simulator:
+  // tools/tests/test_spin_correction.py.
+  gx = 0.0f;
+  gy = 0.0f;
+  gz = 0.0f;
+  return true;
+}
+
 }  // namespace jh_imu

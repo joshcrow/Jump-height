@@ -55,4 +55,16 @@ uint8_t who_am_i();
 // (the caller skips that sample and tries again next tick).
 bool read_accel_g(float& ax, float& ay, float& az);
 
+// Read angular rate in deg/s, raw axes. False on a transient bus failure, and
+// ALSO false on hardware with no gyro wired up (the 3-axis v1 boards) — so a
+// caller must treat false as "no spin information this tick" and fall back to
+// the accel-only detector path, not as an error worth reporting.
+//
+// Why the seam carries this at all: the gyro is not a trick-metric extra, it
+// is a detector input. A rotating board-mounted accelerometer reads its own
+// omega^2*r, which breaks takeoff and landing detection outright above ~300
+// dps — see jump_detector.h's correct_for_spin() and
+// sim/experiments/g4_spin_detector.py.
+bool read_gyro_dps(float& gx, float& gy, float& gz);
+
 }  // namespace jh_imu

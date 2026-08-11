@@ -110,4 +110,8 @@ bool read_accel_g(float& ax, float& ay, float& az) {
   return s_imu.readAccelG(ax, ay, az);
 }
 
+bool read_gyro_dps(float& gx, float& gy, float& gz) {
+  return s_imu.readGyroDps(gx, gy, gz);
+}
+
 }  // namespace jh_imu

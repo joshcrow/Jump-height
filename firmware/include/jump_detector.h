@@ -13,9 +13,26 @@
 // Physics: h = height_scale * g * (airtime + airtime_offset)^2 / 8
 // (see docs/algorithm.md; the two calibration terms default to off)
 //
+// SPIN: a board-mounted accelerometer that is rotating reads its own
+// centripetal term, omega^2*r, on top of the specific force it is there to
+// measure. That is not a trick-metric nicety — it breaks THIS state machine
+// in two distinct ways (sim/experiments/g4_spin_detector.py, which mapped
+// both): at 300-500 dps the rotation lifts |a| back above freefall_enter_g
+// and re-pins takeoff mid-flight, and above ~518 dps (at r=0.3 m) it crosses
+// landing_threshold_g outright and fires a FALSE LANDING. Measured cost:
+// -93% height error at 300 dps peak, and real wing spins run 240-360 mean /
+// 500-900 peak. Straight airs are unaffected, which is exactly why this hid.
+//
+// The fix is one line of algebra applied BEFORE the state machine sees the
+// sample (see correct_for_spin below), which is why it lives here rather
+// than in a caller: a detector fed uncorrected magnitudes is wrong, and
+// nothing downstream can undo it.
+//
 // SPDX-License-Identifier: MIT
 
 #pragma once
+
+#include <math.h>  // sqrtf — still no Arduino/ESP32 dependency; compiles on host
 
 #include "params.gen.h"
 
@@ -32,6 +49,7 @@ struct Params {
   float max_airtime_s       = JH_MAX_AIRTIME_S;       // reject longer: physically absurd
   float airtime_offset_s    = JH_AIRTIME_OFFSET_S;    // calibration: added to raw airtime
   float height_scale        = JH_HEIGHT_SCALE;        // calibration: multiplies height
+  float spin_lever_m        = JH_SPIN_LEVER_M;        // calibration: mount lever arm, 0 = off
 };
 
 struct JumpEvent {
@@ -53,6 +71,43 @@ class Detector {
 
   Detector() : Detector(Params()) {}
   explicit Detector(const Params& p) : p_(p) {}
+
+  // Remove the rotation's own centripetal contribution from an accelerometer
+  // magnitude, in quadrature:
+  //
+  //     a_corr = sqrt(max(0, |a|^2 - (omega^2 * r / g)^2))
+  //
+  // omega comes from the gyro (dps -> rad/s), r is the mount lever arm. The
+  // quadrature form (not a plain subtraction) is what the sim validated: the
+  // centripetal vector is perpendicular to the specific force it contaminates,
+  // so magnitudes add in quadrature, not linearly.
+  //
+  // The max(0,...) clamp is load-bearing and two-sided (g4's landing-erasure
+  // probe): an OVER-estimated r drives the argument negative on the landing
+  // spike itself, clamps it to zero, and the detector never sees the
+  // touchdown — the jump runs away or is lost entirely. An UNDER-estimated r
+  // merely leaves a residual. When calibrating the lever arm, err SHORT.
+  //
+  // spin_lever_m = 0 (the default) makes this exactly the identity, so an
+  // uncalibrated device behaves precisely as it did before.
+  static float correct_for_spin(float accel_mag_g, float gyro_mag_dps,
+                                float spin_lever_m, float g) {
+    if (spin_lever_m <= 0.0f) return accel_mag_g;  // correction off
+    const float w_rad_s = gyro_mag_dps * 0.017453292519943295f;  // pi/180
+    const float rot_g   = (w_rad_s * w_rad_s * spin_lever_m) / g;
+    const float sq      = accel_mag_g * accel_mag_g - rot_g * rot_g;
+    return sq > 0.0f ? sqrtf(sq) : 0.0f;
+  }
+
+  // Gyro-aware feed. Same contract as the accel-only update() below, but the
+  // sample is spin-corrected first. This is the overload a 6-axis board
+  // (the Sense's LSM6DS3) should call on every sample; the accel-only one
+  // remains correct for straight airs and is all a 3-axis v1 board can do.
+  bool update(float t_s, float accel_mag_g, float gyro_mag_dps, JumpEvent& out) {
+    return update(t_s,
+                  correct_for_spin(accel_mag_g, gyro_mag_dps, p_.spin_lever_m, p_.g),
+                  out);
+  }
 
   // Feed one sample: t_s = timestamp in seconds, accel_mag_g = |acceleration| in g.
   // Returns true exactly on the sample that completes a valid jump, filling `out`.
@@ -120,6 +175,11 @@ class Detector {
     p_.airtime_offset_s = airtime_offset_s;
     p_.height_scale     = height_scale;
   }
+  // The lever arm is a third calibration term, but a MOUNT property rather
+  // than a motion one: it changes when the puck is strapped somewhere new,
+  // not when the rider improves. Separate setter so re-calibrating a mount
+  // never disturbs a hard-won airtime offset / height scale.
+  void set_spin_lever_m(float spin_lever_m) { p_.spin_lever_m = spin_lever_m; }
   Reject last_reject() const { return last_reject_; }
   float  last_reject_airtime() const { return last_reject_airtime_; }
 

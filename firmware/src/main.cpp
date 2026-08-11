@@ -562,8 +562,21 @@ void loop() {
   if (!active) return;
 
   // --- live jump detection ---
+  // Spin correction: a rotating board reads its own omega^2*r on top of the
+  // specific force, which breaks BOTH detector gates above ~300 dps (see
+  // jump_detector.h's correct_for_spin). Feed the gyro-aware overload where
+  // the hardware has a gyro; read_gyro_dps() returns false on the 3-axis v1
+  // boards, and the accel-only path below is what those have always used.
+  // With spin_lever_m uncalibrated (0, the default) the two paths are
+  // identical anyway — this costs nothing until a mount is measured.
   jump::JumpEvent ev;
-  if (detector.update(t, mag, ev)) {
+  float gx, gy, gz;
+  const bool have_gyro = jh_imu::read_gyro_dps(gx, gy, gz);
+  const bool jumped =
+      have_gyro
+          ? detector.update(t, mag, sqrtf(gx * gx + gy * gy + gz * gz), ev)
+          : detector.update(t, mag, ev);
+  if (jumped) {
     session_jumps++;
     stored_jumps++;
     if (ev.height_m > session_best) session_best = ev.height_m;
