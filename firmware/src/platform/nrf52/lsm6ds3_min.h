@@ -195,6 +195,7 @@ class Lsm6ds3Min {
 
  private:
   bool writeReg(uint8_t reg, uint8_t val) {
+    if (!wire_) return false;  // same null-before-begin() hazard as readRegs
     wire_->beginTransmission(addr_);
     wire_->write(reg);
     wire_->write(val);
@@ -202,6 +203,18 @@ class Lsm6ds3Min {
   }
 
   bool readRegs(uint8_t reg, uint8_t* buf, uint8_t n) {
+    // wire_ is null until begin() runs, and EVERY public read lands here.
+    // Without this guard a read before begin() dereferences null — a hard
+    // fault, which on this part means a boot loop: the crash lands a few
+    // lines after BLE starts, so the puck advertises for milliseconds per
+    // cycle and USB never finishes re-enumerating. It presents as "board is
+    // simply dead", which is a long way from the actual cause.
+    //
+    // Cost me a bricked board on 2026-08-11 by calling read_gyro_dps() in
+    // setup() five lines before runSelfTest() got around to begin(). Returning
+    // false is the honest answer — "no reading available" — and every caller
+    // already handles it.
+    if (!wire_) return false;
     wire_->beginTransmission(addr_);
     wire_->write(reg);
     if (wire_->endTransmission(false) != 0) return false;  // repeated start

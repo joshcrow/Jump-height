@@ -69,6 +69,27 @@ jump::Detector detector;
 jump::GyroBias gyro_bias;
 jump::LeverArm lever_arm;
 
+// Sensor-read failure counters. Both reads on the sample hot path degrade
+// SILENTLY by design — a failed accel read skips the sample, a failed gyro
+// read falls back to the accel-only detector path — and silence is the right
+// behaviour for the transient I2C hiccup they were written for.
+//
+// It is the WRONG behaviour for a sensor that has actually died. An IMU that
+// stops answering mid-session records nothing and says nothing; a gyro that
+// stops answering quietly reverts to a detector that reads spun jumps low.
+// Either would void an expensive water session invisibly, and the loss would
+// only surface later as "the algorithm seems wrong" rather than "the sensor
+// was down". Count them, and put the count where the session data is.
+uint32_t accel_fail_count = 0;
+uint32_t gyro_fail_count  = 0;
+bool     sensor_warned    = false;
+// Latched once at boot: does this board have a gyro at all? Without it, the
+// v1 boards' deliberate "no gyro" (esp32/jh_imu.cpp returns false always)
+// would be counted as a fault on every sample — a capability difference
+// dressed up as a failure, which is the very thing these counters exist to
+// stop.
+bool     gyro_present     = false;
+
 static bool sensor_ok = false;
 static bool fs_ok     = false;
 static bool ble_ok    = false;  // BLE stack came up; reported by the self-test
@@ -384,16 +405,24 @@ static void handleCommand(const String& cmd) {
     // — either direction, nothing else on this line may move.
     const int vbat = jh_power::vbat_mv();
     const char* fs_key = fs_ok ? "" : " fs=down";
+    // Adder keys, present only when non-zero, so a healthy line is unchanged
+    // for every existing client — and a session that quietly lost a sensor
+    // cannot be mistaken for a session that simply had no jumps.
+    char fail_key[48] = "";
+    if (accel_fail_count || gyro_fail_count) {
+      snprintf(fail_key, sizeof(fail_key), " accel_fail=%lu gyro_fail=%lu",
+               (unsigned long)accel_fail_count, (unsigned long)gyro_fail_count);
+    }
     if (vbat >= 0) {
-      emitf("STATS session_jumps=%lu session_best_m=%.3f stored_jumps=%lu stored_best_m=%.3f trace_bytes=%lu vbat_mv=%d batt_pct=%d chg=%d%s\n",
+      emitf("STATS session_jumps=%lu session_best_m=%.3f stored_jumps=%lu stored_best_m=%.3f trace_bytes=%lu vbat_mv=%d batt_pct=%d chg=%d%s%s\n",
             (unsigned long)session_jumps, session_best,
             (unsigned long)stored_jumps, stored_best, (unsigned long)jh_store::trace_bytes(),
-            vbat, jh_power::batt_pct(), jh_power::charging(), fs_key);
+            vbat, jh_power::batt_pct(), jh_power::charging(), fs_key, fail_key);
     } else {
-      emitf("STATS session_jumps=%lu session_best_m=%.3f stored_jumps=%lu stored_best_m=%.3f trace_bytes=%lu%s\n",
+      emitf("STATS session_jumps=%lu session_best_m=%.3f stored_jumps=%lu stored_best_m=%.3f trace_bytes=%lu%s%s\n",
             (unsigned long)session_jumps, session_best,
             (unsigned long)stored_jumps, stored_best, (unsigned long)jh_store::trace_bytes(),
-            fs_key);
+            fs_key, fail_key);
     }
     emitLine("OK stats");
   } else if (cmd == "jumps") {
@@ -591,6 +620,16 @@ void setup() {
   jh_persist::init();
   loadCalibration();
   runSelfTest();
+
+  // Latch gyro presence AFTER runSelfTest(), because that is what calls
+  // jh_imu::begin() — the only thing that gives the driver its bus handle.
+  // Reading before it is not "an early read that returns nothing"; it is a
+  // null dereference and a boot loop. jh_imu::init() at the top of setup()
+  // only opens the I2C bus, which is easy to mistake for "the IMU is ready".
+  {
+    float gx, gy, gz;
+    gyro_present = jh_imu::read_gyro_dps(gx, gy, gz);
+  }
   scanStoredJumps();
   if (stored_jumps > 0) {
     emitf("# stored history: %lu jumps, best %.2f m — `dump` to export, `clear` to reset\n",
@@ -624,7 +663,17 @@ void loop() {
   if (now_us - next_us > 20 * (int64_t)SAMPLE_INTERVAL_US) next_us = now_us;
 
   float ax, ay, az;
-  if (!jh_imu::read_accel_g(ax, ay, az)) return;  // transient I2C hiccup: skip sample
+  if (!jh_imu::read_accel_g(ax, ay, az)) {
+    // Skipping the sample is right for a transient I2C hiccup; staying quiet
+    // about a dead IMU is not. One warning, once, so a live client sees it
+    // without the line repeating at the sample rate.
+    if (++accel_fail_count == 200 && !sensor_warned) {  // ~1 s at 200 Hz
+      sensor_warned = true;
+      emitLine("# WARNING accelerometer not answering — this session is "
+               "recording nothing. Check wiring, then `selftest`.");
+    }
+    return;
+  }
   const float t   = (now_us - t0_us) * 1e-6f;
   // Orientation-independent, normalized to this unit's own measured gravity.
   const float mag = sqrtf(ax * ax + ay * ay + az * az) / g_baseline;
@@ -660,6 +709,10 @@ void loop() {
   jump::JumpEvent ev;
   float gx, gy, gz;
   const bool have_gyro = jh_imu::read_gyro_dps(gx, gy, gz);
+  // Only counted on hardware that HAS a gyro. The v1 boards answer false on
+  // every call by design (esp32/jh_imu.cpp), and counting that would turn a
+  // deliberate capability difference into a fault indication.
+  if (!have_gyro && gyro_present) gyro_fail_count++;
   bool jumped;
   if (have_gyro) {
     const bool riding = detector.state() == jump::State::RIDING;
