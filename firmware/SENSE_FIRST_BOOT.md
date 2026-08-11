@@ -719,6 +719,55 @@ TACQ configuration, not divider-constant tweaks. Also confirm `chg`
 flips to 1 on USB attach and back to 0 on detach, and that `batt_pct`
 roughly tracks the charge state over a full charge cycle.
 
+**RESOLVED 2026-08-11 — BOTH causes are real, in a ~40/60 split.** Two
+meter points plus an acquisition-time sweep on silicon (`vbatscan`
+command, `jh_power::vbat_mv_tacq()`):
+
+| meter | ADC | low by |
+|---|---|---|
+| 3490 mV (charging, 08-10) | 3390 | 100 mV / 2.87% |
+| 4160 mV (rested full, 08-11) | 4050 | 110 mV / 2.64% |
+
+The two points could NOT separate the candidate causes — the competing
+models predict 4041 vs 4060 and the meter's own resolution is ±5 mV plus
+~0.5%, so the sweep was built instead. On a rested cell (`chg=0`):
+
+| TACQ | mV | vs 3 µs |
+|---|---|---|
+| 3 µs | 4044 | — |
+| 5 µs | 4056 | +12 |
+| 10 µs | 4077 | +33 |
+| 15 µs | 4082 | +38 |
+| 20 µs | 4082 | +38 |
+| 40 µs | 4085 | +41 |
+
+**The acquisition-time theory is CONFIRMED — and insufficient.** The
+reading genuinely climbs with TACQ and plateaus at ~15 µs, which is the
+SAADC failing to charge through the divider's ~340 kΩ source exactly as
+the header predicted. But it accounts for only **50 of the 125 mV** gap
+(default `analogRead` reads 4035): at the 40 µs plateau the reading is
+still **75 mV / 1.80% low**, and no amount of acquisition time closes it.
+
+So there are two independent errors stacked:
+1. **~50 mV — acquisition time.** A firmware fix, correct for EVERY unit:
+   configure TACQ ≥15 µs. Free; there is no downside to the longer sample.
+2. **~75 mV / 1.8% — divider or reference tolerance.** A gain error, and a
+   **PER-UNIT** one. A 1.043 MΩ top leg instead of 1 MΩ would do it, well
+   inside 5% part tolerance; so would the internal reference's own spread.
+   Baking this into firmware would be **wrong for other units** — it
+   belongs in the per-unit calibration record
+   (docs/data-pipeline.md), alongside `airtime_offset_s`/`height_scale`.
+
+**Consequence for the gauge, worth fixing:** `batt_pct` read **88%** on a
+cell the charger had just declared full. Under-reporting is the safe
+direction, but "88% when full" reads as broken. Fixing (1) and recording
+(2) fixes the gauge — no separate curve work needed.
+
+**Still open:** whether a second unit shows the same 1.8% residual. If it
+does, the "per-unit" reading is wrong and it is systematic after all
+(reference spread, or the divider's nominal values being off) — one more
+board settles it.
+
 **FIRST METER POINT, 2026-08-10 — reads LOW by 2.9%, one point only.**
 Meter across the cell 3490 mV; `vbat_mv` 3387–3393 over the same minute
 (charging, `chg=1`, USB in). Delta ≈ 100 mV low — past the ~2% line and

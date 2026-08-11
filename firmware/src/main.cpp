@@ -349,6 +349,7 @@ static bool runSelfTest() {
 static void printHelp() {
   emitLine("# commands: help | stats | jumps | trace | dump | clear | selftest | info | off");
   emitLine("#           set <airtime_offset_s|height_scale> <value|default>");
+  emitLine("#           vbatscan  (bench: battery ADC vs acquisition time)");
 }
 
 // Handles one command line from EITHER transport (serial pollSerial() or BLE
@@ -360,20 +361,38 @@ static void handleCommand(const String& cmd) {
     emitLine("OK help");
   } else if (cmd == "stats") {
     flushTrace();  // so trace_bytes matches what a `dump` would actually deliver
+    // Storage down is NOT the same answer as "you have no jumps", and this
+    // line used to report them identically: jumps_scan() returns 0 when
+    // s_fs_ok is false, so an unmounted device says stored_jumps=0
+    // trace_bytes=0 — a stored session and a lost one look the same.
+    //
+    // Found the expensive way (2026-08-11): read too soon after a flash,
+    // saw the zeros, and concluded the flash had wiped the board. It had
+    // not — nine jumps were sitting there the whole time. A reading that
+    // could not be taken must never be dressed up as a reading of zero.
+    //
+    // Emitted only when down, so the normal line is byte-identical for
+    // every existing client (the same "adder key" rule the battery keys
+    // follow), and the abnormal case is impossible to miss.
+    if (!fs_ok) {
+      emitLine("# storage NOT MOUNTED — the counts below are unknown, not zero");
+    }
     // Battery keys are APPENDED, and only on platforms that can measure
     // (jh_power seam; docs/sense.md §3.4/§4 "adder" rule): absent keys mean
     // an unsupported platform, and clients that predate the keys skip them
     // — either direction, nothing else on this line may move.
     const int vbat = jh_power::vbat_mv();
+    const char* fs_key = fs_ok ? "" : " fs=down";
     if (vbat >= 0) {
-      emitf("STATS session_jumps=%lu session_best_m=%.3f stored_jumps=%lu stored_best_m=%.3f trace_bytes=%lu vbat_mv=%d batt_pct=%d chg=%d\n",
+      emitf("STATS session_jumps=%lu session_best_m=%.3f stored_jumps=%lu stored_best_m=%.3f trace_bytes=%lu vbat_mv=%d batt_pct=%d chg=%d%s\n",
             (unsigned long)session_jumps, session_best,
             (unsigned long)stored_jumps, stored_best, (unsigned long)jh_store::trace_bytes(),
-            vbat, jh_power::batt_pct(), jh_power::charging());
+            vbat, jh_power::batt_pct(), jh_power::charging(), fs_key);
     } else {
-      emitf("STATS session_jumps=%lu session_best_m=%.3f stored_jumps=%lu stored_best_m=%.3f trace_bytes=%lu\n",
+      emitf("STATS session_jumps=%lu session_best_m=%.3f stored_jumps=%lu stored_best_m=%.3f trace_bytes=%lu%s\n",
             (unsigned long)session_jumps, session_best,
-            (unsigned long)stored_jumps, stored_best, (unsigned long)jh_store::trace_bytes());
+            (unsigned long)stored_jumps, stored_best, (unsigned long)jh_store::trace_bytes(),
+            fs_key);
     }
     emitLine("OK stats");
   } else if (cmd == "jumps") {
@@ -467,6 +486,29 @@ static void handleCommand(const String& cmd) {
       return;  // contract violated? still never OK-then-ERR — just stop
     }
     emitLine("ERR off_unsupported this build has no soft-off");
+  } else if (cmd == "vbatscan") {
+    // BENCH DIAGNOSTIC, SENSE_FIRST_BOOT item 24. Reads the cell at every
+    // ADC acquisition-time setting so the bench can see whether the known
+    // ~2.7%-low error depends on acquisition time.
+    //
+    // READ IT LIKE THIS: if mv CLIMBS with tacq_us, the ADC was not getting
+    // long enough to charge through the divider's ~340 kOhm source — a
+    // firmware fix, correct for every unit. If mv is FLAT, the error is in
+    // the divider resistors or the reference — a per-unit calibration, and
+    // baking it into firmware would be wrong for other units.
+    //
+    // Take it on a RESTED cell (chg=0), since a charging one drifts under you.
+    if (jh_power::vbat_mv_tacq(0) < 0) {
+      emitLine("ERR vbatscan_unsupported this build has no battery ADC");
+    } else {
+      static const uint16_t kTacqUs[6] = {3, 5, 10, 15, 20, 40};
+      emitf("# vbatscan chg=%d — mv rising with tacq_us => acquisition time; "
+            "flat => divider/reference\n", jh_power::charging());
+      for (int c = 0; c <= 5; ++c) {
+        emitf("VBATSCAN tacq_us=%u mv=%d\n", kTacqUs[c], jh_power::vbat_mv_tacq(c));
+      }
+      emitLine("OK vbatscan");
+    }
   } else {
     // Help BEFORE the ERR terminator: clients stop reading at OK/ERR, so
     // anything after it would sit in their buffer and corrupt the framing

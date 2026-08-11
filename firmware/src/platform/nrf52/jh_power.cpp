@@ -82,6 +82,72 @@ int vbat_mv() {
   return (int)((tap_mv * 1510UL) / 510UL);
 }
 
+int vbat_mv_tacq(int tacq_code) {
+  // BENCH DIAGNOSTIC for SENSE_FIRST_BOOT item 24. Two meter points proved
+  // vbat_mv reads ~2.7% low (3490 vs 3390, then 4160 vs 4050), but they could
+  // NOT tell apart the candidate causes — the models' predictions differ by
+  // ~19 mV and the meter's own resolution is comparable. This can:
+  //
+  //   * SAADC acquisition time too short for the divider's ~340 kOhm source
+  //     (the standing theory) -> the reading RISES as TACQ increases.
+  //   * Divider resistor tolerance, or internal-reference tolerance
+  //     -> the reading does NOT move with TACQ.
+  //
+  // That distinction decides WHERE the fix belongs: acquisition time is a
+  // firmware fix correct for every unit, while resistor tolerance is a
+  // per-unit calibration that would be actively WRONG to bake into firmware.
+  //
+  // Raw registers rather than analogRead() because the Adafruit core does not
+  // expose TACQ per-read — which is exactly why the theory went untested this
+  // long. Every field position below is from the vendor's own
+  // nrf52840_bitfields.h, not from memory.
+  //
+  // tacq_code: 0=3us 1=5us 2=10us 3=15us 4=20us 5=40us (SAADC_CH_CONFIG_TACQ_*)
+  if (tacq_code < 0 || tacq_code > 5) return -1;
+
+  digitalWrite(PIN_DIVIDER_EN, LOW);
+  delay(1);
+
+  NRF_SAADC->ENABLE = (SAADC_ENABLE_ENABLE_Enabled << SAADC_ENABLE_ENABLE_Pos);
+  NRF_SAADC->RESOLUTION = SAADC_RESOLUTION_VAL_12bit;
+  NRF_SAADC->CH[0].PSELP = SAADC_CH_PSELP_PSELP_AnalogInput7;  // AIN7 = P0.31
+  NRF_SAADC->CH[0].PSELN = SAADC_CH_PSELN_PSELN_NC;
+  NRF_SAADC->CH[0].CONFIG =
+      (SAADC_CH_CONFIG_RESP_Bypass   << SAADC_CH_CONFIG_RESP_Pos)   |
+      (SAADC_CH_CONFIG_RESN_Bypass   << SAADC_CH_CONFIG_RESN_Pos)   |
+      (SAADC_CH_CONFIG_GAIN_Gain1_4  << SAADC_CH_CONFIG_GAIN_Pos)   |
+      (SAADC_CH_CONFIG_REFSEL_Internal << SAADC_CH_CONFIG_REFSEL_Pos) |
+      ((uint32_t)tacq_code           << SAADC_CH_CONFIG_TACQ_Pos)   |
+      (SAADC_CH_CONFIG_MODE_SE       << SAADC_CH_CONFIG_MODE_Pos)   |
+      (SAADC_CH_CONFIG_BURST_Disabled << SAADC_CH_CONFIG_BURST_Pos);
+
+  int32_t sum = 0;
+  const int kReads = 8;
+  volatile int16_t buf = 0;
+  for (int i = 0; i < kReads + 1; ++i) {  // +1: first sample is a throwaway
+    NRF_SAADC->RESULT.PTR = (uint32_t)&buf;
+    NRF_SAADC->RESULT.MAXCNT = 1;
+    NRF_SAADC->EVENTS_END = 0;
+    NRF_SAADC->TASKS_START = 1;
+    while (!NRF_SAADC->EVENTS_STARTED) {}
+    NRF_SAADC->EVENTS_STARTED = 0;
+    NRF_SAADC->TASKS_SAMPLE = 1;
+    while (!NRF_SAADC->EVENTS_END) {}
+    NRF_SAADC->EVENTS_END = 0;
+    NRF_SAADC->TASKS_STOP = 1;
+    while (!NRF_SAADC->EVENTS_STOPPED) {}
+    NRF_SAADC->EVENTS_STOPPED = 0;
+    if (i > 0) sum += (buf < 0) ? 0 : buf;  // SAADC can report small negatives
+  }
+  NRF_SAADC->ENABLE = 0;  // leave it off so the next analogRead() re-inits cleanly
+
+  digitalWrite(PIN_DIVIDER_EN, HIGH);
+
+  const uint32_t raw = (uint32_t)(sum / kReads);
+  const uint32_t tap_mv = (raw * 2400UL) / 4095UL;   // same recipe as vbat_mv()
+  return (int)((tap_mv * 1510UL) / 510UL);
+}
+
 int batt_pct() {
   const int mv = vbat_mv();
   if (mv < 0) return -1;

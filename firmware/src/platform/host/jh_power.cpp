@@ -45,6 +45,16 @@ int charging() {
   return env_int("JH_CHG", 0) ? 1 : 0;
 }
 
+int vbat_mv_tacq(int tacq_code) {
+  // There is no ADC here to have an acquisition time. Returning the SAME value
+  // for every valid code is the honest mock: it models a board whose reading
+  // does not depend on TACQ, which is one of the two real outcomes the sweep
+  // is trying to distinguish — so a host run exercises the command and its
+  // parsing without inventing a hardware effect that may not exist.
+  if (tacq_code < 0 || tacq_code > 5) return -1;
+  return vbat_mv();
+}
+
 bool system_off() {
   // Mirrors the capability rule main.cpp keys on (vbat_mv() >= 0 means
   // "battery platform" means "off is real"): with JH_VBAT_MV scripted the

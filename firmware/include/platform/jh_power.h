@@ -47,6 +47,21 @@ int vbat_mv();
 // 0..100 resting-voltage estimate (see header comment), or -1.
 int batt_pct();
 
+// BENCH DIAGNOSTIC, SENSE_FIRST_BOOT item 24. Same measurement as vbat_mv()
+// but with the ADC's acquisition time forced to a chosen setting:
+//   0=3us 1=5us 2=10us 3=15us 4=20us 5=40us
+// Returns -1 for an out-of-range code or where the platform cannot do it.
+//
+// Why the seam carries a diagnostic at all: two meter points proved vbat_mv()
+// reads ~2.7% low but could not identify WHY, and the candidates need
+// different fixes in different places. If the reading climbs with acquisition
+// time, the ADC is not getting long enough to charge through the divider's
+// ~340 kOhm source impedance — a firmware fix, correct for every unit. If it
+// does not move, the error is in the divider resistors or the reference — a
+// PER-UNIT calibration, which it would be actively wrong to bake into
+// firmware. Sweeping this is the only way to tell the two apart.
+int vbat_mv_tacq(int tacq_code);
+
 // 1 = charger active (USB present, cell charging), 0 = not charging,
 // -1 = unknown/unsupported.
 int charging();
