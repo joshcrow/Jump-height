@@ -380,7 +380,7 @@ static bool runSelfTest() {
 
 // ---------------- Commands ----------------
 static void printHelp() {
-  emitLine("# commands: help | stats | jumps | trace | dump | clear | selftest | info | off");
+  emitLine("# commands: help | stats | jumps | trace | dump | clear | selftest | info | off | dfu");
   emitLine("#           set <airtime_offset_s|height_scale|vbat_scale> <value|default>");
   emitLine("#           vbatscan  (bench: battery ADC vs acquisition time)");
   emitLine("#           gyro      (bench: raw + bias-corrected rate, 2 s)");
@@ -548,6 +548,21 @@ static void handleCommand(const String& cmd) {
       return;  // contract violated? still never OK-then-ERR — just stop
     }
     emitLine("ERR off_unsupported this build has no soft-off");
+  } else if (cmd == "dfu") {
+    // Reboot into the bootloader's OTA-DFU mode (jh_link seam; nRF52 only).
+    // Same farewell-first shape as `off` above, for the same reason: on a
+    // supporting platform the call never returns, and the sender deserves to
+    // know the disconnect that follows is intentional. After this, the puck
+    // advertises as "AdaDFU" for nRF Connect until a transfer completes or
+    // it is reset.
+    flushTrace();  // recording stops here — don't strand the open block
+    emitLine("# rebooting to DFU — use nRF Connect; reset/power-cycle to abort");
+    emitLine("OK dfu");
+    delay(250);              // let USB CDC + BLE actually push those bytes
+    if (!jh_link::reboot_to_dfu()) {
+      emitLine("ERR dfu_unsupported this build has no OTA bootloader");
+    }
+    return;
   } else if (cmd == "gyro") {
     // BENCH DIAGNOSTIC, SENSE_FIRST_BOOT item 26 step 1: has the gyro ever
     // been read on real silicon at all?

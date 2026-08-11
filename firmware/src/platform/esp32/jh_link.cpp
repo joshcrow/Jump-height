@@ -372,4 +372,9 @@ void poll(void (*handle)(const String&)) {
   }
 }
 
+// No Nordic bootloader here — the ESP32 path was the (retired) esp_ota plan
+// and the host build has no radio at all. Answering false keeps main.cpp
+// platform-neutral; the command reports ERR and the device carries on.
+bool reboot_to_dfu() { return false; }
+
 }  // namespace jh_link

@@ -496,4 +496,34 @@ void poll(void (*handle)(const String&)) {
   }
 }
 
+// Reboot into OTA DFU. The magic byte is the Adafruit bootloader's own
+// DFU_OTA_MAGIC = 0xB1, read from Bluefruit52Lib's BLEDfu.cpp rather than
+// remembered — the bootloader reads GPREGRET on boot and stays in DFU
+// instead of starting the app.
+//
+// BLEDfu's own handler jumps straight to the bootloader after preserving
+// bonding keys; a plain reset is used here because this device does not
+// bond, and a reset is the simpler, harder-to-get-wrong path.
+//
+// Why this exists ON TOP of the BLEDfu service: Web Bluetooth blocklists the
+// Nordic DFU service UUID (docs/sense.md §3.3), so the browser app can never
+// touch that characteristic. It CAN speak our own NUS line protocol — so
+// routing the trigger through a plain `dfu` command means the web console,
+// blecmd.py and a phone all reach it the same way, with no blocklist and no
+// second protocol.
+bool reboot_to_dfu() {
+  // Uses the core's own enterOTADfu() (cores/nRF5/wiring.c:89) rather than a
+  // hand-rolled GPREGRET write. First attempt used 0xB1 and REBOOTED STRAIGHT
+  // BACK INTO THE APP — proven on silicon 2026-08-11 (sent `dfu` over BLE,
+  // puck kept advertising as JumpHeight): 0xB1 is DFU_MAGIC_OTA_APPJUM, the
+  // "app JUMPED here with the SoftDevice still live" handshake BLEDfu.cpp
+  // uses with a direct bootloader_util_app_start() — through a full
+  // NVIC_SystemReset() that promise is false and the bootloader just starts
+  // the app. The RESET path wants DFU_MAGIC_OTA_RESET (0xA8), which is
+  // exactly what enterOTADfu() writes.
+  delay(50);          // let the caller's farewell bytes reach USB/BLE
+  enterOTADfu();      // GPREGRET = 0xA8, NVIC_SystemReset(); does not return
+  return true;        // not reached
+}
+
 }  // namespace jh_link

@@ -58,4 +58,13 @@ void write(const char* data, size_t len);
 // a freshly-subscribed client learns the link is alive.
 bool takeGreetPending();
 
+// Reboot into the bootloader's OTA-DFU mode. Returns FALSE if this platform
+// has no such path (the caller reports ERR and carries on); on a platform
+// that does, it never returns.
+//
+// The capability is expressed as a return value rather than an #ifdef,
+// mirroring how `off` gates on jh_power::vbat_mv() >= 0 — main.cpp stays
+// platform-neutral and the seam answers for itself.
+bool reboot_to_dfu();
+
 }  // namespace jh_link
