@@ -380,7 +380,7 @@ static bool runSelfTest() {
 
 // ---------------- Commands ----------------
 static void printHelp() {
-  emitLine("# commands: help | stats | jumps | trace | dump | clear | selftest | info | off | dfu | uf2");
+  emitLine("# commands: help | stats | jumps | trace | dump | clear | selftest | info | off | dfu | uf2 | fakejump");
   emitLine("#           set <airtime_offset_s|height_scale|vbat_scale> <value|default>");
   emitLine("#           vbatscan  (bench: battery ADC vs acquisition time)");
   emitLine("#           gyro      (bench: raw + bias-corrected rate, 2 s)");
@@ -575,6 +575,22 @@ static void handleCommand(const String& cmd) {
       emitLine("ERR uf2_unsupported this build has no UF2 bootloader");
     }
     return;
+  } else if (cmd == "fakejump") {
+    // BENCH ONLY: emit a synthetic JUMP through the real emit path — added
+    // 2026-08-12, the morning the Sense's IMU was pronounced hardware-dead
+    // (rail shorted; SENSE_FIRST_BOOT 16c resolution). A dead sensor stops
+    // MEASUREMENT, not the radio: this lets the entire watch pipeline —
+    // pacing, line reassembly, the corruption gate, FIT fields — be
+    // exercised end-to-end against a puck that cannot jump. Uses the same
+    // counters/formatting as a real jump so clients cannot tell the
+    // difference; deliberately does NOT touch stored history.
+    session_jumps++;
+    const float h_m = 0.30f + 0.05f * (float)(session_jumps % 7);
+    const float at  = sqrtf(8.0f * h_m / 9.80665f);
+    if (h_m > session_best) session_best = h_m;
+    emitf("JUMP n=%lu airtime_raw_s=%.3f airtime_s=%.3f height_m=%.3f height_ft=%.1f best_m=%.3f\n",
+          (unsigned long)session_jumps, at, at, h_m, h_m * 3.28084f, session_best);
+    emitLine("OK fakejump");
   } else if (cmd == "gyro") {
     // BENCH DIAGNOSTIC, SENSE_FIRST_BOOT item 26 step 1: has the gyro ever
     // been read on real silicon at all?

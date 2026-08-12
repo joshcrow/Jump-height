@@ -584,7 +584,16 @@ Gate status: transfer loop **1 of 2 consecutive passes**; trigger
 reliability **open**; dark-state timeout characterization **open**
 (deferred — unsafe without USB attached); phone/nRF Connect run **open**.
 
-## 16c. BOOT HANG at the first I2C probe — OPEN, blocks everything, evidence below
+## 16c. BOOT HANG at the first I2C probe — RESOLVED 2026-08-12: hardware, not firmware
+
+**RESOLUTION:** the LSM6DS3TR-C (or its power path) failed in hardware.
+Full RCA with the exoneration experiment, evidence table, firmware audit and
+prevention actions: **[../docs/rca-sense-imu-2026-08-11.md](../docs/rca-sense-imu-2026-08-11.md)**.
+The decisive fact: `a6e477d` — the exact firmware that recorded 61 jumps
+that afternoon — hangs identically on the cold-started board. The bounded
+probe below (originally the mitigation) is now permanent policy.
+
+Original investigation notes follow, kept for the evidence trail:
 
 **Status 2026-08-11 ~23:30: the app boot-loops, dying inside the selftest's
 first I2C transaction** (`jh_imu::probe` — Arduino `Wire` has no timeout, so
