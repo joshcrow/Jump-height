@@ -37,26 +37,9 @@ class JumpFieldView extends WatchUi.DataField {
     const UI_RECONNECTING = 2;
     const UI_NO_BLE = 3;
 
-    // Layout-tier breakpoints (spec §4.1's full/half/small) — which of the
-    // three arrangements to draw. These stay absolute on purpose: they answer
-    // "is there room for three rows of content", which is a physical question.
-    // Everything *inside* a tier is proportional (see below).
-    const FULL_MIN_H = 120;
-    const HALF_MIN_H = 60;
+    // Geometry constants and math live in Layout.mc (pure, unit-tested —
+    // see LayoutTest.mc). This class draws; Layout computes.
 
-    const EDGE_INSET_PX = 10;  // extra margin on an obscured (clipped) edge
-
-    // Row placement as a FRACTION of the field's height, never absolute
-    // pixels. 2026-08-10, first real sideload (Epix Gen 2, 416x416 full-screen
-    // field): the old absolute offsets — header at top+14, sub-text at top+32,
-    // footer at bottom-12 — were sized for Instinct's 176px. On a 416px field
-    // they crushed the whole header into the top 8% of the glass and left the
-    // big number stranded in the middle. Fractions render the same shape at
-    // any size.
-    const HEADER_Y_FRAC = 0.15f;
-    const SUB_Y_FRAC    = 0.29f;
-    const BIG_Y_FRAC    = 0.55f;
-    const FOOTER_Y_FRAC = 0.88f;
 
     hidden var _model;
     hidden var _puckLink;
@@ -152,9 +135,10 @@ class JumpFieldView extends WatchUi.DataField {
         var feet = UnitsFmt.isFeet(_readUnitOverride());
         var uiState = _uiState();
 
-        if (h >= FULL_MIN_H) {
+        var t = Layout.tier(h);
+        if (t == Layout.TIER_FULL) {
             _drawFull(dc, w, h, insets, fg, bg, feet, uiState);
-        } else if (h >= HALF_MIN_H) {
+        } else if (t == Layout.TIER_HALF) {
             _drawHalf(dc, w, h, insets, fg, bg, feet, uiState);
         } else {
             _drawSmall(dc, w, h, insets, fg, bg, feet, uiState);
@@ -182,7 +166,7 @@ class JumpFieldView extends WatchUi.DataField {
         // circle's CHORD, not w — at 15% of a 416px full-screen field that is
         // ~300px, not 416, which is exactly what clipped "Jump Height" down to
         // "eight" on the first Epix sideload.
-        var headerY = (top + span * HEADER_Y_FRAC).toNumber();
+        var headerY = (top + span * Layout.HEADER_Y_FRAC).toNumber();
         var hHalf = _safeHalfWidth(w, h, headerY, insets);
         var hLeft = midX - hHalf;
         var hRight = midX + hHalf;
@@ -210,29 +194,27 @@ class JumpFieldView extends WatchUi.DataField {
 
         var subText = _subText(uiState);
         if (!subText.equals("")) {
-            var subY = (top + span * SUB_Y_FRAC).toNumber();
+            var subY = (top + span * Layout.SUB_Y_FRAC).toNumber();
             var subFont = _fitFont(dc, subText,
                 _safeHalfWidth(w, h, subY, insets) * 2 - 8, _fontLadder(labelFont));
             _drawVC(dc, midX, subY, subFont, subText, Graphics.TEXT_JUSTIFY_CENTER, fg);
         }
 
         // Dc coordinates want Numbers, not Floats.
-        var bigY = (top + span * BIG_Y_FRAC).toNumber();
+        var bigY = (top + span * Layout.BIG_Y_FRAC).toNumber();
         var bigText = _bigNumberText(uiState, feet);
         var unitText = _bigUnitText(uiState, feet);
         var unitFont = _secondaryFont(h);
         var fonts = [Graphics.FONT_NUMBER_THAI_HOT, Graphics.FONT_NUMBER_HOT,
                      Graphics.FONT_NUMBER_MEDIUM, Graphics.FONT_NUMBER_MILD];
-        var bigAvail = _safeHalfWidth(w, h, bigY, insets) * 2 - 8;
-        if (!unitText.equals("")) {
-            bigAvail -= dc.getTextDimensions(unitText, unitFont)[0] + 10;
-        }
+        var unitW = unitText.equals("") ? 0 : dc.getTextDimensions(unitText, unitFont)[0];
+        var bigAvail = Layout.bigDigitsMax(_safeHalfWidth(w, h, bigY, insets), 8, unitW);
         var font = _fitFont(dc, bigText, bigAvail, fonts);
         _drawBigValue(dc, midX, bigY, bigText, unitText, font, unitFont, fg, bg,
             uiState == UI_CONNECTED && _model.isFlashing());
 
         if (uiState == UI_CONNECTED || uiState == UI_RECONNECTING) {
-            var footerY = (top + span * FOOTER_Y_FRAC).toNumber();
+            var footerY = (top + span * Layout.FOOTER_Y_FRAC).toNumber();
             var footer = "best " + UnitsFmt.formatHeight(_model.sessionBestM(), feet)
                 + " . air " + UnitsFmt.formatAirtime(_model.lastAirtimeS());
             var footFont = _fitFont(dc, footer,
@@ -266,10 +248,8 @@ class JumpFieldView extends WatchUi.DataField {
         var bigY = (top + span * 0.40).toNumber();
         var fonts = [Graphics.FONT_NUMBER_HOT, Graphics.FONT_NUMBER_MEDIUM,
                      Graphics.FONT_NUMBER_MILD, Graphics.FONT_SMALL];
-        var bigAvail = _safeHalfWidth(w, h, bigY, insets) * 2 - 6;
-        if (!unitText.equals("")) {
-            bigAvail -= dc.getTextDimensions(unitText, unitFont)[0] + 8;
-        }
+        var unitW = unitText.equals("") ? 0 : dc.getTextDimensions(unitText, unitFont)[0];
+        var bigAvail = Layout.bigDigitsMax(_safeHalfWidth(w, h, bigY, insets), 6, unitW);
         var font = _fitFont(dc, bigText, bigAvail, fonts);
         _drawBigValue(dc, midX, bigY, bigText, unitText, font, unitFont, fg, bg,
             uiState == UI_CONNECTED && _model.isFlashing());
@@ -372,14 +352,16 @@ class JumpFieldView extends WatchUi.DataField {
         var nd = dc.getTextDimensions(digits, numFont);
         var ud = null;
         var uw = 0;
-        var gap = 0;
         if (!unit.equals("")) {
             ud = dc.getTextDimensions(unit, unitFont);
             uw = ud[0];
-            gap = nd[0] / 12 + 4;
         }
-        var total = nd[0] + gap + uw;
-        var x = cx - total / 2;
+        // Geometry from Layout so the draw can never drift from the tested
+        // math (LayoutTest proves the extent stays inside the row's budget).
+        var extent = Layout.bigGroupExtent(cx, nd[0], uw);
+        var x = extent[0];
+        var gap = (uw > 0) ? (nd[0] / 12 + 4) : 0;
+        var total = extent[1] - extent[0];
 
         var textColor = fg;
         if (flashing) {
@@ -466,38 +448,15 @@ class JumpFieldView extends WatchUi.DataField {
     // bottom pair) is horizontally offset by an amount we cannot query, and
     // guessing would be worse than the small over-estimate of using w/2.
     hidden function _safeHalfWidth(w, h, y, insets) as Number {
-        var nominal = (w - insets[2] - insets[3]) / 2;
+        // Pure math in Layout.safeHalfWidth (unit-tested); this wrapper only
+        // gathers the device facts it needs.
         var settings = System.getDeviceSettings();
-        if (settings.screenShape != System.SCREEN_SHAPE_ROUND) {
-            return nominal;
-        }
-        var screenW = settings.screenWidth;
-        if (w < screenW - 4) {
-            return nominal;  // not full-width: position unknown, don't guess
-        }
-
+        var isRound = (settings.screenShape == System.SCREEN_SHAPE_ROUND);
         var flags = _obscurityFlags();
-        var atTop = (flags & WatchUi.DataField.OBSCURE_TOP) != 0;
-        var atBottom = (flags & WatchUi.DataField.OBSCURE_BOTTOM) != 0;
-
-        var r = screenW / 2.0;
-        var dy;
-        if (atTop && atBottom) {
-            dy = y - h / 2.0;             // field spans the full screen
-        } else if (atTop) {
-            dy = y - r;                    // field hugs the top: y is absolute
-        } else if (atBottom) {
-            dy = r - (h - y);              // field hugs the bottom
-        } else {
-            return nominal;                // mid-screen strip
-        }
-
-        var inside = r * r - dy * dy;
-        if (inside <= 1.0) {
-            return 8;                      // degenerate; keep something drawable
-        }
-        var chordHalf = Math.sqrt(inside).toNumber() - 4;  // 4px breathing room
-        return (chordHalf < nominal) ? chordHalf : nominal;
+        return Layout.safeHalfWidth(w, h, y, insets[2], insets[3],
+            isRound, settings.screenWidth,
+            (flags & WatchUi.DataField.OBSCURE_TOP) != 0,
+            (flags & WatchUi.DataField.OBSCURE_BOTTOM) != 0);
     }
 
     // Label/sub-text font scaled to the field's height. FONT_XTINY on a 416px
@@ -544,10 +503,7 @@ class JumpFieldView extends WatchUi.DataField {
     }
 
     hidden function _dotRadius(h) as Number {
-        var r = h / 40;
-        if (r < 4) { return 4; }
-        if (r > 12) { return 12; }
-        return r;
+        return Layout.dotRadius(h);
     }
 
     // Trim with a trailing "." until it fits: a long puck name should lose its
@@ -598,10 +554,10 @@ class JumpFieldView extends WatchUi.DataField {
         var bottom = 0;
         var left = 0;
         var right = 0;
-        if ((flags & WatchUi.DataField.OBSCURE_TOP) != 0) { top = EDGE_INSET_PX; }
-        if ((flags & WatchUi.DataField.OBSCURE_BOTTOM) != 0) { bottom = EDGE_INSET_PX; }
-        if ((flags & WatchUi.DataField.OBSCURE_LEFT) != 0) { left = EDGE_INSET_PX; }
-        if ((flags & WatchUi.DataField.OBSCURE_RIGHT) != 0) { right = EDGE_INSET_PX; }
+        if ((flags & WatchUi.DataField.OBSCURE_TOP) != 0) { top = Layout.EDGE_INSET_PX; }
+        if ((flags & WatchUi.DataField.OBSCURE_BOTTOM) != 0) { bottom = Layout.EDGE_INSET_PX; }
+        if ((flags & WatchUi.DataField.OBSCURE_LEFT) != 0) { left = Layout.EDGE_INSET_PX; }
+        if ((flags & WatchUi.DataField.OBSCURE_RIGHT) != 0) { right = Layout.EDGE_INSET_PX; }
         return [top, bottom, left, right];
     }
 
