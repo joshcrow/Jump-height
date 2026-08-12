@@ -215,7 +215,8 @@ float load(Key k, float def, bool* from_store) {
       case Key::AirtimeOffsetS: has = rec.has_offset; val = rec.offset; break;
       case Key::HeightScale:    has = rec.has_scale;  val = rec.scale;  break;
       case Key::VbatScale:      has = rec.has_vbat;   val = rec.vbat;   break;
-      case Key::ProbeGuard:     has = 1;              val = rec.guard;  break;
+      case Key::ProbeGuard:     has = 1;  val = (rec.guard & 0x01) ? 1.0f : 0.0f; break;
+      case Key::StoreGuard:     has = 1;  val = (rec.guard & 0x02) ? 1.0f : 0.0f; break;
     }
   }
   if (from_store) *from_store = has;
@@ -233,7 +234,10 @@ void save(Key k, float value) {
     case Key::AirtimeOffsetS: rec.offset = value; rec.has_offset = 1; break;
     case Key::HeightScale:    rec.scale  = value; rec.has_scale  = 1; break;
     case Key::VbatScale:      rec.vbat   = value; rec.has_vbat   = 1; break;
-    case Key::ProbeGuard:     rec.guard  = (value > 0.5f) ? 1 : 0;    break;
+    case Key::ProbeGuard:
+      rec.guard = (value > 0.5f) ? (rec.guard | 0x01) : (rec.guard & ~0x01); break;
+    case Key::StoreGuard:
+      rec.guard = (value > 0.5f) ? (rec.guard | 0x02) : (rec.guard & ~0x02); break;
   }
   writeRecord(rec);
 }
@@ -245,7 +249,8 @@ void clear(Key k) {
     case Key::AirtimeOffsetS: rec.has_offset = 0; break;
     case Key::HeightScale:    rec.has_scale  = 0; break;
     case Key::VbatScale:      rec.has_vbat   = 0; break;
-    case Key::ProbeGuard:     rec.guard      = 0; break;
+    case Key::ProbeGuard:     rec.guard &= ~0x01; break;
+    case Key::StoreGuard:     rec.guard &= ~0x02; break;
   }
   writeRecord(rec);
 }

@@ -672,6 +672,37 @@ fix is a vendored bounded-TWIM mini-driver (twim_min.h, per the DECISIONS
 Do this before the water day; it is the last unbounded wait on the boot or
 sample path.
 
+## 16e. Mule QSPI mount-hang (FIXED: store guard) + an unresolved command-silence on top
+
+**Evening 2026-08-12.** The mule went dark after an afternoon of heavy
+flashing. Neuter-and-bisect (the sensor probe's method, reapplied):
+persist bypass — still dark; **store bypass — back on the air**. The
+mule's QSPI chip now wedges `jh_store::init` exactly like the sensor bus
+wedged the probe: an unbounded external-bus first-contact in the boot
+path, the storage twin of 16c's lesson. Somewhere in the same window the
+mule's stored history (61 jumps + drop-cal trace) was wiped by a
+reformat whose trigger is unestablished — assume bench data on the mule
+is volatile until the chip's state is understood.
+
+**Fix shipped:** persist moves FIRST in boot (internal flash, nothing to
+wedge); `jh_store::init` is bracketed by a sticky StoreGuard (guard byte
+bit 1 — same jh_persist byte as the probe guard, now a bitmask). A mount
+hang costs one watchdog reset, then boots skip storage and run live-only
+with an honest `flash FAIL` row. `format` is the deliberate retry, itself
+guarded. Verified on the mule: the guarded build boots and advertises
+stably (60 s continuous adv, no self-reboot).
+
+**UNRESOLVED, parked honestly:** on that stable boot, commands go
+unanswered — BLE connects fine, the greet (banner+READY, 29 bytes, the
+COMPLETE greet) arrives, then replies stop; serial is also silent (though
+its CDC nodes were ghosting all evening). Two candidates this bench
+cannot separate tonight: (a) a real command-loop wedge surviving the
+store fix, (b) this Mac's measured notification-path death (first packets
+arrive, then silence — the DFU-receipt disease) plus ghost CDC.
+**One-connect discriminator: Bluefy on a phone.** If Bluefy gets replies,
+the mule is fine and the Mac stands convicted again; if not, the wedge is
+real and the next bisect starts at loop()'s post-greet paths.
+
 ## 17. PDM microphone rail — never measured
 
 **File:** not touched by this port at all (deliberately: no PDM code

@@ -589,7 +589,10 @@ static void handleCommand(const String& cmd) {
     // Last-resort storage recovery — works when `clear` cannot (fs down).
     // Destroys stored jumps + trace; live detection unaffected either way.
     flushTrace();
-    if (jh_store::hard_format(emitLine)) {
+    jh_persist::save(jh_persist::Key::StoreGuard, 1.0f);   // guard the retry too
+    const bool fmt_ok = jh_store::hard_format(emitLine);
+    jh_persist::save(jh_persist::Key::StoreGuard, 0.0f);
+    if (fmt_ok) {
       fs_ok = true;
       scanStoredJumps();
       emitLine("OK format");
@@ -705,19 +708,30 @@ void setup() {
   jh_imu::init();
   jh_power::init();
 
-  // Mount storage. jh_store handles format-on-fail internally and resumes any
-  // existing trace.csv/jumps.csv state (byte count, header-written flags, cap
-  // status); `emitLine` is passed through as the announce callback so the
-  // "first boot: formatting..." progress line still lands BEFORE the possible
-  // up-to-a-minute hang, exactly as before.
-  fs_ok = jh_store::init(emitLine);
+  // Persist first — it's INTERNAL flash (no external bus, nothing to wedge)
+  // and both crash guards live in it, so it must be readable before any
+  // external-bus first contact.
+  jh_persist::init();
+  loadCalibration();
+
+  // Mount storage — BRACKETED by the sticky store guard (2026-08-12: the
+  // mule's wedged QSPI chip hung this call before BLE ever started; found
+  // by the neuter-and-bisect method the sensor probe taught us). A hang
+  // costs one watchdog reset; every boot after skips the mount and comes up
+  // alive with an honest `flash FAIL` row. The `format` command is the
+  // deliberate retry — and if THAT hangs, the same guard catches it again.
+  if (jh_persist::load(jh_persist::Key::StoreGuard, 0.0f) > 0.5f) {
+    emitLine("# storage: skipped (previous boot hung in the mount — run `format` to retry)");
+    fs_ok = false;
+  } else {
+    jh_persist::save(jh_persist::Key::StoreGuard, 1.0f);
+    fs_ok = jh_store::init(emitLine);
+    jh_persist::save(jh_persist::Key::StoreGuard, 0.0f);
+  }
 
   // Bring BLE up before the self-test so the `ble` row reflects the real result.
   // A failure is non-fatal: everything below (and jump detection) runs regardless.
   ble_ok = jh_link::begin("JumpHeight");
-
-  jh_persist::init();
-  loadCalibration();
   runSelfTest();
 
   // Latch gyro presence AFTER runSelfTest(), because that is what calls

@@ -47,7 +47,13 @@ enum class Key { AirtimeOffsetS, HeightScale, VbatScale,
                  // the one store proven to survive watchdog resets AND the
                  // bootloader (GPREGRET gets sanitized; .noinit does not
                  // exist in this core's linker scripts — both measured).
-                 ProbeGuard };
+                 ProbeGuard,
+                 // Same guard byte, bit 1: the QSPI store mount crash guard
+                 // (2026-08-12 evening: the mule's wedged flash chip hung
+                 // jh_store::init before BLE ever started — the storage twin
+                 // of the sensor-probe lesson, caught by the same
+                 // neuter-and-bisect method). `format` is the retry path.
+                 StoreGuard };
 
 // Bring up the calibration store. Call once from setup(), before load().
 void init();

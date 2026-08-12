@@ -28,6 +28,7 @@ const char* keyName(Key k) {
     case Key::HeightScale:    return "scale";
     case Key::VbatScale:      return "vbat";
     case Key::ProbeGuard:     return "probe_guard";
+    case Key::StoreGuard:     return "store_guard";
   }
   return "offset";
 }
