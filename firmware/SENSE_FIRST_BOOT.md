@@ -580,9 +580,16 @@ the air with calibration intact. What it took, and what remains:
   net, one failed DFU entry = dark puck until physically reset. Next
   session starts by re-seating the cable.
 
-Gate status: transfer loop **1 of 2 consecutive passes**; trigger
-reliability **open**; dark-state timeout characterization **open**
-(deferred — unsafe without USB attached); phone/nRF Connect run **open**.
+**GATE PASSED 2026-08-12 ~15:00**: two complete OTA loops back-to-back on
+the (sensor-dead but radio-healthy) original board — 113 s + 114 s, every
+10 KB checkpoint verified against the bootloader's own byte count,
+validate + activate clean, app back with calibration intact after both.
+Address-pinned via OTADFU_ADDR (two boards now share the JumpHeight name).
+Trigger reliability: resolved — every "flaky trigger" was macOS transport
+(unverified sends) or wrong-firmware archaeology; the verified trigger has
+not missed since. Still open, ceremony only: one USB-out run (human
+unplug) and one nRF Connect phone run. Dark-state timeout
+characterization remains open.
 
 ## 16c. BOOT HANG at the first I2C probe — RESOLVED 2026-08-12: hardware, not firmware
 
