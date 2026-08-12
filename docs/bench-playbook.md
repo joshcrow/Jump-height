@@ -66,7 +66,11 @@ after first flash is expected, not a swap.
 
 - **A battery-backed board never truly resets.** Every wedge that survives
   "unplug it" survives because the battery kept the chips alive. True cold
-  start = battery *and* USB removed. The battery-less puck-in-bring-up is the
+  start = battery *and* USB removed. Batteries are on JST-style pigtails
+  (unclip, no soldering) — so a true cold start on the mule is a two-second
+  unclip, and cells swap freely between boards once the puck gets its own
+  pigtail soldered. Pigtails also make item 25c's off-current measurement
+  (meter in series on the cell lead) trivial. The battery-less puck-in-bring-up is the
   easy case: replug = power cycle — for the MCU *and* the QSPI flash and IMU.
 - **In OTA-DFU mode the board has no USB at all.** The radio is the only way
   in; a failed transfer strands it dark until physical reset. Never enter DFU
