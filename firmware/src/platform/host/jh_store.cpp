@@ -187,4 +187,6 @@ void clear() {
   s_jumps_header = false;
 }
 
+bool hard_format(void (*announce)(const char* line)) { announce("# hard format: host is a no-op"); return true; }
+
 }  // namespace jh_store

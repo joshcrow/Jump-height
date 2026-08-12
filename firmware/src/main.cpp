@@ -380,7 +380,7 @@ static bool runSelfTest() {
 
 // ---------------- Commands ----------------
 static void printHelp() {
-  emitLine("# commands: help | stats | jumps | trace | dump | clear | selftest | info | off | dfu | uf2 | fakejump");
+  emitLine("# commands: help | stats | jumps | trace | dump | clear | selftest | info | off | dfu | uf2 | fakejump | format");
   emitLine("#           set <airtime_offset_s|height_scale|vbat_scale> <value|default>");
   emitLine("#           vbatscan  (bench: battery ADC vs acquisition time)");
   emitLine("#           gyro      (bench: raw + bias-corrected rate, 2 s)");
@@ -575,6 +575,17 @@ static void handleCommand(const String& cmd) {
       emitLine("ERR uf2_unsupported this build has no UF2 bootloader");
     }
     return;
+  } else if (cmd == "format") {
+    // Last-resort storage recovery — works when `clear` cannot (fs down).
+    // Destroys stored jumps + trace; live detection unaffected either way.
+    flushTrace();
+    if (jh_store::hard_format(emitLine)) {
+      fs_ok = true;
+      scanStoredJumps();
+      emitLine("OK format");
+    } else {
+      emitLine("ERR format_failed see hints above");
+    }
   } else if (cmd == "fakejump") {
     // BENCH ONLY: emit a synthetic JUMP through the real emit path — added
     // 2026-08-12, the morning the Sense's IMU was pronounced hardware-dead

@@ -591,6 +591,45 @@ bool init(void (*announce)(const char* line)) {
 
 bool ok() { return s_fs_ok; }
 
+bool hard_format(void (*announce)(const char* line)) {
+  static SPIFlash_Device_t s_devices2[] = {P25Q16H};
+  announce("# hard format: re-probing flash...");
+  s_fs_ok = s_flash.begin(s_devices2, 1);
+  if (!s_fs_ok) {
+    flashWake();
+    s_fs_ok = s_flash.begin(s_devices2, 1);
+  }
+  if (!s_fs_ok) {
+    s_transport.runCommand(0x66);
+    s_transport.runCommand(0x99);
+    delayMicroseconds(50);
+    flashWake();
+    s_fs_ok = s_flash.begin(s_devices2, 1);
+  }
+  if (!s_fs_ok) {
+    announce("# hard format: chip not answering — physical power-cycle is the next step");
+    return false;
+  }
+  s_flash_total_bytes  = s_flash.size();
+  s_jumps_region_start = SUPERBLOCK_BYTES;
+  s_trace_region_start = s_jumps_region_start + JUMPS_REGION_BYTES;
+  s_trace_region_bytes = (s_flash_total_bytes > s_trace_region_start)
+                             ? s_flash_total_bytes - s_trace_region_start
+                             : 0;
+  announce("# hard format: erasing chip (up to a minute)...");
+  const bool erased = s_flash.eraseChip();
+  const bool wrote  = erased && writeSuperblock();
+  if (!wrote) {
+    announce("# hard format: erase/superblock FAILED");
+    s_fs_ok = false; flashSleep(); return false;
+  }
+  findJumpsAppendPoint();
+  findTraceAppendPoint();
+  flashSleep();
+  announce("# hard format: storage ready");
+  return true;
+}
+
 uint32_t free_bytes() {
   // Cached RAM state only (see the state block's comment) — no flash
   // access, so no wake/sleep bracketing needed here.

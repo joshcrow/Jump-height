@@ -53,6 +53,15 @@ bool init(void (*announce)(const char* line));
 // self-test's flash PASS/FAIL row).
 bool ok();
 
+// LAST-RESORT recovery: full re-init -> chip erase -> fresh superblock,
+// deliberately usable when ok() is false — the state every other API
+// refuses to touch. Exists because an interrupted first-boot format
+// (SENSE_FIRST_BOOT item 21, observed for real 2026-08-12) leaves the fs
+// permanently unmountable with `clear` refusing to help, and on a sealed
+// box "reflash and hope" is not a recovery plan. Destroys all stored data
+// by definition. Returns true if the store is mounted and empty after.
+bool hard_format(void (*announce)(const char* line));
+
 // Free bytes on the storage partition (self-test's flash detail=NNNB_free).
 uint32_t free_bytes();
 

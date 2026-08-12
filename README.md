@@ -249,6 +249,10 @@ edited in place once silicon answers it:
   assumption the nRF52 port made before the board existed.
 - **[`garmin/FIRST_COMPILE.md`](garmin/FIRST_COMPILE.md)** — the same for the
   Connect IQ field, written with no SDK in hand.
+- **[`docs/bench-playbook.md`](docs/bench-playbook.md)** — the operational
+  doctrine those files taught: board registry, instrument rules ("a
+  diagnostic that can false-negative is worse than none"), transport
+  distrust, and the recovery ladder — every rung proven on silicon.
 
 It earns its keep. The bug that killed the watch field on its first live
 connection was **predicted, by line number, as item #3** — and the fix listed
