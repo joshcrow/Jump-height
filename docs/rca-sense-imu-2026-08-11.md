@@ -125,3 +125,74 @@ software. Both have the same remediation.
 - **`fakejump` bench command** (2026-08-12): the full client pipeline is
   testable against a sensor-dead puck, so hardware failure no longer blocks
   software validation.
+
+---
+
+# ADDENDUM — 2026-08-12: the falsifier FIRED. Verdict revised.
+
+Section 6 promised that a replacement module running identical firmware
+would falsify this RCA if it failed. **It failed** — the factory-fresh
+board reported `i2c FAIL no_device` under the current firmware — and the
+investigation that followed rewrote the story. This addendum supersedes
+parts of the original; what stands and what falls is listed explicitly.
+
+## What actually happened
+
+The bounded-probe code added on the night of 08-11 (and two successors)
+produced **false negatives against healthy sensors**:
+
+1. The bit-banged ACK probe reported no ACK from a sensor that Wire,
+   asked seconds later in the same boot, ACKed immediately
+   (`probe-diag: sda=1 scl=1 bb6A=0 bb68=0 wire6A=0`).
+2. A GPIO level-gate then read the bus lines nondeterministically —
+   `1/1` one boot, `0/0` the next, same board, same code.
+3. A TWIM register-level probe also false-negatived (root cause of #2/#3
+   left unchased; a missing/mismatched pin configuration interaction is
+   the leading suspect).
+
+Every post-cold-start "confirmation" of the old board's death ran through
+this code. **The `sda=0 scl=0 rail_float=0` mechanism evidence in §3 is
+retracted** — those reads came from instruments now proven unreliable.
+
+## What still stands, on independent evidence
+
+The old board IS genuinely sick: `a6e477d` — pre-dating every probe — hangs
+at its first **Wire** transaction on the old board (reproduced twice on
+08-12, single-banner captures, while the same binary on the new board reads
+the sensor perfectly at 0.970 g). A held bus on the old board is real;
+only the *mechanism claims* about rail shorts are withdrawn. Cause remains
+unresolved between hardware damage and something environmental/state-based
+that survives cold starts; the board is retained as a bench radio and test
+mule, not scrapped.
+
+## The fix that shipped (fifth design, and the lesson)
+
+Every outside-in "is the bus safe?" probe lied. The shipped design stops
+asking: **crash-loop detection** — a magic+flag pair in `.noinit` RAM set
+before the first Wire touch and cleared after. A held bus costs one
+watchdog reset (~3.5 s), after which boots skip the sensor and come up
+commandable with an honest FAIL row. The healthy path runs *zero* extra
+bus operations — which is why it is the first design that cannot lie.
+Verified on the new board: `i2c PASS`, accel 0.970 g, noise 0.0010 g,
+5/5 consecutive.
+
+## Lessons, earned twice now
+
+- **A diagnostic that can produce false negatives is worse than none**:
+  it converted a live sensor into a confident dead-hardware verdict.
+- The falsifier section is the only reason this was caught in hours
+  instead of after a $15 purchase and a rebuild. RCAs without falsifiers
+  are stories.
+- The failure `arc` argument (§5.1's fatigue narrative) fit the wrong
+  facts equally well — arcs are weak evidence.
+
+## Still open (tracked in SENSE_FIRST_BOOT)
+
+- Old board: root cause of the genuinely held bus.
+- New board: QSPI mount fails since an interrupted-format event
+  (mounted and formatted fine on its first boots; item 21's scenario);
+  0xAB wake and 0x66/0x99 JEDEC reset retries both insufficient.
+  Storage-independent work proceeds meanwhile.
+- Boot-time selftest reads accel 0.960 g / noise 0.0966 g deterministically
+  vs 0.970 g / 0.0010 g on command — likely filter settle vs boot timing;
+  benign-looking, unverified.

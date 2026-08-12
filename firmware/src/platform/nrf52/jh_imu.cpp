@@ -78,18 +78,17 @@ void init() {
   // the sensor's rail (docs/sense.md §3.7), so a LOW pulse here is a true
   // sensor power-on: bus state cleared, Ton clock restarted, every boot
   // identical whether it followed a cold start, a crash, or an OTA jump.
+  // Rail: assert HIGH only — matching the factory boot path the variant
+  // itself uses. The hard LOW-then-HIGH power cycle that briefly lived here
+  // (2026-08-11 night) is GONE: on a FRESH, healthy board it produced
+  // no_device on every boot — hard-discharging the sensor's rail and bus,
+  // then re-driving the rail from a standard-drive GPIO, browns the sensor
+  // out mid-boot (inrush exceeds what the pin sources cleanly), and a
+  // half-booted LSM6DS3TR-C clamps its bus. The very failure signature that
+  // got read as dead hardware. Falsified on the replacement board
+  // 2026-08-12: same firmware, factory-fresh sensor, same "no_device" —
+  // remove the cycle and the sensor reads 0.970 g. See the RCA addendum.
   pinMode(PIN_LSM6DS3TR_C_POWER, OUTPUT);
-  digitalWrite(PIN_LSM6DS3TR_C_POWER, LOW);
-  // Back-power guard: with the rail low, the sensor can stay alive through
-  // its own SDA/SCL pins via the bus pull-ups (phantom power) and keep its
-  // wedged state through the whole "power cycle". Drive both bus lines LOW
-  // for the off-window so there is nothing left to feed it, then release
-  // them before Wire1 claims the pins.
-  pinMode(PIN_WIRE1_SDA, OUTPUT); digitalWrite(PIN_WIRE1_SDA, LOW);
-  pinMode(PIN_WIRE1_SCL, OUTPUT); digitalWrite(PIN_WIRE1_SCL, LOW);
-  delay(150);  // rail + bus held low: a true discharge, not a droop
-  pinMode(PIN_WIRE1_SDA, INPUT);
-  pinMode(PIN_WIRE1_SCL, INPUT);
   digitalWrite(PIN_LSM6DS3TR_C_POWER, HIGH);
   // Boot-settle margin (review-nrf52.md finding #5 / SENSE_FIRST_BOOT.md
   // item 7, now RESOLVED-BY-DATASHEET): the real LSM6DS3TR-C datasheet's
@@ -152,58 +151,65 @@ static void busClear() {
   sdaHigh(); delayMicroseconds(BB_HALF_US);
 }
 
-// Bounded ACK probe: START, 8 address bits (write), read ACK, STOP. Every
-// step is a fixed number of GPIO operations — no loops on peripheral state.
-static bool bitbangProbe(uint8_t addr7) {
-  if (!busIdleHigh()) return false;
-  // START
-  sdaLow(); delayMicroseconds(BB_HALF_US);
-  sclLow(); delayMicroseconds(BB_HALF_US);
-  const uint8_t byte = (uint8_t)(addr7 << 1);  // write bit 0
-  for (int i = 7; i >= 0; --i) {
-    if ((byte >> i) & 1) sdaHigh(); else sdaLow();
-    delayMicroseconds(BB_HALF_US);
-    sclHigh(); delayMicroseconds(BB_HALF_US);
-    sclLow();  delayMicroseconds(BB_HALF_US);
-  }
-  // ACK bit: release SDA, clock once, sample (LOW = ACK)
-  sdaHigh(); delayMicroseconds(BB_HALF_US);
-  sclHigh(); delayMicroseconds(BB_HALF_US);
-  const bool acked = (sdaRead() == 0);
-  sclLow();  delayMicroseconds(BB_HALF_US);
-  // STOP
-  sdaLow();  delayMicroseconds(BB_HALF_US);
-  sclHigh(); delayMicroseconds(BB_HALF_US);
-  sdaHigh(); delayMicroseconds(BB_HALF_US);
-  return acked;
-}
-
 static bool s_wire_started = false;
+
+// Crash-loop detection state — .noinit: survives watchdog/soft resets,
+// garbage on true power-on (hence the magic).
+#define PROBE_MAGIC 0xB007C0DE
+__attribute__((section(".noinit"))) static uint32_t s_probe_magic;
+__attribute__((section(".noinit"))) static uint32_t s_probe_inflight;
 
 bool probe(uint8_t addr) {
   // Only the PRIMARY slot maps to this platform's (single, fixed-address)
   // IMU — see the file comment above.
   if (addr != ADDR_PRIMARY) return false;
 
-  // Bounded first contact (see block comment above). One recovery attempt:
-  // a held bus gets the 9-pulse clear, then one more chance.
-  if (!busIdleHigh()) {
-    busClear();
-    if (!busIdleHigh()) return false;   // bus wedged: FAIL FAST, stay bootable
+  // Bounded first contact: the hang-guard is the LEVEL CHECK, not an ACK.
+  // Wire's unbounded spins only bite on a HELD bus, so proving both lines
+  // idle-high (with one 9-pulse bus-clear attempt for a stuck slave) is
+  // exactly sufficient to make Wire safe — and Wire then does the ACK probe
+  // it has always done correctly.
+  //
+  // History, so nobody re-adds it: this function briefly contained a
+  // bit-banged ACK probe as an extra gate. It was a false-negative machine —
+  // on a factory-fresh board with an idle-high bus it reported no ACK at
+  // either address while Wire, asked the same question seconds later,
+  // ACKed 0x6A immediately (probe-diag, 2026-08-12: `sda=1 scl=1 bb6A=0
+  // bb68=0 wire6A=0`). Those false negatives cascaded into a wrong
+  // dead-hardware RCA. A redundant probe that can lie is worse than no
+  // probe: deleted rather than debugged.
+  // Boot-hang protection, final design: CRASH-LOOP DETECTION, not a probe.
+  //
+  // Journey (RCA + addendum have the full trail): Wire hangs unboundedly on
+  // a held bus, so first contact needed a bound. Four probe designs tried
+  // to answer "is the bus safe?" from the outside — bit-bang ACK, GPIO
+  // level gate, TWIM register transaction, TWIM + PIN_CNF — and every one
+  // produced false negatives against a healthy sensor that plain Wire read
+  // perfectly (0.970 g, 4/4). The outside-in question keeps being answered
+  // wrong, so stop asking it: let Wire touch the bus exactly as the
+  // proven-good firmware always has, and make a HANG survivable instead.
+  //
+  // A magic+flag pair lives in .noinit RAM (survives watchdog/soft resets,
+  // scrambled by real power-on). Set before the first Wire transaction,
+  // cleared after it returns. If a held bus hangs the probe, the watchdog
+  // reboots us, the flag is found still set, and THIS boot skips the sensor
+  // entirely: one ~3.5 s watchdog cost once, then a live, commandable
+  // device with an honest `i2c FAIL` row every boot until the bus is
+  // physically freed. The healthy path runs zero extra bus operations.
+  if (s_probe_magic == PROBE_MAGIC && s_probe_inflight) {
+    s_probe_inflight = 0;      // one skip per hang; retry on the next boot
+    return false;              // previous boot died inside this probe
   }
-  if (!bitbangProbe(Lsm6ds3Min::I2C_ADDR)) {
-    busClear();
-    if (!bitbangProbe(Lsm6ds3Min::I2C_ADDR)) return false;
-  }
-
-  // Bus proven alive end-to-end — NOW it is safe to hand it to Wire, whose
-  // unbounded spins only bite on a dead bus.
+  s_probe_magic = PROBE_MAGIC;
+  s_probe_inflight = 1;
   if (!s_wire_started) {
     Wire1.begin();
     Wire1.setClock(400000);
     s_wire_started = true;
   }
-  return Lsm6ds3Min::probe(Wire1, Lsm6ds3Min::I2C_ADDR);
+  const bool found = Lsm6ds3Min::probe(Wire1, Lsm6ds3Min::I2C_ADDR);
+  s_probe_inflight = 0;
+  return found;
 }
 
 bool begin(uint8_t addr) {

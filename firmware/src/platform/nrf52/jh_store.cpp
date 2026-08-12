@@ -552,6 +552,19 @@ bool init(void (*announce)(const char* line)) {
     flashWake();
     s_fs_ok = s_flash.begin(s_devices, 1);
   }
+  if (!s_fs_ok) {
+    // Second retry, heavier hammer: JEDEC reset (66h enable + 99h reset).
+    // A chip left in continuous-read or QPI mode — e.g. by an interrupted
+    // session from FOREIGN firmware, which is exactly how a mid-format
+    // reflash on 2026-08-12 left this board's P25Q16H unmountable on every
+    // subsequent boot — ignores normal commands until reset. 66/99 is the
+    // standard escape; ~30 us recovery, then one more mount attempt.
+    s_transport.runCommand(0x66);
+    s_transport.runCommand(0x99);
+    delayMicroseconds(50);
+    flashWake();
+    s_fs_ok = s_flash.begin(s_devices, 1);
+  }
   if (!s_fs_ok) return false;
 
   s_flash_total_bytes  = s_flash.size();  // P25Q16H: 2,097,152 (2 MiB)
