@@ -27,6 +27,7 @@ const char* keyName(Key k) {
     case Key::AirtimeOffsetS: return "offset";
     case Key::HeightScale:    return "scale";
     case Key::VbatScale:      return "vbat";
+    case Key::ProbeGuard:     return "probe_guard";
   }
   return "offset";
 }

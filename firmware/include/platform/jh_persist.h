@@ -39,7 +39,15 @@ namespace jh_persist {
 // docs/data-pipeline.md's "calibration record (per physical unit)" already
 // names more of these coming — gyro bias, gyro scale-factor, the mount
 // lever arm. An enum takes them; a boolean never could.
-enum class Key { AirtimeOffsetS, HeightScale, VbatScale };
+enum class Key { AirtimeOffsetS, HeightScale, VbatScale,
+                 // Not calibration: the sensor-probe crash guard (jh_imu,
+                 // nrf52). 1.0 = a previous boot died inside the first bus
+                 // touch; boots skip the sensor (sticky) until a manual
+                 // `selftest` retries. Lives here because internal flash is
+                 // the one store proven to survive watchdog resets AND the
+                 // bootloader (GPREGRET gets sanitized; .noinit does not
+                 // exist in this core's linker scripts — both measured).
+                 ProbeGuard };
 
 // Bring up the calibration store. Call once from setup(), before load().
 void init();

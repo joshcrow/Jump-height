@@ -57,7 +57,8 @@ const uint32_t kMagic       = 0x4C43484AUL;
 // them: a shorter file is a v1 record, not a corrupt one, and silently
 // dropping a hard-won drop calibration on a firmware update would be a
 // nasty way to learn that.
-const uint8_t  kFormatVer   = 2;
+const uint8_t  kFormatVer   = 3;
+const uint8_t  kFormatVerV2 = 2;
 const uint8_t  kFormatVerV1 = 1;
 
 #pragma pack(push, 1)
@@ -70,12 +71,23 @@ struct CalRecordV1 {
   float    offset;
   float    scale;
 };
+struct CalRecordV2 {
+  uint32_t magic;
+  uint8_t  format_version;
+  uint8_t  has_offset;
+  uint8_t  has_scale;
+  uint8_t  has_vbat;
+  float    offset;
+  float    scale;
+  float    vbat;
+};
 struct CalRecord {
   uint32_t magic;
   uint8_t  format_version;
   uint8_t  has_offset;
   uint8_t  has_scale;
   uint8_t  has_vbat;
+  uint8_t  guard;      // v3: jh_imu probe crash guard (0/1); NOT calibration
   float    offset;
   float    scale;
   float    vbat;
@@ -91,8 +103,7 @@ bool readRecord(CalRecord& rec) {
   Adafruit_LittleFS_Namespace::File f =
       InternalFS.open(kPath, Adafruit_LittleFS_Namespace::FILE_O_READ);
   if (!f) return false;
-  uint8_t buf[sizeof(CalRecord) > sizeof(CalRecordV1) ? sizeof(CalRecord)
-                                                      : sizeof(CalRecordV1)];
+  uint8_t buf[sizeof(CalRecord)];  // v3 is the largest record shape
   memset(buf, 0, sizeof(buf));
   const int n = f.read(buf, sizeof(buf));
   f.close();
@@ -107,6 +118,22 @@ bool readRecord(CalRecord& rec) {
     memcpy(&rec, buf, sizeof(rec));
     return true;
   }
+  if (ver == kFormatVerV2 && n >= (int)sizeof(CalRecordV2)) {
+    // MIGRATE v2 -> v3: same fields plus the guard byte, which never
+    // existed — clear. Same never-discard rule as the v1 path below.
+    CalRecordV2 old;
+    memcpy(&old, buf, sizeof(old));
+    rec.magic          = old.magic;
+    rec.format_version = kFormatVer;
+    rec.has_offset     = old.has_offset;
+    rec.has_scale      = old.has_scale;
+    rec.has_vbat       = old.has_vbat;
+    rec.guard          = 0;
+    rec.offset         = old.offset;
+    rec.scale          = old.scale;
+    rec.vbat           = old.vbat;
+    return true;
+  }
   if (ver == kFormatVerV1) {
     // MIGRATE, don't discard. A v1 file is a shorter valid record, not a
     // corrupt one; treating it as "nothing saved" would throw away a drop
@@ -118,6 +145,7 @@ bool readRecord(CalRecord& rec) {
     rec.has_offset     = old.has_offset;
     rec.has_scale      = old.has_scale;
     rec.has_vbat       = 0;          // never existed in v1
+    rec.guard          = 0;          // nor did the guard
     rec.offset         = old.offset;
     rec.scale          = old.scale;
     rec.vbat           = 1.0f;
@@ -187,6 +215,7 @@ float load(Key k, float def, bool* from_store) {
       case Key::AirtimeOffsetS: has = rec.has_offset; val = rec.offset; break;
       case Key::HeightScale:    has = rec.has_scale;  val = rec.scale;  break;
       case Key::VbatScale:      has = rec.has_vbat;   val = rec.vbat;   break;
+      case Key::ProbeGuard:     has = 1;              val = rec.guard;  break;
     }
   }
   if (from_store) *from_store = has;
@@ -204,6 +233,7 @@ void save(Key k, float value) {
     case Key::AirtimeOffsetS: rec.offset = value; rec.has_offset = 1; break;
     case Key::HeightScale:    rec.scale  = value; rec.has_scale  = 1; break;
     case Key::VbatScale:      rec.vbat   = value; rec.has_vbat   = 1; break;
+    case Key::ProbeGuard:     rec.guard  = (value > 0.5f) ? 1 : 0;    break;
   }
   writeRecord(rec);
 }
@@ -215,6 +245,7 @@ void clear(Key k) {
     case Key::AirtimeOffsetS: rec.has_offset = 0; break;
     case Key::HeightScale:    rec.has_scale  = 0; break;
     case Key::VbatScale:      rec.has_vbat   = 0; break;
+    case Key::ProbeGuard:     rec.guard      = 0; break;
   }
   writeRecord(rec);
 }

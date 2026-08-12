@@ -118,9 +118,23 @@ def load_package(path):
 
 
 async def find(name, seconds=10.0):
-    return await BleakScanner.find_device_by_filter(
-        lambda d, adv: (adv.local_name or d.name or "").lower() == name.lower(),
-        timeout=seconds)
+    """Find by advertised name — optionally pinned to one device address.
+
+    OTADFU_ADDR (env, address prefix) restricts JumpHeight matches to that
+    CoreBluetooth address. Two pucks advertising the same name is now the
+    normal bench state, and on 2026-08-12 an unpinned trigger flashed the
+    WRONG board (and the post-flash "app is back" check was fooled by the
+    same collision). AdaDFU is never pinned — one board in the bootloader
+    at a time is a bench invariant.
+    """
+    want = os.environ.get("OTADFU_ADDR", "").upper()
+    def match(d, adv):
+        if (adv.local_name or d.name or "").lower() != name.lower():
+            return False
+        if want and name.lower() == "jumpheight":
+            return d.address.upper().startswith(want)
+        return True
+    return await BleakScanner.find_device_by_filter(match, timeout=seconds)
 
 
 async def trigger_app_dfu():
@@ -136,7 +150,7 @@ async def trigger_app_dfu():
     """
     import glob
     for attempt in range(3):
-        dev = await find("JumpHeight", 6.0)
+        dev = await find("JumpHeight", 15.0)
         if dev is None:
             return False
         got = asyncio.Event()
@@ -196,12 +210,12 @@ async def dfu(zip_path):
         print("*** BOOTLOADER+SOFTDEVICE UPDATE — do not interrupt power ***")
 
     # Step 1 — get the bootloader on the air (or find it already there).
-    boot = await find("AdaDFU", 5.0)
+    boot = await find("AdaDFU", 12.0)
     if boot is None:
         if not await trigger_app_dfu():
             sys.exit("neither AdaDFU nor JumpHeight is advertising — is the puck awake?")
         for _ in range(6):
-            boot = await find("AdaDFU", 5.0)
+            boot = await find("AdaDFU", 12.0)
             if boot:
                 break
     if boot is None:

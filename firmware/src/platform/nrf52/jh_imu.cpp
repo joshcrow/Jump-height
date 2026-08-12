@@ -60,6 +60,7 @@
 #include "platform/jh_imu.h"
 
 #include <Arduino.h>
+#include "platform/jh_persist.h"
 #include <Wire.h>
 
 #include "lsm6ds3_min.h"
@@ -153,11 +154,16 @@ static void busClear() {
 
 static bool s_wire_started = false;
 
-// Crash-loop detection state — .noinit: survives watchdog/soft resets,
-// garbage on true power-on (hence the magic).
-#define PROBE_MAGIC 0xB007C0DE
-__attribute__((section(".noinit"))) static uint32_t s_probe_magic;
-__attribute__((section(".noinit"))) static uint32_t s_probe_inflight;
+// Crash-loop detection state — GPREGRET2, the SoftDevice-managed retained
+// register (sibling of the DFU magic in GPREGRET). Survives watchdog and
+// soft resets, cleared by real power-on. Chosen over a .noinit section
+// after measurement: this core's linker scripts define no .noinit region,
+// so the attribute landed the flags in ordinary zero-initialised RAM and
+// the skip NEVER fired — two banners, two identical hangs, on the very
+// board the protection exists for. GPREGRET is the mechanism already
+// proven to survive resets on this hardware (the `dfu` command rides its
+// sibling), so the protection now stands on measured ground.
+static bool s_boot_probe_done = false;  // false only for the boot-time probe
 
 bool probe(uint8_t addr) {
   // Only the PRIMARY slot maps to this platform's (single, fixed-address)
@@ -196,19 +202,29 @@ bool probe(uint8_t addr) {
   // entirely: one ~3.5 s watchdog cost once, then a live, commandable
   // device with an honest `i2c FAIL` row every boot until the bus is
   // physically freed. The healthy path runs zero extra bus operations.
-  if (s_probe_magic == PROBE_MAGIC && s_probe_inflight) {
-    s_probe_inflight = 0;      // one skip per hang; retry on the next boot
-    return false;              // previous boot died inside this probe
+  // STICKY guard in internal flash (jh_persist) — the one store measured to
+  // survive both watchdog resets AND the bootloader's register sanitizing.
+  // Boot path (s_boot_probe_done false): a set guard means a previous boot
+  // died inside this probe — skip the sensor, stay alive, leave the guard
+  // SET so every boot skips until a human (or client) runs `selftest`,
+  // which comes through here again with s_boot_probe_done true and retries
+  // for real. Healthy path writes nothing (guard already clear).
+  const bool guard = jh_persist::load(jh_persist::Key::ProbeGuard, 0.0f) > 0.5f;
+  if (guard && !s_boot_probe_done) {
+    s_boot_probe_done = true;
+    return false;              // sticky skip; `selftest` is the retry path
   }
-  s_probe_magic = PROBE_MAGIC;
-  s_probe_inflight = 1;
+  s_boot_probe_done = true;
+  if (!guard) {
+    jh_persist::save(jh_persist::Key::ProbeGuard, 1.0f);
+  }
   if (!s_wire_started) {
     Wire1.begin();
     Wire1.setClock(400000);
     s_wire_started = true;
   }
   const bool found = Lsm6ds3Min::probe(Wire1, Lsm6ds3Min::I2C_ADDR);
-  s_probe_inflight = 0;
+  jh_persist::save(jh_persist::Key::ProbeGuard, 0.0f);  // survived: clear guard
   return found;
 }
 
