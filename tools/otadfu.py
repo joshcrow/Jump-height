@@ -218,6 +218,17 @@ async def dfu(zip_path):
             d = await find("AdaDFU", 5.0)
             if d:
                 return d
+            # A plain reset with a VALID app boots the APP, not the
+            # bootloader — that's a healthy outcome, not a failure. Re-enter
+            # DFU through the verified trigger and carry on.
+            if await find("JumpHeight", 4.0):
+                print("reset booted the (valid) app — re-entering DFU via trigger")
+                if not await trigger_app_dfu():
+                    continue
+                for _ in range(6):
+                    d = await find("AdaDFU", 5.0)
+                    if d:
+                        return d
         raise RuntimeError(
             "bootloader did not come back as AdaDFU — if USB is plugged in it "
             "reset into UF2/serial mode instead; recover with "
@@ -249,6 +260,19 @@ async def dfu(zip_path):
         async with BleakClient(dev, timeout=20.0,
                                disconnected_callback=on_disconnect) as c:
             await c.start_notify(DFU_CONTROL, on_notify)
+
+            # STATE HYGIENE (learned the hard way, twice): a bootloader that
+            # carries a previous session's byte count "completes" early — its
+            # receive-complete response (10 03 01) lands on a checkpoint read
+            # and the image is garbage. Probe 0x07 first: any nonzero count
+            # means a dirty session; refuse to stream into it.
+            await c.write_gatt_char(DFU_CONTROL, bytes([OP_REPORT_RECV_SIZE]), response=True)
+            r = await asyncio.wait_for(responses.get(), 10.0)
+            if len(r) >= 7 and r[0] == OP_RESPONSE and r[1] == OP_REPORT_RECV_SIZE:
+                have = struct.unpack("<I", r[3:7])[0]
+                if have != 0:
+                    raise RuntimeError(f"refused op 0x1: bootloader dirty ({have} residual bytes)")
+            # (a refusal or timeout here falls through to the normal error paths)
 
             # start(app) + image sizes (softdevice, bootloader, app)
             await c.write_gatt_char(DFU_CONTROL, bytes([OP_START_DFU, IMAGE_APPLICATION]), response=True)
