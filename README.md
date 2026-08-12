@@ -32,17 +32,19 @@ New here? **[BUILD.md](BUILD.md)** is the hardware runbook,
 | Piece | State |
 |---|---|
 | **Detection algorithm** | ✅ Proven in sim and on the bench. Shared C++ core, mirrored in Python. |
-| **The puck** — XIAO nRF52840 Sense | ✅ On silicon. Bring-up milestone S0 complete: two real QSPI bugs found and fixed on hardware, battery telemetry, soft power-off proven both directions. |
+| **The puck** — XIAO nRF52840 Sense | ✅ On silicon, second unit (sensor + gyro verified; the original became the bench mule after an IMU-bus fault — full story in [`docs/rca-sense-imu-2026-08-11.md`](docs/rca-sense-imu-2026-08-11.md)). Fully wireless firmware pipeline: OTA update gate passed twice back-to-back, bootloader itself upgraded over the air. |
 | **v1 prototype** — FireBeetle ESP32 | 🧊 **Feature-frozen**, bugfix-only (DECISIONS #27). Bench-validated, and still the rig booked for the first water day until the Sense passes the same gauntlet — then it retires to spare. |
 | **Browser app** | ✅ Live BLE stats, session sync, charts, in-browser flashing. |
 | **Garmin watch field** | 🟡 **Live on the wrist** (Epix Gen 2, 2026-08-11) — a real toss registered. Numbers are **not yet trustworthy**: see the open bug below. |
 | **Phase 2 — the water day** | 🌊 **Next.** Nothing here has been in the ocean yet. |
 
-**Open bug, stated plainly:** with a second BLE central connected, the watch
-displays values the puck never sent (a count of 64 when the device reported 1).
-Cause not yet found; two confident diagnoses were already wrong and are recorded
-as dead ends in [`garmin/FIRST_COMPILE.md`](garmin/FIRST_COMPILE.md). Don't trust
-numbers on the watch face until that closes.
+**Watch-numbers bug, root-caused:** Connect IQ negotiates the minimum BLE
+packet size, so jump lines fragment five ways and under-paced sending lost
+fragments — the watch then displayed values the puck never sent. Fixed on both
+ends (puck paces to the negotiated link; the watch rejects lines that fail
+protocol invariants instead of displaying them). On-wrist validation of the fix
+is the next watch session; the two confidently-wrong diagnoses along the way are
+kept as dead ends in [`garmin/FIRST_COMPILE.md`](garmin/FIRST_COMPILE.md).
 
 ---
 
