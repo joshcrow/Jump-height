@@ -90,11 +90,31 @@ DEFAULT_ZIP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
 
 
 def load_package(path):
-    """Pull app .bin + init .dat out of an adafruit-nrfutil package."""
+    """Pull image + init packet out of an adafruit-nrfutil package.
+
+    Returns (image, init_packet, kind, sizes) where kind is "app" or "sd_bl"
+    and sizes is the (sd, bl, app) triple for the start packet. Type-3
+    (softdevice_bootloader) support exists because this board's 0.6.1
+    bootloader REFUSES SD+BL over serial (start packet never ACKed — the fix
+    for that bug ships in the newer bootloader, a perfect catch-22) and this
+    Mac has never reliably enumerated the UF2 mass-storage drive
+    (SENSE_FIRST_BOOT #16). BLE is the transport that works, and it is the
+    same path nRF Connect uses for bootloader updates. Failure safety: SD+BL
+    stages dual-bank; the MBR swaps only a validated image, so a dead
+    transfer leaves the OLD bootloader running.
+    """
     with zipfile.ZipFile(path) as z:
-        manifest = json.loads(z.read("manifest.json"))
-        app = manifest["manifest"]["application"]
-        return z.read(app["bin_file"]), z.read(app["dat_file"])
+        manifest = json.loads(z.read("manifest.json"))["manifest"]
+        if "application" in manifest:
+            app = manifest["application"]
+            img = z.read(app["bin_file"])
+            return img, z.read(app["dat_file"]), "app", (0, 0, len(img))
+        if "softdevice_bootloader" in manifest:
+            sb = manifest["softdevice_bootloader"]
+            img = z.read(sb["bin_file"])
+            return (img, z.read(sb["dat_file"]), "sd_bl",
+                    (sb["sd_size"], sb["bl_size"], 0))
+        raise SystemExit("package has neither application nor softdevice_bootloader")
 
 
 async def find(name, seconds=10.0):
@@ -170,8 +190,10 @@ async def trigger_app_dfu():
 
 
 async def dfu(zip_path):
-    image, init_packet = load_package(zip_path)
-    print(f"package: {os.path.basename(zip_path)}  app image {len(image)} bytes")
+    image, init_packet, kind, sizes = load_package(zip_path)
+    print(f"package: {os.path.basename(zip_path)}  {kind} image {len(image)} bytes  sizes={sizes}")
+    if kind == "sd_bl":
+        print("*** BOOTLOADER+SOFTDEVICE UPDATE — do not interrupt power ***")
 
     # Step 1 — get the bootloader on the air (or find it already there).
     boot = await find("AdaDFU", 5.0)
@@ -275,10 +297,11 @@ async def dfu(zip_path):
             # (a refusal or timeout here falls through to the normal error paths)
 
             # start(app) + image sizes (softdevice, bootloader, app)
-            await c.write_gatt_char(DFU_CONTROL, bytes([OP_START_DFU, IMAGE_APPLICATION]), response=True)
-            await c.write_gatt_char(DFU_PACKET, struct.pack("<III", 0, 0, len(image)), response=False)
+            mode = IMAGE_APPLICATION if kind == "app" else 0x03  # SD+BL
+            await c.write_gatt_char(DFU_CONTROL, bytes([OP_START_DFU, mode]), response=True)
+            await c.write_gatt_char(DFU_PACKET, struct.pack("<III", *sizes), response=False)
             await expect(OP_START_DFU)
-            print("bootloader accepted image size")
+            print(f"bootloader accepted image size (mode {mode})")
 
             # init packet (the .dat: device/app ids + CRC)
             await c.write_gatt_char(DFU_CONTROL, bytes([OP_INITIALIZE, 0x00]), response=True)
@@ -314,7 +337,13 @@ async def dfu(zip_path):
                 await c.write_gatt_char(DFU_PACKET, image[off:off + CHUNK], response=False)
                 await asyncio.sleep(PACKET_GAP_S)
                 sent_bytes = min(off + CHUNK, len(image))  # final packet is partial
-                if sent_bytes >= next_ckpt or sent_bytes >= len(image):
+                # NO checkpoint at 100%: on the last byte the bootloader fires
+                # its receive-complete (10 03 01) immediately, and it lands
+                # exactly where a final 0x07 reply would be read — that race
+                # killed a bootloader update at 96.1%-verified. The
+                # receive-complete IS the completion check (it only arrives
+                # when every promised byte landed); CRC comes at VALIDATE.
+                if sent_bytes < len(image) and sent_bytes >= next_ckpt:
                     next_ckpt += CHECKPOINT_BYTES
                     await c.write_gatt_char(DFU_CONTROL, bytes([OP_REPORT_RECV_SIZE]), response=True)
                     r = await asyncio.wait_for(responses.get(), 10.0)
@@ -364,7 +393,18 @@ async def dfu(zip_path):
 
     print("activated — bootloader is flashing and rebooting")
 
-    # Step 3 — confirm the app came back.
+    # Step 3 — confirm what SHOULD come back, by package kind.
+    if kind == "sd_bl":
+        print("bootloader update staged — MBR swaps it on this reboot.")
+        for _ in range(10):
+            if await find("AdaDFU", 5.0):
+                print("new bootloader is up in DFU mode (app was invalidated — flash it next) ✅")
+                return
+            if await find("JumpHeight", 3.0):
+                print("app survived the bootloader swap ✅")
+                return
+        print("WARNING: nothing on the air yet — the MBR copy can take a moment; rescan before worrying")
+        return
     for _ in range(8):
         dev = await find("JumpHeight", 5.0)
         if dev:

@@ -376,5 +376,6 @@ void poll(void (*handle)(const String&)) {
 // and the host build has no radio at all. Answering false keeps main.cpp
 // platform-neutral; the command reports ERR and the device carries on.
 bool reboot_to_dfu() { return false; }
+bool reboot_to_uf2() { return false; }
 
 }  // namespace jh_link

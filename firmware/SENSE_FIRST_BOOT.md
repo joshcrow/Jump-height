@@ -584,6 +584,46 @@ Gate status: transfer loop **1 of 2 consecutive passes**; trigger
 reliability **open**; dark-state timeout characterization **open**
 (deferred — unsafe without USB attached); phone/nRF Connect run **open**.
 
+## 16c. BOOT HANG at the first I2C probe — OPEN, blocks everything, evidence below
+
+**Status 2026-08-11 ~23:30: the app boot-loops, dying inside the selftest's
+first I2C transaction** (`jh_imu::probe` — Arduino `Wire` has no timeout, so
+a held bus hangs forever; captured twice over serial as a banner that stops
+at `SELFTEST BEGIN`). Wedged boots were intermittent through the evening
+(healthy serial-flash boots at 19:52 and a healthy OTA boot at 20:33) and
+became persistent around 22:20.
+
+**Dead hypotheses, with the evidence that killed each:**
+1. *loop() early-return on sensor failure* — wrong: loop() polls commands
+   BEFORE the `!sensor_ok` return (main.cpp:711 vs :714).
+2. *IMU rail power-cycle fixes it* — a LOW pulse on P1.08 at init did not
+   change the outcome.
+3. *Back-powering through the bus pull-ups defeats the rail cycle* — driving
+   SDA/SCL low during a 150 ms rail-off window did not change the outcome
+   either. (Both changes are KEPT — they are correct hardening — they just
+   were not the cure.)
+
+**Standing facts:** the BLE task stays fully alive through the hang
+(advertising, connectable, and the BLEDfu control point works — used all
+night as a remote reboot). The battery means NO reset ever removes power
+from the sensor: every "power cycle" tonight was CPU-only. The gyro config
+writes (CTRL4_C/CTRL6_C/CTRL7_G, commit d504c54) are the newest code that
+touches this sensor and shipped the same day the wedge first appeared.
+
+**Morning plan, in order:**
+1. **Battery disconnect** (the box is open): a true cold start is the one
+   discriminator software cannot fake. Healthy after it ⇒ the sensor was
+   hardware-latched and the hunt moves to what latched it (prime suspect:
+   the new gyro config sequence). Still wedged ⇒ the fault is not
+   sensor-state and the map redraws.
+2. **Bounded probe, regardless of cause:** the boot path must never hang on
+   a dead bus. Give the first I2C touch a timeout (TWIM-level; Arduino
+   Wire won't do it) so a wedged sensor produces `SELFTEST i2c FAIL` and a
+   live, commandable device instead of a boot loop. This is the real
+   robustness fix and is independent of the root cause.
+3. Then re-run the OTA gate pair (transfer machinery is proven — three
+   complete flashes including the bootloader's own 0.6.1→0.11.0 update).
+
 ## 17. PDM microphone rail — never measured
 
 **File:** not touched by this port at all (deliberately: no PDM code

@@ -69,8 +69,27 @@ namespace jh_imu {
 static Lsm6ds3Min s_imu;
 
 void init() {
-  // Power the sensor rail, then let it settle before the bus is touched.
+  // POWER-CYCLE the sensor rail — not just power it. On a battery-fed board
+  // no reset ever removes power: a sensor that wedges its I2C bus (SDA held
+  // mid-transaction) stays wedged through every NVIC/DFU/watchdog reset,
+  // and every subsequent boot hangs at its first bus touch — observed
+  // 2026-08-11 as a boot loop dying at SELFTEST BEGIN, surviving reflashes
+  // all evening precisely because only the CPU was ever reset. P1.08 gates
+  // the sensor's rail (docs/sense.md §3.7), so a LOW pulse here is a true
+  // sensor power-on: bus state cleared, Ton clock restarted, every boot
+  // identical whether it followed a cold start, a crash, or an OTA jump.
   pinMode(PIN_LSM6DS3TR_C_POWER, OUTPUT);
+  digitalWrite(PIN_LSM6DS3TR_C_POWER, LOW);
+  // Back-power guard: with the rail low, the sensor can stay alive through
+  // its own SDA/SCL pins via the bus pull-ups (phantom power) and keep its
+  // wedged state through the whole "power cycle". Drive both bus lines LOW
+  // for the off-window so there is nothing left to feed it, then release
+  // them before Wire1 claims the pins.
+  pinMode(PIN_WIRE1_SDA, OUTPUT); digitalWrite(PIN_WIRE1_SDA, LOW);
+  pinMode(PIN_WIRE1_SCL, OUTPUT); digitalWrite(PIN_WIRE1_SCL, LOW);
+  delay(150);  // rail + bus held low: a true discharge, not a droop
+  pinMode(PIN_WIRE1_SDA, INPUT);
+  pinMode(PIN_WIRE1_SCL, INPUT);
   digitalWrite(PIN_LSM6DS3TR_C_POWER, HIGH);
   // Boot-settle margin (review-nrf52.md finding #5 / SENSE_FIRST_BOOT.md
   // item 7, now RESOLVED-BY-DATASHEET): the real LSM6DS3TR-C datasheet's

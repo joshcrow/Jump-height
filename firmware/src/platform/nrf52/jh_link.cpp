@@ -543,4 +543,12 @@ bool reboot_to_dfu() {
   return true;        // not reached
 }
 
+bool reboot_to_uf2() {
+  delay(50);
+  sd_power_gpregret_clr(0, 0xFF);
+  sd_power_gpregret_set(0, 0x57);   // DFU_MAGIC_UF2_RESET (wiring.c:27)
+  NVIC_SystemReset();
+  return true;  // not reached
+}
+
 }  // namespace jh_link

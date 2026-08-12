@@ -380,7 +380,7 @@ static bool runSelfTest() {
 
 // ---------------- Commands ----------------
 static void printHelp() {
-  emitLine("# commands: help | stats | jumps | trace | dump | clear | selftest | info | off | dfu");
+  emitLine("# commands: help | stats | jumps | trace | dump | clear | selftest | info | off | dfu | uf2");
   emitLine("#           set <airtime_offset_s|height_scale|vbat_scale> <value|default>");
   emitLine("#           vbatscan  (bench: battery ADC vs acquisition time)");
   emitLine("#           gyro      (bench: raw + bias-corrected rate, 2 s)");
@@ -561,6 +561,18 @@ static void handleCommand(const String& cmd) {
     delay(250);              // let USB CDC + BLE actually push those bytes
     if (!jh_link::reboot_to_dfu()) {
       emitLine("ERR dfu_unsupported this build has no OTA bootloader");
+    }
+    return;
+  } else if (cmd == "uf2") {
+    // Reboot into the bootloader's UF2 drive (MSC). Bench use: bootloader
+    // self-updates ship as update-*.uf2 and are MSC-only; the 1200-baud
+    // touch can't reach MSC (serial-only magic by design).
+    flushTrace();
+    emitLine("# rebooting to UF2 drive — copy update-*.uf2 there; reset to abort");
+    emitLine("OK uf2");
+    delay(250);
+    if (!jh_link::reboot_to_uf2()) {
+      emitLine("ERR uf2_unsupported this build has no UF2 bootloader");
     }
     return;
   } else if (cmd == "gyro") {

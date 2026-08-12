@@ -67,4 +67,11 @@ bool takeGreetPending();
 // platform-neutral and the seam answers for itself.
 bool reboot_to_dfu();
 
+// Reboot into the bootloader's UF2 mass-storage mode (the drag-drop drive).
+// Same contract as reboot_to_dfu(). Exists because the 1200-baud serial
+// touch enters SERIAL-ONLY DFU by design (DFU_MAGIC_SERIAL_ONLY_RESET) —
+// the UF2 drive is only offered under DFU_MAGIC_UF2_RESET, and bootloader
+// self-update packages (update-*.uf2) are MSC-only.
+bool reboot_to_uf2();
+
 }  // namespace jh_link
