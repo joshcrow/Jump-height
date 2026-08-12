@@ -126,6 +126,8 @@ class String {
 // (pollSerial(), a `while (Serial.available())` loop) runs unmodified.
 class HostSerial {
  public:
+  int availableForWrite() { return 4096; }  // host never backpressures
+
   void begin(unsigned long baud);
   int available();
   int read();

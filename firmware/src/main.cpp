@@ -139,7 +139,17 @@ static String cmd_buf;
 // loop()/setup() (never a link-implementation callback), so the BLE notify
 // path has no cross-task contention (see jh_link.h).
 static void emitBytes(const char* data, size_t len) {
-  Serial.write((const uint8_t*)data, len);
+  // BOUNDED serial write. The core's CDC write spins forever when a host
+  // holds DTR but stops draining (Adafruit_USBD_CDC.cpp write loop) — a
+  // wedged serial monitor on the Mac was enough to starve loop(), trip the
+  // watchdog, and (before watchdog_init moved first) strand the reboot in
+  // the unprotected window. Debug output is NEVER worth the device: if the
+  // host isn't draining, drop the serial copy and move on — BLE still
+  // carries every line, and a stalled bench terminal was not reading
+  // anyway.
+  if ((size_t)Serial.availableForWrite() >= len) {
+    Serial.write((const uint8_t*)data, len);
+  }
   jh_link::write(data, len);
 }
 static void emit(const char* s)     { emitBytes(s, strlen(s)); }
@@ -685,6 +695,7 @@ static void pollSerial() {
 
 // ---------------- Setup ----------------
 void setup() {
+  jh_link::watchdog_init();   // FIRST — no pre-watchdog hang window, ever
   Serial.begin(115200);
   delay(300);
   emitLine("# JumpHeight fw v" FW_VERSION);  // serial-only here: BLE isn't up yet

@@ -74,4 +74,14 @@ bool reboot_to_dfu();
 // self-update packages (update-*.uf2) are MSC-only.
 bool reboot_to_uf2();
 
+// Watchdog seam. ARM FIRST THING IN setup() — the 2026-08-12 dark-out hunt
+// found the fatal window: jh_imu::init()/jh_store::init() used to run
+// before the watchdog existed (it was armed inside begin()), so any hang
+// there was PERMANENT — USB enumerates, CDC silent, BLE never starts,
+// which is precisely the observed dark-board signature. Arming first
+// requires every long setup operation to feed (see jh_store's chunked
+// erase). No-ops on platforms without one.
+void watchdog_init();
+void watchdog_feed();
+
 }  // namespace jh_link

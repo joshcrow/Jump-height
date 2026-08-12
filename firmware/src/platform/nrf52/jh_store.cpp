@@ -533,6 +533,28 @@ void produceNextUnit() {
 }  // namespace
 
 // ------------------------------------------------------------------- init
+
+// Watchdog feed, forward-declared (not via jh_link.h, whose Arduino String
+// types break the host-side store test harness) and defined WEAK so the
+// host harness links without a jh_link at all; on device the strong
+// definition in jh_link.cpp wins.
+namespace jh_link { __attribute__((weak)) void watchdog_feed() {} }
+
+// Chip erase, chunked and watchdog-fed. A monolithic eraseChip() blocks for
+// up to a minute; with the watchdog now armed from the top of setup() (see
+// jh_link.h), any >3.5 s blocking call in the boot path is a reset. 4 KB
+// sector erases run ~40 ms each (same call clear() already uses) — feed
+// every few sectors.
+static bool eraseChipFed() {
+  const uint32_t sectors = s_flash.size() / 4096;
+  for (uint32_t sec = 0; sec < sectors; ++sec) {
+    if ((sec & 7) == 0) { jh_link::watchdog_feed(); }
+    if (!s_flash.eraseSector(sec)) return false;
+  }
+  jh_link::watchdog_feed();
+  return true;
+}
+
 bool init(void (*announce)(const char* line)) {
   static SPIFlash_Device_t s_devices[] = {P25Q16H};
   s_fs_ok = s_flash.begin(s_devices, 1);
@@ -576,7 +598,7 @@ bool init(void (*announce)(const char* line)) {
 
   if (!superblockValid()) {
     announce("# first boot: formatting storage — takes up to a minute, hang tight...");
-    const bool erased = s_flash.eraseChip();
+    const bool erased = eraseChipFed();
     const bool wrote   = erased && writeSuperblock();
     announce(wrote ? "# storage ready" : "# storage format failed");
     if (!wrote) { s_fs_ok = false; flashSleep(); return false; }
@@ -617,7 +639,7 @@ bool hard_format(void (*announce)(const char* line)) {
                              ? s_flash_total_bytes - s_trace_region_start
                              : 0;
   announce("# hard format: erasing chip (up to a minute)...");
-  const bool erased = s_flash.eraseChip();
+  const bool erased = eraseChipFed();
   const bool wrote  = erased && writeSuperblock();
   if (!wrote) {
     announce("# hard format: erase/superblock FAILED");

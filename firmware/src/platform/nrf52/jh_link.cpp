@@ -336,8 +336,11 @@ void wdtFeed() {
 
 }  // namespace
 
+void watchdog_init() { wdtInit(); }
+void watchdog_feed() { wdtFeed(); }
+
 bool begin(const char* name) {
-  wdtInit();  // see the file comment: begin()/pump() are the only two
+  wdtInit();  // idempotent-enough: TASKS_START on a running WDT is a no-op  // see the file comment: begin()/pump() are the only two
              // main.cpp call sites available to hook this from, since
              // main.cpp itself is unchanged.
 

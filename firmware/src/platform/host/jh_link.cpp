@@ -32,5 +32,7 @@ bool takeGreetPending() { return false; }
 // platform-neutral; the command reports ERR and the device carries on.
 bool reboot_to_dfu() { return false; }
 bool reboot_to_uf2() { return false; }
+void watchdog_init() {}
+void watchdog_feed() {}
 
 }  // namespace jh_link
