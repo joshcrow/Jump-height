@@ -640,6 +640,38 @@ touches this sensor and shipped the same day the wedge first appeared.
 3. Then re-run the OTA gate pair (transfer machinery is proven — three
    complete flashes including the bootloader's own 0.6.1→0.11.0 update).
 
+## 16d. Gyro-crash-hunt results (2026-08-12) — five fixed, one deferred, core exonerated
+
+An 18-agent adversarial hunt (sanitizers over 2.16M-sample streams,
+line review, independent repro harnesses) for the new board's dark-out.
+**The C++ gyro core was exonerated for crash/hang/deadlock** — every loop
+provably bounded, 12 h EMA and 40 h float-time soaks clean. The dark-out
+itself was the platform chain (CDC spin -> WDT -> pre-watchdog boot window),
+fixed in afba536. The hunt's OTHER confirmed findings, all repro'd before
+fixing and pinned as harness tests (gyro_bias_harness.cpp):
+
+- **Railed gyro + armed lever = detector livelock + calibration corruption**
+  -> three guards: gyro_bias rail guard (>=1900 dps never enters the EMA),
+  lever_arm kGyroClipGuardDps, correct_for_spin passes raw through when
+  rot_g exceeds the accel's own full scale (never manufacture free-fall).
+- **Lever commit skipped on gyro-absent landings** -> transition tracking
+  hoisted; commit on validated jumps only; discard() (pending-only, the
+  converged value survives) on every other AIRBORNE exit. This also kills
+  the "rejected flights still commit" corruption path.
+- **Bias EMA seeded from a moving first sample** -> seed only from samples
+  plausibly a bias (<20 dps; ZRL spec is +-10).
+- **`gyro` bench command starves the WDT** (2.05 s of delay(100)) -> feeds
+  per iteration.
+
+**DEFERRED, on the record:** the 200 Hz sample path still reads the IMU
+through Wire, whose event waits are unbounded — a mid-session bus wedge is
+a WDT reset (now survivable: watchdog-first boot + sticky probe guard turn
+it into one reset + sensor-off-until-selftest, not a boot loop). The clean
+fix is a vendored bounded-TWIM mini-driver (twim_min.h, per the DECISIONS
+#13 minimal-driver precedent) with a micros() deadline on every wait.
+Do this before the water day; it is the last unbounded wait on the boot or
+sample path.
+
 ## 17. PDM microphone rail — never measured
 
 **File:** not touched by this port at all (deliberately: no PDM code

@@ -633,6 +633,8 @@ static void handleCommand(const String& cmd) {
     } else {
       emitLine("# gyro: 20 samples @ 10 Hz — hold still, then rotate the board");
       for (int i = 0; i < 20; ++i) {
+        jh_link::watchdog_feed();  // 20x delay(100) inside a command starves
+                                    // the ~3.5s WDT with zero margin otherwise
         if (!jh_imu::read_gyro_dps(gx, gy, gz)) { emitLine("# read failed"); break; }
         const float raw_mag = sqrtf(gx * gx + gy * gy + gz * gz);
         // Report BOTH raw and bias-corrected: the pair is what shows whether
@@ -810,6 +812,13 @@ void loop() {
   // every call by design (esp32/jh_imu.cpp), and counting that would turn a
   // deliberate capability difference into a fault indication.
   if (!have_gyro && gyro_present) gyro_fail_count++;
+  // Transition tracking is hoisted OUT of the have_gyro branch (2026-08-12
+  // gyro-crash-hunt, confirmed by repro): a flight whose LANDING sample hits
+  // a transient gyro read failure used to exit AIRBORNE through the
+  // accel-only branch, skip commit entirely, and leave up to 64 stale
+  // observations pending — which then merged into the NEXT flight's median
+  // and walked spin_lever_m to a blend no real flight would produce.
+  const bool was_airborne = detector.state() == jump::State::AIRBORNE;
   bool jumped;
   if (have_gyro) {
     const bool riding = detector.state() == jump::State::RIDING;
@@ -819,18 +828,24 @@ void loop() {
     // fall, so `mag` — the RAW, uncorrected magnitude — IS the rotation's own
     // omega^2*r term, and r falls out of it. Feeding the raw value is essential:
     // the corrected one would be circular.
-    const bool was_airborne = detector.state() == jump::State::AIRBORNE;
     if (was_airborne) lever_arm.observe(mag, omega_dps);
 
     jumped = detector.update(t, mag, omega_dps, ev);
-
-    // Flight over (jump or reject — a rejected flight still carries perfectly
-    // good rotation data). Fold in this flight's estimate for the NEXT jump.
-    if (was_airborne && detector.state() != jump::State::AIRBORNE) {
-      if (lever_arm.commit()) detector.set_spin_lever_m(lever_arm.value());
-    }
   } else {
     jumped = detector.update(t, mag, ev);
+  }
+  // Flight over. The old rule — "a rejected flight still carries perfectly
+  // good rotation data" — was the ROOT of a confirmed calibration-corruption
+  // path: phantom flights (max-airtime rejects manufactured by a railed gyro)
+  // are all rejects, and committing them walked a converged lever arm off by
+  // ~50x in minutes. Commit ONLY flights that ended in a validated jump;
+  // every other AIRBORNE exit discards its observations.
+  if (was_airborne && detector.state() != jump::State::AIRBORNE) {
+    if (jumped) {
+      if (lever_arm.commit()) detector.set_spin_lever_m(lever_arm.value());
+    } else {
+      lever_arm.discard();
+    }
   }
   if (jumped) {
     session_jumps++;

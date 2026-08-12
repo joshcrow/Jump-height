@@ -47,14 +47,37 @@ class GyroBias {
   // when the board is NOT airborne — pass detector.state() == State::RIDING.
   // Returns the bias-corrected angular rate MAGNITUDE in deg/s, which is
   // what jump_detector.h's gyro-aware update() wants.
+  // Full-scale rail guard (2026-08-12 gyro-crash-hunt, confirmed by repro):
+  // a railed axis (|reading| pinned at the ±2000 dps full scale) is a FLOOR,
+  // not a rate — feeding it to the EMA poisons the baseline to hundreds of
+  // dps with a ~50-minute recovery tau, leaving the corrector deaf to real
+  // spins long after the rail ends. Mirrors lever_arm.h's kClipGuardG
+  // reasoning, opposite sensor. 0.95x of ±2000 dps.
+  static constexpr float kRailGuardDps = 1900.0f;
+
+  // Seed plausibility (same hunt, separate confirmed path): the FIRST riding
+  // sample used to seed the EMA verbatim — seed while carving and the
+  // "bias" starts at a real rotation rate, corrupting every correction
+  // until the EMA slowly forgets it. A bias is spec'd at +-10 dps (ZRL);
+  // only samples that could plausibly BE a bias may seed.
+  static constexpr float kSeedMaxDps = 20.0f;
+
   float update(float gx, float gy, float gz, bool riding) {
-    if (riding) {
+    const bool railed = fabsf(gx) >= kRailGuardDps || fabsf(gy) >= kRailGuardDps ||
+                        fabsf(gz) >= kRailGuardDps;
+    if (riding && !railed) {
       if (!seeded_) {
         // Seed on the first riding sample rather than crawling up from zero:
         // an EMA started at 0 would spend seconds pretending the bias is
         // small, which is exactly the window a first jump lands in.
-        bx_ = gx; by_ = gy; bz_ = gz;
-        seeded_ = true;
+        if (fabsf(gx) < kSeedMaxDps && fabsf(gy) < kSeedMaxDps &&
+            fabsf(gz) < kSeedMaxDps) {
+          bx_ = gx; by_ = gy; bz_ = gz;
+          seeded_ = true;
+        }
+        // Not plausibly a bias (board was moving): stay unseeded, correct
+        // with zero bias — safe, since an unseeded correction is identity-
+        // shaped and spin_lever_m starts at 0 anyway.
       } else {
         bx_ += alpha_ * (gx - bx_);
         by_ += alpha_ * (gy - by_);

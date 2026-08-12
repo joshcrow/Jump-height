@@ -66,6 +66,13 @@ CHECKS = [
     "spin_still_reads_true_after_long_flight",
     "single_axis_bias_fully_removed",
     "documents_uncorrected_bias_cost_pct",
+    # pinned from the 2026-08-12 gyro-crash-hunt (each confirmed by repro
+    # before the guard existed; see the harness comments for mechanisms)
+    "railed_samples_never_poison_baseline",
+    "moving_first_sample_must_not_seed",
+    "seed_happens_on_first_plausible_quiet_sample",
+    "railed_omega_passes_raw_through_instead_of_freefall",
+    "legitimate_spin_correction_still_applies",
 ]
 
 

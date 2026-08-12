@@ -114,12 +114,17 @@ class LeverArm {
   //
   // If the accel range ever changes, this must change with it.
   static constexpr float kClipGuardG = 15.5f;
+  // Gyro-side twin of kClipGuardG (2026-08-12 hunt): a railed omega makes r
+  // read catastrophically LOW — the direction that collapses a converged
+  // lever. Same argument, opposite sensor.
+  static constexpr float kGyroClipGuardDps = 1900.0f;
 
   // Feed one sample taken while AIRBORNE.
   //   accel_mag_g_raw : UNCORRECTED accelerometer magnitude, in g
   //   gyro_mag_dps    : bias-corrected angular rate magnitude, in deg/s
   void observe(float accel_mag_g_raw, float gyro_mag_dps) {
     if (gyro_mag_dps < kMinDps) return;
+    if (gyro_mag_dps >= kGyroClipGuardDps) return;  // railed omega: r reads low
     if (accel_mag_g_raw >= kClipGuardG) return;  // railed: a floor, not a reading
     const float w = gyro_mag_dps * 0.017453292519943295f;  // rad/s
     const float r = (accel_mag_g_raw * kG) / (w * w);
@@ -177,6 +182,12 @@ class LeverArm {
 
   // For a re-mount: throw away what was learned about the old position.
   void reset() { has_ = false; value_ = 0.0f; n_ = 0; }
+
+  // Drop PENDING observations only — the converged value_ survives. This is
+  // what a non-jump AIRBORNE exit calls: the flight's samples are suspect
+  // (phantom flights are all rejects), but a calibration already earned from
+  // real landed jumps must not die with them.
+  void discard() { n_ = 0; }
 
  private:
   float dps_[kSlots] = {0};

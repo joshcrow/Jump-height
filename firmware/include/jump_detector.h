@@ -110,6 +110,15 @@ class Detector {
     if (spin_lever_m <= 0.0f) return accel_mag_g;  // correction off
     const float w_rad_s = gyro_mag_dps * 0.017453292519943295f;  // pi/180
     const float rot_g   = (w_rad_s * w_rad_s * spin_lever_m) / g;
+    // Uncorrectable-sample guard (2026-08-12 gyro-crash-hunt, confirmed by
+    // repro): if the centripetal term exceeds anything the +-16 g accel can
+    // even read, this sample cannot be corrected — subtracting it just
+    // MANUFACTURES free-fall. A railed gyro with the lever armed used to
+    // pin the detector in a CANDIDATE->AIRBORNE->reject livelock this way,
+    // erase real landing spikes, and fabricate jumps once the lever
+    // collapsed. Pass the raw magnitude through instead: wrong-but-bounded
+    // beats confidently zero.
+    if (rot_g > 16.0f) return accel_mag_g;
     const float sq      = accel_mag_g * accel_mag_g - rot_g * rot_g;
     return sq > 0.0f ? sqrtf(sq) : 0.0f;
   }

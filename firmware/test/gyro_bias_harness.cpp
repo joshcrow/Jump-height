@@ -19,6 +19,7 @@
 #include <cstdio>
 
 #include "gyro_bias.h"
+#include "jump_detector.h"
 
 static int g_fails = 0;
 
@@ -83,6 +84,45 @@ int main() {
     check(err_pct > 4.0f && err_pct < 6.0f, "documents_uncorrected_bias_cost_pct");
     std::printf("# uncorrected %.0f dps bias at %.0f dps true rate = %.1f%% "
                 "error in the omega^2 term\n", b, w_true, err_pct);
+  }
+
+  // ----- pinned from the 2026-08-12 gyro-crash-hunt (confirmed by repro) -----
+
+  // Rail guard: a railed axis must NOT enter the EMA. Before the guard, five
+  // minutes of a railed gyro poisoned the baseline to hundreds of dps with a
+  // ~50-minute recovery tau.
+  {
+    jump::GyroBias gb;
+    for (int i = 0; i < 1000; ++i) gb.update(1.0f, 2.0f, 3.0f, true);  // converge
+    for (int i = 0; i < 60000; ++i) gb.update(2000.0f, 2000.0f, 2000.0f, true);  // rail 5min
+    const float m = gb.update(1.0f, 2.0f, 3.0f, true);  // back to quiet
+    check(std::fabs(m) < 1.0f, "railed_samples_never_poison_baseline");
+  }
+
+  // Seed plausibility: the first riding sample used to seed verbatim — seed
+  // while carving (say 250 dps) and every correction afterward is wrong.
+  {
+    jump::GyroBias gb;
+    gb.update(250.0f, 0.0f, 0.0f, true);       // moving at first ride sample
+    const float m = gb.update(250.0f, 0.0f, 0.0f, true);
+    check(std::fabs(m - 250.0f) < 1.0f, "moving_first_sample_must_not_seed");
+    for (int i = 0; i < 100; ++i) gb.update(5.0f, -3.0f, 2.0f, true);  // quiet later
+    const float m2 = gb.update(5.0f, -3.0f, 2.0f, true);
+    check(std::fabs(m2) < 1.0f, "seed_happens_on_first_plausible_quiet_sample");
+  }
+
+  // Uncorrectable-sample guard in the detector's spin correction: a rot_g
+  // beyond the accel's full scale must pass the raw magnitude through, not
+  // manufacture free-fall. (This is the exact mechanism of the livelock.)
+  {
+    const float raw = 1.0f;   // resting board
+    const float corrected = jump::Detector::correct_for_spin(
+        raw, 3464.0f /* all-axes rail magnitude */, 0.157f, 9.80665f);
+    check(std::fabs(corrected - raw) < 1e-6f,
+          "railed_omega_passes_raw_through_instead_of_freefall");
+    // and a legitimate correction still works:
+    const float ok = jump::Detector::correct_for_spin(1.2f, 400.0f, 0.157f, 9.80665f);
+    check(ok > 0.0f && ok < 1.2f, "legitimate_spin_correction_still_applies");
   }
 
   std::printf(g_fails ? "RESULT: FAIL\n" : "RESULT: PASS\n");
