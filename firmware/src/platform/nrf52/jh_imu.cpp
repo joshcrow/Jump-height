@@ -105,14 +105,104 @@ void init() {
   // "worked in practice" to keep holding as that ordering shifts.
   delay(40);
 
-  Wire1.begin();
-  Wire1.setClock(400000);
+  // Wire1 is deliberately NOT started here anymore: probe() starts it only
+  // after the bit-banged health check proves the bus alive. Starting it
+  // against a wedged bus arms the unbounded spins for whoever touches it
+  // first.
 }
+
+// ---- bounded first contact ------------------------------------------------
+//
+// The core's Wire_nRF52.cpp spins on `while(!EVENTS_...)` with NO timeout —
+// a held bus hangs the caller forever. That is exactly how a wedged sensor
+// turned into an unbootable device on 2026-08-11: the selftest's first probe
+// never returned, and the watchdog turned the hang into a boot loop
+// (SENSE_FIRST_BOOT 16c). The rule this section enforces: Wire NEVER touches
+// a bus that has not first been proven alive by construction-bounded code.
+//
+// Everything here is bit-banged GPIO at ~50 kHz with explicit loop bounds:
+// it cannot hang, only fail. Sequence: health check (both lines high?) →
+// if not, the standard 9-SCL-pulse bus-clear + STOP, re-check → bounded
+// ACK probe of the device address. Only after an ACK does Wire1 get the pins.
+
+static inline void sdaHigh() { pinMode(PIN_WIRE1_SDA, INPUT_PULLUP); }
+static inline void sdaLow()  { pinMode(PIN_WIRE1_SDA, OUTPUT); digitalWrite(PIN_WIRE1_SDA, LOW); }
+static inline void sclHigh() { pinMode(PIN_WIRE1_SCL, INPUT_PULLUP); }
+static inline void sclLow()  { pinMode(PIN_WIRE1_SCL, OUTPUT); digitalWrite(PIN_WIRE1_SCL, LOW); }
+static inline int  sdaRead() { return digitalRead(PIN_WIRE1_SDA); }
+static inline int  sclRead() { return digitalRead(PIN_WIRE1_SCL); }
+static const uint32_t BB_HALF_US = 10;  // ~50 kHz; sensor supports 400 kHz
+
+static bool busIdleHigh() {
+  sdaHigh(); sclHigh(); delayMicroseconds(BB_HALF_US);
+  return sdaRead() && sclRead();
+}
+
+// Standard bus-clear: up to 9 clock pulses lets a slave stuck mid-byte shift
+// out whatever it thinks it still owes, then a STOP releases the bus.
+static void busClear() {
+  sdaHigh();
+  for (int i = 0; i < 9 && !sdaRead(); ++i) {
+    sclLow();  delayMicroseconds(BB_HALF_US);
+    sclHigh(); delayMicroseconds(BB_HALF_US);
+  }
+  // STOP: SDA low->high while SCL high
+  sdaLow();  delayMicroseconds(BB_HALF_US);
+  sclHigh(); delayMicroseconds(BB_HALF_US);
+  sdaHigh(); delayMicroseconds(BB_HALF_US);
+}
+
+// Bounded ACK probe: START, 8 address bits (write), read ACK, STOP. Every
+// step is a fixed number of GPIO operations — no loops on peripheral state.
+static bool bitbangProbe(uint8_t addr7) {
+  if (!busIdleHigh()) return false;
+  // START
+  sdaLow(); delayMicroseconds(BB_HALF_US);
+  sclLow(); delayMicroseconds(BB_HALF_US);
+  const uint8_t byte = (uint8_t)(addr7 << 1);  // write bit 0
+  for (int i = 7; i >= 0; --i) {
+    if ((byte >> i) & 1) sdaHigh(); else sdaLow();
+    delayMicroseconds(BB_HALF_US);
+    sclHigh(); delayMicroseconds(BB_HALF_US);
+    sclLow();  delayMicroseconds(BB_HALF_US);
+  }
+  // ACK bit: release SDA, clock once, sample (LOW = ACK)
+  sdaHigh(); delayMicroseconds(BB_HALF_US);
+  sclHigh(); delayMicroseconds(BB_HALF_US);
+  const bool acked = (sdaRead() == 0);
+  sclLow();  delayMicroseconds(BB_HALF_US);
+  // STOP
+  sdaLow();  delayMicroseconds(BB_HALF_US);
+  sclHigh(); delayMicroseconds(BB_HALF_US);
+  sdaHigh(); delayMicroseconds(BB_HALF_US);
+  return acked;
+}
+
+static bool s_wire_started = false;
 
 bool probe(uint8_t addr) {
   // Only the PRIMARY slot maps to this platform's (single, fixed-address)
   // IMU — see the file comment above.
   if (addr != ADDR_PRIMARY) return false;
+
+  // Bounded first contact (see block comment above). One recovery attempt:
+  // a held bus gets the 9-pulse clear, then one more chance.
+  if (!busIdleHigh()) {
+    busClear();
+    if (!busIdleHigh()) return false;   // bus wedged: FAIL FAST, stay bootable
+  }
+  if (!bitbangProbe(Lsm6ds3Min::I2C_ADDR)) {
+    busClear();
+    if (!bitbangProbe(Lsm6ds3Min::I2C_ADDR)) return false;
+  }
+
+  // Bus proven alive end-to-end — NOW it is safe to hand it to Wire, whose
+  // unbounded spins only bite on a dead bus.
+  if (!s_wire_started) {
+    Wire1.begin();
+    Wire1.setClock(400000);
+    s_wire_started = true;
+  }
   return Lsm6ds3Min::probe(Wire1, Lsm6ds3Min::I2C_ADDR);
 }
 
