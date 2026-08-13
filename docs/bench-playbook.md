@@ -128,6 +128,11 @@ after first flash is expected, not a swap.
 
 ## 6b. Electrical safety rules (2026-08-13 — how we never cook hardware again)
 
+> The full standing plan — mechanism, shipped code defenses, the meter
+> decision tree, and the unseal gate for the sealed spare board — lives in
+> [hardware-protection.md](hardware-protection.md). This section is the
+> five rules; that document is the law they come from.
+
 1. **No MCU line into a peripheral's power domain may be energized while
    that domain is down.** Power-up: float bus → rail up → settle (regulator
    3 ms + device Ton 35 ms) → attach. Power-down: detach (Wire1.end()) →
