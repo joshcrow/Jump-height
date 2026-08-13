@@ -156,3 +156,167 @@ What this document buys now: the next time a power feature is needed
 (and "the watch can't find the puck" or "battery died in the bag"
 WILL come up), the answer is designed, sequenced, and safe — instead
 of another single-evening command with an unexamined rail edge.
+
+---
+
+# Research addendum (2026-08-13): motion-wake reliability, observability, charging — with sources
+
+Six web researchers (4-agent focused workflow + deep dives on
+displays and solar/primary cells) ran against the owner's challenge:
+"motion wake would be slick if bulletproof and infuriating if not;
+charging is also under-designed." Findings below; full sourced
+reports in the session archive.
+
+## 7. Is motion wake actually reliable? YES — with three named engineering conditions
+
+**The owner's fear is validated by direct prior art.** Garmin's
+Running Dynamics Pod is the purest motion-wake-only product (coin
+cell, no button, "give it a good shake") — and its forums document
+the exact nightmare: pod asleep, watch still believes it's paired,
+silent no-data run. WOO (our market) has the opposite failure:
+manual button arming, documented missed sessions from forgetting to
+press it, and users who don't trust its LED. Both extremes fail.
+Nobody in the category ships motion wake + a trustworthy wrist-side
+armed indicator. We already own the wrist.
+
+**Condition 1 — use the right interrupt, on the right register map.**
+Datasheet-grade traps found:
+- ST's AN4650 register map is WRONG for our exact part: the
+  LSM6DS3TR-C moved/expanded the activity-inactivity enable
+  (INACT_EN[1:0] in TAP_CFG 0x58); following the app note literally
+  configures the wrong register.
+- The activity/inactivity interrupt CANNOT be latched — it pulses
+  for exactly 1/ODR and deasserts (ST engineer, confirmed forum
+  answer). A slow host misses it, period. The WAKE-UP interrupt CAN
+  latch (LIR=1 in TAP_CFG; cleared by reading WAKE_UP_SRC). Use the
+  wake-up path for MCU wake, never the inactivity pulse.
+- Threshold LSB = FS/64: at ±2g that's 31.25 mg steps; configuring
+  ±16g for shock tolerance silently coarsens wake sensitivity to
+  250 mg steps. Wake config and session config are different FS
+  regimes — reconfigure on each transition.
+- Latency floor ≈ 2 sample periods: 160 ms at 12.5 Hz. Fine — board
+  handling lasts seconds.
+- No amplitude hysteresis exists; threshold near the 2-3 mg noise
+  floor chatters. Set ≥2 LSB + WAKE_DUR ≥ 1.
+
+**Condition 2 — belt and braces.** One unresolved field report of
+spurious/missed wake behavior exists in this register family, so the
+interrupt is primary, not sole: an RTC-tick backstop (every 2-5 min:
+poll the accel, variance check, re-sleep) converts "missed interrupt"
+from a lost session into minutes of delay. Both paths are µA-cheap.
+
+**Condition 3 — asymmetric thresholds.** A false wake costs ~10 min
+of idle current (then re-sleep); a missed wake costs a session. So
+bias sensitive: wake on car-loading-grade motion, re-sleep only
+after genuinely long stillness.
+
+**The numbers (datasheet + measured-report grade):**
+| Item | Current |
+|---|---|
+| LSM6DS3TR-C accel low-power @12.5 Hz (wake engine on) | 9 µA |
+| nRF52840 System OFF + GPIO-DETECT wake (XIAO measured) | 2.4 µA |
+| nRF52840 System ON idle + RTC (RAM retained) | 3.2-5.4 µA |
+| BLE advertising @2 s, 0 dBm (derived from Nordic's formula) | ~9-10 µA |
+| LiPo self-discharge equivalent (~2%/mo, folklore-grade) | ~7 µA |
+
+Two standby flavors, both months-long on 250 mAh:
+- **Dark standby** (System OFF + INT1 wake): ~11 µA electronics —
+  ~1.6 years — but invisible to the watch until motion.
+- **Visible standby** (System ON + slow advertising): ~25 µA —
+  ~10 months — the watch sees the puck (and its battery) at rest.
+Since any handling wakes the puck instantly, dark standby is
+acceptable: the puck is visible whenever a human is near it. Pick
+after measuring real board standby (§9 bench items).
+
+## 8. The observability answer (the actual fix for "standing on the beach unsure")
+
+**Put battery % and armed-state in the BLE advertisement payload
+itself.** The watch/phone then shows "puck ✓ 78%" WITHOUT a
+connection, the moment the puck advertises. Cost: zero hardware,
+trivial firmware. This single change converts "is it on?" from faith
+into a glance — it is the cheapest, highest-leverage finding of the
+whole research pass.
+
+The full feedback ladder:
+1. Watch datafield shows puck presence + battery from the
+   advertisement (no connection needed).
+2. Recovery affordance is caveman-proof: shake it, glance again
+   (~seconds).
+3. In SESSION, an LED heartbeat blink through the potting (mA-class
+   but session-only) gives a no-watch confirmation.
+4. Every state transition announces on the protocol (`STATE ...`),
+   so bench and apps never see a silent disappearance.
+
+**Zero-power state displays: researched and REJECTED for a potted
+puck.** E-paper holds an image at zero power but is 1 mm glass,
+0-50 °C, UV-sensitive, moisture-sensitive, and every vendor warns
+against pressure/encapsulation — no prior art exists for potting
+one, and all real waterproof e-ink products use air-gap housings
+with windows. Sharp Memory LCD needs continuous VCOM toggling (not
+zero-power) and its own app note bans epoxy amine hardeners near the
+polarizer. Flip-discs are truly zero-power but mechanical.
+Electrochromic segments need a refresh every ~2 min and degrade in
+UV. The one potting-compatible zero-power readout is NFC (flat coil,
+no window): a phone tap reads state with the puck fully asleep —
+and NFC field detect is also a System OFF WAKE source on the
+nRF52840 (tap-to-wake). The XIAO exposes NFC antenna pads; needs
+only a coil. Flagged as a v1.5 option, unverified through salt
+water/potting thickness.
+
+## 9. Charging and energy strategy
+
+**The biggest lever is firmware, not chemistry.** Session current
+today is ~4 mA (200 Hz reads + live BLE streaming) ≈ 8 mAh/session
+→ ~31 sessions per charge. The LSM6DS3TR-C has an on-chip FIFO:
+buffer samples, wake the MCU every 1-2 s instead of every 5 ms, and
+upload at session end (the Garmin-speed-sensor/TPMS playbook) →
+~0.5 mA session ≈ 8× the sessions per charge, before touching any
+battery question. This also collapses charging-UX pressure from
+weekly toward monthly. (Live watch display needs only the JUMP
+lines, not the 200 Hz stream — the protocol already separates them.)
+
+**Dock (destination product): WOO already ran our experiment.**
+WOO 3.0 shipped exposed charging contacts → documented salt
+corrosion complaints; WOO 4.0's fix is a magnetic wireless dock
+marketed on waterproof integrity. Industry default for salt gear is
+magnetic pogo (hard cobalt-gold ≥0.5 µm over nickel, recessed,
+ideally power-gated pads) — and Garmin still collects corroded-pin
+reports. Qi-receiver-in-potted-salt-puck is an undocumented niche:
+BQ51013B-class RX ($2.4) feeds a charger IC exactly like USB VBUS
+(so charger-wake works unchanged; debounce the slower Qi power-up),
+but it needs carrier-board hardware. Verdict: current puck keeps
+gasketed USB + fresh-water rinse discipline; the sealed destination
+product wants the WOO-4.0-style inductive dock.
+
+**Solar: measured verdict — real physics, wrong problem.** A
+25×25 mm cell in real conditions harvests ~40-80 mWh/day in good
+sun (whole session ≈ 30 mWh; standby ≈ 1.6 mWh/day), so it CAN
+cover standby forever and even net-positive a sunny session. But it
+does nothing for the actual failure mode (a dark gear bag is 0 lux),
+feeding it into our BQ25101 hits real snags (10.8 h safety-timer
+fault, 6.5 V OVP ceiling, a hardware charge LED that would eat
+20-30% of the harvest), and it demands an optical window over
+250 µm silicon in the one product whose virtue is being a monolithic
+sealed lump. REJECTED for this hardware; noted for a future carrier
+board only as the AEM10941 topology (solar + LiPo + automatic
+primary-cell backstop — the only architecture found that
+structurally guarantees "always answers").
+
+**Primary cells: checked and rejected for this duty cycle.** At
+today's 4 mA sessions a CR2032 lasts ~6 weeks, CR2477 ~5 months —
+fantasy as products. AFTER the FIFO firmware change, a CR2477 shape
+would genuinely run 3-4 years sealed — a real v2 option, but it
+forfeits recharging entirely and our LiPo+dock path is better suited
+to the session pattern. Kept as a documented alternative, not the
+plan.
+
+**Bench items this research adds** (all measure-first, §6b rules):
+- Measure real XIAO standby in both flavors (System OFF + INT1 wake;
+  System ON + slow adv). Community: 2.4 µA / 5.4 µA board-level; our
+  board must be confirmed (P0.14 divider state matters, ~2.3 µA).
+- Measure off-current with StoreGuard set: a forum report shows
+  `sd_power_system_off` failing to reach low power when QSPI flash
+  was never initialized — our guarded boot skips flash init; verify
+  the off path still sleeps the QSPI chip (ties to item 25).
+- Verify LSM6DS3TR-C part marking (TR-C vs older DS3: 9 µA vs 24 µA
+  low-power — changes every budget above).
