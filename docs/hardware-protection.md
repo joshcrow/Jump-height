@@ -66,28 +66,53 @@ Our two exposures, both fixed:
    (currently: the mule).
 5. **Batch flashes**; seven-flash evenings are where mistakes compound.
 
-## 4. The meter session (next physical step)
+## 4. The meter session — SUPERSEDED by the software meter (2026-08-13)
 
-Protocol and interpretation table: SENSE_FIRST_BOOT §16g. Outcomes:
+The owner ruled out a multimeter session, so the rail question was
+answered in software instead: `railcheck` (branch `mule-railcheck`,
+SENSE_FIRST_BOOT §16h) uses the module's own rail-powered I2C pull-ups
+against weak internal pull-downs as the rail indicator, reads the EN
+level back through the pin's own input buffer, and validates its method
+against a known-good pin (P0.14) on the same board.
+
+Mule verdict: `en=1 pin=0` — the EN net itself is stuck at ground. The
+"rail ~0 V" outcome below, plus one level more specific: the fault is at
+P1.08 or the net it drives, upstream of everything the original table
+could distinguish.
+
+Original interpretation table (kept for the Puck, still unmeasured):
 - 6D rail ~0 V → sensor likely healthy, rail path damaged → bodge-wire
   recovery path, no new module needed.
 - 6D rail ~3.3 V → die damaged → module replacement, onto FIXED firmware
   only, after the §5 gate passes.
 - Mule 3V3 low → one board-level fault explains its IMU AND its QSPI.
 
-## 5. The unseal gate (the sealed spare board)
+## 5. The unseal gate — OVERRIDDEN by the owner 2026-08-13; executing as a verify-each-step ladder on board #3
 
-The spare Sense stays sealed until ALL of:
-1. The meter session has produced a mechanism verdict (§4).
-2. The off/sleep/wake cycle has been soaked on a board with a WORKING
-   sensor: ≥20 `off`→wake cycles with `selftest` PASS after every wake.
-   (Requires either a recovered sensor or the replacement module on the
-   mule-as-carrier first.)
-3. The revive/selftest path has passed on a healthy sensor ≥5
-   consecutive times (the bounded driver's healthy path has never run on
-   silicon — it is proven on the held-bus path only).
-4. The quarantine rule (§3.3) is in effect: the spare's first flash is
-   the audited build that passed 1–3, and nothing else.
+The owner unsealed and plugged in the final spare (board #3) before the
+gate could complete — the gate's soak requirement was circular anyway
+(it needed a working sensor, and the only candidate working sensor IS
+the spare). Replacement discipline, as executed:
+1. Mechanism verdict: delivered by the software meter (§4) — the mule's
+   fault is a hard EN-net-to-ground fault; the back-feed exposures in
+   firmware were found and fixed independently (§2).
+2. Pre-flash audit: a 10-agent adversarial review of the exact build
+   before first flash (SENSE_FIRST_BOOT §16h) — no damage-capable
+   defect; three real blockers fixed BEFORE flashing, including a
+   cold-boot selftest artifact that would have painted the healthy
+   board dead on arrival.
+3. Quarantine held: board #3's first flash is clean main (`dca2985`),
+   never the railcheck branch or any experimental electrical code.
+4. The soak now runs ON board #3, re-ordered so every step verifies
+   before the next risk is taken:
+   a. `selftest` ×5 — no rail transitions at all; proves the bounded
+      driver's healthy path on silicon.
+   b. `revive` ×5 — one audited rail cycle per step, sensor verdict
+      after EACH; stop at the first anomaly.
+   c. `off`→wake ×5 tonight, ≥20 lifetime — the System OFF transition,
+      selftest after every wake.
+   Any FAIL stops the ladder immediately; no retry-and-hope on the
+   final board.
 
 ## 6. Standing verifications (added to the bench list)
 

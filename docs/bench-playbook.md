@@ -94,6 +94,15 @@ after first flash is expected, not a swap.
 - **The 1200-baud touch is an app feature.** Bootloaders and hung apps don't
   implement it. Bootloader UF2 (MSC) mode is entered by magic `0x57` (`uf2`
   command) — the 1200-touch enters *serial-only* DFU by design.
+- **The touch that actually works from a shell is `stty -f /dev/cu.usbmodemX
+  1200`** (2026-08-13, board #3's factory app): pyserial open-at-1200 +
+  DTR-toggle variants did nothing, stty reset the board instantly. And after
+  ANY reset into the bootloader, expect the Allow gate above if the Mac has
+  never seen that board's bootloader identity — the app and bootloader count
+  as different accessories.
+- **USB port numbers are not stable across sessions** — the boards SWAPPED
+  `/dev/cu.usbmodem` numbers on 2026-08-13. Before any flash or destructive
+  command, map port→board via `ioreg` USB serial numbers, never by habit.
 - **uhubctl doesn't work on the current hub.** A PPPS-capable hub (~$30)
   would make bench power fully software-controlled and retire half of this
   file's "ask a human to replug" cases.
