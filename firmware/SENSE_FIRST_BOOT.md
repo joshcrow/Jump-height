@@ -754,6 +754,38 @@ Implement only AFTER the power-cycle experiment confirms the mechanism,
 and verify the pulses with a scope or a second board, not with the code
 under test.
 
+### 16f VERDICT, same night: THE FALSIFIERS FIRED. Clamp theory dead.
+
+The experiment ran within the hour (owner replugged both boards):
+
+- **Puck, true cold start (no battery — replug IS power removal):
+  `selftest` still hangs → WDT, 5/5.** Prediction 1 FAILED.
+- **Archaeology control (the doctrine's control arm): `a6e477d` — the
+  binary that read this same sensor at 0.970 g two days ago — BOOT-LOOPS
+  on the Puck** (port re-enumerates every ~4 s, the boot-selftest-hang
+  watchdog cycle; commands never answered; flashed back off it after).
+  The current firmware is EXONERATED for the hang itself; the bus is
+  genuinely held, cold, under any firmware. The Puck now presents
+  IDENTICALLY to the mule.
+- **Mule `mount` still hangs after the power-out** — but this arm is
+  UNSCORED until the owner confirms the battery pigtail itself was
+  unclipped (a USB-only unplug is a no-op on a battery-backed board,
+  playbook §4). If confirmed unclipped: the wedged-mode theory is dead
+  too and the mule's QSPI joins the genuinely-sick list.
+
+**What stands after the fire:** two boards, days apart, each losing its
+IMU bus permanently (and surviving cold starts) with radio/MCU/flash
+healthy. That resurrects the original RCA's environmental candidates —
+now with a COMMON-MODE question attached (same bench, same hub, same
+kapton-and-tape workflow, same firmware lineage). One noted correlation,
+mechanism unknown, kept honest: the Puck ran the probe-era builds
+(bit-bang + rail power-cycling — the code that "browned out healthy
+sensors") during the 08-12 falsifier session, and was dead within ~a day;
+but the MULE's death PREDATES that code entirely, so it cannot be the
+whole story. **Next instrument is a meter, not code** (playbook §7):
+sensor rail voltage + SDA/SCL levels on both boards, powered. Software
+has nothing left to say about this bus.
+
 ## 17. PDM microphone rail — never measured
 
 **File:** not touched by this port at all (deliberately: no PDM code

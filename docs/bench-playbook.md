@@ -137,21 +137,29 @@ Settled 2026-08-12 evening:
   stacked on the pre-hardening build's unbounded CDC emit; with the prompt
   answered and the hardened build flashed, the board is up and commandable.
 
+Scored the same night (2026-08-12, late) — **the falsifiers fired**:
+1. ~~Puck sensor returns after USB-out cold start~~ **FAILED** — still
+   hangs→WDT 5/5 truly cold, AND the archaeology control (`a6e477d`, which
+   read this sensor at 0.970 g two days prior) boot-loops on it. Bus
+   genuinely held under any firmware. Clamp theory dead. (SENSE_FIRST_BOOT
+   16f verdict has the full table.)
+2. ~~Mule `mount` succeeds after battery-unclip~~ **FAILED but UNSCORED**
+   until the owner confirms the pigtail itself was unclipped — a USB-only
+   unplug is a no-op on a battery-backed board (§4).
+3. Mule sensor return — moot with #1 dead; superseded below.
+
 Open:
-1. **The Puck's sensor returns after a ~10 s USB-out cold start** —
-   its `i2c FAIL no_device` is a slave clamping the bus since yesterday's
-   mid-transaction death, powered continuously ever since. Check:
-   `selftest` ×5 all `i2c PASS` after replug. If it still FAILs on truly
-   cold silicon, the clamp theory is wrong and the CURRENT firmware's
-   first-contact is under the lamp (that would be a reproducible
-   sensor-killer, a different and bigger story).
-2. **The mule's `mount` succeeds after battery-unclip + USB-out** (its
-   P25Q16H's wedged mode has survived on battery power). Then STATS
-   reveals whether the 61-jump history ever actually got reformatted —
-   "wiped" was never established. `mount` is safe to repeat: it never
-   formats; a hang just costs one WDT reset and re-latches the guard.
-3. **The mule's sensor MAY return after that same battery-out** — same
-   clamp signature as the Puck. Every prior "cold start" verification ran
-   through the false-negative probes, and the a6e477d hang reproductions
-   came with the battery back in. If it returns: mule fully exonerated,
-   board registry rewrite. If not: meter on the rail (the original #3).
+1. **Meter, not code** — software has nothing left to say about either
+   IMU bus. On BOTH boards, powered: sensor rail voltage, SDA and SCL
+   levels. ~0 V rail = real power-path fault; 3.3 V rail with clamped
+   lines = die-level clamp; 3.3 V and high lines = the mystery reopens
+   with the one instrument that can't false-negative.
+2. **Common-mode question** on record: two IMU buses dead days apart,
+   same bench, same hub, same kapton workflow, same firmware lineage.
+   Noted correlation, mechanism unknown, not the whole story (the mule
+   died BEFORE the probe-era rail-cycling code existed): the Puck ran
+   probe-era builds during the 08-12 falsifier session and was dead
+   within a day.
+3. Mule battery-unclip experiment still worth one clean run (if it wasn't
+   truly unclipped): `mount` verdict on the 61-jump history stands or
+   falls there.
