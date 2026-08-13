@@ -303,6 +303,24 @@ static bool runSelfTest() {
 
   // 2. Does the accelerometer read ~1 g sitting still?
   if (imu_up) {
+    // Wait out the accelerometer's FIRST conversion before sampling stats.
+    // begin() wrote CTRL1_XL (power-down exit) moments ago; with BDU set,
+    // the output registers hold their reset 0x0000 until the first
+    // conversion lands (>= 1/ODR plus turn-on). One all-zero triple folded
+    // into N=100 otherwise-clean samples puts sd at ~0.0995 — past the
+    // 0.08 FAIL line — so a HEALTHY cold-booted sensor printed "noise
+    // FAIL" deterministically (audit 2026-08-13; the archive's odd boot
+    // rows 0.960 g/0.0966 are exactly the on-command 0.970 g plus one zero
+    // sample). An exact 0/0/0 triple is unphysical for live silicon at
+    // rest (gravity), so first-non-zero is a safe readiness gate; the loop
+    // is bounded so a genuinely zero-stuck part still reaches the stats
+    // below and fails there honestly.
+    for (int i = 0; i < 30; ++i) {
+      float ax, ay, az;
+      if (jh_imu::read_accel_g(ax, ay, az) &&
+          (ax != 0.0f || ay != 0.0f || az != 0.0f)) break;
+      delay(5);
+    }
     float sum = 0, sumsq = 0;
     int   good = 0;
     const int N = 100;
