@@ -139,13 +139,16 @@ the screen.
 
 ## 6. Where this sits in the roadmap
 
-NOT before calibration. The holistic read stands: the device has
-never been checked against physics; drop calibration and one labeled
-water session outrank every capability, this one included. The
-sequence:
+NOT before the water milestone. Correction to an earlier framing:
+drop calibration HAPPENED (a6e477d, airtime_offset_s = +0.0257
+measured on silicon, on-device and in params.json — the owner went
+ham drop-testing before the watch campaign). What has still never
+happened is a labeled WATER session. The sequence:
 
-1. Board #3 proven (soak ladder) — in progress.
-2. Drop calibration + labeled water session — the real milestones.
+1. Board #3 proven (soak ladder) — in progress. Re-run the drop
+   ritual on it once healthy: the 0.0257 offset was measured on
+   board #1 and is assumed transferable, not proven per-unit.
+2. One labeled water session — the remaining real milestone.
 3. THEN the STANDBY tier, built to §5's rules, measured as built
    (items 25/25c on the way through).
 
