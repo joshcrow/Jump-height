@@ -390,7 +390,7 @@ static bool runSelfTest() {
 
 // ---------------- Commands ----------------
 static void printHelp() {
-  emitLine("# commands: help | stats | jumps | trace | dump | clear | selftest | info | off | dfu | uf2 | fakejump | mount | format");
+  emitLine("# commands: help | stats | jumps | trace | dump | clear | selftest | revive | info | off | dfu | uf2 | fakejump | mount | format");
   emitLine("#           set <airtime_offset_s|height_scale|vbat_scale> <value|default>");
   emitLine("#           vbatscan  (bench: battery ADC vs acquisition time)");
   emitLine("#           gyro      (bench: raw + bias-corrected rate, 2 s)");
@@ -469,6 +469,17 @@ static void handleCommand(const String& cmd) {
   } else if (cmd == "selftest") {
     runSelfTest();
     emitLine("OK selftest");
+  } else if (cmd == "revive") {
+    // Clean sensor power-cycle (16g sequencing) then a full retry — the
+    // recovery for power-up-corrupted-but-undamaged silicon. Bench command;
+    // safe to repeat, ~0.7 s of deliberate delays inside.
+    if (!jh_imu::revive()) {
+      emitLine("ERR revive_unsupported no sensor rail on this platform");
+    } else {
+      emitLine("# rail cycled clean (bus floated first) — retrying selftest");
+      runSelfTest();
+      emitLine("OK revive");
+    }
   } else if (cmd.startsWith("set ")) {
     // set <airtime_offset_s|height_scale> <value|default> — runtime
     // calibration, persisted to NVS. Ranges are sanity rails, not tuning.

@@ -165,6 +165,29 @@ static bool s_wire_started = false;
 // sibling), so the protection now stands on measured ground.
 static bool s_boot_probe_done = false;  // false only for the boot-time probe
 
+bool revive() {
+  // Clean sensor power-cycle — the sequencing the removed 2026-08-11 rail
+  // cycle got wrong (16g): it cut the rail with TWIM + pull-ups energized,
+  // back-driving the sensor through its bus pins during the LOW — the very
+  // corruption it was trying to clear. Order here: release TWIM, float
+  // every MCU line into the sensor domain, THEN drop the rail (regulator
+  // EN via P1.08 — a logic input, no inrush path through the GPIO), long
+  // discharge, rail up, regulator start (3 ms) + sensor Ton (35 ms) with
+  // margin before anyone touches the bus.
+  Wire1.end();
+  s_wire_started = false;
+  pinMode(PIN_WIRE1_SDA, INPUT);   // no pull — truly floating
+  pinMode(PIN_WIRE1_SCL, INPUT);
+  pinMode(PIN_LSM6DS3TR_C_INT1, INPUT);
+  delay(2);
+  pinMode(PIN_LSM6DS3TR_C_POWER, OUTPUT);
+  digitalWrite(PIN_LSM6DS3TR_C_POWER, LOW);
+  delay(600);
+  digitalWrite(PIN_LSM6DS3TR_C_POWER, HIGH);
+  delay(45);
+  return true;
+}
+
 bool probe(uint8_t addr) {
   // Only the PRIMARY slot maps to this platform's (single, fixed-address)
   // IMU — see the file comment above.

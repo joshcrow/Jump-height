@@ -54,3 +54,5 @@ bool read_gyro_dps(float&, float&, float&) {
 }
 
 }  // namespace jh_imu
+
+bool jh_imu::revive() { return false; }  // no sensor rail control on this platform

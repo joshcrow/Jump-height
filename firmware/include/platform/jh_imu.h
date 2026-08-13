@@ -37,6 +37,14 @@ static const uint8_t ADDR_SECONDARY = 0x69;
 // Bring up the sensor bus. Call once from setup(), before probe()/begin().
 void init();
 
+// Clean sensor power-cycle, where the platform has rail control (Sense:
+// P1.08-enabled regulator). Sequencing per SENSE_FIRST_BOOT 16g: bus lines
+// floated FIRST (energized lines while the rail is down back-drive the
+// sensor and corrupt its power-up — the documented failure the 2026-08-11
+// rail cycle caused), long discharge, rail up, full settle. Returns false
+// on platforms with no rail to cycle. Follow with probe()/begin().
+bool revive();
+
 // True if a sensor ACKs at this I2C address. Safe to call repeatedly — the
 // `selftest` command re-probes on demand, exactly like today.
 bool probe(uint8_t addr);
