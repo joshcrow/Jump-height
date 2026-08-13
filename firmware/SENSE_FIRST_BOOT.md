@@ -841,6 +841,100 @@ weakened from proven to probable, pending the meter.
 If the chip locations aren't obvious in the morning: photo → I'll mark
 the probe points on it.
 
+## 16h. The software meter (railcheck) — mule verdict IN: the EN line itself is dead. 2026-08-13 morning.
+
+Owner's directive: no multimeter session; a third, final board plugged
+in; "take care of this problem once and for all." The meter question
+("is the 6D rail coming up?") got answered in software instead.
+
+**The instrument** — `railcheck` (mule-only branch `mule-railcheck`):
+detach the bus (audited `bus_release()`), put weak internal PULL-DOWNS
+on SDA/SCL, then step EN (P1.08) high/low/high. The module's own 4.7 k
+I2C pull-ups hang off the SAME switched rail as the sensor, so against
+a pull-down, a line reading HIGH can only mean "rail up". Pull-DOWNS
+sink toward ground — they cannot back-feed an unpowered die (the 16g
+hazard is pull-UPS into a dead rail), so the instrument is safe by
+construction. v2 added EN READBACK: the pin's own input buffer is
+connected while driving, so the row reports the actual level ON the
+pin, not the level we asked for. v3 added a method control: the same
+readback on P0.14 (battery-divider EN, proven working by every vbat
+read).
+
+**Mule results** (after the owner's full battery+USB unplug, so this is
+a true cold state):
+- selftest: still `i2c FAIL no_device` — full power removal did NOT
+  recover it. The volatile-latch theory is dead.
+- `revive` (clean 600 ms rail cycle): still no_device.
+- railcheck v1: `en=1 sda=0 scl=0` ×3 — rail never rises.
+- railcheck v2: `en=1 pin=0` ×3 — **the MCU drives P1.08 HIGH and the
+  pin itself stays LOW.** The EN net is stuck at ground.
+
+**Verdict:** the mule's fault is a hard board-level electrical fault on
+the sensor-power path — P1.08 pin driver damaged, or the net it drives
+shorted low (a die latched/fused into a short across its own supply
+would do exactly this, and jh_imu.cpp's own RCA notes say P1.08 sources
+the rail from a standard-drive GPIO). No firmware, reflash, power
+cycle, or ritual can bring this sensor back; recovery is physical
+(bodge wire from 3V3 with a series resistor, or module replacement).
+Every "held bus" observation on the mule is explained: an UNPOWERED die
+clamps SDA/SCL through its ESD structures. The die itself may even be
+healthy — it has simply never been powered since the fault.
+
+Consistency check: this is the meter table's "rail ~0 V" outcome, the
+one the decision tree called the good-news branch for the die and the
+bad-news branch for the board.
+
+**Second opinion scored (owner forwarded a Gemini answer):** its fix #1
+(drive PIN_LSM6DS3TR_C_POWER HIGH + settle before bus traffic) has been
+in our firmware from the start (jh_imu::init, 40 ms) — and the mule's
+pin=0 readback refutes its claim that this failure class is always a
+temporary software-state lockup: EN cannot rise regardless of software.
+Its #2 (library/BSP mismatch) is n/a — our register-level driver read
+0.970 g on healthy silicon. Its #3 (polling faster than ODR "crashes
+the bus") is not a real electrical mechanism; bounded transactions
+(16d) make any bus stall a 2 ms timeout regardless. Useful frame
+retained: most community "dead IMU" reports ARE the software power-pin
+miss, which is why the optimistic consensus exists. Ours measured past
+it.
+
+**Pre-flash audit before board #3 (10-agent adversarial workflow):** no
+damage-capable defect found in HEAD; bootloader confirmed hands-off
+P1.08 (Adafruit_nRF52_Bootloader board config); no permanent-damage
+reports found in the wild for this failure (datasheet only says
+exceeding I2C-pin voltage vs VDD "may cause permanent damage" — a
+stress rating, no recovery path documented). Three real blockers found
+and fixed before anything was flashed:
+1. Working-tree contamination — railcheck (experimental electrical
+   code) would have shipped to the one-shot board. Board #3's build is
+   clean main (`dca2985`); railcheck stays on the mule branch.
+2. railcheck left the bus detached with `sensor_ok` stale-true —
+   silent sample loss until the next selftest. Fixed: railcheck now
+   ends with a full selftest, like revive.
+3. **Cold-boot selftest read the accel before its first conversion**
+   (output regs still 0x0000 under BDU) — ONE zero triple in the
+   N=100 stats = sd 0.0995 = guaranteed `noise FAIL` on a healthy
+   cold-booted sensor. The archive's own odd boot rows (0.960 g /
+   0.0966 vs on-command 0.970 g / 0.0010) are exactly this artifact —
+   the model reproduces them to three decimals. Board #3 would have
+   looked dead on arrival. Fixed on main (`dca2985`): bounded
+   discard-until-nonzero before the stats loop.
+
+Advisories logged for follow-up (not damage-capable, audit 2026-08-13):
+INT1 input buffer left connected through sleep; no WDT feed inside
+runSelfTest/revive; ProbeGuard writes flash twice per healthy probe
+despite its "writes nothing" comment; TwimBounded begin() writes PSEL
+without forcing ENABLE off first; Lsm6ds3Min::begin() issues no
+SW_RESET (warm reboots inherit stale register state); pinMode(OUTPUT)
+momentarily drives EN low before digitalWrite(HIGH) on a cold boot.
+
+**Board #3 (USB SN 8C7E817A759445ED):** factory app ignores the
+pyserial 1200-touch; `stty -f <port> 1200` is what actually reset it to
+bootloader. It then vanished from USB: ioreg shows the device present
+but `!registered, !matched` — the macOS accessory-approval gate
+(playbook §4) blocking the bootloader's NEW identity. Waiting on a
+human Allow click; the bootloader idles with the sensor rail untouched,
+which the audit confirmed is safe indefinitely.
+
 ## 17. PDM microphone rail — never measured
 
 **File:** not touched by this port at all (deliberately: no PDM code
