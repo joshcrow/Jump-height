@@ -42,6 +42,7 @@
 // SPDX-License-Identifier: MIT
 
 #include <Arduino.h>
+#include <Wire.h>     // Wire1.end() — release TWIM before cutting the 6D rail
 #include <nrf_soc.h>  // sd_power_system_off — the SoftDevice is up
                       // (Bluefruit), so the sd_ call is mandatory; the
                       // raw register write below is only the fallback.
@@ -235,8 +236,27 @@ bool system_off() {
   // already parked off (vbat_mv() always re-disables it), and the QSPI
   // flash sits in deep power-down between operations (jh_store's
   // wake/sleep bracketing) — nothing else needs telling.
-  pinMode(15, OUTPUT);
-  digitalWrite(15, LOW);
+  // RELEASE THE BUS BEFORE CUTTING THE RAIL (2026-08-13, the night the
+  // second sensor died). Nordic DevZone, on this exact module: SDA/SCL
+  // energized while the 6D rail is down BACK-DRIVE the sensor die through
+  // its ESD structures and corrupt its power-up sequencing. The original
+  // sequence here cut the rail with Wire1's TWIM still owning the pins —
+  // and System OFF RETAINS pin state, so the sensor spent every sleep
+  // being phantom-fed through its bus pins. `off` was exercised on the
+  // mule the day before its sensor stopped ACKing; suspected contributor
+  // (SENSE_FIRST_BOOT 16f web-findings addendum). Order now: bus pins to
+  // input-no-pull FIRST, settle, then rail down. Wire_nRF52.cpp begin()
+  // sets GPIO_PIN_CNF_PULL_Pullup on both lines (measured in the core
+  // source, lines 56/62) — the MCU's own pull-ups, alive regardless of the
+  // 6D rail — and TWIM's PSEL owns the pins until the peripheral is
+  // disabled, so end() must come before the pinMode()s can take effect.
+  Wire1.end();
+  pinMode(PIN_WIRE1_SDA, INPUT);   // no pull — line truly floats
+  pinMode(PIN_WIRE1_SCL, INPUT);
+  pinMode(PIN_LSM6DS3TR_C_INT1, INPUT);
+  delay(1);
+  pinMode(PIN_LSM6DS3TR_C_POWER, OUTPUT);
+  digitalWrite(PIN_LSM6DS3TR_C_POWER, LOW);
   delay(5);
 
   // Wake sources after this line: USB/VBUS attach or the reset button —

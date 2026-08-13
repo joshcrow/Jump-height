@@ -150,10 +150,12 @@ Scored the same night (2026-08-12, late) — **the falsifiers fired**:
 
 Open:
 1. **Meter, not code** — software has nothing left to say about either
-   IMU bus. On BOTH boards, powered: sensor rail voltage, SDA and SCL
-   levels. ~0 V rail = real power-path fault; 3.3 V rail with clamped
-   lines = die-level clamp; 3.3 V and high lines = the mystery reopens
-   with the one instrument that can't false-negative.
+   IMU bus. Full 2-minute protocol + interpretation table:
+   SENSE_FIRST_BOOT **16g** (written after the overnight web findings:
+   the 6D rail powers the sensor AND its pull-ups via a P1.08-enabled
+   regulator; bus-energized-while-rail-down back-feed is a documented
+   sensor-corrupter on this module, and our `off` path did it for hours
+   per sleep — fixed in code, unflashed pending the meter).
 2. **Common-mode question** on record: two IMU buses dead days apart,
    same bench, same hub, same kapton workflow, same firmware lineage.
    Noted correlation, mechanism unknown, not the whole story (the mule

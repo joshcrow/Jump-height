@@ -786,6 +786,61 @@ whole story. **Next instrument is a meter, not code** (playbook §7):
 sensor rail voltage + SDA/SCL levels on both boards, powered. Software
 has nothing left to say about this bus.
 
+## 16g. Web findings (2026-08-13, overnight): the back-feed mechanism is DOCUMENTED for this module; off-path fix shipped; meter protocol
+
+Owner's directive: "reach out to the web for anyone else suffering this."
+Findings, most important first:
+
+**1. Nordic DevZone (Zephyr LSM6DS3 bring-up on this exact board):**
+P1.08 does not feed the sensor directly — it ENABLES a small fixed
+regulator whose output (6D_PWR) powers BOTH the sensor's VDD AND the
+on-module I2C pull-up resistors (Zephyr devicetree models it as a
+regulator with `startup-delay-us = 3000`). The documented hazard, quoted
+in substance: the pull-up source voltage **must be 0 V before P1.08
+rises**; SDA/SCL energized while the 6D rail is down **back-drive the
+sensor through its pins and corrupt its internal power-up sequencing.**
+A sensor in that state does not ACK — indistinguishable from dead
+silicon from the bus side.
+
+**2. Our firmware commits exactly that hazard, sustained, in `off`:**
+`system_off()` cut the rail with Wire1's TWIM still owning SDA/SCL — and
+Wire_nRF52.cpp's begin() enables the nRF's own **internal pull-ups**
+(GPIO_PIN_CNF_PULL_Pullup, core source lines 56/62), powered from the
+MCU domain, alive regardless of the 6D rail. System OFF **retains** pin
+state. Net effect: every soft-off left the sensor unpowered with both
+bus lines held at 3.3 V for the entire sleep — hours of back-feed
+through the die's protection structures. `off` was proven "both
+directions" on the mule (54fa232, web Power-off button a3e4889) the day
+before its sensor stopped ACKing. The Puck's exposure was different but
+same family: the (since-removed) hard rail LOW→HIGH power-cycle code ran
+on it during the 08-12 falsifier session — discharging the rail into an
+energized bus is the same back-feed, transient edition.
+
+**FIX SHIPPED (unflashed — bench frozen until the meter):** system_off()
+now does `Wire1.end()` → SDA/SCL/INT1 to input-no-pull → settle → rail
+LOW → System OFF. Builds clean; full sim suite passes.
+
+**3. The archaeology control was CONTAMINATED (16f verdict amended):**
+tonight's cold start was followed by the CURRENT build's first contact;
+`a6e477d` was flashed afterward over a warm reset only. If any current
+boot re-corrupts the power-up, every later observation is poisoned. The
+clean version of that experiment (cold start DIRECTLY into a6e477d) has
+not been run. 16f's "held under any firmware" claim is therefore
+weakened from proven to probable, pending the meter.
+
+### Morning meter protocol (2 minutes/board; black probe on a GND pad)
+
+| # | Measure | Reading | Meaning |
+|---|---|---|---|
+| 0 | 3V3 castellated pad | ~3.3 V | sanity; on the MULE, if LOW → one answer explains BOTH its dead buses (QSPI + IMU) — board-level power fault |
+| 1 | Across the small capacitor next to the LSM6DS3TR-C (the small ~3×2.5 mm chip, NOT under the big shield) = the 6D rail | ~3.3 V | power path fine → the die itself is stressed/damaged (back-feed history above). Module replacement path — but ONLY after the fixed firmware is what a new module ever meets. |
+| | | ~0 V | **sensor probably healthy** — the rail path is the casualty (P1.08 driver or regulator). Recoverable: bodge 3V3→rail, or repoint firmware at a spare GPIO wired to the regulator EN. |
+| 2 | (if #1 read 0 V) P1.08 / regulator EN side, board powered, app booted | ~3.3 V | pin drives, regulator dead → bodge or module swap |
+| | | ~0 V | pin driver blown or firmware not driving — I'll add a `railtest` command to toggle it on demand before concluding |
+
+If the chip locations aren't obvious in the morning: photo → I'll mark
+the probe points on it.
+
 ## 17. PDM microphone rail — never measured
 
 **File:** not touched by this port at all (deliberately: no PDM code
