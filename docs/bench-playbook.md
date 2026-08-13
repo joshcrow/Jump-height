@@ -126,6 +126,26 @@ after first flash is expected, not a swap.
 - **Migrations never discard.** jh_persist v1→v2→v3 pattern: a shorter valid
   record is old, not corrupt.
 
+## 6b. Electrical safety rules (2026-08-13 — how we never cook hardware again)
+
+1. **No MCU line into a peripheral's power domain may be energized while
+   that domain is down.** Power-up: float bus → rail up → settle (regulator
+   3 ms + device Ton 35 ms) → attach. Power-down: detach (Wire1.end()) →
+   float lines → rail down. Both sequences exist in code now (jh_imu::revive,
+   jh_power::system_off) — new code copies them, never improvises.
+2. **Any code that touches a power/rail/bus pin gets a datasheet-or-web
+   sequencing check BEFORE silicon.** The off-path back-feed was documented
+   on Nordic DevZone the whole time; ten minutes of searching would have
+   prevented it.
+3. **New-board quarantine: a fresh board meets only the current audited
+   build.** Never experimental electrical code. The spare Sense stays
+   SEALED until the damage mechanism is confirmed fixed and a sacrificial
+   board has survived the off/sleep/wake cycle repeatedly.
+4. **Electrical experiments run on the designated sacrificial board only**
+   (currently: the mule).
+5. **One flash per session where possible; batch changes.** Seven-flash
+   evenings are where sequencing mistakes compound.
+
 ## 7. Standing predictions (check on next bench contact)
 
 Settled 2026-08-12 evening:
