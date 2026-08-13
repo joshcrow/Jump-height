@@ -60,6 +60,7 @@
 #include "platform/jh_imu.h"
 
 #include <Arduino.h>
+#include <nrf_gpio.h>  // railcheck's EN readback (input buffer + drive at once)
 #include "platform/jh_persist.h"
 
 #include "lsm6ds3_min.h"
@@ -167,6 +168,52 @@ void bus_release() {
   s_bus.end();
   s_wire_started = false;
   pinMode(PIN_LSM6DS3TR_C_INT1, INPUT);  // no pull — truly floating
+}
+
+int railcheck(RailcheckStep out[3]) {
+  // The software meter — contract and safety argument in jh_imu.h. Detach
+  // first via the ONE audited detach, then the only things touching the
+  // sensor domain are the EN logic input and internal pull-DOWNs (which
+  // sink toward GND — they cannot back-feed an unpowered die; the 16g
+  // hazard is specifically pull-UPs into a dead rail).
+  bus_release();
+  pinMode(PIN_WIRE1_SDA, INPUT_PULLDOWN);
+  pinMode(PIN_WIRE1_SCL, INPUT_PULLDOWN);
+  // EN as output WITH its input buffer connected (plain pinMode(OUTPUT)
+  // disconnects it): the readback below sees the actual level ON the pin,
+  // so a dead pin driver or an EN net shorted low shows up as pin != en.
+  const uint32_t en_nrf = g_ADigitalPinMap[PIN_LSM6DS3TR_C_POWER];
+  nrf_gpio_cfg(en_nrf, NRF_GPIO_PIN_DIR_OUTPUT, NRF_GPIO_PIN_INPUT_CONNECT,
+               NRF_GPIO_PIN_NOPULL, NRF_GPIO_PIN_S0S1, NRF_GPIO_PIN_NOSENSE);
+  const uint8_t en_seq[3] = {1, 0, 1};
+  for (int i = 0; i < 3; ++i) {
+    digitalWrite(PIN_LSM6DS3TR_C_POWER, en_seq[i] ? HIGH : LOW);
+    // Up: regulator start (3 ms) + sensor Ton (35 ms) + margin, same figure
+    // revive() uses. Down: long discharge so the rail is genuinely dead
+    // before reading, not coasting on capacitance.
+    delay(en_seq[i] ? 50 : 600);
+    out[i].en  = en_seq[i];
+    out[i].pin = (uint8_t)nrf_gpio_pin_read(en_nrf);
+    out[i].sda = (uint8_t)digitalRead(PIN_WIRE1_SDA);
+    out[i].scl = (uint8_t)digitalRead(PIN_WIRE1_SCL);
+  }
+  // Method control, same board: apply the identical readback to a pin
+  // KNOWN to drive correctly — P0.14 (battery-divider EN, proven by every
+  // vbat read) idles driven HIGH. Reconfiguring it input-connect leaves
+  // its OUT level untouched. control=1 while en readback=0 validates the
+  // instrument; control=0 would mean the readback method itself is broken.
+  const uint32_t ctl_nrf = g_ADigitalPinMap[14];  // D14 / P0.14
+  nrf_gpio_cfg(ctl_nrf, NRF_GPIO_PIN_DIR_OUTPUT, NRF_GPIO_PIN_INPUT_CONNECT,
+               NRF_GPIO_PIN_NOPULL, NRF_GPIO_PIN_S0S1, NRF_GPIO_PIN_NOSENSE);
+  out[0].control = out[1].control = out[2].control =
+      (uint8_t)nrf_gpio_pin_read(ctl_nrf);
+  // Restore the normal detached-idle state: pulls off, lines floating,
+  // rail HIGH (the last step already re-asserted it). The next probe()
+  // restarts the bus from scratch exactly as after revive().
+  pinMode(PIN_WIRE1_SDA, INPUT);
+  pinMode(PIN_WIRE1_SCL, INPUT);
+  delay(45);
+  return 3;
 }
 
 bool probe(uint8_t addr) {

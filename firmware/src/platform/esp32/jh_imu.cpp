@@ -55,5 +55,6 @@ bool read_gyro_dps(float&, float&, float&) {
 
 }  // namespace jh_imu
 
+int jh_imu::railcheck(RailcheckStep*) { return 0; }  // no switched rail to meter
 bool jh_imu::revive() { return false; }  // no sensor rail control on this platform
 void jh_imu::bus_release() {}  // no switched sensor domain on this platform

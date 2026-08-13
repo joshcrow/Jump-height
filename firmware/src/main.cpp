@@ -303,6 +303,24 @@ static bool runSelfTest() {
 
   // 2. Does the accelerometer read ~1 g sitting still?
   if (imu_up) {
+    // Wait out the accelerometer's FIRST conversion before sampling stats.
+    // begin() wrote CTRL1_XL (power-down exit) moments ago; with BDU set,
+    // the output registers hold their reset 0x0000 until the first
+    // conversion lands (>= 1/ODR plus turn-on). One all-zero triple folded
+    // into N=100 otherwise-clean samples puts sd at ~0.0995 — past the
+    // 0.08 FAIL line — so a HEALTHY cold-booted sensor printed "noise
+    // FAIL" deterministically (audit 2026-08-13; the archive's odd boot
+    // rows 0.960 g/0.0966 are exactly the on-command 0.970 g plus one zero
+    // sample). An exact 0/0/0 triple is unphysical for live silicon at
+    // rest (gravity), so first-non-zero is a safe readiness gate; the loop
+    // is bounded so a genuinely zero-stuck part still reaches the stats
+    // below and fails there honestly.
+    for (int i = 0; i < 30; ++i) {
+      float ax, ay, az;
+      if (jh_imu::read_accel_g(ax, ay, az) &&
+          (ax != 0.0f || ay != 0.0f || az != 0.0f)) break;
+      delay(5);
+    }
     float sum = 0, sumsq = 0;
     int   good = 0;
     const int N = 100;
@@ -398,7 +416,7 @@ static bool runSelfTest() {
 
 // ---------------- Commands ----------------
 static void printHelp() {
-  emitLine("# commands: help | stats | jumps | trace | dump | clear | selftest | revive | info | off | dfu | uf2 | fakejump | mount | format");
+  emitLine("# commands: help | stats | jumps | trace | dump | clear | selftest | revive | railcheck | info | off | dfu | uf2 | fakejump | mount | format");
   emitLine("#           set <airtime_offset_s|height_scale|vbat_scale> <value|default>");
   emitLine("#           vbatscan  (bench: battery ADC vs acquisition time)");
   emitLine("#           gyro      (bench: raw + bias-corrected rate, 2 s)");
@@ -477,6 +495,61 @@ static void handleCommand(const String& cmd) {
   } else if (cmd == "selftest") {
     runSelfTest();
     emitLine("OK selftest");
+  } else if (cmd == "railcheck") {
+    // Software meter (bench diagnostic — see jh_imu.h). Answers the one
+    // question the multimeter session was for: is the sensor's switched
+    // rail actually coming up? The module's own I2C pull-ups are powered
+    // by that rail, so against a weak internal pull-down a HIGH line can
+    // only mean "rail up". Verdict table below mirrors SENSE_FIRST_BOOT
+    // §16g's meter table.
+    jh_imu::RailcheckStep steps[3];
+    if (jh_imu::railcheck(steps) != 3) {
+      emitLine("ERR railcheck_unsupported no sensor rail on this platform");
+    } else {
+      for (int i = 0; i < 3; ++i) {
+        String row = "RAILCHECK en=";
+        row += steps[i].en; row += " pin="; row += steps[i].pin;
+        row += " sda="; row += steps[i].sda;
+        row += " scl="; row += steps[i].scl;
+        row += " control="; row += steps[i].control;
+        emitLine(row.c_str());
+      }
+      const bool en_tracks = steps[0].pin == 1 && steps[1].pin == 0 &&
+                             steps[2].pin == 1;
+      const bool up_on   = steps[0].sda && steps[0].scl &&
+                           steps[2].sda && steps[2].scl;
+      const bool dead_off = !steps[1].sda && !steps[1].scl;
+      if (!steps[0].control) {
+        emitLine("# verdict: METHOD FAULT — the control-pin readback failed;");
+        emitLine("# do not trust the rows above.");
+      } else if (up_on && dead_off) {
+        emitLine("# verdict: rail FOLLOWS EN — regulator + pull-ups GOOD.");
+        emitLine("# A powered rail with no ACK points at the sensor die.");
+      } else if (!steps[0].sda && !steps[0].scl &&
+                 !steps[2].sda && !steps[2].scl && dead_off) {
+        if (en_tracks) {
+          emitLine("# verdict: EN reaches the pin but the rail never rises —");
+          emitLine("# regulator dead, EN trace broken, or the die shorting");
+          emitLine("# its own rail (matches meter outcome 'rail ~0V').");
+        } else {
+          emitLine("# verdict: the MCU cannot even drive EN high — P1.08 pin");
+          emitLine("# driver damaged or the EN net is shorted low.");
+        }
+      } else if (!dead_off) {
+        emitLine("# verdict: a line stays HIGH with EN low — rail back-fed");
+        emitLine("# from somewhere else. Unexpected: investigate before more.");
+      } else {
+        emitLine("# verdict: split levels — one line held, one free. A held");
+        emitLine("# single line with the rail up reads as the die clamping it.");
+      }
+      // railcheck left the bus DETACHED (bus_release inside). Reattach the
+      // sensor path the same way revive does — a full selftest re-probe —
+      // or sensor_ok stays stale-true and every later sample silently
+      // drops (audit 2026-08-13, confirmed blocker).
+      emitLine("# reattaching sensor bus — selftest follows");
+      runSelfTest();
+      emitLine("OK railcheck");
+    }
   } else if (cmd == "revive") {
     // Clean sensor power-cycle (16g sequencing) then a full retry — the
     // recovery for power-up-corrupted-but-undamaged silicon. Bench command;

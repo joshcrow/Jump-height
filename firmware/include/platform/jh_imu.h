@@ -52,6 +52,28 @@ void bus_release();
 // on platforms with no rail to cycle. Follow with probe()/begin().
 bool revive();
 
+// Software meter (bench diagnostic, SENSE_FIRST_BOOT 16g): decide "sensor
+// rail up or down" without a multimeter, using the module's own I2C pull-up
+// resistors — they are powered by the same switched rail as the sensor, so
+// with the MCU's bus controller detached and a weak internal PULL-DOWN on
+// SDA/SCL, a line that still reads HIGH can only be held there by powered
+// module pull-ups (rail UP). Three steps: rail as-is/EN high, EN low
+// (long discharge), EN high again; each records both line levels. Never
+// energizes the sensor domain (pull-downs and the EN logic input only —
+// the 16g hazard is pull-UPS into a dead rail, deliberately not used).
+// Returns steps written (3), or 0 where there is no rail to test.
+// `pin` is the EN line read BACK through its own input buffer while driven:
+// it separates "the MCU pin can no longer drive high / EN net shorted low"
+// (pin != en) from "EN asserts fine but the rail still never comes up"
+// (pin == en, lines low — regulator dead or die shorting the rail).
+// `control` is the same readback applied to a known-good driven pin
+// (P0.14, battery-divider EN, idles HIGH): 1 proves the readback method
+// itself works on this board, so pin=0 readings are real.
+struct RailcheckStep {
+  uint8_t en; uint8_t pin; uint8_t sda; uint8_t scl; uint8_t control;
+};
+int railcheck(RailcheckStep out[3]);
+
 // True if a sensor ACKs at this I2C address. Safe to call repeatedly — the
 // `selftest` command re-probes on demand, exactly like today.
 bool probe(uint8_t addr);
