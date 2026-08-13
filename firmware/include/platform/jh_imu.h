@@ -37,6 +37,13 @@ static const uint8_t ADDR_SECONDARY = 0x69;
 // Bring up the sensor bus. Call once from setup(), before probe()/begin().
 void init();
 
+// Detach every MCU line from the sensor's power domain (bus controller off,
+// SDA/SCL/INT floated, no pulls) — the power-down half of the 16g sequencing
+// pair, in one audited place. MUST be called before anything cuts the
+// sensor's rail (jh_power::system_off does). No-op on platforms without a
+// switched sensor domain.
+void bus_release();
+
 // Clean sensor power-cycle, where the platform has rail control (Sense:
 // P1.08-enabled regulator). Sequencing per SENSE_FIRST_BOOT 16g: bus lines
 // floated FIRST (energized lines while the rail is down back-drive the

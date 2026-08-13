@@ -90,12 +90,14 @@ class FakeDevice:
         """The battery keys appended to STATS/INFO, or '' when emulating a
         no-telemetry (v1/ESP32) device — mirroring main.cpp's adder rule
         exactly: keys present iff the platform can measure. Percent uses
-        the host seam's linear 3300→0..4200→100 curve (calibration realism
-        is not what rehearsals assert; key plumbing is)."""
+        the host seam's linear 3300→0..4160→100 curve (top anchor is the
+        nrf52 curve's rested-full anchor, SENSE_FIRST_BOOT.md item 24, not
+        the 4200 mV charging voltage; calibration realism is not what
+        rehearsals assert, key plumbing is)."""
         if self.args.no_battery:
             return ""
         mv = self.args.vbat_mv
-        pct = max(0, min(100, (mv - 3300) * 100 // 900))
+        pct = max(0, min(100, (mv - 3300) * 100 // 860))
         chg = 1 if self.args.charging else 0
         return f" vbat_mv={mv} batt_pct={pct} chg={chg}"
 
@@ -347,7 +349,7 @@ def main() -> int:
     # devices, where the keys are byte-absent). Values are fixed, not
     # drifting: tests and rehearsals want determinism, not realism.
     ap.add_argument("--vbat-mv", type=int, default=3920,
-                    help="reported battery voltage (default 3920 ≈ 68%%)")
+                    help="reported battery voltage (default 3920 ≈ 72%%)")
     ap.add_argument("--charging", action="store_true", help="report chg=1")
     ap.add_argument("--no-battery", action="store_true",
                     help="emulate a no-battery-telemetry (v1/ESP32) device")

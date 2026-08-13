@@ -8,11 +8,13 @@
 // Set JH_VBAT_MV (e.g. "3870") to make the host device report battery
 // telemetry like a Sense would: vbat_mv() returns the value verbatim,
 // batt_pct() derives from the SAME curve shape the nrf52 impl uses (kept
-// deliberately simple here — linear 3300→0 .. 4200→100 — because what the
-// host tests assert is key PRESENCE and plumbing, not curve calibration),
-// and charging() reports JH_CHG ("0"/"1", default 0). This is what lets
-// tools/tests/test_hostdev.py exercise the emit path in CI with no
-// hardware anywhere.
+// deliberately simple here — linear 3300→0 .. 4160→100, the nrf52 curve's
+// own two end anchors, matched here so a resting-full mock reads 100 the
+// same way the real board does per SENSE_FIRST_BOOT.md item 24 — because
+// what the host tests assert is key PRESENCE and plumbing, not curve
+// calibration), and charging() reports JH_CHG ("0"/"1", default 0). This
+// is what lets tools/tests/test_hostdev.py exercise the emit path in CI
+// with no hardware anywhere.
 //
 // SPDX-License-Identifier: MIT
 
@@ -35,9 +37,9 @@ int vbat_mv() { return env_int("JH_VBAT_MV", -1); }
 int batt_pct() {
   const int mv = vbat_mv();
   if (mv < 0) return -1;
-  if (mv >= 4200) return 100;
+  if (mv >= 4160) return 100;
   if (mv <= 3300) return 0;
-  return (mv - 3300) * 100 / (4200 - 3300);
+  return (mv - 3300) * 100 / (4160 - 3300);
 }
 
 int charging() {

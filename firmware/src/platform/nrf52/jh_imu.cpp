@@ -61,9 +61,9 @@
 
 #include <Arduino.h>
 #include "platform/jh_persist.h"
-#include <Wire.h>
 
 #include "lsm6ds3_min.h"
+#include "twim_bounded.h"
 
 namespace jh_imu {
 
@@ -105,53 +105,27 @@ void init() {
   // "worked in practice" to keep holding as that ordering shifts.
   delay(40);
 
-  // Wire1 is deliberately NOT started here anymore: probe() starts it only
-  // after the bit-banged health check proves the bus alive. Starting it
-  // against a wedged bus arms the unbounded spins for whoever touches it
-  // first.
+  // The bus is deliberately NOT started here: probe() starts it on first
+  // use. Bounded transactions (twim_bounded.h, 16d) make "started against a
+  // wedged bus" survivable — a held line costs one ~2 ms timeout, never a
+  // hang — but there is still no reason to touch the bus before the first
+  // real question.
 }
 
-// ---- bounded first contact ------------------------------------------------
+// ---- bounded transactions (16d) -------------------------------------------
 //
 // The core's Wire_nRF52.cpp spins on `while(!EVENTS_...)` with NO timeout —
-// a held bus hangs the caller forever. That is exactly how a wedged sensor
-// turned into an unbootable device on 2026-08-11: the selftest's first probe
-// never returned, and the watchdog turned the hang into a boot loop
-// (SENSE_FIRST_BOOT 16c). The rule this section enforces: Wire NEVER touches
-// a bus that has not first been proven alive by construction-bounded code.
-//
-// Everything here is bit-banged GPIO at ~50 kHz with explicit loop bounds:
-// it cannot hang, only fail. Sequence: health check (both lines high?) →
-// if not, the standard 9-SCL-pulse bus-clear + STOP, re-check → bounded
-// ACK probe of the device address. Only after an ACK does Wire1 get the pins.
+// a held bus hangs the caller forever. That is how a wedged sensor turned
+// into an unbootable device on 2026-08-11 (16c's boot loop), and how a
+// mid-session wedge would turn into a lost session on the water. All bus
+// traffic now goes through TwimBounded (twim_bounded.h): same TWIM
+// peripheral, same transactions, explicit time bound on every wait. The
+// bit-banged health-check/bus-clear helpers that used to live here are gone
+// — they were the false-negative instruments the 16f addendum convicts, and
+// bounded transactions make their question ("is the bus safe to touch?")
+// unnecessary.
 
-static inline void sdaHigh() { pinMode(PIN_WIRE1_SDA, INPUT_PULLUP); }
-static inline void sdaLow()  { pinMode(PIN_WIRE1_SDA, OUTPUT); digitalWrite(PIN_WIRE1_SDA, LOW); }
-static inline void sclHigh() { pinMode(PIN_WIRE1_SCL, INPUT_PULLUP); }
-static inline void sclLow()  { pinMode(PIN_WIRE1_SCL, OUTPUT); digitalWrite(PIN_WIRE1_SCL, LOW); }
-static inline int  sdaRead() { return digitalRead(PIN_WIRE1_SDA); }
-static inline int  sclRead() { return digitalRead(PIN_WIRE1_SCL); }
-static const uint32_t BB_HALF_US = 10;  // ~50 kHz; sensor supports 400 kHz
-
-static bool busIdleHigh() {
-  sdaHigh(); sclHigh(); delayMicroseconds(BB_HALF_US);
-  return sdaRead() && sclRead();
-}
-
-// Standard bus-clear: up to 9 clock pulses lets a slave stuck mid-byte shift
-// out whatever it thinks it still owes, then a STOP releases the bus.
-static void busClear() {
-  sdaHigh();
-  for (int i = 0; i < 9 && !sdaRead(); ++i) {
-    sclLow();  delayMicroseconds(BB_HALF_US);
-    sclHigh(); delayMicroseconds(BB_HALF_US);
-  }
-  // STOP: SDA low->high while SCL high
-  sdaLow();  delayMicroseconds(BB_HALF_US);
-  sclHigh(); delayMicroseconds(BB_HALF_US);
-  sdaHigh(); delayMicroseconds(BB_HALF_US);
-}
-
+static TwimBounded s_bus;
 static bool s_wire_started = false;
 
 // Crash-loop detection state — GPREGRET2, the SoftDevice-managed retained
@@ -174,11 +148,7 @@ bool revive() {
   // EN via P1.08 — a logic input, no inrush path through the GPIO), long
   // discharge, rail up, regulator start (3 ms) + sensor Ton (35 ms) with
   // margin before anyone touches the bus.
-  Wire1.end();
-  s_wire_started = false;
-  pinMode(PIN_WIRE1_SDA, INPUT);   // no pull — truly floating
-  pinMode(PIN_WIRE1_SCL, INPUT);
-  pinMode(PIN_LSM6DS3TR_C_INT1, INPUT);
+  bus_release();
   delay(2);
   pinMode(PIN_LSM6DS3TR_C_POWER, OUTPUT);
   digitalWrite(PIN_LSM6DS3TR_C_POWER, LOW);
@@ -186,6 +156,17 @@ bool revive() {
   digitalWrite(PIN_LSM6DS3TR_C_POWER, HIGH);
   delay(45);
   return true;
+}
+
+void bus_release() {
+  // The power-down half of the 16g sequencing pair, in ONE audited place
+  // (playbook 6b rule 1: copied, never improvised): disable TWIM, float
+  // SDA/SCL (TwimBounded::end does both), float INT1. After this, no MCU
+  // line can energize the sensor domain. Callers: revive() above and
+  // jh_power::system_off() before it cuts the rail.
+  s_bus.end();
+  s_wire_started = false;
+  pinMode(PIN_LSM6DS3TR_C_INT1, INPUT);  // no pull — truly floating
 }
 
 bool probe(uint8_t addr) {
@@ -242,18 +223,17 @@ bool probe(uint8_t addr) {
     jh_persist::save(jh_persist::Key::ProbeGuard, 1.0f);
   }
   if (!s_wire_started) {
-    Wire1.begin();
-    Wire1.setClock(400000);
+    s_bus.begin(PIN_WIRE1_SDA, PIN_WIRE1_SCL);  // 400 kHz, bounded (16d)
     s_wire_started = true;
   }
-  const bool found = Lsm6ds3Min::probe(Wire1, Lsm6ds3Min::I2C_ADDR);
+  const bool found = Lsm6ds3Min::probe(s_bus, Lsm6ds3Min::I2C_ADDR);
   jh_persist::save(jh_persist::Key::ProbeGuard, 0.0f);  // survived: clear guard
   return found;
 }
 
 bool begin(uint8_t addr) {
   (void)addr;  // always the real device at Lsm6ds3Min::I2C_ADDR — see above
-  return s_imu.begin(Wire1, Lsm6ds3Min::I2C_ADDR);
+  return s_imu.begin(s_bus, Lsm6ds3Min::I2C_ADDR);
 }
 
 uint8_t who_am_i() {

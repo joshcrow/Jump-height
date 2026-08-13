@@ -42,10 +42,10 @@
 // SPDX-License-Identifier: MIT
 
 #include <Arduino.h>
-#include <Wire.h>     // Wire1.end() — release TWIM before cutting the 6D rail
 #include <nrf_soc.h>  // sd_power_system_off — the SoftDevice is up
                       // (Bluefruit), so the sd_ call is mandatory; the
                       // raw register write below is only the fallback.
+#include "platform/jh_imu.h"    // bus_release() — detach before rail cut
 #include "platform/jh_power.h"
 
 namespace jh_power {
@@ -59,9 +59,18 @@ const uint32_t PIN_CHG_STATE  = 23;  // D23 / P0.17, LOW = charging
 // Resting-voltage → percent, single-cell LiPo, small piecewise-linear
 // table (interpolated). Coarse on purpose: the product question is
 // "charge before this session?", not coulomb counting.
+//
+// TOP ANCHOR 4160, NOT 4200 (SENSE_FIRST_BOOT.md item 24). 4200 mV is the
+// CHARGING voltage (the BQ25101's regulated float), never what a rested
+// cell reads — the item's own 08-11 meter point put a rested-full cell at
+// 4160 mV. Anchoring 100% at 4200 meant even a perfect ADC topped out
+// ~98%, on top of the acquisition-time error item 24 already fixed
+// (SAADC TACQ 15 µs, see the file header). With that measurement fix in,
+// the remaining "never quite full" gap was the anchor, not the sensor —
+// this is the anchor move item 24 called for.
 struct CurvePoint { uint16_t mv; uint8_t pct; };
 const CurvePoint kCurve[] = {
-    {4200, 100}, {4060, 90}, {3980, 80}, {3900, 65},
+    {4160, 100}, {4060, 90}, {3980, 80}, {3900, 65},
     {3820, 45},  {3770, 30}, {3700, 15}, {3550, 5}, {3300, 0},
 };
 const int kCurveLen = (int)(sizeof(kCurve) / sizeof(kCurve[0]));
@@ -245,15 +254,12 @@ bool system_off() {
   // being phantom-fed through its bus pins. `off` was exercised on the
   // mule the day before its sensor stopped ACKing; suspected contributor
   // (SENSE_FIRST_BOOT 16f web-findings addendum). Order now: bus pins to
-  // input-no-pull FIRST, settle, then rail down. Wire_nRF52.cpp begin()
-  // sets GPIO_PIN_CNF_PULL_Pullup on both lines (measured in the core
-  // source, lines 56/62) — the MCU's own pull-ups, alive regardless of the
-  // 6D rail — and TWIM's PSEL owns the pins until the peripheral is
-  // disabled, so end() must come before the pinMode()s can take effect.
-  Wire1.end();
-  pinMode(PIN_WIRE1_SDA, INPUT);   // no pull — line truly floats
-  pinMode(PIN_WIRE1_SCL, INPUT);
-  pinMode(PIN_LSM6DS3TR_C_INT1, INPUT);
+  // input-no-pull FIRST, settle, then rail down. One audited implementation
+  // of that detach lives in jh_imu::bus_release() (playbook 6b rule 1:
+  // sequencing pairs are copied, never improvised) — it disables the TWIM
+  // peripheral (whose begin sets internal pull-ups on both lines, alive
+  // regardless of the 6D rail) and floats SDA/SCL/INT1 with pulls off.
+  jh_imu::bus_release();
   delay(1);
   pinMode(PIN_LSM6DS3TR_C_POWER, OUTPUT);
   digitalWrite(PIN_LSM6DS3TR_C_POWER, LOW);

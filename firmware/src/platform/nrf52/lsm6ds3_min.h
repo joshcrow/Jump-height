@@ -119,22 +119,27 @@
 #pragma once
 
 #include <Arduino.h>
-#include <Wire.h>
+
+#include "twim_bounded.h"
 
 class Lsm6ds3Min {
  public:
   static const uint8_t I2C_ADDR = 0x6A;  // fixed by the board (docs/sense.md §1)
 
-  // True if a device ACKs at this I2C address on this bus.
-  static bool probe(TwoWire& wire, uint8_t addr) {
-    wire.beginTransmission(addr);
-    return wire.endTransmission() == 0;
+  // True if a device ACKs at this I2C address on this bus. Bounded (16d):
+  // writes the WHO_AM_I register pointer — a held bus times out in ~2 ms
+  // and reports absent instead of hanging the caller into the watchdog.
+  // (Wire's probe was an address-only zero-byte write; a one-byte register
+  // pointer write is the same ACK question with no zero-MAXCNT corner.)
+  static bool probe(TwimBounded& bus, uint8_t addr) {
+    const uint8_t reg = 0x0F;
+    return bus.write(addr, &reg, 1) == TwimBounded::OK;
   }
 
   // Configure ±16 g accel and ±2000 dps gyro, both @ 208 Hz, BDU+auto-increment
   // on. Returns false only if an I2C write fails (wiring problem).
-  bool begin(TwoWire& wire, uint8_t addr) {
-    wire_ = &wire;
+  bool begin(TwimBounded& bus, uint8_t addr) {
+    wire_ = &bus;
     addr_ = addr;
     bool ok = true;
     ok &= writeReg(0x12, 0x44);  // CTRL3_C:  BDU=1, IF_INC=1
@@ -196,10 +201,8 @@ class Lsm6ds3Min {
  private:
   bool writeReg(uint8_t reg, uint8_t val) {
     if (!wire_) return false;  // same null-before-begin() hazard as readRegs
-    wire_->beginTransmission(addr_);
-    wire_->write(reg);
-    wire_->write(val);
-    return wire_->endTransmission() == 0;
+    const uint8_t d[2] = {reg, val};
+    return wire_->write(addr_, d, 2) == TwimBounded::OK;
   }
 
   bool readRegs(uint8_t reg, uint8_t* buf, uint8_t n) {
@@ -215,14 +218,13 @@ class Lsm6ds3Min {
     // false is the honest answer — "no reading available" — and every caller
     // already handles it.
     if (!wire_) return false;
-    wire_->beginTransmission(addr_);
-    wire_->write(reg);
-    if (wire_->endTransmission(false) != 0) return false;  // repeated start
-    if (wire_->requestFrom(addr_, n) != n) return false;
-    for (uint8_t i = 0; i < n; ++i) buf[i] = wire_->read();
-    return true;
+    // Register pointer + repeated-start burst read, both time-bounded (16d):
+    // a bus that wedges MID-SESSION now costs one ~2 ms timeout per tick —
+    // "no reading available", the detector's existing skip path — instead of
+    // a watchdog reset that ends the session.
+    return wire_->writeThenRead(addr_, &reg, 1, buf, n) == TwimBounded::OK;
   }
 
-  TwoWire* wire_ = nullptr;
-  uint8_t  addr_ = I2C_ADDR;
+  TwimBounded* wire_ = nullptr;
+  uint8_t     addr_ = I2C_ADDR;
 };

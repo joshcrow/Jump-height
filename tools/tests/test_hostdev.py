@@ -440,10 +440,12 @@ class TestBatteryTelemetry(HostDevTestCase):
             for cmd, prefix in (("stats", "STATS "), ("info", "INFO ")):
                 kv = parse_kv(self._line(dev, cmd, prefix))
                 self.assertEqual(kv["vbat_mv"], "3870")
-                # Host curve is linear 3300→0 .. 4200→100 (see the host
-                # seam's own comment): 3870 ⇒ 63. Pinned exactly so an
-                # accidental curve/plumbing change fails loudly.
-                self.assertEqual(kv["batt_pct"], "63")
+                # Host curve is linear 3300→0 .. 4160→100 (see the host
+                # seam's own comment — 4160 is the nrf52 curve's
+                # rested-full top anchor, SENSE_FIRST_BOOT.md item 24):
+                # 3870 ⇒ 66. Pinned exactly so an accidental
+                # curve/plumbing change fails loudly.
+                self.assertEqual(kv["batt_pct"], "66")
                 self.assertEqual(kv["chg"], "1")
         finally:
             dev.close()
