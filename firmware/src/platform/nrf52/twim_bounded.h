@@ -50,9 +50,20 @@ class TwimBounded {
   };
 
   // Per-transaction wait bound. Our longest transaction is 1+6 bytes at
-  // 400 kHz (~200 us on a healthy bus); 2 ms is 10x margin for clock
-  // stretching while staying ~1750x under the 3.5 s watchdog.
-  static const uint32_t TIMEOUT_US = 2000;
+  // 400 kHz (~200 us on a healthy bus); the nominal bound is milliseconds
+  // while staying far under the 3.5 s watchdog.
+  //
+  // GRANULARITY (night-review finding): this core's micros() is
+  // tick-derived (~977 us steps — DWT cycle counting is never enabled, and
+  // enabling it here would shrink micros()'s wrap period to ~67 s and
+  // break jh_clock's wrap arithmetic, so it stays off). All micros()-based
+  // bounds below are therefore honest only to +/- one tick, and every wait
+  // additionally carries an ITERATION cap — a preemption-proof, clock-free
+  // hard bound (the counter doesn't advance while an ISR runs, so
+  // preemption stretches wall time but can never make the loop infinite).
+  static const uint32_t TIMEOUT_US = 4000;       // ~4-5 ms real, >=4 ticks
+  static const uint32_t SPIN_CAP   = 400000;     // ~40-200 ms absolute worst
+  static const uint32_t STOP_CAP   = 20000;      // bounded STOP-wait courtesy
 
   // Configure pins + peripheral. Arduino pin numbers (mapped to nRF pins
   // internally). Pin config mirrors Wire_nRF52.cpp begin() exactly: input
@@ -95,7 +106,12 @@ class TwimBounded {
     NRF_TWIM1->SHORTS     = TWIM_SHORTS_LASTTX_STOP_Msk;
     clearEvents();
     NRF_TWIM1->TASKS_STARTTX = 1;
-    return await();
+    const Result r = await();
+    // Second line of defence (night-review finding #2): a stale STOP from a
+    // previous transaction, or any silently-short transfer, shows up as
+    // AMOUNT != requested even when the event decode said OK.
+    if (r == OK && NRF_TWIM1->TXD.AMOUNT != n) return BUSERR;
+    return r;
   }
 
   // Write wn bytes, repeated-start, read rn bytes, STOP. The register-read
@@ -113,7 +129,13 @@ class TwimBounded {
                             TWIM_SHORTS_LASTRX_STOP_Msk;
     clearEvents();
     NRF_TWIM1->TASKS_STARTTX = 1;
-    return await();
+    const Result r = await();
+    // Same AMOUNT cross-check as write() — a short RX handed to the caller
+    // as OK becomes a plausible-looking wrong sample in the detector.
+    if (r == OK && (NRF_TWIM1->TXD.AMOUNT != wn || NRF_TWIM1->RXD.AMOUNT != rn)) {
+      return BUSERR;
+    }
+    return r;
   }
 
  private:
@@ -141,38 +163,57 @@ class TwimBounded {
     NRF_TWIM1->ERRORSRC       = 0xFFFFFFFF;  // write-1-to-clear, all sources
   }
 
+  // Bounded STOP-then-quiesce: try TASKS_STOP (courtesy — STOP cannot
+  // complete on a clamped SCL), and if the peripheral will not stop,
+  // force-disable/re-enable it, which abandons the transaction
+  // unconditionally. EVERY non-OK exit of await() funnels through here, so
+  // no exit can leave a STOP in flight to pollute the next transaction
+  // (night-review finding #2/#6).
+  void quiesce() {
+    NRF_TWIM1->TASKS_STOP = 1;
+    for (uint32_t n = 0; n < STOP_CAP && !NRF_TWIM1->EVENTS_STOPPED; ++n) {}
+    if (!NRF_TWIM1->EVENTS_STOPPED) {
+      NRF_TWIM1->ENABLE = TWIM_ENABLE_ENABLE_Disabled << TWIM_ENABLE_ENABLE_Pos;
+      delayMicroseconds(10);
+      NRF_TWIM1->ENABLE = TWIM_ENABLE_ENABLE_Enabled << TWIM_ENABLE_ENABLE_Pos;
+    }
+    clearEvents();
+  }
+
   // The one loop Wire never bounded. Every exit path leaves the peripheral
   // stopped (or disabled+re-enabled if it would not stop) and events clear.
+  //
+  // ORDERING (night-review finding #1, the important one): both transaction
+  // shapes self-stop via SHORTS, so EVENTS_ERROR and EVENTS_STOPPED land
+  // microseconds apart and STOPPED can win the race — an ISR preempting
+  // this loop in that window used to make it return OK over a latched
+  // NACK/OVERRUN, silently converting "config write never happened" into
+  // success. Wire_nRF52.cpp's own completion path checks EVENTS_ERROR
+  // unconditionally AFTER seeing STOPPED; so does this now, plus an
+  // AMOUNT-vs-expected cross-check in the callers as a second line.
   Result await() {
     const uint32_t t0 = micros();
-    while (!NRF_TWIM1->EVENTS_STOPPED) {
-      if (NRF_TWIM1->EVENTS_ERROR) {
-        // Controller latched an error; make it STOP (bounded), then decode.
-        NRF_TWIM1->TASKS_STOP = 1;
-        const uint32_t s0 = micros();
-        while (!NRF_TWIM1->EVENTS_STOPPED && (micros() - s0) < 500) {}
-        const uint32_t src = NRF_TWIM1->ERRORSRC;
-        clearEvents();
-        if (src & (TWIM_ERRORSRC_ANACK_Msk | TWIM_ERRORSRC_DNACK_Msk)) {
-          return NACK;
-        }
-        return BUSERR;
-      }
-      if ((micros() - t0) >= TIMEOUT_US) {
-        // Held bus. Ask nicely once (STOP is itself unbounded on a clamped
-        // SCL, so bound that wait too), then force: disable/re-enable the
-        // peripheral, which abandons the transaction unconditionally.
-        NRF_TWIM1->TASKS_STOP = 1;
-        const uint32_t s0 = micros();
-        while (!NRF_TWIM1->EVENTS_STOPPED && (micros() - s0) < 500) {}
-        if (!NRF_TWIM1->EVENTS_STOPPED) {
-          NRF_TWIM1->ENABLE = TWIM_ENABLE_ENABLE_Disabled << TWIM_ENABLE_ENABLE_Pos;
-          delayMicroseconds(10);
-          NRF_TWIM1->ENABLE = TWIM_ENABLE_ENABLE_Enabled << TWIM_ENABLE_ENABLE_Pos;
-        }
-        clearEvents();
+    uint32_t n = 0;
+    while (!NRF_TWIM1->EVENTS_STOPPED && !NRF_TWIM1->EVENTS_ERROR) {
+      if (((micros() - t0) >= TIMEOUT_US) || (++n >= SPIN_CAP)) {
+        // Re-check ONCE before declaring death: the transaction may have
+        // completed during preemption between the reads above and this
+        // branch (finding #4 — a valid buffer must not be reported TIMEOUT).
+        if (NRF_TWIM1->EVENTS_STOPPED || NRF_TWIM1->EVENTS_ERROR) break;
+        quiesce();
         return TIMEOUT;
       }
+    }
+    // Something fired. Give a raced-in STOP a bounded beat to land, then
+    // decode ERROR regardless of which event won the poll.
+    if (NRF_TWIM1->EVENTS_ERROR) {
+      for (uint32_t s = 0; s < STOP_CAP && !NRF_TWIM1->EVENTS_STOPPED; ++s) {}
+      const uint32_t src = NRF_TWIM1->ERRORSRC;
+      quiesce();  // also clears events; forced-disable only if STOP failed
+      if (src & (TWIM_ERRORSRC_ANACK_Msk | TWIM_ERRORSRC_DNACK_Msk)) {
+        return NACK;
+      }
+      return BUSERR;
     }
     clearEvents();
     return OK;

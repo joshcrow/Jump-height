@@ -43,10 +43,14 @@ Our two exposures, both fixed:
    600 ms discharge → rail HIGH → 45 ms settle (3 ms regulator start +
    35 ms sensor Ton + margin) → only then bus traffic.
 3. **Bounded bus transactions** — `twim_bounded.h` (16d): every I2C wait
-   has a ~2 ms bound. A held bus is an error return, not a hang, so no
-   code is ever tempted to add "is the bus safe?" probes again (the
-   probe family produced false negatives that convicted healthy
-   hardware — DECISIONS #34, SENSE_FIRST_BOOT 16f).
+   carries BOTH a wall-clock bound (~4 ms nominal; micros() on this core
+   is tick-granular, so ± ~1 ms) and a preemption-proof iteration cap. A
+   held bus is an error return, not a hang; errors that race the
+   self-STOP are decoded after STOPPED (not only before), and AMOUNT is
+   cross-checked against the request so a short transfer can never
+   report OK. No code is ever tempted to add "is the bus safe?" probes
+   again (the probe family produced false negatives that convicted
+   healthy hardware — DECISIONS #34, SENSE_FIRST_BOOT 16f).
 4. **Crash-loop guards stay** (ProbeGuard/StoreGuard, jh_persist) as the
    belt-and-braces layer under all of the above.
 

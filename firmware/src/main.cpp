@@ -238,8 +238,16 @@ static void printFileFramed(jh_store::StoredFile which, const char* name) {
     // handled inside jh_link::write, so a long BLE dump self-throttles.
     uint8_t block[240];
     size_t n;
+    uint32_t blocks = 0;
     while ((n = jh_store::read_chunk(block, sizeof(block))) > 0) {
       emitBytes((const char*)block, n);
+      // Feed the watchdog every few blocks (night-review finding #7): on a
+      // serial-only session emitBytes DROPS when the CDC buffer is short
+      // rather than blocking, so a full-trace export (~2 MB decode) is pure
+      // CPU — long enough to starve the 3.5 s watchdog with no feed. BLE
+      // sessions were already fed inside jh_link::write's drain branch;
+      // this covers every path.
+      if ((++blocks & 15) == 0) jh_link::watchdog_feed();
     }
     jh_store::close_read();
   }
