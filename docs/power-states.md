@@ -310,6 +310,47 @@ forfeits recharging entirely and our LiPo+dock path is better suited
 to the session pattern. Kept as a documented alternative, not the
 plan.
 
+## 10. Round 2 (gaps closed): wet contacts and NFC
+
+**Wet-contact auto-on — COMPLEMENT, not replacement.** The dive
+industry split on purpose: Suunto uses wet contacts but only ANDed
+with a depth threshold; Shearwater deliberately has none (pressure
+only). Manufacturer-acknowledged failure modes: sweat/rain falsely
+bridge the contacts and drain the battery (Suunto's own manuals),
+and a dried SALT bridge holds the circuit "wet" after the session —
+worse in seawater than the freshwater record. Every vendor makes
+contact-rinsing mandatory maintenance. If ever added (v2): same-metal
+gold-over-nickel pair, flush (no recess for salt crystals), pulsed/AC
+sensing (Suunto's patent names this as the anti-electrolysis choice),
+ANDed with motion — the two signals cancel each other's false-arm
+modes. Not needed for v1: motion + watch presence covers the story.
+
+**NFC — verified on our exact module; the surprise is which half
+wins.** The XIAO exposes NFC1/NFC2 only as bare SMD test pads (not
+castellations); no tuning caps on board; the core leaves the pins in
+NFC mode, so no UICR change needed. Field-detect wake from System
+OFF is real at ~100 nA — but it arrives as a RESET (boot path must
+handle it), Nordic REQUIRES a series battery diode against strong-
+field return current (unfixable after potting if skipped), and the
+coil must be tuned WITH the potting in place (potting detunes; it
+does not attenuate — and a salt-water film is only -0.14 dB, the
+eddy-loss fear is imported from UHF/2.4 GHz and does not apply at
+13.56 MHz). Design low-Q so wet and dry both work.
+
+The stronger option for THIS project: a passive tag IC (NTAG I2C
+plus, ~$4 class) on the I2C bus, own coil, status byte written to
+its EEPROM before sleep. A phone then reads battery/state/fault
+through the potting **with the puck flat, hung, or bricked** — the
+only non-destructive diagnostic window a permanently sealed unit can
+have, which this project's history argues for louder than any
+convenience wake. One coil only (two 13.56 MHz loops in a puck
+mutually detune — either/or): choose the tag; if tap-to-wake is
+wanted later, take it from the tag's field-detect pin into a GPIO,
+which also sidesteps the reset-on-wake constraint. Type 2/NFC-A =
+iPhone background reading, no app. Caveats: tag-IC specifics need
+datasheet confirmation (vendor sites unreachable this session);
+sports/marine prior art unsearched (budget), physics-derived.
+
 **Bench items this research adds** (all measure-first, §6b rules):
 - Measure real XIAO standby in both flavors (System OFF + INT1 wake;
   System ON + slow adv). Community: 2.4 µA / 5.4 µA board-level; our
