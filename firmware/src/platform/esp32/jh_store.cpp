@@ -57,6 +57,25 @@ bool init(void (*announce)(const char* line)) {
   return s_fs_ok;
 }
 
+bool try_mount(void (*announce)(const char* line)) {
+  // Non-destructive twin of init(): mount only, never format-on-fail.
+  s_fs_ok = LittleFS.begin(false, "/littlefs", 10, "littlefs");
+  if (!s_fs_ok) {
+    announce("# mount: failed — NOT formatting (`format`/init would)");
+    return false;
+  }
+  File f = LittleFS.open(TRACE_PATH, FILE_READ);
+  if (f) {
+    s_trace_bytes  = f.size();
+    s_trace_header = s_trace_bytes > 0;
+    if (s_trace_bytes >= JH_TRACE_MAX_BYTES) s_trace_full = true;
+    f.close();
+  }
+  File jf = LittleFS.open(JUMPS_PATH, FILE_READ);
+  if (jf) { s_jumps_header = jf.size() > 0; jf.close(); }
+  return s_fs_ok;
+}
+
 bool ok() { return s_fs_ok; }
 
 uint32_t free_bytes() {

@@ -390,6 +390,114 @@ class TestStoreHost(unittest.TestCase):
         self.assertEqual(int(last(r4.events, "JUMPS_SCAN")["count"]), 3)
         self.assertEqual(int(last(r4.events, "TRACE_BYTES")["n"]), bytes3)
 
+    # ---------------------------------------------------------- try_mount
+
+    def test_try_mount_valid_store_resumes_everything(self) -> None:
+        """try_mount() over a valid superblock behaves exactly like init():
+        mounts, resumes append points, no announce lines (nothing formats).
+        This is the mule-recovery happy path (jh_store.h's try_mount doc):
+        StoreGuard skipped the boot mount, the `mount` command retries, the
+        history is still there."""
+        backing = self._backing("try_mount_ok.bin")
+        r1 = run_harness(self.harness, [
+            "INIT",
+            "JUMPS_APPEND 1 1.000 0.300 0.280 0.550",
+            "JUMPS_APPEND 2 2.000 0.310 0.290 0.610",
+        ], backing=backing)
+        self.assertEqual(r1.returncode, 0)
+
+        r2 = run_harness(self.harness, [
+            "TRY_MOUNT",
+            "OK",
+            "JUMPS_SCAN",
+            "JUMPS_APPEND 3 3.000 0.320 0.300 0.700",  # append continuity
+            "JUMPS_SCAN",
+        ], backing=backing)
+        self.assertEqual(r2.returncode, 0)
+        self.assertEqual(last(r2.events, "TRY_MOUNT")["ok"], "1")
+        self.assertEqual(last(r2.events, "OK")["ok"], "1")
+        self.assertEqual(all_of(r2.events, "ANNOUNCE"), [],
+                         "a clean try_mount must not announce (nothing formats)")
+        scans = all_of(r2.events, "JUMPS_SCAN")
+        self.assertEqual(int(scans[0]["count"]), 2)
+        self.assertEqual(int(scans[1]["count"]), 3,
+                         "append points must be fully resumed, exactly like init()")
+
+    def test_try_mount_virgin_chip_refuses_to_format(self) -> None:
+        """try_mount() on a never-written chip must REFUSE (init() is the
+        only formatter): ok=0, storage not-ok, and — the actual contract —
+        nothing gets written, proven by a later init() over the same backing
+        still seeing a virgin chip and announcing a first-boot format."""
+        backing = self._backing("try_mount_virgin.bin")
+        r1 = run_harness(self.harness, [
+            "TRY_MOUNT",
+            "OK",
+            "JUMPS_APPEND 1 1.000 0.300 0.280 0.550",  # must no-op: not ok
+            "JUMPS_SCAN",
+        ], backing=backing)
+        self.assertEqual(r1.returncode, 0)
+        self.assertEqual(last(r1.events, "TRY_MOUNT")["ok"], "0")
+        self.assertEqual(last(r1.events, "OK")["ok"], "0")
+        self.assertEqual(int(last(r1.events, "JUMPS_SCAN")["count"]), 0)
+        announces = [e["text"] for e in all_of(r1.events, "ANNOUNCE")]
+        self.assertTrue(any("NOT formatting" in a for a in announces),
+                        f"expected the refuses-to-format announce, got {announces!r}")
+
+        r2 = run_harness(self.harness, ["INIT", "OK"], backing=backing)
+        announces2 = [e["text"] for e in all_of(r2.events, "ANNOUNCE")]
+        self.assertTrue(any("formatting storage" in a for a in announces2),
+                        "init() must still see a virgin chip — try_mount wrote NOTHING")
+        self.assertEqual(last(r2.events, "OK")["ok"], "1")
+
+    def test_try_mount_corrupt_superblock_never_touches_data(self) -> None:
+        """THE reason try_mount() exists (jh_store.h doc): a chip that
+        mounts but reads a bad superblock might be garbage reads over
+        INTACT data — init() would auto-format and destroy it. try_mount()
+        must refuse AND leave every byte of the chip untouched, so that
+        once the superblock is repaired (here: restored; on real silicon:
+        a power-cycle un-wedging the chip's read mode) the data is still
+        there in full."""
+        backing = self._backing("try_mount_corrupt_sb.bin")
+        r1 = run_harness(self.harness, [
+            "INIT",
+            "JUMPS_APPEND 1 1.000 0.300 0.280 0.550",
+            "JUMPS_APPEND 2 2.000 0.310 0.290 0.610",
+        ], backing=backing)
+        self.assertEqual(r1.returncode, 0)
+
+        # Corrupt one bit of the superblock magic, remembering the original.
+        with open(backing, "r+b") as f:
+            original_byte = f.read(1)
+            f.seek(0)
+            f.write(bytes([original_byte[0] ^ 0x01]))
+        snapshot = backing.read_bytes()
+
+        r2 = run_harness(self.harness, [
+            "TRY_MOUNT",
+            "OK",
+        ], backing=backing)
+        self.assertEqual(r2.returncode, 0)
+        self.assertEqual(last(r2.events, "TRY_MOUNT")["ok"], "0")
+        self.assertEqual(last(r2.events, "OK")["ok"], "0")
+        announces = [e["text"] for e in all_of(r2.events, "ANNOUNCE")]
+        self.assertTrue(any("NOT formatting" in a for a in announces),
+                        f"expected the refuses-to-format announce, got {announces!r}")
+        self.assertEqual(backing.read_bytes(), snapshot,
+                         "try_mount over a bad superblock must not change ONE byte — "
+                         "an init() here would have chip-erased everything")
+
+        # Repair the superblock: the data must still be there, in full.
+        with open(backing, "r+b") as f:
+            f.write(original_byte)
+        r3 = run_harness(self.harness, [
+            "TRY_MOUNT",
+            "JUMPS_SCAN",
+        ], backing=backing)
+        self.assertEqual(last(r3.events, "TRY_MOUNT")["ok"], "1")
+        scan = last(r3.events, "JUMPS_SCAN")
+        self.assertEqual(int(scan["count"]), 2, "the data survived the whole episode")
+        self.assertAlmostEqual(float(scan["best_m"]), 0.610, places=3)
+
     # ------------------------------------------------------- cap semantics
 
     def test_trace_region_cap_stops_trace_but_jumps_continue(self) -> None:

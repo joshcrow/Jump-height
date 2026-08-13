@@ -170,6 +170,11 @@ void cmdInit() {
   std::printf("INIT ok=%d elapsed_us=%lld\n", ok ? 1 : 0, us);
 }
 
+void cmdTryMount() {
+  const bool ok = jh_store::try_mount(announce);
+  std::printf("TRY_MOUNT ok=%d\n", ok ? 1 : 0);
+}
+
 void cmdJumpsFill(std::istringstream& iss) {
   long count = 0;
   iss >> count;
@@ -236,6 +241,8 @@ int main() {
 
     if (cmd == "INIT") {
       cmdInit();
+    } else if (cmd == "TRY_MOUNT") {
+      cmdTryMount();
     } else if (cmd == "OK") {
       std::printf("OK ok=%d\n", jh_store::ok() ? 1 : 0);
     } else if (cmd == "FREE_BYTES") {

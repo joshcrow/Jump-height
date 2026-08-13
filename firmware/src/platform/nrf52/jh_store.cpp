@@ -555,7 +555,9 @@ static bool eraseChipFed() {
   return true;
 }
 
-bool init(void (*announce)(const char* line)) {
+// The mount ladder shared by init() and try_mount(): plain begin → DPD wake
+// → JEDEC 66/99 reset. Sets s_fs_ok and the region geometry on success.
+static bool mountLadder() {
   static SPIFlash_Device_t s_devices[] = {P25Q16H};
   s_fs_ok = s_flash.begin(s_devices, 1);
   if (!s_fs_ok) {
@@ -595,6 +597,11 @@ bool init(void (*announce)(const char* line)) {
   s_trace_region_bytes = (s_flash_total_bytes > s_trace_region_start)
                              ? s_flash_total_bytes - s_trace_region_start
                              : 0;
+  return true;
+}
+
+bool init(void (*announce)(const char* line)) {
+  if (!mountLadder()) return false;
 
   if (!superblockValid()) {
     announce("# first boot: formatting storage — takes up to a minute, hang tight...");
@@ -607,6 +614,28 @@ bool init(void (*announce)(const char* line)) {
   findJumpsAppendPoint();
   findTraceAppendPoint();
 
+  flashSleep();
+  return s_fs_ok;
+}
+
+bool try_mount(void (*announce)(const char* line)) {
+  if (!mountLadder()) {
+    announce("# mount: chip not answering");
+    return false;
+  }
+  if (!superblockValid()) {
+    // The one behavior separating this from init(): NEVER format. A chip
+    // that passes the JEDEC probe but returns a bad superblock may be
+    // returning garbage reads (wedged read mode) over INTACT data —
+    // rebuilding here would destroy exactly what this call exists to
+    // recover. The caller decides whether `format` is acceptable.
+    announce("# mount: chip answers but superblock is unreadable — NOT formatting");
+    s_fs_ok = false;
+    flashSleep();
+    return false;
+  }
+  findJumpsAppendPoint();
+  findTraceAppendPoint();
   flashSleep();
   return s_fs_ok;
 }

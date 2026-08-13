@@ -49,6 +49,15 @@ enum class StoredFile { JUMPS, TRACE };
 // across a reboot is unchanged. Returns overall mounted-ok.
 bool init(void (*announce)(const char* line));
 
+// Non-destructive mount retry: the same mount ladder as init(), but it
+// NEVER formats — an unreadable/foreign superblock is announced and
+// reported as failure instead of being rebuilt over possibly-live data.
+// Exists for the guard-skipped-mount case (StoreGuard latched, on-chip data
+// state unknown — the mule's 61-jump history, 2026-08-12): `format` was the
+// only retry and it destroys by design. A success fully resumes append
+// state, exactly like init().
+bool try_mount(void (*announce)(const char* line));
+
 // True if storage is mounted (mirrors main.cpp's own fs_ok, for the
 // self-test's flash PASS/FAIL row).
 bool ok();

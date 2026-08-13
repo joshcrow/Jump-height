@@ -86,6 +86,10 @@ bool init(void (*/*announce*/)(const char* line)) {
   return s_fs_ok;
 }
 
+// Host mounts are directory creation — nothing to format, so the
+// non-destructive retry is literally init().
+bool try_mount(void (*announce)(const char* line)) { return init(announce); }
+
 bool ok() { return s_fs_ok; }
 
 uint32_t free_bytes() {

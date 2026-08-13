@@ -672,7 +672,7 @@ fix is a vendored bounded-TWIM mini-driver (twim_min.h, per the DECISIONS
 Do this before the water day; it is the last unbounded wait on the boot or
 sample path.
 
-## 16e. Mule QSPI mount-hang (FIXED: store guard) + an unresolved command-silence on top
+## 16e. Mule QSPI mount-hang (FIXED: store guard) + a command-silence that was self-inflicted (RESOLVED)
 
 **Evening 2026-08-12.** The mule went dark after an afternoon of heavy
 flashing. Neuter-and-bisect (the sensor probe's method, reapplied):
@@ -692,16 +692,67 @@ with an honest `flash FAIL` row. `format` is the deliberate retry, itself
 guarded. Verified on the mule: the guarded build boots and advertises
 stably (60 s continuous adv, no self-reboot).
 
-**UNRESOLVED, parked honestly:** on that stable boot, commands go
-unanswered — BLE connects fine, the greet (banner+READY, 29 bytes, the
-COMPLETE greet) arrives, then replies stop; serial is also silent (though
-its CDC nodes were ghosting all evening). Two candidates this bench
-cannot separate tonight: (a) a real command-loop wedge surviving the
-store fix, (b) this Mac's measured notification-path death (first packets
-arrive, then silence — the DFU-receipt disease) plus ghost CDC.
-**One-connect discriminator: Bluefy on a phone.** If Bluefy gets replies,
-the mule is fine and the Mac stands convicted again; if not, the wedge is
-real and the next bisect starts at loop()'s post-greet paths.
+**RESOLVED 2026-08-12, late evening — the silence was self-inflicted.**
+Every "liveness" test of the guarded build had used `selftest` as its
+probe — the ONE command that, on a ProbeGuarded board, is the *designed
+deliberate retry* of the held sensor bus: it hangs, the watchdog fires,
+the board reboots mid-session. The tester was rebooting the device under
+test and recording the reboot as a wedge. `info` and `stats` answer
+instantly and completely (verified same evening, same Mac, same stack —
+after a `blueutil` reset had already failed to change anything, which is
+what forced the re-look). Neither the Mac nor the mule was ever guilty;
+the Bluefy discriminator is unnecessary. Doctrine written into
+docs/bench-playbook.md: **liveness probes must be side-effect-free**
+(`info`, never `selftest`) — a probe that reboots the target fabricates
+the exact wedge it hunts.
+
+**Also corrected:** "the 61-jump history was wiped by a reformat" (above)
+was never established and is now *known unknown* — with StoreGuard
+skipping the mount, STATS counts are unknown-not-zero. A non-destructive
+`mount` command shipped for exactly this (see below): `try_mount()` never
+formats (an invalid superblock is reported, not rebuilt — torture-tested
+in tools/tests/test_store_host.py including a byte-for-byte
+nothing-touched assertion). First live attempt: the mount still hangs →
+one WDT reset → guard re-latches, board back commandable. The chip's
+wedged mode survives every warm reset because the battery never lets it
+power down (bench-playbook §4). **Next action: two-second battery unclip
++ USB out, then `mount` again** — if the wedge was interrupted-format
+mode residue, the history is still sitting in the jumps region.
+
+## 16f. The held-bus signature REPRODUCED on the Puck — clamp theory, predictions on record
+
+**Late evening 2026-08-12.** The Puck (new board), first contact after its
+day behind macOS's unanswered USB-accessory Allow prompt: hardened build
+flashed clean over the 1200-touch (ISRs were alive under the hung app),
+`info`/`stats` answer, `flash PASS 2093056B_free` (playbook prediction:
+QSPI mounts after true power-cycle — confirmed). But: `i2c FAIL no_device`
+at boot, and `selftest` (the deliberate retry) hangs → WDT reset at
+~3.5 s, **deterministically, 5/5 trials** — the mule's exact disease, on
+silicon that read 0.970 g two days ago.
+
+**The unifying theory (playbook §4, peripheral corollary):** an I2C slave
+caught mid-transaction when its master dies holds SDA low until it loses
+power. Both boards died mid-something with the bus active (Puck: yesterday's
+CDC-blocked hang; mule: the 08-11 evening wedge era) and have been powered
+continuously since (Puck: USB never unplugged; mule: battery). Warm resets,
+reflashes, and DFU cycles never release the slave.
+
+**Falsifiable predictions written BEFORE the experiment** — playbook §7
+items 1–3: Puck sensor returns after a ~10 s USB-out; mule `mount` (and
+possibly its sensor too) returns after battery-unclip + USB-out. If the
+Puck still FAILs truly cold, the theory dies and the current firmware's
+sensor first-contact goes under the lamp as a reproducible sensor-killer.
+
+**If the theory holds, the software remedy** (folds into 16d's bounded-TWIM
+work): the standard 9-clock SCL bus-clear + STOP before `Wire.begin()` —
+write-only (immune to the GPIO-read false-negative disease of the dead
+probes), harmless on a healthy bus. Honesty note: cc4662c's overnight
+probe DID include a 9-pulse bus-clear and the mule stayed un-ACKing — but
+that ran inside the same apparatus later proven unreliable at pin control
+(PIN_CNF mismatch the leading suspect), so it neither confirms nor refutes.
+Implement only AFTER the power-cycle experiment confirms the mechanism,
+and verify the pulses with a scope or a second board, not with the code
+under test.
 
 ## 17. PDM microphone rail — never measured
 

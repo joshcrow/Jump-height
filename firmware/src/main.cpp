@@ -390,7 +390,7 @@ static bool runSelfTest() {
 
 // ---------------- Commands ----------------
 static void printHelp() {
-  emitLine("# commands: help | stats | jumps | trace | dump | clear | selftest | info | off | dfu | uf2 | fakejump | format");
+  emitLine("# commands: help | stats | jumps | trace | dump | clear | selftest | info | off | dfu | uf2 | fakejump | mount | format");
   emitLine("#           set <airtime_offset_s|height_scale|vbat_scale> <value|default>");
   emitLine("#           vbatscan  (bench: battery ADC vs acquisition time)");
   emitLine("#           gyro      (bench: raw + bias-corrected rate, 2 s)");
@@ -585,6 +585,25 @@ static void handleCommand(const String& cmd) {
       emitLine("ERR uf2_unsupported this build has no UF2 bootloader");
     }
     return;
+  } else if (cmd == "mount") {
+    // Non-destructive retry of a guard-skipped or failed mount — `format`
+    // is the destructive one. Same guard bracket as boot: a hang costs one
+    // watchdog reset and re-latches the skip; nothing is ever erased.
+    if (fs_ok) {
+      emitLine("OK mount already_mounted");
+      return;
+    }
+    jh_persist::save(jh_persist::Key::StoreGuard, 1.0f);
+    fs_ok = jh_store::try_mount(emitLine);
+    jh_persist::save(jh_persist::Key::StoreGuard, 0.0f);
+    if (fs_ok) {
+      scanStoredJumps();
+      emitf("# stored history: %lu jumps, best %.2f m — `dump` to export\n",
+            (unsigned long)stored_jumps, (double)stored_best);
+      emitLine("OK mount");
+    } else {
+      emitLine("ERR mount_failed storage still down — `format` rebuilds it (DESTROYS data)");
+    }
   } else if (cmd == "format") {
     // Last-resort storage recovery — works when `clear` cannot (fs down).
     // Destroys stored jumps + trace; live detection unaffected either way.
@@ -721,7 +740,7 @@ void setup() {
   // alive with an honest `flash FAIL` row. The `format` command is the
   // deliberate retry — and if THAT hangs, the same guard catches it again.
   if (jh_persist::load(jh_persist::Key::StoreGuard, 0.0f) > 0.5f) {
-    emitLine("# storage: skipped (previous boot hung in the mount — run `format` to retry)");
+    emitLine("# storage: skipped (previous boot hung in the mount — `mount` retries safely, `format` rebuilds)");
     fs_ok = false;
   } else {
     jh_persist::save(jh_persist::Key::StoreGuard, 1.0f);

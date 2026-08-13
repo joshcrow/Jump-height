@@ -41,6 +41,12 @@ after first flash is expected, not a swap.
    falsifiers are stories.
 5. **Failure arcs are weak evidence.** "Fine all day, intermittent, then
    dead" fit solder fatigue perfectly — and described a software race.
+6. **Liveness probes must be side-effect-free.** The "mule command-silence
+   mystery" (16e) was the tester sending `selftest` — the documented
+   deliberate-retry command that HANGS AND REBOOTS a ProbeGuarded board —
+   as its liveness check, then recording the reboot as a wedge. Probe
+   liveness with `info` or `stats`, never with a command whose designed
+   failure mode is the symptom you're hunting.
 
 ## 3. The transport doctrine (macOS is an unreliable witness)
 
@@ -66,7 +72,17 @@ after first flash is expected, not a swap.
 
 - **A battery-backed board never truly resets.** Every wedge that survives
   "unplug it" survives because the battery kept the chips alive. True cold
-  start = battery *and* USB removed. Batteries are on JST-style pigtails
+  start = battery *and* USB removed. This applies to PERIPHERALS, not just
+  the MCU: an I2C slave caught mid-transaction when the MCU dies keeps
+  clamping SDA through every warm reset — only power removal (or a 9-clock
+  SCL bus-clear, the standard I2C unstick, not yet implemented — see
+  SENSE_FIRST_BOOT 16d/16f) releases it. Both boards' "held bus" (2026-08-12)
+  match this signature: continuous power since a mid-transaction death.
+- **macOS gates new USB accessories behind an Allow prompt** (Sequoia+).
+  A board that shows in `ioreg` as `!registered, !matched` with no
+  `/dev/cu.*` node may just be sitting at that dialog — check the screen
+  before diagnosing silicon. The prompt can sit unanswered for a DAY while
+  every remote diagnosis runs in circles (it did). Batteries are on JST-style pigtails
   (unclip, no soldering) — so a true cold start on the mule is a two-second
   unclip, and cells swap freely between boards once the puck gets its own
   pigtail soldered. Pigtails also make item 25c's off-current measurement
@@ -90,7 +106,7 @@ after first flash is expected, not a swap.
 | App advertising but command-dead | **BLEDfu control point** (subscribe, write `0x01`) — runs on the BLE task, survives a dead `loop()`; then `0x06` from the bootloader reboots clean |
 | Bootloader stale mid-DFU | `otadfu.py` auto-recovers (0x07 probe → `0x06`) — with USB *out*; with USB in, `0x06` lands in UF2/serial mode: recover by serial flash |
 | Boot loops at `SELFTEST BEGIN` | Already handled: the jh_persist sticky guard turns the second boot into an honest `i2c FAIL` + READY. `selftest` command = deliberate retry |
-| Storage unmountable | `format` command (works with fs down). If the chip won't even probe: physical power-cycle (battery-less board: replug) |
+| Storage unmountable | `mount` first — non-destructive retry (`try_mount()` NEVER formats; an unreadable superblock is reported, not rebuilt). Then `format` (works with fs down, DESTROYS data). If the chip won't even probe: physical power-cycle (battery-less board: replug) |
 | Dark on every interface | Physical: reset tap or power cycle. This is the case to engineer away, not accept |
 
 ## 6. Firmware invariants (hold these in review)
@@ -112,12 +128,30 @@ after first flash is expected, not a swap.
 
 ## 7. Standing predictions (check on next bench contact)
 
-1. The new board's QSPI mounts fine after its replug (the flash chip itself
-   gets power-cycled; its stuck mode was the interrupted-format residue). If
-   not: `format` command; if *that* fails, the chip state theory is wrong.
-2. The new board's mid-afternoon dark-out recurs under the gyro hot path —
-   watch its serial for the first hour after revival. If it recurs: hard
-   fault in `d504c54`'s first real-sensor execution is the prime suspect.
-3. The mule's sensor bus, probed by *meter* rather than code: either ~0 V on
-   the rail (real hardware fault) or 3.3 V (and the mystery reopens with
-   better instruments).
+Settled 2026-08-12 evening:
+- ~~The new board's QSPI mounts fine after its replug~~ **CONFIRMED** —
+  first boot of the hardened build: `flash PASS 2093056B_free`, no guard
+  trip, no format needed.
+- ~~The dark-out recurs under the gyro hot path~~ **RESOLVED OTHERWISE** —
+  the "dark-out" was macOS's unanswered USB-accessory Allow prompt (§4)
+  stacked on the pre-hardening build's unbounded CDC emit; with the prompt
+  answered and the hardened build flashed, the board is up and commandable.
+
+Open:
+1. **The Puck's sensor returns after a ~10 s USB-out cold start** —
+   its `i2c FAIL no_device` is a slave clamping the bus since yesterday's
+   mid-transaction death, powered continuously ever since. Check:
+   `selftest` ×5 all `i2c PASS` after replug. If it still FAILs on truly
+   cold silicon, the clamp theory is wrong and the CURRENT firmware's
+   first-contact is under the lamp (that would be a reproducible
+   sensor-killer, a different and bigger story).
+2. **The mule's `mount` succeeds after battery-unclip + USB-out** (its
+   P25Q16H's wedged mode has survived on battery power). Then STATS
+   reveals whether the 61-jump history ever actually got reformatted —
+   "wiped" was never established. `mount` is safe to repeat: it never
+   formats; a hang just costs one WDT reset and re-latches the guard.
+3. **The mule's sensor MAY return after that same battery-out** — same
+   clamp signature as the Puck. Every prior "cold start" verification ran
+   through the false-negative probes, and the a6e477d hang reproductions
+   came with the battery back in. If it returns: mule fully exonerated,
+   board registry rewrite. If not: meter on the rail (the original #3).
