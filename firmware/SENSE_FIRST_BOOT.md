@@ -935,6 +935,135 @@ but `!registered, !matched` — the macOS accessory-approval gate
 human Allow click; the bootloader idles with the sensor rail untouched,
 which the audit confirmed is safe indefinitely.
 
+## 16i. THE ANSWER — the sensor rail needs HIGH GPIO drive. Nothing was ever broken. 2026-08-14
+
+**Four days, three boards, two confident "dead hardware" verdicts, one
+register field.**
+
+`jh_imu::init()` powered the sensor domain with the Arduino idiom:
+
+```cpp
+pinMode(PIN_LSM6DS3TR_C_POWER, OUTPUT);   // configures S0S1 = STANDARD drive
+digitalWrite(PIN_LSM6DS3TR_C_POWER, HIGH);
+```
+
+On this module P1.08 does not merely *enable* a regulator — it **sources
+the sensor domain**: the LSM6DS3TR-C's VDD *and* the on-module I2C
+pull-ups hang off it. A standard-drive nRF52840 pad supplies about 2 mA.
+That is not enough. The pad sags to ground, the rail never rises, both
+bus lines sit low, every transaction times out, and the sensor is
+indistinguishable from dead silicon — which is exactly how it was
+diagnosed, twice.
+
+One field of PIN_CNF fixes it: **H0H1 (high drive, ~10 mA)**.
+
+### The measurement, same board, seconds apart
+
+```
+sweep en=HIGH          pin=0  sda(dn/up)=0/0  scl(dn/up)=0/0   twim: TIMEOUT
+sweep en=HIGH-HIDRIVE  pin=1  sda(dn/up)=0/1  scl(dn/up)=0/1   twim6A: OK
+```
+
+Results after the fix:
+- **Board #3** (factory fresh): `i2c PASS`, `accel PASS 1.022 g`,
+  `noise PASS 0.0028 g` — and stable over repeat runs (1.021-1.022 g,
+  noise to 0.0013 g).
+- **The MULE** — declared dead this same morning on a "hard board-level
+  fault, physical repair only" — after `revive`: `accel PASS 1.029 g`,
+  `noise PASS 0.0069 g`. **It was never damaged.** The Puck almost
+  certainly is not either.
+
+### How it was finally caught: the GPIO census
+
+Every previous instrument asked *the sensor's own pins* whether things
+were healthy, so every answer was contaminated by the same fault. The
+census asked **every GPIO on the chip** instead — each read twice, once
+against an internal pull-down and once against a pull-up:
+
+```
+0.02:01 0.03:01 0.04:01 ... 1.09:01 1.11:01   <- free pins follow their pull
+0.07:00  0.27:00  0.11:00  1.08:00            <- the ENTIRE sensor domain, held low
+0.18:11                                        <- RESET, pulled up. as designed
+```
+
+That single output proved two things at once: **the instrument was
+sound** (unrelated pins behave perfectly), and **the load was real**
+(only the sensor domain is pinned low). Without the control pins in the
+same table, "held low" would have been one more ambiguous reading — and
+the honest response to ambiguity had already been, twice, to blame the
+hardware.
+
+### Why it intermittently "worked" before
+
+Marginal, not binary. On 2026-08-12 a fresh board read 0.970 g with this
+same standard-drive code: the pad can sometimes drag the rail just over
+the line, and once the sensor is running its draw drops. That is why the
+failure looked like a sensor that "died overnight," survived reflashes
+(the pad state persists across CPU resets), and occasionally came back
+after a full power removal. Every one of those observations fits drive
+strength; none of them required a dead chip.
+
+### Confirmed against Seeed's own schematic (v1.1, sheet 2/3)
+
+Independent research pulled the published schematic while the fix was
+being verified, and it corroborates the mechanism exactly:
+
+- **P1.08 / 6D_PWR drives no regulator, no load switch, no FET.** The
+  GPIO pad connects DIRECTLY to the LSM6DS3TR-C's VDD (pin 8) and VDDIO
+  (pin 5). *The MCU pin is the sensor's power supply.* Active high by
+  construction. The only passive on the net is a 100 nF cap — so when
+  the pin is an input the rail simply floats.
+- **The bus pull-ups are R14/R15, 10 kOhm, and they pull up to 6D_PWR**
+  — the switched net, not 3V3. So the pin is sourcing the sensor plus
+  both pull-ups.
+- Current needed: ~0.9 mA (sensor) + ~0.66 mA (two 10k pull-ups) plus
+  turn-on inrush. nRF52840 **standard drive is specified at 0.5 mA**;
+  high drive is 5 mA (9 mA max). The Arduino default was under-specced
+  by roughly 3x before inrush — it was never going to hold the rail up.
+- **The QSPI flash runs from an always-on 3V3 LDO**, a different rail
+  entirely. "The flash answers" was therefore never evidence about the
+  sensor rail, and reading it that way cost time.
+
+**One instrument correction, for the record:** reading SDA/SCL against
+weak internal pull-downs proves nothing. Even with the rail fully alive,
+a 10k external pull-up against the nRF's 11-16k internal pull-down puts
+the pad at 1.7-2.0 V, below the 2.31 V input-high threshold — so a
+healthy board reads LOW too. That test was junk in both directions, and
+the `railcheck` verdict built on it (mule "EN net stuck at ground, hard
+board fault") was wrong. The *pin readback* (OUT=1, DIR=1, IN=0) was the
+sound half, and it is what the census made unambiguous.
+
+**Also now documented:** because R14/R15 tie the bus lines to the sensor
+rail, driving SDA/SCL high while the rail is down back-powers the sensor
+through those resistors. This is the real, schematic-level version of the
+16g hazard, and it is why `bus_release()` (float, pulls off) before any
+rail change stays mandatory.
+
+### Standing rules this produces
+
+1. **Never configure a pin that carries current with `pinMode()`.** The
+   Arduino idiom silently selects standard drive. Rail/enable/supply pins
+   are configured through `nrf_gpio_cfg(..., NRF_GPIO_PIN_H0H1, ...)`.
+   `init()` and `revive()` both do this now.
+2. **Read a pin back before trusting that you drove it.** OUT=1 with
+   IN=0 is a complete, printable diagnosis; it was available on day one.
+3. **A pin-level claim needs control pins in the same measurement.** The
+   census is the template: measure the suspect *and* known-good pins with
+   one method, in one pass.
+4. **Two failed verdicts on the same evidence means the instrument is
+   suspect, not the hardware.** Both dead-hardware calls rested on
+   readings taken exclusively inside the broken domain.
+
+### Still open after this
+
+- **Storage on both boards**: QSPI answers the JEDEC probe, but the
+  superblock is unreadable and `format` does not complete (USB CDC drops
+  during the long chip erase; `fs=down` afterwards). Separate fault, next
+  in the queue — the sensor path is now good on both boards.
+- The self-test's `whoami WARN ... likely a clone MPU-6050` line is wrong
+  for this part: **0x6A is the correct LSM6DS3TR-C WHO_AM_I**. Cosmetic,
+  but it is exactly the kind of misleading row that feeds a wrong verdict.
+
 ## 17. PDM microphone rail — never measured
 
 **File:** not touched by this port at all (deliberately: no PDM code
