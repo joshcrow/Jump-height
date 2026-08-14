@@ -33,7 +33,57 @@ science.
 
 That single fact moves BLE work off the critical path.
 
-## The sequence
+## REVISED 2026-08-14: the water session is ~2 weeks out, and it is expensive
+
+The owner's constraint, which changes the sequencing completely: getting
+on the water needs a brother's board, a kayak, a windy day, and someone
+filming from the kayak. That is **one shot, hard to repeat, roughly two
+weeks away.**
+
+So the goal is no longer "get to the water fast." It is:
+
+> **Use the two weeks of bench time to make that one session count —
+> and to be sure it cannot be wasted.**
+
+Which flips the priority: work that *increases what we learn* from the
+session, or that *prevents the session from being wasted*, is now worth
+doing before it. Work that only matters for the finished product still
+waits.
+
+**One hard rule for the two weeks: FEATURE FREEZE ~4 days before the
+session.** Land changes early, then run the dress rehearsal on the exact
+build that goes in the water. Never take a fresh build to a one-shot
+experiment — this project has already paid that tuition.
+
+### Week 1 — de-risk and make the session yield more
+
+| Work | Why it earns its place now | Who |
+|---|---|---|
+| **Desk test** (3 untethered tosses) | The ONLY proof that a jump survives to storage on this board. A wasted trip otherwise. | **owner, 10 min** |
+| **P1 batch** — silent BLE drop fix, LED off, slower advertising, `system_off` drive strength | Small, safe, done in one flash. Removes the last shipped rule violation. **DONE in code, awaiting a board.** | eng |
+| **Watch corruption gate** | The brother is wearing the watch. If it shows nonsense mid-session nobody can tell whether the puck is working. | eng |
+| **Full land dress rehearsal** | Mount, film, jump, download, label, `eval` — end to end on the frozen build. Finds the pipeline breaks that would otherwise be found in a kayak. | both |
+
+### Week 2 — rehearse, freeze, pack
+
+| Work | Why |
+|---|---|
+| Battery + state in the advertisement | Glanceable "it's alive" before pushing off. Cheap, no link risk. |
+| Detector tuning from rehearsal data | Land tosses are not foil jumps, but a missed toss on the bench is a missed jump on the water. |
+| Waterproofing: bucket test, tether, mount cure time | The failure that ends the session in the first five minutes. |
+| **Written session protocol** — a one-page card | Charge, arm, verify on the wrist, start video, sync marker, land, download. On the water nobody remembers a checklist. |
+| **FREEZE** | No firmware changes after this. |
+
+### Explicitly NOT in the two weeks
+
+**The power/standby restructure (P3).** It is the biggest, riskiest piece
+of work available and it touches the main loop, the watchdog and the I2C
+peripheral. Destabilising the firmware in the fortnight before a one-shot
+experiment is exactly the wrong risk to take, and the device already runs
+~60 h per charge against a 2 h session. It waits until there is real
+water data to design against.
+
+## The original sequence (kept for reference)
 
 ### P0 — Get the water data (this week)
 
