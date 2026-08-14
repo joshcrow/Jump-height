@@ -38,6 +38,50 @@ do not.**
 
 ---
 
+## CHANGED AFTER THE AUDIT (2026-08-14, later the same day)
+
+These landed after the audit above was generated. They are listed here rather
+than merged in, so the provenance stays honest: the audit is a snapshot, this
+is the delta since.
+
+### Boot-scan watchdog feeds (jumps + trace append-point scans)
+- **State:** built-unverified
+- **Evidence:** `jh_store.cpp:311` and `:398`, commit 0ab78d3
+- **Gap:** never exercised at a realistic fill level. The failure it prevents
+  (boot reset → StoreGuard latch → a whole session recorded storage-less)
+  only appears on a well-used region, which no board has ever had. The 2 h
+  walk-with-the-puck test would create one.
+
+### Self-arming spin correction — GATED OFF
+- **State:** not-built (deliberately disabled)
+- **Evidence:** `main.cpp` `JH_SPIN_SELFARM_ENABLED 0`, commit 0ab78d3
+- **Gap:** re-enable only with a persistence key, a wire field, and water data
+  to validate against. It alters which jumps are *detected*, not just their
+  reported height, so it is not reversible offline.
+
+### `jump status` staleness gate
+- **State:** proven-on-hardware (of a sort — it caught this very commit)
+- **Evidence:** `tools/jump` cmd_status; fired correctly against commit 0ab78d3
+  with "STATUS.md is 0.4 h OLDER than the newest code change"
+- **Gap:** USB-only, so unusable at the beach on a sealed case; does not print
+  STATS (`batt_pct`/`stored_jumps`/`trace_bytes`), which are the pre-launch
+  numbers that matter.
+
+### `jump sync` trace-cap warning — DISABLED
+- **State:** not-built (deliberately)
+- **Evidence:** `tools/jump` `trace_capped = False`, commit 0ab78d3
+- **Gap:** the honest check needs the device's own `trace_bytes` carried
+  through the download. Until then it claims nothing rather than crying wolf.
+
+### BLE per-connection retry — chunk length latched
+- **State:** built-unverified
+- **Evidence:** `jh_link.cpp` `s_chunk_n`, commit 9277821
+- **Gap:** never on silicon. The latch fixes a regression the first version
+  introduced (recomputing the chunk while a retry was pending could drop bytes
+  on a second connection).
+
+---
+
 ## PROVEN ON HARDWARE  (44)
 
 ### BLE ByteArray→String ingest decode
