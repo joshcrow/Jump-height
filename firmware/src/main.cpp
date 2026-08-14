@@ -144,6 +144,35 @@ static String cmd_buf;
 // this file should call Serial.print* directly. Only ever called from
 // loop()/setup() (never a link-implementation callback), so the BLE notify
 // path has no cross-task contention (see jh_link.h).
+// ---- reliable-export mode ------------------------------------------------
+//
+// MEASURED FAILURE, 2026-08-14: downloading the SAME stored trace twice gave
+// two different files — one lost 0.58 s of samples mid-file, the other 0.42 s
+// at a different place, and both truncated the final line. Cause: the drop
+// above. `Serial.availableForWrite()` is momentarily short during a long
+// export (the host drains in bursts), and a dropped 240-byte block is a
+// silently missing slice of the session with nothing in the output to mark it.
+//
+// Dropping is the right policy for CHATTER — a wedged terminal must never
+// cost the device. It is the wrong policy for a FILE, where the whole point
+// is to get every byte off the puck exactly once. So file exports set
+// s_serial_must_not_drop and we WAIT for room instead, bounded, feeding the
+// watchdog. If the host is genuinely gone we give up, count the bytes, and
+// the caller reports the export as incomplete — loudly, never silently.
+static bool     s_serial_must_not_drop  = false;
+static uint32_t s_serial_dropped_bytes  = 0;
+
+// Bounded wait for CDC buffer room. Returns false if the host never drains.
+static bool waitForSerialRoom(size_t len) {
+  const uint32_t deadline_ms = millis() + 2000;  // generous; host bursts are ms
+  while ((size_t)Serial.availableForWrite() < len) {
+    if ((int32_t)(millis() - deadline_ms) >= 0) return false;
+    jh_link::watchdog_feed();
+    delay(1);
+  }
+  return true;
+}
+
 static void emitBytes(const char* data, size_t len) {
   // BOUNDED serial write. The core's CDC write spins forever when a host
   // holds DTR but stops draining (Adafruit_USBD_CDC.cpp write loop) — a
@@ -155,6 +184,10 @@ static void emitBytes(const char* data, size_t len) {
   // anyway.
   if ((size_t)Serial.availableForWrite() >= len) {
     Serial.write((const uint8_t*)data, len);
+  } else if (s_serial_must_not_drop) {
+    // FILE EXPORT: waiting beats dropping. See emitBytesReliable's comment.
+    if (!waitForSerialRoom(len)) s_serial_dropped_bytes += len;
+    else Serial.write((const uint8_t*)data, len);
   }
   jh_link::write(data, len);
 }
@@ -237,6 +270,8 @@ static void logJump(const jump::JumpEvent& ev) {
 }
 
 static void printFileFramed(jh_store::StoredFile which, const char* name) {
+  s_serial_must_not_drop = true;          // a FILE must arrive whole
+  s_serial_dropped_bytes = 0;
   emitf("FILE %s BEGIN\n", name);
   if (jh_store::open_read(which)) {
     // Read in blocks (not byte-by-byte): far fewer BLE notifications, and the
@@ -257,6 +292,14 @@ static void printFileFramed(jh_store::StoredFile which, const char* name) {
     }
     jh_store::close_read();
   }
+  // Report truth about completeness. A silent short file is the failure this
+  // whole mode exists to prevent, so say so in-band where every client
+  // (CLI, web, watch) already parses lines.
+  if (s_serial_dropped_bytes) {
+    emitf("# WARNING %s INCOMPLETE — %lu bytes never reached the host; re-run the download\n",
+          name, (unsigned long)s_serial_dropped_bytes);
+  }
+  s_serial_must_not_drop = false;
   emitf("FILE %s END\n", name);
 }
 
