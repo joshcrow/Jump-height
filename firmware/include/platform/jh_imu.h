@@ -71,7 +71,15 @@ struct BusDiag {
   uint8_t wire_ack_alt;    // ... at 0x6B
   uint8_t wire_whoami;     // WHO_AM_I via Wire1 if it ACKed (0x6A expected)
 };
-bool bus_diag(BusDiag& out);
+void bus_rail_registers(uint32_t& out_latch, uint32_t& dir, uint32_t& cnf,
+                        uint32_t& in_level);
+void bus_rail_sweep(uint8_t state, uint8_t& sda, uint8_t& scl, uint8_t& pin);
+bool bus_diag_rail(BusDiag& out);
+bool bus_diag_twim(BusDiag& out);
+// The Wire1 control half — SEPARATE because stock Wire1 spins unbounded on
+// a held bus (it hung board #3 and ate the whole report). Call only after
+// the caller has already printed bus_diag()'s facts.
+bool bus_diag_wire(BusDiag& out);
 
 // True if a sensor ACKs at this I2C address. Safe to call repeatedly — the
 // `selftest` command re-probes on demand, exactly like today.

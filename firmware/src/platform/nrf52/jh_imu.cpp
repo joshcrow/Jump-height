@@ -171,7 +171,7 @@ void bus_release() {
   pinMode(PIN_LSM6DS3TR_C_INT1, INPUT);  // no pull — truly floating
 }
 
-bool bus_diag(BusDiag& out) {
+bool bus_diag_rail(BusDiag& out) {
   // Contract and safety argument in jh_imu.h. Order matters: read-only
   // facts first, bounded driver next, and the stock-Wire1 control LAST
   // (Wire1 spins unbounded on a held bus — if it hangs, the watchdog
@@ -195,17 +195,81 @@ bool bus_diag(BusDiag& out) {
   out.sda_pulled_up = (uint8_t)digitalRead(PIN_WIRE1_SDA);
   out.scl_pulled_up = (uint8_t)digitalRead(PIN_WIRE1_SCL);
 
-  // The bounded driver, at both SA0 strap addresses.
+  return true;
+}
+
+void bus_rail_registers(uint32_t& out_latch, uint32_t& dir, uint32_t& cnf,
+                        uint32_t& in_level) {
+  // RAW register truth for the sensor rail enable (P1.08). Every earlier
+  // rail conclusion rested on nrf_gpio_pin_read() alone; this reports the
+  // OUT latch, DIR, PIN_CNF and IN separately, so "we are driving it high
+  // and the pad is low" can be told apart from "we never drove it at all".
+  const uint32_t nrf_pin = g_ADigitalPinMap[PIN_LSM6DS3TR_C_POWER];
+  NRF_GPIO_Type* port = (nrf_pin < 32) ? NRF_P0 : NRF_P1;
+  const uint32_t bit = nrf_pin & 31;
+  out_latch = (port->OUT >> bit) & 1u;
+  dir       = (port->DIR >> bit) & 1u;
+  cnf       = port->PIN_CNF[bit];
+  in_level  = (port->IN >> bit) & 1u;
+}
+
+void bus_rail_sweep(uint8_t state, uint8_t& sda, uint8_t& scl, uint8_t& pin) {
+  // One step of a rail-polarity sweep. state: 0=drive LOW, 1=drive HIGH,
+  // 2=release (input, no pull — lets any external pull decide). Bus lines
+  // are floated by the audited detach first and read against weak internal
+  // pull-DOWNS, which can only sink toward ground and therefore cannot
+  // back-feed an unpowered die (the 16g hazard is pull-UPS into a dead
+  // rail). Exists because "drive it HIGH and hope" was never actually
+  // verified to power anything: a factory-fresh board reports the rail
+  // down, so the assumption itself is now under test.
+  bus_release();
+  pinMode(PIN_WIRE1_SDA, INPUT_PULLDOWN);
+  pinMode(PIN_WIRE1_SCL, INPUT_PULLDOWN);
+  const uint32_t nrf_pin = g_ADigitalPinMap[PIN_LSM6DS3TR_C_POWER];
+  if (state == 2) {
+    nrf_gpio_cfg(nrf_pin, NRF_GPIO_PIN_DIR_INPUT, NRF_GPIO_PIN_INPUT_CONNECT,
+                 NRF_GPIO_PIN_NOPULL, NRF_GPIO_PIN_S0S1, NRF_GPIO_PIN_NOSENSE);
+  } else {
+    nrf_gpio_cfg(nrf_pin, NRF_GPIO_PIN_DIR_OUTPUT, NRF_GPIO_PIN_INPUT_CONNECT,
+                 NRF_GPIO_PIN_NOPULL, NRF_GPIO_PIN_S0S1, NRF_GPIO_PIN_NOSENSE);
+    if (state) nrf_gpio_pin_set(nrf_pin); else nrf_gpio_pin_clear(nrf_pin);
+  }
+  delay(120);  // regulator start + sensor Ton + margin
+  pin = (uint8_t)nrf_gpio_pin_read(nrf_pin);
+  sda = (uint8_t)digitalRead(PIN_WIRE1_SDA);
+  scl = (uint8_t)digitalRead(PIN_WIRE1_SCL);
+  pinMode(PIN_WIRE1_SDA, INPUT);
+  pinMode(PIN_WIRE1_SCL, INPUT);
+}
+
+bool bus_diag_twim(BusDiag& out) {
+  // The bounded driver, at both SA0 strap addresses. Split out so the
+  // caller can print the read-only rail facts FIRST — board #3 showed the
+  // whole command dying silently, and a report you never see cannot tell
+  // you where it died.
   s_bus.begin(PIN_WIRE1_SDA, PIN_WIRE1_SCL);
   s_wire_started = true;
   const uint8_t reg = 0x0F;  // WHO_AM_I pointer — a 1-byte write is the ACK test
   out.twim_result     = (uint8_t)s_bus.write(0x6A, &reg, 1);
   out.twim_result_alt = (uint8_t)s_bus.write(0x6B, &reg, 1);
 
-  // The control. Hand the peripheral over cleanly (both drivers own TWIM1,
-  // so the bounded one must be fully disabled first) and let stock Wire1
-  // ask the identical question. The rail stays UP throughout — the 16g
-  // hazard is an energized bus over a DEAD rail, which this is not.
+  out.wire_ack = out.wire_ack_alt = out.wire_whoami = 0xFF;  // "not run"
+  return true;
+}
+
+bool bus_diag_wire(BusDiag& out) {
+  // The CONTROL half, split into its own call (2026-08-13, board #3): stock
+  // Wire1 spins UNBOUNDED on a held bus, so running it in the same call as
+  // the read-only facts meant a hang ate the whole report — 30 s of silence
+  // and a watchdog reboot, with the rail data we actually needed never
+  // printed. The caller now prints everything above BEFORE calling this, so
+  // a hang here costs only the control row.
+  //
+  // Hand the peripheral over cleanly (both drivers own TWIM1, so the bounded
+  // one must be fully disabled first) and let stock Wire1 ask the identical
+  // question. The rail stays UP throughout — the 16g hazard is an energized
+  // bus over a DEAD rail, which this is not.
+  const uint8_t reg = 0x0F;
   s_bus.end();
   s_wire_started = false;
   Wire1.begin();

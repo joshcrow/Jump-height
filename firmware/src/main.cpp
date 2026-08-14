@@ -501,13 +501,43 @@ static void handleCommand(const String& cmd) {
     // The whole point is the last comparison: Wire1 read a factory-fresh
     // sensor at 0.970 g on 2026-08-12, before the bounded driver existed.
     jh_imu::BusDiag d;
-    if (!jh_imu::bus_diag(d)) {
+    emitLine("# i2cdiag: begin (stage markers follow — the LAST line you see");
+    emitLine("# is the stage that hung, which is itself the finding)");
+    if (!jh_imu::bus_diag_rail(d)) {
       emitLine("ERR i2cdiag_unsupported no sensor bus on this platform");
     } else {
       emitf("I2CDIAG rail_pin=%u sda=%u scl=%u\n",
             d.rail_pin, d.sda_pulled_up, d.scl_pulled_up);
+      {
+        uint32_t o, dir, cnf, in;
+        jh_imu::bus_rail_registers(o, dir, cnf, in);
+        emitf("I2CDIAG railreg out=%lu dir=%lu in=%lu cnf=0x%08lX\n",
+              (unsigned long)o, (unsigned long)dir, (unsigned long)in,
+              (unsigned long)cnf);
+      }
+      // Polarity sweep: the "drive it HIGH" assumption has never actually
+      // been verified to power anything, and a factory-fresh board says the
+      // rail is down. Try both drive states and release.
+      for (uint8_t st = 0; st < 3; ++st) {
+        uint8_t sda = 0, scl = 0, pin = 0;
+        jh_link::watchdog_feed();
+        jh_imu::bus_rail_sweep(st, sda, scl, pin);
+        emitf("I2CDIAG sweep en=%s pin=%u sda=%u scl=%u\n",
+              st == 0 ? "LOW " : (st == 1 ? "HIGH" : "FLOAT"), pin, sda, scl);
+      }
+      jh_link::watchdog_feed();
+      emitLine("# stage: bounded-driver probe");
+      jh_link::watchdog_feed();
+      jh_imu::bus_diag_twim(d);
       emitf("I2CDIAG twim6A=%u twim6B=%u (0=OK 1=NACK 2=TIMEOUT 3=BUSERR)\n",
             d.twim_result, d.twim_result_alt);
+      // Everything above is bounded and is now SAFELY OUT before the control
+      // runs: stock Wire1 spins forever on a held bus, so if the next line
+      // is the last thing you see, the bus is held hard enough to hang the
+      // driver this project used all week — which is itself the answer.
+      emitLine("# running stock-Wire1 control (unbounded — may hang here)");
+      jh_link::watchdog_feed();
+      jh_imu::bus_diag_wire(d);
       emitf("I2CDIAG wire6A=%u wire6B=%u whoami=0x%02X\n",
             d.wire_ack, d.wire_ack_alt, d.wire_whoami);
       if (!d.rail_pin) {
