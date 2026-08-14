@@ -1,3 +1,12 @@
+// ERROR HANDLING NOTE (2026-08-14): every catch in this file is a BARE
+// `catch (ex)`, never `catch (ex instanceof Lang.Exception)`. Connect IQ
+// raises errors that are NOT Lang.Exception; a filtered catch lets those
+// escape and kills the entire data field. This project has been bitten
+// twice on silicon — utf8ArrayToString throwing 'Unexpected Type Error' on
+// the first notification, and the first corruption gate throwing 'System
+// Error: Failed invoking <symbol>' on the first line received — both with
+// every simulator test green. On an unproven watch this is the difference
+// between a field that degrades and a field that dies behind a splash.
 // PuckLink.mc
 //
 // BLE state machine (spec §5.4): IDLE -> SCANNING -> PAIRING -> DISCOVERING
@@ -125,7 +134,7 @@ class PuckLink extends Ble.BleDelegate {
             Ble.registerProfile(profile);
             // _state stays IDLE until onProfileRegister() confirms success --
             // scanning only starts from a confirmed-good profile.
-        } catch (ex instanceof Lang.Exception) {
+        } catch (ex) {
             _state = STATE_DEAD;
         }
     }
@@ -134,7 +143,7 @@ class PuckLink extends Ble.BleDelegate {
     function stop() as Void {
         try {
             Ble.setScanState(Ble.SCAN_STATE_OFF);
-        } catch (ex instanceof Lang.Exception) {
+        } catch (ex) {
             // nothing to do -- we're stopping anyway
         }
         _state = STATE_IDLE;
@@ -242,7 +251,7 @@ class PuckLink extends Ble.BleDelegate {
         _state = STATE_SCANNING;
         try {
             Ble.setScanState(Ble.SCAN_STATE_SCANNING);
-        } catch (ex instanceof Lang.Exception) {
+        } catch (ex) {
             _scheduleRescan();
         }
     }
@@ -256,7 +265,7 @@ class PuckLink extends Ble.BleDelegate {
         _state = STATE_SCANNING;
         try {
             Ble.setScanState(Ble.SCAN_STATE_OFF);
-        } catch (ex instanceof Lang.Exception) {
+        } catch (ex) {
             // already off / never on -- fine
         }
         _resumeScanAtMs = System.getTimer() + _backoffMs;
@@ -295,7 +304,7 @@ class PuckLink extends Ble.BleDelegate {
                 _scheduleRescan();
             }
             // else: wait for onConnectedStateChanged()
-        } catch (ex instanceof Lang.Exception) {
+        } catch (ex) {
             _scheduleRescan();
         }
     }
@@ -332,7 +341,7 @@ class PuckLink extends Ble.BleDelegate {
         try {
             cccd.requestWrite(CCCD_ENABLE);
             // wait for onDescriptorWrite()
-        } catch (ex instanceof Lang.Exception) {
+        } catch (ex) {
             _scheduleRescan();
         }
     }
@@ -346,7 +355,7 @@ class PuckLink extends Ble.BleDelegate {
         }
         try {
             _rxChar.requestWrite(STATS_CMD, { :writeType => Ble.WRITE_TYPE_WITH_RESPONSE });
-        } catch (ex instanceof Lang.Exception) {
+        } catch (ex) {
             // Worst case STATS doesn't reseed until the next reconnect --
             // jumps still show live either way.
         }

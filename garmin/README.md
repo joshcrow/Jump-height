@@ -201,3 +201,24 @@ puck on a desk:
 - [ ] While a *different* data screen is showing (not the jump field),
       toss the puck, then switch back — the jump was still captured
       (FIRST_COMPILE.md #12's compute()-keeps-running-off-screen bet).
+
+
+## Toolchain note (2026-08-14)
+
+`monkeyc`/`monkeydo` need a Java runtime, which this Mac did not have —
+"Unable to locate a Java Runtime" is what you get otherwise. Installed with
+`brew install openjdk`; run the SDK tools with:
+
+```sh
+export JAVA_HOME=/opt/homebrew/opt/openjdk
+export PATH="$JAVA_HOME/bin:$PATH"
+SDK="$HOME/Library/Application Support/Garmin/ConnectIQ/Sdks/connectiq-sdk-mac-9.2.0-2026-06-09-92a1605b2"
+"$SDK/bin/monkeyc"  -f monkey.jungle -d epix2 -o bin/JumpFieldTest.prg \
+                    -y ~/.garmin-ciq/developer_key.der --unit-test
+"$SDK/bin/connectiq" &                       # simulator must be running
+"$SDK/bin/monkeydo" bin/JumpFieldTest.prg epix2 -t
+```
+
+The developer key lives at `~/.garmin-ciq/developer_key.der`. Build for
+`epix2` — the bench watch is an Epix Gen 2, not the Instinct the older docs
+name.

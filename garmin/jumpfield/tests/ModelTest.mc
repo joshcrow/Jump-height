@@ -77,7 +77,7 @@ function testStats_ignoresStoredFields(logger) {
     // session_* and stored_* deliberately differ so a bug that reads the
     // wrong prefix is caught.
     m.onLine(Protocol.parseKV(
-        "STATS session_jumps=2 session_best_m=0.5 stored_jumps=99 stored_best_m=9.9"));
+        "STATS session_jumps=2 session_best_m=0.5 stored_jumps=99 stored_best_m=9.9 trace_bytes=42"));
     Test.assertEqual(m.jumpCount(), 2);
     Test.assertEqual(m.sessionBestM(), 0.5);
     return true;
@@ -91,7 +91,7 @@ function testStats_seedsAfterReconnectPreservingArrivalOrder(logger) {
     var m = new Model.State();
     m.onLine(Protocol.parseKV("JUMP n=1 airtime_s=0.5 height_m=0.3 best_m=0.3"));
     m.markStale();
-    m.onLine(Protocol.parseKV("STATS session_jumps=5 session_best_m=1.9"));
+    m.onLine(Protocol.parseKV("STATS session_jumps=5 session_best_m=1.9 stored_jumps=5 stored_best_m=1.9 trace_bytes=7"));
     Test.assertEqual(m.jumpCount(), 5);
     Test.assertEqual(m.sessionBestM(), 1.9);
     return true;
@@ -231,7 +231,7 @@ function testCorrupt_gluedStatsAndJumpIsRejected(logger) {
     // Mirror case, and the worse one: a bad STATS reseeds count AND best at
     // once (US6), poisoning the display until the next reconnect.
     var m = new Model.State();
-    m.onLine(Protocol.parseKV("STATS session_jumps=3 session_best_m=1.2"));
+    m.onLine(Protocol.parseKV("STATS session_jumps=3 session_best_m=1.2 stored_jumps=3 stored_best_m=1.2 trace_bytes=99"));
     Test.assertEqual(m.jumpCount(), 3);
     m.onLine(Protocol.parseKV("STATS session_jumps=64 session_best_m=0.09 height_m=0.5 best_m=0.5"));
     Test.assertEqual(m.jumpCount(), 3);
@@ -273,5 +273,24 @@ function testCorrupt_gateDoesNotRejectRealTraffic(logger) {
     m.onLine(Protocol.parseKV("JUMP n=5 airtime_s=0.4 height_m=0.2 best_m=0.2"));
     Test.assertEqual(m.jumpCount(), 5);
     Test.assertEqual(m.rejectedCount(), 0);
+    return true;
+}
+
+// A STATS line truncated mid-flight loses its tail. Because parseKV is
+// last-key-wins and LineReader glues fragments, the surviving head can still
+// parse as a valid STATS — and STATS reseeds count AND best in one go, so a
+// fragment would poison the whole session display until the next reconnect.
+// stored_jumps and trace_bytes are emitted unconditionally by the firmware and
+// sit AFTER the fields consumed here, so their absence proves truncation.
+(:test)
+function testCorrupt_truncatedStatsIsRejected(logger) {
+    var m = new Model.State();
+    m.onLine(Protocol.parseKV(
+        "STATS session_jumps=4 session_best_m=1.316 stored_jumps=9 stored_best_m=1.316 trace_bytes=182031"));
+    Test.assertEqual(m.jumpCount(), 4);
+    // Now a truncated one: head survives, tail is gone.
+    m.onLine(Protocol.parseKV("STATS session_jumps=77 session_best_m=9.1"));
+    Test.assertEqual(m.jumpCount(), 4);        // must NOT reseed from a fragment
+    Test.assertEqual(m.rejectedCount(), 1);
     return true;
 }

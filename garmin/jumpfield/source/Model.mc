@@ -253,6 +253,22 @@ module Model {
                 _rejected += 1;
                 return;
             }
+            // COMPLETENESS. The JUMP gate demands every field be present; this
+            // one demanded nothing, while STATS is the LONGER and more
+            // chunk-exposed line — and the one that reseeds count AND best in
+            // a single go. A line truncated mid-way can survive as
+            // "STATS session_jumps=<spliced>" and reseed the whole session
+            // display from a fragment.
+            //
+            // stored_jumps and trace_bytes are emitted unconditionally by BOTH
+            // branches of the firmware's STATS emitf, and BOTH sit AFTER
+            // session_best_m on the wire — so their presence proves the line
+            // survived past the fields being consumed here. Two lookups, no
+            // allocation, matching the inline style proven on silicon.
+            if (kv.get("stored_jumps") == null || kv.get("trace_bytes") == null) {
+                _rejected += 1;
+                return;
+            }
 
             // Reconnect/late-join reseed only (US6). session_* fields only —
             // stored_* describes the device's flash archive, not this live

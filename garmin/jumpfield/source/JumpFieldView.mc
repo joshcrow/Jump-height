@@ -1,3 +1,12 @@
+// ERROR HANDLING NOTE (2026-08-14): every catch in this file is a BARE
+// `catch (ex)`, never `catch (ex instanceof Lang.Exception)`. Connect IQ
+// raises errors that are NOT Lang.Exception; a filtered catch lets those
+// escape and kills the entire data field. This project has been bitten
+// twice on silicon — utf8ArrayToString throwing 'Unexpected Type Error' on
+// the first notification, and the first corruption gate throwing 'System
+// Error: Failed invoking <symbol>' on the first line received — both with
+// every simulator test green. On an unproven watch this is the difference
+// between a field that degrades and a field that dies behind a splash.
 // JumpFieldView.mc
 //
 // The DataField itself: owns Model/PuckLink/FitOut (the whole live object
@@ -59,7 +68,7 @@ class JumpFieldView extends WatchUi.DataField {
         var feet = UnitsFmt.isFeet(_readUnitOverride());
         try {
             _fitOut = new FitOut(self, UnitsFmt.unitLabel(feet));
-        } catch (ex instanceof Lang.Exception) {
+        } catch (ex) {
             _fitOut = null;  // FIT enrichment is a nicety (US4); the live
                               // glance (US1-US3) must not depend on it
         }
@@ -105,7 +114,16 @@ class JumpFieldView extends WatchUi.DataField {
 
         var feet = UnitsFmt.isFeet(_readUnitOverride());
 
-        if (_fitOut != null) {
+        // GUARD: only write SESSION fields once we actually have data.
+        // FIT SESSION developer fields are last-write-wins at save time, and a
+        // mid-activity restart (OOM, an uncaught error, a watch reboot) builds
+        // a FRESH Model whose counters are all zero — which would then
+        // overwrite a good pre-restart summary with 0/0.0/0.0 within one
+        // second. best_airtime can never be recovered afterwards: there is no
+        // wire field for it, so it exists only in this watch's own running max.
+        // Two lines turn "a restart permanently zeroes the summary" into "a
+        // restart keeps the last good summary until the puck reseeds".
+        if (_fitOut != null && _model.hasData()) {
             _fitOut.updateSession(
                 _model.jumpCount(),
                 UnitsFmt.heightValue(_model.sessionBestM(), feet),
@@ -543,7 +561,7 @@ class JumpFieldView extends WatchUi.DataField {
     hidden function _obscurityFlags() as Number {
         try {
             return getObscurityFlags();
-        } catch (ex instanceof Lang.Exception) {
+        } catch (ex) {
             return 0;
         }
     }
@@ -572,7 +590,7 @@ class JumpFieldView extends WatchUi.DataField {
             if (v != null) {
                 enabled = v;
             }
-        } catch (ex instanceof Lang.Exception) {
+        } catch (ex) {
             enabled = true;  // default from properties.xml is true; a read
                               // failure shouldn't silently disable the nudge
         }
@@ -584,7 +602,7 @@ class JumpFieldView extends WatchUi.DataField {
         }
         try {
             Attention.vibrate([ new Attention.VibeProfile(50, 200) ]);
-        } catch (ex instanceof Lang.Exception) {
+        } catch (ex) {
             // Forbidden on this device/app-type combo -- exactly the silent
             // degrade spec §9.3 calls for; the invert-flash remains the nudge.
         }
@@ -596,7 +614,7 @@ class JumpFieldView extends WatchUi.DataField {
             if (v != null && v.length() > 0) {
                 return v;
             }
-        } catch (ex instanceof Lang.Exception) {
+        } catch (ex) {
         }
         return "JumpHeight";  // properties.xml's own default, repeated here so
                               // a read failure still leaves the field usable
@@ -609,7 +627,7 @@ class JumpFieldView extends WatchUi.DataField {
             if (v != null) {
                 return v;
             }
-        } catch (ex instanceof Lang.Exception) {
+        } catch (ex) {
         }
         return UnitsFmt.UNIT_AUTO;
     }
