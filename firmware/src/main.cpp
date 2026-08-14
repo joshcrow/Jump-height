@@ -466,16 +466,25 @@ static void handleCommand(const String& cmd) {
       snprintf(fail_key, sizeof(fail_key), " accel_fail=%lu gyro_fail=%lu",
                (unsigned long)accel_fail_count, (unsigned long)gyro_fail_count);
     }
+    // Link drops: appended only when non-zero, so a healthy session's STATS
+    // line is unchanged and existing parsers keep working. Non-zero means a
+    // client's LIVE view lost bytes; the RECORDED session is unaffected
+    // (jh_store writes independently of the radio).
+    char drop_key[32] = "";
+    if (jh_link::tx_drops() > 0) {
+      snprintf(drop_key, sizeof(drop_key), " tx_drops=%lu",
+               (unsigned long)jh_link::tx_drops());
+    }
     if (vbat >= 0) {
-      emitf("STATS session_jumps=%lu session_best_m=%.3f stored_jumps=%lu stored_best_m=%.3f trace_bytes=%lu vbat_mv=%d batt_pct=%d chg=%d%s%s\n",
+      emitf("STATS session_jumps=%lu session_best_m=%.3f stored_jumps=%lu stored_best_m=%.3f trace_bytes=%lu vbat_mv=%d batt_pct=%d chg=%d%s%s%s\n",
             (unsigned long)session_jumps, session_best,
             (unsigned long)stored_jumps, stored_best, (unsigned long)jh_store::trace_bytes(),
-            vbat, jh_power::batt_pct(), jh_power::charging(), fs_key, fail_key);
+            vbat, jh_power::batt_pct(), jh_power::charging(), fs_key, fail_key, drop_key);
     } else {
-      emitf("STATS session_jumps=%lu session_best_m=%.3f stored_jumps=%lu stored_best_m=%.3f trace_bytes=%lu%s%s\n",
+      emitf("STATS session_jumps=%lu session_best_m=%.3f stored_jumps=%lu stored_best_m=%.3f trace_bytes=%lu%s%s%s\n",
             (unsigned long)session_jumps, session_best,
             (unsigned long)stored_jumps, stored_best, (unsigned long)jh_store::trace_bytes(),
-            fs_key, fail_key);
+            fs_key, fail_key, drop_key);
     }
     emitLine("OK stats");
   } else if (cmd == "jumps") {

@@ -379,5 +379,6 @@ bool reboot_to_dfu() { return false; }
 bool reboot_to_uf2() { return false; }
 void watchdog_init() {}
 void watchdog_feed() {}
+uint32_t tx_drops() { return 0; }
 
 }  // namespace jh_link

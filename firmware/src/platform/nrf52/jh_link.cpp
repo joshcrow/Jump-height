@@ -253,6 +253,14 @@ const uint32_t PACE_MAX_US = 100000;   // sanity cap: never stall a dump on a
                                         // pathological negotiated interval
 uint32_t s_pace_us = CHUNK_GAP_US;      // recomputed in sendOneChunk()
 
+// Per-connection delivery tracking for the chunk currently in flight, plus
+// the visible drop counter. See sendOneChunk().
+const uint8_t TX_RETRY_MAX = 8;         // ~8 pump passes before giving up
+uint16_t s_pending_hdls[kMaxPrphConnections];
+uint8_t  s_pending_n = 0;
+uint8_t  s_pending_tries = 0;
+uint32_t s_tx_drops = 0;
+
 size_t txqSize() { return (s_txq_head + TX_CAP - s_txq_tail) % TX_CAP; }
 
 // Currently connected AND subscribed handles (at most kMaxPrphConnections).
@@ -272,7 +280,7 @@ void sendOneChunk() {
 
   uint16_t subs[kMaxPrphConnections];
   const uint8_t n_subs = subscribedHandles(subs);
-  if (n_subs == 0) { s_txq_tail = s_txq_head; return; }  // no listener: drop pending
+  if (n_subs == 0) { s_txq_tail = s_txq_head; s_pending_n = 0; return; }  // no listener
 
   // Chunk to the SMALLEST subscribed connection's own MTU (queried fresh —
   // see file comment on why no cached MTU-change callback is needed here).
@@ -295,9 +303,43 @@ void sendOneChunk() {
   if (n > sizeof(buf)) n = sizeof(buf);
   for (size_t i = 0; i < n; ++i) buf[i] = s_txq[(s_txq_tail + i) % TX_CAP];
 
-  for (uint8_t i = 0; i < n_subs; ++i) s_bleuart.write(subs[i], buf, n);
+  // NEVER DISCARD A BYTE SILENTLY (2026-08-14). BLEUart::write() returns 0
+  // when the SoftDevice has no free TX buffers (BLEUart.cpp:254 —
+  // `_txd.notify(...) ? len : 0`). The previous version ignored that and
+  // advanced the tail regardless, so a rejected chunk vanished for that
+  // connection while the other central got it: bytes missing mid-line, the
+  // fragments re-gluing into a JUMP that still parses but carries wrong
+  // numbers. That is the watch-corruption signature, and a single central
+  // under load hits the same path.
+  //
+  // Retry is PER-CONNECTION, not all-or-nothing: re-sending a chunk to a
+  // connection that already accepted it would duplicate bytes and corrupt
+  // the stream a second way. s_pending_* remembers exactly who still owes
+  // this chunk.
+  if (s_pending_n == 0) {                       // new chunk: everyone owes it
+    for (uint8_t i = 0; i < n_subs; ++i) s_pending_hdls[i] = subs[i];
+    s_pending_n = n_subs;
+    s_pending_tries = 0;
+  }
+  uint8_t still_pending = 0;
+  for (uint8_t i = 0; i < s_pending_n; ++i) {
+    const uint16_t h = s_pending_hdls[i];
+    if (s_bleuart.write(h, buf, n) == n) continue;   // delivered
+    s_pending_hdls[still_pending++] = h;             // owes it still
+  }
+  s_pending_n = still_pending;
 
-  s_txq_tail = (s_txq_tail + n) % TX_CAP;
+  if (s_pending_n == 0) {
+    s_txq_tail = (s_txq_tail + n) % TX_CAP;          // everyone got it
+  } else if (++s_pending_tries >= TX_RETRY_MAX) {
+    // Bounded: one wedged central must never stall output for the others,
+    // and must never stall it forever. Give up on this chunk, COUNT it, and
+    // move on — a drop we can see is a bug; a drop we cannot see is a wrong
+    // number on someone's wrist. Surfaced as tx_drops= in `stats`.
+    s_tx_drops += n;
+    s_txq_tail = (s_txq_tail + n) % TX_CAP;
+    s_pending_n = 0;
+  }
   s_last_chunk_us = micros();
 }
 
@@ -338,6 +380,8 @@ void wdtFeed() {
 
 void watchdog_init() { wdtInit(); }
 void watchdog_feed() { wdtFeed(); }
+
+uint32_t tx_drops() { return s_tx_drops; }
 
 bool begin(const char* name) {
   wdtInit();  // idempotent-enough: TASKS_START on a running WDT is a no-op  // see the file comment: begin()/pump() are the only two
@@ -398,7 +442,15 @@ bool begin(const char* name) {
                                                     // see the file comment
                                                     // for why we ALSO handle
                                                     // restart ourselves
-  Bluefruit.Advertising.setInterval(32, 244);   // fast 20 ms / slow 152.5 ms
+  // The blue LED blinked at ~50% duty for as long as the puck advertised —
+  // Bluefruit's _led_conn, on by default. Pointless drain, and absurd in a
+  // sealed puck (2026-08-14 power review).
+  Bluefruit.autoConnLed(false);
+  // Fast 20 ms for the first 30 s (a watch looking for us finds us at once),
+  // then 1 s idle. 152.5 ms was a session-grade rate for a device that
+  // spends most of its life sitting still, and the advertiser alone
+  // overran the whole standby budget.
+  Bluefruit.Advertising.setInterval(32, 1600);  // fast 20 ms / slow 1000 ms
   Bluefruit.Advertising.setFastTimeout(30);
   const bool started = Bluefruit.Advertising.start(0);  // 0 = advertise forever
 

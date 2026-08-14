@@ -42,6 +42,7 @@
 // SPDX-License-Identifier: MIT
 
 #include <Arduino.h>
+#include <nrf_gpio.h>  // rail drive strength (DECISIONS #37)
 #include <nrf_soc.h>  // sd_power_system_off — the SoftDevice is up
                       // (Bluefruit), so the sd_ call is mandatory; the
                       // raw register write below is only the fallback.
@@ -261,8 +262,25 @@ bool system_off() {
   // regardless of the 6D rail) and floats SDA/SCL/INT1 with pulls off.
   jh_imu::bus_release();
   delay(1);
-  pinMode(PIN_LSM6DS3TR_C_POWER, OUTPUT);
-  digitalWrite(PIN_LSM6DS3TR_C_POWER, LOW);
+  // DRIVE STRENGTH, NOT pinMode (DECISIONS #37). P1.08 is the sensor's
+  // SUPPLY, not a regulator enable, and pinMode() silently selects standard
+  // drive — the exact mistake that cost four days and two wrong
+  // dead-hardware verdicts. High drive here too, so the pad can actually
+  // sink the rail (100 nF plus the sensor) instead of coasting down.
+  //
+  // WHY THE RAIL STILL DROPS HERE, when the power design says the product
+  // performs zero rail transitions: this is the one sanctioned exception,
+  // and it is deliberate. `off` is human-invoked, announced, rare, and runs
+  // the audited sequence (bus floated FIRST, so nothing can back-feed
+  // through R14/R15). The alternative — leaving the rail up and putting the
+  // sensor to sleep with a register write — swaps a proven-safe operation
+  // for a FALLIBLE I2C write with no verification, and if that write failed
+  // the sensor would sit at ~0.9 mA and flatten the cell in days. The rule
+  // is about the everyday loop, not about a deliberate shutdown.
+  const uint32_t rail = g_ADigitalPinMap[PIN_LSM6DS3TR_C_POWER];
+  nrf_gpio_cfg(rail, NRF_GPIO_PIN_DIR_OUTPUT, NRF_GPIO_PIN_INPUT_CONNECT,
+               NRF_GPIO_PIN_NOPULL, NRF_GPIO_PIN_H0H1, NRF_GPIO_PIN_NOSENSE);
+  nrf_gpio_pin_clear(rail);
   delay(5);
 
   // Wake sources after this line: USB/VBUS attach or the reset button —

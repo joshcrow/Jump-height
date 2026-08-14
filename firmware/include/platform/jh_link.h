@@ -84,4 +84,10 @@ bool reboot_to_uf2();
 void watchdog_init();
 void watchdog_feed();
 
+// Bytes the link gave up on after TX_RETRY_MAX attempts. Zero on a healthy
+// session. Non-zero means the live stream lost data — the RECORDED session
+// is unaffected (jh_store writes independently), but a client's view was
+// incomplete, and that must be visible rather than silent.
+uint32_t tx_drops();
+
 }  // namespace jh_link
