@@ -836,7 +836,23 @@ def _desktest_untethered(dev: "Device") -> int:
             good += 1 if ok else 0
         if good >= 3:
             print(f"\nRESULT: PASS ✅ — assembly verified: {good} clean tosses,")
-            print("recorded entirely on its own, no cable. Next: ./tools/jump drop")
+            print("recorded entirely on its own, no cable.")
+            print("\nThat just proved the three things a water session needs:")
+            print("  • it runs on the battery alone")
+            print("  • the detector fires on real motion")
+            print("  • jumps SURVIVE to storage (the self-test only proves the")
+            print("    filesystem mounts, not that a jump is ever written)")
+            print("\nBefore the water:")
+            print("  • Pair the WATCH ONLY — no Mac/phone connected at the same")
+            print("    time. A second BLE central corrupts the watch display")
+            print("    (open bug, garmin/FIRST_COMPILE.md), and watch-only is")
+            print("    also the control run that investigation still needs.")
+            print("  • `off` does NOT wake from steady USB power — it needs a")
+            print("    plug-in edge or the reset button. Don't power down at the")
+            print("    beach unless you can reach one (SENSE_FIRST_BOOT 16j).")
+            print("  • Top the battery up; check `stats` for batt_pct first.")
+            print("\nNext: ./tools/jump drop  (skip if this unit is already")
+            print("calibrated — check `info` for CAL source=device)")
             return 0
         if not new:
             print("  No new flights in storage at all.")

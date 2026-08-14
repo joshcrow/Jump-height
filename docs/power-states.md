@@ -1,5 +1,25 @@
 # Power architecture — states, transitions, and the end-user story
 
+> **IMPLEMENTATION STATUS (2026-08-14): NONE OF THIS IS BUILT YET.**
+> Verified by reading the code, not by memory:
+> - `INT1` (the IMU's motion-wake interrupt) is never configured as a wake
+>   source — `jh_imu.cpp` only ever floats it. **No wake-on-motion.**
+> - There is **no STANDBY tier**. The device has exactly two states: fully
+>   on, or `off` (System OFF, manual command only).
+> - The BLE advertisement carries flags, TX power, the NUS service UUID and
+>   the name — **no battery level, no armed state**.
+> - The 20 s idle timeout gates *recording only*; it does not change power.
+> - There is no auto-off, no charger-aware behavior beyond reading `~CHG`.
+>
+> What IS measured and true: `off` performs the audited detach then System
+> OFF, and does **not** wake from steady VBUS — it needs a VBUS edge or the
+> reset button (§16j). That confirms the charger-wake design below works on
+> real silicon, and it is the only part of this document with silicon
+> behind it.
+>
+> This stays deliberately unbuilt until the water session (§6).
+
+
 Drafted 2026-08-13, while the third board waited at the macOS Allow
 prompt. Owner's framing, verbatim spirit: "we lack a comprehensive
 power on / power off / power save design — we haven't thought through
