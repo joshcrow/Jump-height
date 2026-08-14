@@ -184,7 +184,14 @@ bool revive() {
   nrf_gpio_pin_clear(rail);
   delay(600);
   nrf_gpio_pin_set(rail);
-  delay(45);
+  // 120 ms, not 45. Datasheet Ton is 35 ms, but this rail is fed from a
+  // GPIO pad through a 100 nF cap, so the rise is slower and softer than a
+  // regulator's. MEASURED 2026-08-14: with 45 ms the mule failed first
+  // contact once in six revives (`config FAIL write_error`, clean on
+  // retry) while board #3 went 5/5 — an intermittency, i.e. the worst
+  // kind of margin. The `i2cdiag` sweep used 120 ms and never missed.
+  // A tenth of a second on a bench-recovery command costs nothing.
+  delay(120);
   return true;
 }
 
@@ -457,6 +464,16 @@ bool probe(uint8_t addr) {
 
 bool begin(uint8_t addr) {
   (void)addr;  // always the real device at Lsm6ds3Min::I2C_ADDR — see above
+  // ONE bounded retry. MEASURED 2026-08-14 on the mule: after a rail
+  // cycle the sensor sometimes ACKs its address but NACKs the first
+  // config write (`config FAIL write_error`), and a second attempt
+  // moments later succeeds — 2 failures in ~14 revives on that board,
+  // 0 in 5 on board #3. First contact with a just-powered die is exactly
+  // where a transient belongs, and on the water a `revive` that gives up
+  // on one NACK costs the rest of the session. Bounded: one retry, then
+  // the honest failure, so a genuinely dead sensor still reports as one.
+  if (s_imu.begin(s_bus, Lsm6ds3Min::I2C_ADDR)) return true;
+  delay(25);
   return s_imu.begin(s_bus, Lsm6ds3Min::I2C_ADDR);
 }
 

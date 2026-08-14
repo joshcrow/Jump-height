@@ -1054,15 +1054,39 @@ rail change stays mandatory.
    suspect, not the hardware.** Both dead-hardware calls rested on
    readings taken exclusively inside the broken domain.
 
+### Durability, measured (not asserted)
+
+| Board | selftest | revive (rail power-cycle) |
+|---|---|---|
+| **#3** (keeper) | **5/5 PASS** | **5/5 PASS** |
+| **Mule** | **5/5 PASS** | 2 failures in ~14 → **12/12 PASS** after the retry below |
+
+The mule intermittently ACKed its address but NACKed the first config
+write after a rail cycle (`config FAIL write_error`, clean on the next
+attempt). Raising the post-power-up settle 45 ms → 120 ms did NOT fix it,
+so it is a first-contact transient with a just-powered die, not a timing
+margin. `jh_imu::begin()` now does **one bounded retry** after 25 ms:
+12/12 on the board that was failing. Bounded on purpose — a genuinely
+dead sensor still reports as dead.
+
+The off/wake half of the gate cannot be automated on this bench: `off`
+does not wake from steady VBUS (§16j), so every cycle needs a human
+replug. A PPPS USB hub retires that.
+
 ### Still open after this
 
-- **Storage on both boards**: QSPI answers the JEDEC probe, but the
-  superblock is unreadable and `format` does not complete (USB CDC drops
-  during the long chip erase; `fs=down` afterwards). Separate fault, next
-  in the queue — the sensor path is now good on both boards.
-- The self-test's `whoami WARN ... likely a clone MPU-6050` line is wrong
-  for this part: **0x6A is the correct LSM6DS3TR-C WHO_AM_I**. Cosmetic,
-  but it is exactly the kind of misleading row that feeds a wrong verdict.
+- ~~Storage on both boards~~ **FIXED the same night** — and it was the
+  same class of bug: a weak `watchdog_feed` stub declared inside
+  `namespace jh_store` created `jh_store::jh_link::watchdog_feed`, so
+  every feed in that file bound to an empty function. The chunked-erase
+  watchdog fix had been feeding nothing since it shipped; a 512-sector
+  format reset the board ~3.5 s in (right after sector 96, measured), so
+  `format` never finished and storage was permanently unmountable. Stub
+  moved to global scope, all calls written `::jh_link::watchdog_feed()`,
+  plus a device-only `yield()` so USB survives the 20 s erase. Both
+  boards now: `flash PASS 2093056B_free`, **`SELFTEST END result=PASS`**.
+- ~~The `whoami` row calls 0x6A a clone~~ **FIXED**: 0x6A (LSM6DS3TR-C)
+  and 0x68 (MPU-6050) are both accepted as correct silicon.
 
 ## 16j. `off` does NOT wake from steady VBUS — item 25 answered. 2026-08-14
 
