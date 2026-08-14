@@ -298,9 +298,26 @@ void sendOneChunk() {
   s_pace_us = (pace_us > PACE_MAX_US) ? PACE_MAX_US : pace_us;
   const size_t payload = (min_mtu > 3) ? (size_t)(min_mtu - 3) : 20;
 
+  // LATCH THE CHUNK LENGTH while a retry is in flight. Recomputing it each
+  // pass is a silent-loss bug in its own right (found by review, 2026-08-14,
+  // before it ever ran): `avail` GROWS between passes because loop() keeps
+  // queueing while pump() drains, and min_mtu can SHRINK if a second central
+  // joins. So a chunk sent as 6 bytes to central A could come back as 20
+  // bytes for central B, and when B accepts, the tail advances 20 — A
+  // silently loses the 14 it never saw. Exactly the failure this whole fix
+  // exists to remove, reintroduced on the other connection. Single-central
+  // is unaffected, but Mac+watch is the configuration the fix gets
+  // re-verified in, so it would have muddied the very measurement.
+  static size_t s_chunk_n = 0;
   uint8_t buf[244];
-  size_t n = (avail < payload) ? avail : payload;
-  if (n > sizeof(buf)) n = sizeof(buf);
+  size_t n;
+  if (s_pending_n > 0) {
+    n = s_chunk_n;                       // retry: same bytes, same length
+  } else {
+    n = (avail < payload) ? avail : payload;
+    if (n > sizeof(buf)) n = sizeof(buf);
+    s_chunk_n = n;
+  }
   for (size_t i = 0; i < n; ++i) buf[i] = s_txq[(s_txq_tail + i) % TX_CAP];
 
   // NEVER DISCARD A BYTE SILENTLY (2026-08-14). BLEUart::write() returns 0

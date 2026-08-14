@@ -55,6 +55,65 @@ session.** Land changes early, then run the dress rehearsal on the exact
 build that goes in the water. Never take a fresh build to a one-shot
 experiment — this project has already paid that tuition.
 
+### PLAN REVIEW, 2026-08-14 — the finding that changes the session itself
+
+An adversarial review of this plan found something more important than
+any schedule item:
+
+> **The height ground truth as specified is CIRCULAR. The session as
+> designed cannot test the thesis it exists to test.**
+
+`data-pipeline.md`, `algorithm.md` and `roadmap.md` all define video
+truth the same way: count airborne frames to get true airtime, then
+compute height as `h = g·T²/8`. **That is the formula under test.**
+Scoring the device's `h = g·T²/8` against a label computed with
+`h = g·T²/8` can only ever measure timing agreement — it passes whether
+or not wings are ballistic, and the resulting RMSE is not comparable to
+the published Surfr/WOO numbers, which came from independently measured
+height.
+
+Two changes, and neither costs build time:
+
+1. **Add one independent height measure.** The rig carries its own
+   ruler: the mast is a known length, in the same plane, at the same
+   distance. At apex, measure board-underside-to-water in mast lengths.
+   ±15 % is plenty — the failure it must catch (a kite-like 2.3×
+   overshoot) is enormous. It is a briefing item for the two brothers,
+   not code: the kayak needs to be roughly abeam of the jump line.
+2. **Make the primary result video-independent.** `wing-ballistic-sim.md`
+   names the real open question: is airborne |a| inside the predicted
+   0-0.07 g band? That needs only an intact 50 Hz trace and **no footage
+   at all.** Promote it to the session's primary deliverable and demote
+   video to the secondary. It means the session can still answer the
+   physics question if the filming goes badly — which, from a kayak, in
+   wind, it might.
+
+### Other review findings that change the two weeks
+
+- **Video sync has no workable procedure.** One marker aligns one
+  continuous recording; real filming produces 20-40 short clips, and the
+  device has **no wall clock** (trace time is boot-relative). Tolerance
+  is ±0.8 s, and a botched alignment fails *silently* — it matches a
+  subset and prints a plausible RMSE. Needs: a wall-clock↔trace anchor
+  recorded at both ends, verified camera clip timestamps, and a sync
+  marker that survives 50 Hz decimation (drop the board flat 3×, not a
+  finger tap).
+- **Battery endurance is a paper number.** "~60 h" is modeled, not
+  measured; the ADC behind `batt_pct` is itself uncalibrated. And `off`
+  is a **one-way door in a sealed case** — §16j proves it only wakes on a
+  VBUS edge or the reset button, neither reachable through a screwed-down
+  lid. Schedule a sealed 3 h untethered run in week 1, while a bad result
+  is still actionable.
+- **The mount is unbought and needs a 24 h cure — on the brother's
+  board.** That is a dependency on a person who is not in this plan. A
+  base that lets go mid-session does not produce "no data", it produces a
+  puck swinging on a leash logging free-fall and impacts that the
+  detector will happily call jumps.
+- **The USB download path can silently drop blocks** — `emitBytes`
+  discards a whole block when the serial buffer is short, and it changed
+  two days ago without being exercised at session scale. That is the
+  path the session data comes home through.
+
 ### Week 1 — de-risk and make the session yield more
 
 | Work | Why it earns its place now | Who |
