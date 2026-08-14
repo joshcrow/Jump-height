@@ -281,7 +281,21 @@ void bus_rail_sweep(uint8_t state, uint8_t& sda, uint8_t& scl, uint8_t& pin) {
   pin = (uint8_t)nrf_gpio_pin_read(nrf_pin);
   sda = (uint8_t)digitalRead(PIN_WIRE1_SDA);
   scl = (uint8_t)digitalRead(PIN_WIRE1_SCL);
-  // SECOND reading with internal PULL-UPS. This is the one that matters:
+  // SECOND reading with internal PULL-UPS — ONLY when the rail is actually
+  // asserted. Enabling pull-ups while the rail is LOW or floating pushes
+  // current through R14/R15 (10k, tied to the sensor rail per the schematic)
+  // straight into an unpowered die: that is precisely the back-feed this
+  // project banned, and the first cut of this diagnostic committed it on the
+  // EN=LOW and EN=FLOAT steps. Caught by the 2026-08-14 design review.
+  // On those steps the pull-down reading is reported alone.
+  if (state == 0 || state == 2) {
+    sda = (uint8_t)(sda | (sda << 1));  // mirror: no pull-up probe was safe
+    scl = (uint8_t)(scl | (scl << 1));
+    pinMode(PIN_WIRE1_SDA, INPUT);
+    pinMode(PIN_WIRE1_SCL, INPUT);
+    return;
+  }
+  // Rail is driven HIGH here, so pull-ups are safe and informative:
   // pull-downs only prove "no powered external pull-up is winning", which
   // is ALSO what you see on a board that simply has no external pull-ups —
   // so a pull-down-only reading cannot tell a dead rail from a normal

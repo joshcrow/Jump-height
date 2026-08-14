@@ -18,6 +18,13 @@
 > behind it.
 >
 > This stays deliberately unbuilt until the water session (§6).
+>
+> **§0-§5b were rewritten 2026-08-14** after the drive-strength root
+> cause and the schematic facts landed. The headline change: the product
+> now performs **zero sensor-rail transitions**, because the arithmetic
+> shows cutting the rail saves 3 µA against a ~10 µA floor dominated by
+> battery self-discharge. The feared operation is designed out, not
+> merely done carefully.
 
 
 Drafted 2026-08-13, while the third board waited at the macOS Allow
@@ -28,134 +35,245 @@ document is that design. It is a DESIGN, deliberately not an
 implementation plan to start tomorrow — see §6 for where it sits in
 the roadmap.
 
-## 1. Why this document exists (the honest accounting)
+## 0. The fear, answered with evidence (read this first)
 
-The two dead sensors trace back to power-management code built ad hoc:
+The premise behind "power code killed our boards" was mine, and it was
+wrong. What the record actually shows:
 
-- `off` (54fa232) and the web power button (a3e4889) were written for
-  the beach off-ritual — a real end-user need — as a single command,
-  without a state design around them. The original sequence cut the
-  sensor's rail with the bus energized; System OFF retains pin state;
-  every sleep back-fed the sensor die for hours (16g). The mule's
-  sensor stopped ACKing the day after `off` was proven on it.
-- The diagnostic rail-cycling that killed the second board was itself
-  chasing the mystery the first ad-hoc power code created.
+- **`off` shipped 2026-08-04** (54fa232) and was used for a week.
+- **On 2026-08-11** — seven days and many `off` cycles later — that same
+  board read gravity perfectly and produced the drop calibration
+  (`airtime_offset_s = +0.0257`, a6e477d).
+- **The real fault (GPIO drive strength) was present from the very first
+  boot**, in `jh_imu::init()`, and explains every symptom on all three
+  boards including the intermittency. Fixed 2026-08-14; both "dead"
+  boards immediately read gravity again.
 
-The lesson is not "never sleep the device." It is: power transitions
-are the most dangerous code in this project, so they must be FEW,
-CENTRALIZED, and BORING. The state machine below is shaped by one
-rule: **the everyday loop contains zero sensor-rail transitions.**
-Rail edges happen only on rare, deliberate, announced transitions,
-through the one audited sequencing pair (`bus_release`/`revive`,
-DECISIONS #33).
+So `off` had a week of proven coexistence with a healthy sensor, and the
+thing that actually broke everything was never in the power path at all.
+**No board was damaged. No board has ever been damaged.**
 
-## 2. The destination-state user story
+That said, "the old theory was wrong" is not the same as "power code is
+safe," and the fear points at something real. The schematic (§1 of
+[xiao-hardware-truth.md](xiao-hardware-truth.md)) shows the genuine
+hazard: R14/R15 (10k) tie SDA and SCL directly to the sensor rail, so
+driving a bus line high while the rail is down back-powers the die
+through those resistors. That is a real mechanism. It has never been
+shown to have damaged anything here, and the design below makes it
+unreachable rather than merely unlikely.
 
-A sealed, potted puck. No buttons, no visible ports, no ritual. The
-watch is the primary UI. The user's entire power interface:
+## 2. The fact that changes the whole design
 
-- **Pick the gear up → the puck is awake.** Carrying the board to the
-  water is unmistakable motion; by the time the rider is on the water
-  the session is armed. The watch finds it without being asked.
-- **Leave it still → it goes quiet by itself.** Minutes of stillness
-  end the session and drop to standby. Nothing to remember, nothing
-  to press.
-- **Between sessions it just waits.** Weeks on a shelf cost single-
-  digit percent of battery. The watch can still find it (slow
-  advertising) to show battery before a trip.
-- **Storage or travel: tell it to sleep deeply, or let it decide.**
-  An explicit "power off" from watch/app/web (flights, end of
-  season), or automatically after N consecutive days without motion.
-- **Waking from deep sleep = plug it into the charger.** One physical
-  act, unambiguous, requires no button and no timing — VBUS is a
-  hardware wake source for System OFF on the nRF52840.
+**The GPIO pad IS the sensor's power supply.** P1.08 drives no regulator
+and no FET; it feeds the LSM6DS3TR-C's VDD/VDDIO and both bus pull-ups
+directly. Every "power state" question therefore reduces to one thing:
+*do we ever stop driving that pin?*
 
-Motion is the button. The charger is the deep-wake key. The watch is
-the screen.
+And once you ask it that way, the arithmetic answers it.
 
-## 3. The state machine
+## 3. The arithmetic that removes the dangerous operation
 
-```
-            motion (INT1)                 sustained stillness
-  STANDBY ────────────────▶ SESSION ────────────────────────▶ STANDBY
-     │                                                          ▲
-     │ `off` cmd, or N days still                               │
-     ▼                                                          │
-  DEEP OFF ────────────────────────────────────────────────────┘
-                    VBUS attach (charger) → cold boot
+Datasheet and measured figures (sources in §11):
 
-  CHARGING is an overlay, not a state: the BQ25101 charges the cell
-  autonomously in every state, MCU involved or not. VBUS also wakes
-  DEEP OFF; ~CHG is telemetry.
-```
-
-### SESSION (today's "on")
-- 200 Hz sampling, detector live, BLE connectable, trace logging.
-- Budget: mA-class; a session day.
-- Entry from STANDBY is purely register work: the rail is ALREADY UP.
-  Reconfigure the IMU from activity-detect to 200 Hz over the bounded
-  bus. No electrical transition at all.
-
-### STANDBY (the missing tier — the important one)
-- MCU: System ON idle, RAM retained, RTC running.
-- IMU: POWERED, in its own hardware low-power activity-detect mode
-  (accel at 1.6–12.5 Hz, wake interrupt on INT1 — µA-class per
-  datasheet; exact figure is a §6b.2 pre-silicon check, not a guess
-  to code against).
-- BLE: slow advertising (~30 s interval) so a watch can find a
-  resting puck, or off entirely — tunable after measurement.
-- Wake: INT1 activity → SESSION in under a second.
-- Budget target: tens of µA → months on the 250 mAh cell. The knee
-  of the whole design: standby must be cheap enough that the rail
-  NEVER needs to drop in normal life.
-- **The rail stays up in STANDBY.** That is the point of STANDBY.
-
-### DEEP OFF (today's `off`, correctly placed)
-- The one rail transition in the machine: audited detach
-  (`bus_release`) → rail down → System OFF. Sequencing fixed in
-  77951ec; already shipped.
-- ~µA-class; shelf life limited by LiPo self-discharge, not
-  electronics.
-- Wake: VBUS attach (charger) or reset. That's the contract: deep
-  sleep is exited with the charging cable, nothing else.
-- Entry: explicit command (watch/app/web), or auto after N days of
-  STANDBY with no session (N ≈ 7, tunable), always announced over
-  BLE before executing so a listening watch can log it.
-
-## 4. Gap analysis (exists today vs. missing)
-
-| Piece | Status |
+| Consumer | Current |
 |---|---|
-| Motion gate (in-session, 20 s) | EXISTS — becomes the SESSION→STANDBY first stage |
-| `off` → System OFF, safe sequencing | EXISTS (77951ec), wake-on-VBUS assumed, **off-current never measured** (item 25) |
-| STANDBY tier (System ON idle + IMU activity-detect) | **MISSING — the big gap.** Today's choice is "fully on" or "deep off" |
-| Wake-on-motion (INT1) | MISSING — INT1 unused by the poll-loop port; pin is wired (D18/P0.11) |
-| Two-stage idle (pause recording → drop to STANDBY) | MISSING (only stage one exists) |
-| Auto DEEP OFF after N days | MISSING |
-| Charger-aware behavior (wake on dock, announce battery) | PARTIAL — ~CHG read exists as telemetry only |
-| Tap-as-button (hardware double-tap detect) | NOT PLANNED — nice-to-have, the IMU supports it in hardware |
-| Standby/off current measurements | MISSING — items 25/25c, need the meter or the overnight-delta method |
-| Charging access on a sealed unit | **OPEN HARDWARE QUESTION** — potting vs. gasketed USB vs. pogo pads decides whether "plug in to deep-wake" survives the sealed design |
+| LSM6DS3TR-C, **power-down** (registers alive, rail up) | **3 µA** |
+| LSM6DS3TR-C, accel low-power 12.5 Hz + wake-on-motion | **9 µA** |
+| nRF52840 **System OFF** (XIAO, measured) | **2.4 µA** |
+| nRF52840 **System ON** idle + RTC (XIAO, measured) | **5.4 µA** |
+| BLE advertising @2 s, added | **~10 µA** |
+| **LiPo self-discharge, 250 mAh** (~2 %/month) | **~7 µA equivalent** |
 
-## 5. Safety rules this design inherits (non-negotiable)
+Now the only question that matters:
 
-1. Every rail/bus transition goes through the audited pair
-   (`jh_imu::bus_release` / `revive`-shaped power-up). New states
-   never reimplement sequencing (DECISIONS #33 rule 1).
-2. IMU low-power/interrupt configuration is register work on a
-   powered die — but it is NEW electrical-adjacent code, so:
-   datasheet check before silicon (rule 2), first runs on the
-   sacrificial board (rule 4), soaked before a keeper board sees it
-   (hardware-protection §6).
-3. STANDBY concentrates risk away from the rail: the more the puck
-   lives in STANDBY, the fewer rail edges in its lifetime. Design
-   success metric: a season's rail-transition count in the single
-   digits.
-4. Every auto-transition announces itself on the protocol (`STATE
-   standby`, `# deep off in 60s — send any command to cancel`) so
-   bench sessions and the watch never see a silent disappearance —
-   the "board went dark" ambiguity this week is what a silent state
-   machine costs.
+> **What does cutting the sensor rail actually save? 3 µA.**
+
+Shelf life with the rail left UP and the sensor in power-down:
+`2.4 + 3 + 7 = 12.4 µA` → **~2.3 years**.
+Shelf life with the rail CUT: `2.4 + 7 = 9.4 µA` → **~3.0 years**.
+
+Both are far beyond the cell's practical life, and **both are dominated
+by self-discharge, not by the sensor.** The rail cut buys a rounding
+error, and it is the single most dangerous operation in the codebase —
+the one that needs sequencing, that can back-power the die, and that has
+consumed four days of this project's life.
+
+**So we stop doing it.**
+
+### THE RULE
+
+> **The sensor rail is asserted once, at boot, with high drive, and is
+> never changed again for the life of the power-up. The product performs
+> ZERO rail transitions. A design that needs one is wrong.**
+
+Everything the sensor needs — full-rate, low-power wake-on-motion, or
+fully asleep at 3 µA — is reached by **register writes over a powered
+bus**, which is an ordinary, safe, bounded I2C transaction. Power states
+become software states. The electrically dangerous operation is deleted
+from normal life entirely.
+
+`revive()` (the one rail power-cycle) survives only as a **human-invoked
+bench recovery command**. Nothing automatic may ever call it.
+
+## 4. The state machine (rail-static)
+
+```
+                 motion on INT1                  stillness (2 min)
+   STANDBY ──────────────────────▶  SESSION ──────────────────────▶ STANDBY
+      │                                                                ▲
+      │  `shelf` command, or N days with no session                    │
+      ▼                                                                │
+    SHELF ─────────────────────────────────────────────────────────────┘
+              VBUS (charger) / reset / INT1 motion  →  cold boot
+
+   In ALL THREE states P1.08 stays HIGH. The rail never moves.
+   CHARGING is an overlay: the BQ25101 charges the cell in every state.
+```
+
+| | MCU | Sensor (via register writes only) | BLE | Total | Life on 250 mAh |
+|---|---|---|---|---|---|
+| **SESSION** | active | 208 Hz + gyro | connected | ~4 mA | a session day |
+| **STANDBY** | System ON idle | accel LP 12.5 Hz, wake-on-motion | slow adv (2 s) | ~24 µA | **~11 months** |
+| **SHELF** | System OFF | power-down (3 µA) | off | ~5.4 µA + self-disch. | **~2.3 years** |
+
+Two deliberate choices worth stating:
+
+1. **STANDBY keeps BLE advertising** even though System OFF would be
+   cheaper (~11 µA vs ~24 µA). Eleven months of standby is already far
+   more than the product needs, and the advertisement is what makes the
+   puck *visible on the wrist at rest* — the direct answer to "am I sure
+   it's on?" Spending 13 µA to remove that anxiety is the right trade.
+2. **SHELF wakes on motion too**, not just the charger. The nRF52840's
+   GPIO DETECT is a System OFF wake source, so INT1 still works. Waking
+   from SHELF is a reset (cold boot), which is fine and is what already
+   happens on every power-up.
+
+## 5. Transitions — exactly what changes, and what never does
+
+| Transition | What actually happens | Rail |
+|---|---|---|
+| boot → STANDBY | `nrf_gpio_cfg(P1.08, …H0H1…)`, set high, settle, configure IMU for wake-on-motion | **rises once, at boot** |
+| STANDBY → SESSION | INT1 fires → reconfigure IMU registers to 208 Hz + gyro | untouched |
+| SESSION → STANDBY | 2 min still → IMU registers back to LP wake-on-motion, flush storage | untouched |
+| STANDBY → SHELF | IMU register write to power-down, announce, `sd_power_system_off()` | untouched |
+| SHELF → boot | VBUS / reset / INT1 → cold boot (GPIOs reset to input, rail collapses and is re-asserted by `init()` — the bus is floating at reset too, so this is inherently safe) | one unavoidable, naturally-safe cycle |
+
+The only rail movement in the entire product is the one that happens at
+every cold boot, and at reset **all** GPIOs float simultaneously — bus
+included — so the back-feed hazard cannot occur there by construction.
+
+## 5a. REVIEW CORRECTIONS (2026-08-14, 47-agent adversarial pass)
+
+36 findings confirmed, 7 refuted. The rail-static RULE survived — but
+several numbers and two shipped code paths did not. Corrections, in
+order of how badly they were wrong:
+
+**1. SHELF cannot be 3 µA and wake on motion. Physics, not opinion.**
+In power-down (ODR_XL = 0) the accelerometer produces no samples, so the
+wake engine has nothing to run on and INT1 never fires. §4 claimed both.
+Pick one, and the honest numbers are:
+- motion-wakeable SHELF: `2.4 + 9 + 7 = 18.4 µA` → **~1.5 years**
+- charger/reset-only SHELF: `2.4 + 3 + 7 = 12.4 µA` → ~2.3 years
+**Decision: take the 1.5 years and keep motion wake.** A puck that only
+wakes on a cable is the Garmin-footpod silent-failure this whole design
+exists to avoid, and 1.5 years already outlives the cell.
+Note this *strengthens* THE RULE: an unpowered sensor cannot assert INT1
+either, so cutting the rail would cost the wake feature outright.
+
+**2. The advertising budget was off by an order of magnitude.**
+`jh_link.cpp` advertises at **152.5 ms**, not the 2 s §4 assumed. The
+advertiser alone blows the STANDBY budget. Slow-interval advertising has
+to be configured explicitly; it is not free.
+
+**3. There is no low-power idle to build STANDBY on.** `loop()` is a
+busy poll that returns early and is immediately re-entered — the CPU
+never reaches the FreeRTOS idle task, so nothing sleeps. Worse,
+**TWIM1 is left ENABLE=1 forever** (only `bus_release()` clears it), and
+a serial peripheral left enabled is the classic nRF52 sleep killer —
+hundreds of µA, 30-40× the entire STANDBY budget. STANDBY is a
+main-loop restructure, not a feature to bolt on.
+
+**4. The 3.5 s watchdog cannot be stopped and is configured to run
+during sleep** (`CONFIG = SLEEP=Run`), so it caps every sleep at ~3.4 s.
+The design's 2-5 minute standby tick is impossible until that is
+addressed.
+
+**5. The blue LED blinks at ~50 % duty the whole time the puck
+advertises** — Bluefruit's `_led_conn`, and nothing ever calls
+`Bluefruit.autoConnLed(false)`. A constant drain today, and an absurd
+behavior for a sealed puck.
+
+**6. The DC/DC converter is never enabled**, so session and advertising
+currents are both ~1.7× the figures quoted here.
+
+**7. Two shipped code paths violate THE RULE right now:**
+- `jh_power::system_off()` still cuts the rail — and does it with
+  `pinMode()`, the exact API DECISIONS #37 bans.
+- `bus_release()` floats INT1, and `system_off()` calls it first, so the
+  shutdown path **structurally cannot** have a motion wake. INT1 must be
+  configured via GPIO SENSE/PORT (shared by the System ON and System OFF
+  paths), never `attachInterrupt()`.
+
+**8. `i2cdiag` committed the back-feed itself** — it enabled internal
+pull-ups on SDA/SCL while driving the rail LOW, pushing current into an
+unpowered die through R14/R15, and it is reachable over BLE. **Fixed
+2026-08-14**: the pull-up probe now runs only when the rail is asserted.
+The lesson is the sharper one: *the diagnostic written to prove safety
+was itself unsafe*, which is why rule 6 below (bench board first) is not
+optional.
+
+**9. A cold boot mid-activity permanently corrupts the Garmin FIT
+record** — the real data-loss path, and it is about SHELF/reset
+behavior, not about the rail. Any state that can reboot mid-session must
+be reconciled on the watch side.
+
+**Refuted** (the design was right): brownout does not create a back-feed
+path; TWIM's internal pull-ups are not a standing hazard; the sensor
+does get a real power-on reset at cold boot; the bootloader is not a
+hole; STANDBY→SESSION does not manufacture phantom jumps; a latched
+wake-up interrupt does not cause a boot loop.
+
+**What this means for sequencing:** STANDBY is *not* the cheap first
+increment it looked like. The cheap, safe, high-value first increments
+are (a) `autoConnLed(false)`, (b) slow advertising, (c) enabling DC/DC,
+(d) fixing `system_off()` to stop cutting the rail. Those four are small
+and independently verifiable. The sleep-tier work comes after, with
+current measured at every step.
+
+## 5b. The safety rules any power change must satisfy
+
+1. **Zero rail transitions in product code.** Only `jh_imu::init()`
+   asserts it; only a human running `revive` may cycle it.
+2. **Never energize the bus while the rail is down.** `bus_release()`
+   first, always. (Naturally satisfied at reset.)
+3. **The rail is configured H0H1, in exactly one place.** Never
+   `pinMode()` (DECISIONS #37).
+4. **Every state change is announced** on the protocol (`STATE standby`,
+   `# shelf in 60 s — send any command to cancel`) so nothing ever
+   disappears silently. Silent state machines are why "the board is
+   dead" was said three times.
+5. **Measure before trusting.** Every current figure in §3 is a
+   datasheet or third-party number. Not one has been measured on OUR
+   board. No state ships until its current is measured (§6b).
+6. **New power code runs on the backup board first** (#3), with
+   `pincensus` + `i2cdiag` before and after, and a 20-cycle soak, before
+   it touches the product board.
+
+## 6b. What must be measured before any of this is trusted
+
+- **Baseline off-current** on our board (item 25) — the overnight
+  voltage-delta method needs no meter.
+- **STANDBY current**, both flavors, to confirm the 24 µA / 11 µA
+  estimates within 2x.
+- **The IMU's wake-on-motion configuration on OUR part**: ST's app note
+  AN4650's register map is WRONG for the TR-C variant (the activity
+  enable moved into `TAP_CFG`), the inactivity interrupt CANNOT be
+  latched while the wake-up interrupt can, and threshold resolution is
+  full-scale dependent. Get this from the TR-C datasheet, not the app
+  note.
+- **A missed-interrupt backstop**: an RTC tick every few minutes that
+  polls the accel and re-arms, so a lost interrupt costs minutes, not a
+  session.
 
 ## 6. Where this sits in the roadmap
 
