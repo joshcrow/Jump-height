@@ -55,5 +55,6 @@ bool read_gyro_dps(float&, float&, float&) {
 
 }  // namespace jh_imu
 
+bool jh_imu::bus_diag(BusDiag&) { return false; }  // no sensor bus to diagnose
 bool jh_imu::revive() { return false; }  // no sensor rail control on this platform
 void jh_imu::bus_release() {}  // no switched sensor domain on this platform

@@ -60,6 +60,8 @@
 #include "platform/jh_imu.h"
 
 #include <Arduino.h>
+#include <Wire.h>      // bus_diag control: stock Wire1 A/B
+#include <nrf_gpio.h>  // bus_diag rail-enable readback (no rail edge)
 #include "platform/jh_persist.h"
 
 #include "lsm6ds3_min.h"
@@ -167,6 +169,69 @@ void bus_release() {
   s_bus.end();
   s_wire_started = false;
   pinMode(PIN_LSM6DS3TR_C_INT1, INPUT);  // no pull — truly floating
+}
+
+bool bus_diag(BusDiag& out) {
+  // Contract and safety argument in jh_imu.h. Order matters: read-only
+  // facts first, bounded driver next, and the stock-Wire1 control LAST
+  // (Wire1 spins unbounded on a held bus — if it hangs, the watchdog
+  // reboots us and everything above has already been reported).
+  const uint32_t rail_nrf = g_ADigitalPinMap[PIN_LSM6DS3TR_C_POWER];
+  // Read the rail enable back through its own input buffer WITHOUT
+  // changing what it is driving — init() already drove it HIGH; adding
+  // INPUT_CONNECT to an output is not a rail transition.
+  nrf_gpio_cfg(rail_nrf, NRF_GPIO_PIN_DIR_OUTPUT, NRF_GPIO_PIN_INPUT_CONNECT,
+               NRF_GPIO_PIN_NOPULL, NRF_GPIO_PIN_S0S1, NRF_GPIO_PIN_NOSENSE);
+  out.rail_pin = (uint8_t)nrf_gpio_pin_read(rail_nrf);
+
+  // Bus idle levels with OUR pulls removed: whatever holds the lines high
+  // now can only be the module's own pull-ups, which sit on the switched
+  // rail. This is the rail indicator, and it costs no rail edge.
+  s_bus.end();
+  s_wire_started = false;
+  pinMode(PIN_WIRE1_SDA, INPUT);
+  pinMode(PIN_WIRE1_SCL, INPUT);
+  delay(2);
+  out.sda_pulled_up = (uint8_t)digitalRead(PIN_WIRE1_SDA);
+  out.scl_pulled_up = (uint8_t)digitalRead(PIN_WIRE1_SCL);
+
+  // The bounded driver, at both SA0 strap addresses.
+  s_bus.begin(PIN_WIRE1_SDA, PIN_WIRE1_SCL);
+  s_wire_started = true;
+  const uint8_t reg = 0x0F;  // WHO_AM_I pointer — a 1-byte write is the ACK test
+  out.twim_result     = (uint8_t)s_bus.write(0x6A, &reg, 1);
+  out.twim_result_alt = (uint8_t)s_bus.write(0x6B, &reg, 1);
+
+  // The control. Hand the peripheral over cleanly (both drivers own TWIM1,
+  // so the bounded one must be fully disabled first) and let stock Wire1
+  // ask the identical question. The rail stays UP throughout — the 16g
+  // hazard is an energized bus over a DEAD rail, which this is not.
+  s_bus.end();
+  s_wire_started = false;
+  Wire1.begin();
+  Wire1.setClock(400000);
+  Wire1.beginTransmission(0x6A);
+  Wire1.write(reg);
+  out.wire_ack = (Wire1.endTransmission() == 0) ? 1 : 0;
+  Wire1.beginTransmission(0x6B);
+  Wire1.write(reg);
+  out.wire_ack_alt = (Wire1.endTransmission() == 0) ? 1 : 0;
+  out.wire_whoami = 0;
+  const uint8_t found_addr = out.wire_ack ? 0x6A : (out.wire_ack_alt ? 0x6B : 0);
+  if (found_addr) {
+    Wire1.beginTransmission(found_addr);
+    Wire1.write(reg);
+    if (Wire1.endTransmission(false) == 0 &&
+        Wire1.requestFrom(found_addr, (uint8_t)1) == 1) {
+      out.wire_whoami = (uint8_t)Wire1.read();
+    }
+  }
+  Wire1.end();
+  // Leave the bus back under the bounded driver, as every other path
+  // expects to find it.
+  s_bus.begin(PIN_WIRE1_SDA, PIN_WIRE1_SCL);
+  s_wire_started = true;
+  return true;
 }
 
 bool probe(uint8_t addr) {

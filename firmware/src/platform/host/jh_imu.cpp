@@ -186,5 +186,6 @@ bool read_gyro_dps(float& gx, float& gy, float& gz) {
 
 }  // namespace jh_imu
 
+bool jh_imu::bus_diag(BusDiag&) { return false; }  // no sensor bus to diagnose
 bool jh_imu::revive() { return false; }  // host: nothing to power-cycle
 void jh_imu::bus_release() {}  // host: nothing to release

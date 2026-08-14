@@ -52,6 +52,27 @@ void bus_release();
 // on platforms with no rail to cycle. Follow with probe()/begin().
 bool revive();
 
+// One-shot sensor-bus diagnostic (bench). Answers, in one pass and with NO
+// rail transitions at all (read-only on the power pin — the quarantine-safe
+// class of check): is the sensor rail enable actually high, are the module's
+// rail-powered pull-ups holding the bus up, does the bounded driver see an
+// ACK, and does the stock Arduino Wire1 driver — the one that read 0.970 g
+// on factory-fresh silicon 2026-08-12, before the bounded driver existed —
+// see the same thing? A disagreement between the last two convicts the
+// driver, not the hardware. Fills `out` with a one-line-per-fact report.
+// Returns lines written, 0 where there is no sensor bus.
+struct BusDiag {
+  uint8_t rail_pin;        // P1.08 level read back while driven (1 = up)
+  uint8_t sda_pulled_up;   // bus idle level with our pulls off (1 = module
+  uint8_t scl_pulled_up;   //     pull-ups powered ⇒ rail really is up)
+  uint8_t twim_result;     // TwimBounded::Result at 0x6A
+  uint8_t twim_result_alt; // ... at 0x6B (SA0 strap alternative)
+  uint8_t wire_ack;        // stock Wire1 ACK at 0x6A (the control)
+  uint8_t wire_ack_alt;    // ... at 0x6B
+  uint8_t wire_whoami;     // WHO_AM_I via Wire1 if it ACKed (0x6A expected)
+};
+bool bus_diag(BusDiag& out);
+
 // True if a sensor ACKs at this I2C address. Safe to call repeatedly — the
 // `selftest` command re-probes on demand, exactly like today.
 bool probe(uint8_t addr);

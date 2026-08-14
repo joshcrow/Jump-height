@@ -416,7 +416,7 @@ static bool runSelfTest() {
 
 // ---------------- Commands ----------------
 static void printHelp() {
-  emitLine("# commands: help | stats | jumps | trace | dump | clear | selftest | revive | info | off | dfu | uf2 | fakejump | mount | format");
+  emitLine("# commands: help | stats | jumps | trace | dump | clear | selftest | revive | i2cdiag | info | off | dfu | uf2 | fakejump | mount | format");
   emitLine("#           set <airtime_offset_s|height_scale|vbat_scale> <value|default>");
   emitLine("#           vbatscan  (bench: battery ADC vs acquisition time)");
   emitLine("#           gyro      (bench: raw + bias-corrected rate, 2 s)");
@@ -495,6 +495,40 @@ static void handleCommand(const String& cmd) {
   } else if (cmd == "selftest") {
     runSelfTest();
     emitLine("OK selftest");
+  } else if (cmd == "i2cdiag") {
+    // Bench diagnostic (see jh_imu.h): rail readback + bus idle levels +
+    // bounded-driver ACK + stock-Wire1 ACK, in one pass, no rail edges.
+    // The whole point is the last comparison: Wire1 read a factory-fresh
+    // sensor at 0.970 g on 2026-08-12, before the bounded driver existed.
+    jh_imu::BusDiag d;
+    if (!jh_imu::bus_diag(d)) {
+      emitLine("ERR i2cdiag_unsupported no sensor bus on this platform");
+    } else {
+      emitf("I2CDIAG rail_pin=%u sda=%u scl=%u\n",
+            d.rail_pin, d.sda_pulled_up, d.scl_pulled_up);
+      emitf("I2CDIAG twim6A=%u twim6B=%u (0=OK 1=NACK 2=TIMEOUT 3=BUSERR)\n",
+            d.twim_result, d.twim_result_alt);
+      emitf("I2CDIAG wire6A=%u wire6B=%u whoami=0x%02X\n",
+            d.wire_ack, d.wire_ack_alt, d.wire_whoami);
+      if (!d.rail_pin) {
+        emitLine("# verdict: rail enable reads LOW while driven — board-level");
+        emitLine("# power fault (the mule's signature). Not a driver problem.");
+      } else if (!d.sda_pulled_up || !d.scl_pulled_up) {
+        emitLine("# verdict: EN high but the module pull-ups aren't holding the");
+        emitLine("# bus up — rail path dead downstream of the enable.");
+      } else if (d.wire_ack || d.wire_ack_alt) {
+        if (d.twim_result != 0 && d.twim_result_alt != 0) {
+          emitLine("# verdict: WIRE1 GETS AN ACK AND THE BOUNDED DRIVER DOES NOT.");
+          emitLine("# The sensor is ALIVE; twim_bounded.h is the bug.");
+        } else {
+          emitLine("# verdict: both drivers see the sensor — bus healthy.");
+        }
+      } else {
+        emitLine("# verdict: rail up, bus idle high, neither driver gets an ACK");
+        emitLine("# — points at the sensor die, not at our code.");
+      }
+      emitLine("OK i2cdiag");
+    }
   } else if (cmd == "revive") {
     // Clean sensor power-cycle (16g sequencing) then a full retry — the
     // recovery for power-up-corrupted-but-undamaged silicon. Bench command;
