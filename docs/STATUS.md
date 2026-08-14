@@ -40,6 +40,30 @@ do not.**
 
 ## CHANGED AFTER THE AUDIT (2026-08-14, later the same day)
 
+### END-TO-END: a jump detected on real motion and read back from flash — GATE CLOSED
+- **State:** proven-on-hardware
+- **Evidence:** `./tools/jump desktest` PASS on the OG board, 2026-08-14,
+  three untethered tosses with the cable OUT, running on battery alone.
+  Read back off the device afterwards:
+  ```
+  n,takeoff_s,airtime_raw_s,airtime_s,height_m
+  1,13307.017,0.250,0.276,0.093
+  2,13314.731,0.415,0.441,0.238
+  3,13318.231,0.271,0.296,0.108
+  ```
+  `stats` then reported `stored_jumps=3 stored_best_m=0.238`.
+- **Why it matters:** this is the FIRST jump detected on silicon on any
+  build since 2026-08-11, and the first proof of end-to-end persistence
+  since the storage path, the IMU rail drive and `begin()` all changed. It
+  simultaneously proves battery-only operation, the detector on real motion,
+  and that a jump survives to flash — the three things the self-test cannot
+  show. The `airtime_offset_s = 0.0257` calibration is visibly applied
+  (raw 0.250 → corrected 0.276).
+- **Gap:** flight 1 landed at 0.250 s, exactly the `min_airtime_s` floor —
+  these were gentle tosses, so the detector's LOW edge is now exercised but
+  its behaviour on 1 s+ airtimes is still only simulated.
+
+
 ### USB session download — WAS LOSSY, now fixed and verified
 - **State:** proven-on-hardware
 - **Evidence:** commit b7c3644. BEFORE: two downloads of the same stored trace
