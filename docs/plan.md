@@ -61,7 +61,7 @@ experiment — this project has already paid that tuition.
 |---|---|---|
 | **Desk test** (3 untethered tosses) | The ONLY proof that a jump survives to storage on this board. A wasted trip otherwise. | **owner, 10 min** |
 | **P1 batch** — silent BLE drop fix, LED off, slower advertising, `system_off` drive strength | Small, safe, done in one flash. Removes the last shipped rule violation. **DONE in code, awaiting a board.** | eng |
-| **Watch corruption gate** | The brother is wearing the watch. If it shows nonsense mid-session nobody can tell whether the puck is working. | eng |
+| ~~Watch corruption gate~~ **ALREADY BUILT** | Correction 2026-08-14: `Model.mc::_jumpIsCorrupt()` already rejects incomplete JUMP lines, glued JUMP+STATS lines, physically impossible values, and `best < height` — the wire invariant that alone would have caught the 2026-08-11 corruption — and counts rejections. 17 Model tests cover it. **The watch already refuses to render a corrupt line.** Nothing to build. | — |
 | **Full land dress rehearsal** | Mount, film, jump, download, label, `eval` — end to end on the frozen build. Finds the pipeline breaks that would otherwise be found in a kayak. | both |
 
 ### Week 2 — rehearse, freeze, pack
@@ -123,8 +123,8 @@ Only worth doing once we know the numbers themselves are right.
 
 1. Honor the transmit return + `tx_drops` counter — kills the silent
    byte-loss path (`ble-dependability.md` §3 layer 1).
-2. Watch-side corruption gate — reject implausible lines instead of
-   rendering them.
+2. ~~Watch-side corruption gate~~ — **already shipped** (Model.mc
+   `_jumpIsCorrupt`, 17 tests). Listed here in error; verified 2026-08-14.
 3. Battery + armed state in the advertisement — the "is it on?" fix.
 4. Per-line checksum + sequence — makes loss *detectable*, not just rare.
 
