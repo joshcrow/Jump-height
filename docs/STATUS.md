@@ -40,6 +40,23 @@ do not.**
 
 ## CHANGED AFTER THE AUDIT (2026-08-14, later the same day)
 
+### Watch: error-boundary hardening, FIT summary guard, STATS completeness
+- **State:** tested-in-sim-or-host
+- **Evidence:** commit f2861ee. Both device targets BUILD SUCCESSFUL;
+  **44/44 unit tests PASS** in the Connect IQ simulator (epix2), including a
+  new `testCorrupt_truncatedStatsIsRejected`.
+- **Gap:** not yet sideloaded. The point of the catch change is behaviour on
+  an unproven device, which by definition the simulator cannot show.
+
+### Garmin toolchain runnable on this Mac
+- **State:** proven-on-hardware (of the toolchain)
+- **Evidence:** `brew install openjdk` — the SDK tools could not run at all
+  before ("Unable to locate a Java Runtime"). Full recipe in
+  `garmin/README.md`, key at `~/.garmin-ciq/developer_key.der`.
+- **Gap:** none. This unblocks every future watch change being compiled and
+  tested rather than eyeballed.
+
+
 ### END-TO-END: a jump detected on real motion and read back from flash — GATE CLOSED
 - **State:** proven-on-hardware
 - **Evidence:** `./tools/jump desktest` PASS on the OG board, 2026-08-14,
