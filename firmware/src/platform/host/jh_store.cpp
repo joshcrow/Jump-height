@@ -41,7 +41,7 @@ namespace {
 
 const char* kJumpsName = "jumps.csv";
 const char* kTraceName = "trace.csv";
-const char* kJumpsHeader = "n,takeoff_s,airtime_raw_s,airtime_s,height_m\n";
+const char* kJumpsHeader = "n,takeoff_s,airtime_raw_s,airtime_s,height_m,med_a_g,med_w_dps,med_acorr_g,n_air\n";
 const char* kTraceHeader = "t,mag\n";
 
 bool s_fs_ok = false;
@@ -101,7 +101,8 @@ uint32_t free_bytes() {
 }
 
 void jumps_append(uint32_t n, float takeoff_s, float airtime_raw_s, float airtime_s,
-                   float height_m) {
+                   float height_m, uint16_t med_a_mg, uint16_t med_w_dps,
+                   uint16_t med_acorr_mg, uint16_t n_air) {
   if (!s_fs_ok) return;
   FILE* f = std::fopen(jumpsPath().c_str(), "a");
   if (!f) return;
@@ -109,8 +110,10 @@ void jumps_append(uint32_t n, float takeoff_s, float airtime_raw_s, float airtim
     std::fputs(kJumpsHeader, f);
     s_jumps_header = true;
   }
-  std::fprintf(f, "%lu,%.3f,%.3f,%.3f,%.3f\n", (unsigned long)n, (double)takeoff_s,
-               (double)airtime_raw_s, (double)airtime_s, (double)height_m);
+  std::fprintf(f, "%lu,%.3f,%.3f,%.3f,%.3f,%.3f,%u,%.3f,%u\n", (unsigned long)n, (double)takeoff_s,
+               (double)airtime_raw_s, (double)airtime_s, (double)height_m,
+               med_a_mg / 1000.0, (unsigned)med_w_dps, med_acorr_mg / 1000.0,
+               (unsigned)n_air);
   std::fclose(f);
 }
 

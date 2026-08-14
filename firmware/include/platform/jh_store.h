@@ -78,7 +78,9 @@ uint32_t free_bytes();
 // Append one row (writes the CSV header first time only). No-op if storage
 // isn't mounted.
 void jumps_append(uint32_t n, float takeoff_s, float airtime_raw_s,
-                   float airtime_s, float height_m);
+                  float airtime_s, float height_m,
+                  uint16_t med_a_mg = 0, uint16_t med_w_dps = 0,
+                  uint16_t med_acorr_mg = 0, uint16_t n_air = 0);
 // Parse the stored file: row count and the max value of its last column
 // (height_m). Both 0 if storage is down or the file is empty/missing.
 void jumps_scan(uint32_t& count, float& best_m);

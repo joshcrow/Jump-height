@@ -263,10 +263,61 @@ static void flushTrace() {
   trace_buf = "";
 }
 
-static void logJump(const jump::JumpEvent& ev) {
+
+// ---- flight physics accumulator -------------------------------------------
+//
+// THE MEASUREMENT THE PROJECT EXISTS TO MAKE. The thesis is that a wing jump
+// is ballistic: once airborne, specific force is ~0 (predicted band 0-0.07 g).
+// The 50 Hz trace cannot test it — it stores |a| only, and |a| carries the
+// board's own rotation as omega^2*r, which for ordinary board pitch is several
+// times the width of the band under test. The gyro is read every sample and
+// was being discarded.
+//
+// So sample the airborne window at the FULL 200 Hz and keep three medians per
+// jump: raw |a|, |omega|, and |a| with the rotation term removed. Medians, not
+// means, because takeoff and landing edges are violent outliers.
+//
+// Capacity 256 samples = 1.28 s. A longer flight is truncated to its first
+// 1.28 s and n_air records how many samples the medians actually used, so a
+// truncated window can never be mistaken for a short flight.
+static const uint16_t kAirCap = 256;
+static uint16_t s_air_a_mg[kAirCap];
+static uint16_t s_air_w_dps[kAirCap];
+static uint16_t s_air_n = 0;
+
+static void airReset() { s_air_n = 0; }
+
+static void airObserve(float mag_g, float omega_dps) {
+  if (s_air_n >= kAirCap) return;
+  const float a = mag_g * 1000.0f;
+  const float w = omega_dps;
+  s_air_a_mg[s_air_n]  = (uint16_t)(a < 0 ? 0 : (a > 65535.0f ? 65535.0f : a));
+  s_air_w_dps[s_air_n] = (uint16_t)(w < 0 ? 0 : (w > 65535.0f ? 65535.0f : w));
+  s_air_n++;
+}
+
+// Median by insertion sort on a copy. n <= 256 and this runs ONCE per jump,
+// inside the landing settle, so the cost is invisible; the sample loop is
+// never asked to do it.
+static uint16_t medianOf(const uint16_t* src, uint16_t n) {
+  if (n == 0) return 0;
+  static uint16_t tmp[kAirCap];
+  for (uint16_t i = 0; i < n; ++i) tmp[i] = src[i];
+  for (uint16_t i = 1; i < n; ++i) {
+    const uint16_t v = tmp[i];
+    int16_t j = (int16_t)i - 1;
+    while (j >= 0 && tmp[j] > v) { tmp[j + 1] = tmp[j]; --j; }
+    tmp[j + 1] = v;
+  }
+  return tmp[n / 2];
+}
+
+static void logJump(const jump::JumpEvent& ev, uint16_t med_a_mg,
+                    uint16_t med_w_dps, uint16_t med_acorr_mg, uint16_t n_air) {
   if (!fs_ok) return;
   jh_store::jumps_append(stored_jumps, ev.takeoff_time_s, ev.airtime_raw_s,
-                          ev.airtime_s, ev.height_m);
+                          ev.airtime_s, ev.height_m,
+                          med_a_mg, med_w_dps, med_acorr_mg, n_air);
 }
 
 static void printFileFramed(jh_store::StoredFile which, const char* name) {
@@ -1046,10 +1097,16 @@ void loop() {
     // fall, so `mag` — the RAW, uncorrected magnitude — IS the rotation's own
     // omega^2*r term, and r falls out of it. Feeding the raw value is essential:
     // the corrected one would be circular.
-    if (was_airborne) lever_arm.observe(mag, omega_dps);
+    if (was_airborne) {
+      lever_arm.observe(mag, omega_dps);
+      airObserve(mag, omega_dps);   // full-rate flight physics — see airObserve
+    }
 
     jumped = detector.update(t, mag, omega_dps, ev);
   } else {
+    // No gyro on this platform: still record |a| so the band can be looked at,
+    // with omega recorded as 0 rather than pretended-away.
+    if (was_airborne) airObserve(mag, 0.0f);
     jumped = detector.update(t, mag, ev);
   }
   // Flight over. The old rule — "a rejected flight still carries perfectly
@@ -1083,6 +1140,7 @@ void loop() {
       }
     } else {
       lever_arm.discard();
+      airReset();          // rejected flight: its samples must not leak forward
     }
   }
   if (jumped) {
@@ -1093,7 +1151,22 @@ void loop() {
     emitf("JUMP n=%lu airtime_raw_s=%.3f airtime_s=%.3f height_m=%.3f height_ft=%.1f best_m=%.3f\n",
           (unsigned long)session_jumps, ev.airtime_raw_s, ev.airtime_s,
           ev.height_m, ev.height_m * 3.28084f, session_best);
-    logJump(ev);
+    // Medians over the flight just ended. The corrected value subtracts the
+    // rotation term the detector itself uses, so it is directly comparable to
+    // the sim's predicted 0-0.07 g band; the raw one is kept because it is
+    // what the trace shows and the two disagreeing is itself informative.
+    const uint16_t med_a  = medianOf(s_air_a_mg, s_air_n);
+    const uint16_t med_w  = medianOf(s_air_w_dps, s_air_n);
+    const float    r_m    = detector.spin_lever_m();
+    const float    w_rad  = med_w * 0.017453293f;
+    const float    corr_g = (w_rad * w_rad * r_m) / 9.80665f;   // omega^2*r
+    float          acorr  = med_a / 1000.0f - corr_g;
+    if (acorr < 0.0f) acorr = 0.0f;
+    logJump(ev, med_a, med_w, (uint16_t)(acorr * 1000.0f + 0.5f), s_air_n);
+    emitf("# flight n=%lu med_a=%.3fg med_w=%udps med_acorr=%.3fg n_air=%u\n",
+          (unsigned long)session_jumps, med_a / 1000.0, (unsigned)med_w,
+          (double)acorr, (unsigned)s_air_n);
+    airReset();
   } else if (detector.last_reject() == jump::Detector::Reject::TOO_SHORT) {
     // Narrate near-misses: silence during a desk test is undebuggable.
     emitf("# almost a jump: %.2fs of air — under the %.2fs minimum. Toss higher.\n",

@@ -83,7 +83,10 @@ uint32_t free_bytes() {
 }
 
 void jumps_append(uint32_t n, float takeoff_s, float airtime_raw_s,
-                   float airtime_s, float height_m) {
+                   float airtime_s, float height_m, uint16_t, uint16_t,
+                   uint16_t, uint16_t) {
+  // v1 ESP32 board: the extended flight-physics columns are a Sense-only
+  // measurement (it has no gyro), so they are accepted and ignored here.
   if (!s_fs_ok) return;
   File f = LittleFS.open(JUMPS_PATH, FILE_APPEND);
   if (f) {

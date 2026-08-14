@@ -204,6 +204,11 @@ class Detector {
   // not when the rider improves. Separate setter so re-calibrating a mount
   // never disturbs a hard-won airtime offset / height scale.
   void set_spin_lever_m(float spin_lever_m) { p_.spin_lever_m = spin_lever_m; }
+  // Read back what the correction is actually using — main.cpp needs it to
+  // report the spin-corrected airborne median per jump, and a value that is
+  // applied but unreadable is exactly the kind of invisible state this
+  // project has been bitten by.
+  float spin_lever_m() const { return p_.spin_lever_m; }
   Reject last_reject() const { return last_reject_; }
   float  last_reject_airtime() const { return last_reject_airtime_; }
 

@@ -115,7 +115,7 @@ const uint32_t PAGE_BYTES         = 256;  // matches Adafruit_FlashTransport.h's
                                           // recovery below — see skipPastTornWrite().
 
 const char* TRACE_HEADER = "t,mag\n";
-const char* JUMPS_HEADER = "n,takeoff_s,airtime_raw_s,airtime_s,height_m\n";
+const char* JUMPS_HEADER = "n,takeoff_s,airtime_raw_s,airtime_s,height_m,med_a_g,med_w_dps,med_acorr_g,n_air\n";
 
 // ------------------------------------------------------------- superblock
 #pragma pack(push, 1)
@@ -143,7 +143,25 @@ struct JumpRecord {
   float    airtime_s;
   float    height_m;
   uint8_t  crc;       // trace_codec::crc8 over the 20 bytes above
-  uint8_t  _pad[11];  // -> 32 bytes total (JUMP_RECORD_BYTES)
+  // FLIGHT PHYSICS (2026-08-14). The whole project turns on one question:
+  // is a wing jump ballistic — i.e. is the airborne specific force ~0? The
+  // 50 Hz trace cannot answer it, because it stores only |a| and |a| carries
+  // the board's own rotation (omega^2*r): 90 deg/s of ordinary pitch injects
+  // 0.13-0.25 g against a band 0.07 g wide. The gyro is read every sample
+  // and was thrown away.
+  //
+  // So record the answer per jump, computed at the full 200 Hz over the
+  // detector's own airborne window, in bytes that were already being wasted.
+  // No region resize, no record-size change, no trace-format change.
+  uint16_t med_a_mg;      // median RAW airborne |a|, milli-g
+  uint16_t med_w_dps;     // median airborne |omega|, deg/s
+  uint16_t med_acorr_mg;  // median airborne |a| with omega^2*r removed
+  uint16_t n_air;         // samples the medians were taken over
+  uint8_t  crc2;          // crc8 over the 8 bytes above — separate from `crc`
+                          // so records written before this existed still
+                          // validate, and their absent extras read as absent
+                          // rather than as zeros.
+  uint8_t  _pad[2];       // -> 32 bytes total (JUMP_RECORD_BYTES)
 };
 #pragma pack(pop)
 
@@ -523,9 +541,26 @@ void produceNextUnit() {
         s_read_src_cursor = skipPastTornWrite(s_read_src_cursor, JUMP_RECORD_BYTES, s_read_src_used);
         continue;
       }
-      const int n = snprintf(s_read_pending, sizeof(s_read_pending), "%lu,%.3f,%.3f,%.3f,%.3f\n",
-                            (unsigned long)rec.n, (double)rec.takeoff_s, (double)rec.airtime_raw_s,
-                            (double)rec.airtime_s, (double)rec.height_m);
+      // Extended flight-physics columns are written only when crc2 validates,
+      // so a record from before they existed reads as EMPTY cells rather than
+      // as zeros — "we didn't measure it" and "we measured zero" are very
+      // different claims about a ballistic hypothesis.
+      const uint8_t c2 = trace_codec::crc8((const uint8_t*)&rec.med_a_mg,
+                                           offsetof(JumpRecord, crc2) -
+                                           offsetof(JumpRecord, med_a_mg));
+      const int n = (c2 == rec.crc2)
+          ? snprintf(s_read_pending, sizeof(s_read_pending),
+                     "%lu,%.3f,%.3f,%.3f,%.3f,%.3f,%u,%.3f,%u\n",
+                     (unsigned long)rec.n, (double)rec.takeoff_s,
+                     (double)rec.airtime_raw_s, (double)rec.airtime_s,
+                     (double)rec.height_m, rec.med_a_mg / 1000.0,
+                     (unsigned)rec.med_w_dps, rec.med_acorr_mg / 1000.0,
+                     (unsigned)rec.n_air)
+          : snprintf(s_read_pending, sizeof(s_read_pending),
+                     "%lu,%.3f,%.3f,%.3f,%.3f,,,,\n",
+                     (unsigned long)rec.n, (double)rec.takeoff_s,
+                     (double)rec.airtime_raw_s, (double)rec.airtime_s,
+                     (double)rec.height_m);
       s_read_pending_len = n > 0 ? (size_t)n : 0;
       s_read_src_cursor += JUMP_RECORD_BYTES;
       return;
@@ -764,7 +799,9 @@ uint32_t free_bytes() {
 
 // --------------------------------------------------------------- jumps.csv
 void jumps_append(uint32_t n, float takeoff_s, float airtime_raw_s,
-                  float airtime_s, float height_m) {
+                  float airtime_s, float height_m,
+                  uint16_t med_a_mg, uint16_t med_w_dps,
+                  uint16_t med_acorr_mg, uint16_t n_air) {
   if (!s_fs_ok) return;
   if (s_jumps_append_off + JUMP_RECORD_BYTES > JUMPS_REGION_BYTES) return;  // region full
 
@@ -777,6 +814,13 @@ void jumps_append(uint32_t n, float takeoff_s, float airtime_raw_s,
   rec.airtime_s = airtime_s;
   rec.height_m = height_m;
   rec.crc = trace_codec::crc8((const uint8_t*)&rec, offsetof(JumpRecord, crc));
+  rec.med_a_mg     = med_a_mg;
+  rec.med_w_dps    = med_w_dps;
+  rec.med_acorr_mg = med_acorr_mg;
+  rec.n_air        = n_air;
+  rec.crc2 = trace_codec::crc8((const uint8_t*)&rec.med_a_mg,
+                               offsetof(JumpRecord, crc2) -
+                               offsetof(JumpRecord, med_a_mg));
   // Jump-record offsets are word-aligned only because the record size is a
   // multiple of 4 — a QSPI hardware requirement (align4()'s comment), not
   // a style choice. Anyone resizing JumpRecord must keep it that way.
