@@ -11,9 +11,15 @@ trusted. Read it before any bench session; amend it when it costs you an hour.
 
 | Board | USB serial (our fw) | BLE addr (this Mac) | Bootloader BLE | Role |
 |---|---|---|---|---|
-| **"Board #3"** — 3rd Sense (2026-08-13) | `11641737F0ECA0D6` (bootloader shares it) | `14E6E6F1…` | same SN, PID `0x0045` | **THE product board.** Sensor VERIFIED HEALTHY 2026-08-14 after the drive-strength fix: `accel 1.022 g / noise 0.0013-0.0028 g`. Storage still needs a good `format` (`fs=down`). |
+| **"OG"** — original Sense (a.k.a. "the mule") | `7ACE98D972CB56F8` | `185D88EE…` | `EB2503CC…` | **THE product board — owner's call 2026-08-14.** It has the **battery pigtail soldered** and it is the board the drop calibration was measured on. Fully healthy: `accel 1.030-1.032 g / noise 0.0037 g`, `flash PASS 2093056B_free`, `SELFTEST END result=PASS`. Soaked 5/5 selftest + 12/12 revive. Water-test candidate. |
+| **"Board #3"** — 3rd Sense (2026-08-13) | `11641737F0ECA0D6` (bootloader shares it) | `14E6E6F1…` | same SN, PID `0x0045` | **Backup / cleanest sensor.** Verified healthy after the drive-strength fix: `accel 1.021 g / noise 0.0025 g`, `flash PASS`, END=PASS; 5/5 selftest + 5/5 revive with zero transients. No pigtail, no per-unit drop cal. Currently in System OFF — needs a replug to wake. |
 | **"Puck"** — 2nd Sense (2026-08-12, no battery yet) | `2513620E30AE413D` | `B96D14EA…` | (unrecorded) | Sensor read 0.970 g on 08-12. Was written off as dead; **almost certainly fine** — it was never reassessed after the fix. Re-test with the current build before assuming anything. |
-| **"Mule"** — original Sense | `7ACE98D972CB56F8` | `185D88EE…` | `EB2503CC…` | Bench/sacrificial board. **NOT dead** — declared hardware-dead 08-14 morning, then read `accel 1.029 g / noise 0.0069 g` the same night with the drive-strength fix. Radio/bootloader healthy; storage needs `format`. |
+| ~~"Mule"~~ | — | — | — | Retired name: the "mule" and the "OG" are the SAME board (row 1). Calling the product board sacrificial is how it nearly got treated as disposable. |
+
+**Storage note (2026-08-14):** both boards were `format`ed to repair
+storage, so the OG's 61-jump history is **gone for good**. It had been
+unreadable (invalid superblock) since 08-12 and `format` was the only way
+to get storage mounting again — but the erase is what made it permanent.
 
 **Every board previously declared dead was healthy.** The cause was
 firmware (GPIO drive strength — SENSE_FIRST_BOOT §16i,
