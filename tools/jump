@@ -2084,6 +2084,130 @@ def _run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, cwd=str(REPO), capture_output=True, text=True, **kw)
 
 
+def cmd_status(args) -> int:
+    """Live capability status, MACHINE-CHECKED where possible.
+
+    This command exists because the project kept rediscovering work it had
+    already finished. Prose status drifts; artifacts do not. So: ask the
+    build what commands it actually contains, ask the test suites whether
+    they actually pass, ask a connected board what it actually reports —
+    and flag STATUS.md as suspect whenever code changed after it did.
+
+    Nothing here is a claim. Every line is a check with a result.
+    """
+    import subprocess as sp
+
+    def hdr(t):
+        print("\n" + t)
+        print("-" * len(t))
+
+    rc_any = 0
+    print("=== Jump Height — live status ===")
+    print("(machine-checked; anything not checkable is marked UNKNOWN, never assumed)")
+
+    # ---------------------------------------------------------------- build
+    hdr("Firmware artifact")
+    elf = REPO / "firmware/.pio/build/xiaoblesense_adafruit/firmware.elf"
+    if not elf.exists():
+        print("  ⚠️  no nRF52 build present — run ./tools/jump flash or pio run")
+    else:
+        age_s = time.time() - elf.stat().st_mtime
+        print(f"  built {age_s/3600:.1f} h ago  ({elf.name})")
+        try:
+            out = sp.run(["strings", str(elf)], capture_output=True, text=True,
+                         timeout=60).stdout
+        except Exception:
+            out = ""
+        line = next((l for l in out.splitlines() if l.startswith("# commands:")), None)
+        if line:
+            cmds = [c.strip() for c in line.split(":", 1)[1].split("|")]
+            print(f"  commands in binary ({len(cmds)}): {' '.join(cmds)}")
+        else:
+            print("  ⚠️  could not read the command list out of the binary")
+
+    # ---------------------------------------------------------------- tests
+    hdr("Test suites")
+    if getattr(args, "full", False):
+        r = sp.run([sys.executable, str(REPO / "tools/jump"), "simtest"],
+                   capture_output=True, text=True)
+        ok = "RESULT: PASS" in r.stdout
+        print(f"  host + CLI suite: {'PASS ✅' if ok else 'FAIL ❌'}")
+        if not ok:
+            rc_any = 1
+    else:
+        print("  host + CLI suite: not run (use --full)")
+    mc = _find_monkeyc()
+    if mc:
+        print(f"  Garmin SDK: found ({Path(mc).parent.parent.name})")
+        print("  Garmin unit tests: not run here (needs a simulator session)")
+    else:
+        print("  Garmin SDK: NOT on PATH — watch tests cannot run")
+
+    # ------------------------------------------------------------- hardware
+    hdr("Hardware")
+    ports = scan_ports()
+    if not ports:
+        print("  no board connected (status below is UNKNOWN, not 'fine')")
+    for port in ports:
+        print(f"  {port}:")
+        try:
+            dev = Device(port)
+            dev.drain_boot(timeout=4.0)
+            for line in dev.command("info", timeout=6):
+                if line.startswith("INFO") or line.startswith("CAL"):
+                    print(f"    {line}")
+            rows = []
+            for line in dev.command("selftest", timeout=25):
+                if line.startswith("SELFTEST ") and " detail=" in line:
+                    rows.append(line.split(None, 3))
+            for r_ in rows:
+                print(f"    {r_[1]:8} {r_[2]}")
+            dev.close()
+        except Exception as e:  # noqa: BLE001 — a bench tool reports, never raises
+            print(f"    ⚠️  {type(e).__name__}: {e}")
+
+    # ------------------------------------------------------ staleness check
+    hdr("Documentation freshness")
+    status_md = REPO / "docs/STATUS.md"
+    if not status_md.exists():
+        print("  ⚠️  docs/STATUS.md missing — there is no single source of truth")
+        rc_any = 1
+    else:
+        try:
+            newest = sp.run(["git", "log", "-1", "--format=%ct", "--",
+                             "firmware", "garmin", "tools", "web"],
+                            cwd=str(REPO), capture_output=True, text=True).stdout.strip()
+            st = sp.run(["git", "log", "-1", "--format=%ct", "--", "docs/STATUS.md"],
+                        cwd=str(REPO), capture_output=True, text=True).stdout.strip()
+            if newest and st and int(newest) > int(st):
+                delta = (int(newest) - int(st)) / 3600.0
+                print(f"  ⚠️  STATUS.md is {delta:.1f} h OLDER than the newest code change.")
+                print("     Treat every state in it as suspect until reconciled.")
+                rc_any = 1
+            else:
+                print("  STATUS.md is at least as new as the newest code change ✅")
+        except Exception:
+            print("  (could not compare git timestamps)")
+
+    print("\nNothing above is a promise. Re-run after any change.")
+    return rc_any
+
+
+def _find_monkeyc():
+    """Locate the Connect IQ compiler without requiring it on PATH."""
+    from shutil import which
+    got = which("monkeyc")
+    if got:
+        return got
+    base = Path.home() / "Library/Application Support/Garmin/ConnectIQ/Sdks"
+    if base.exists():
+        for sdk in sorted(base.iterdir(), reverse=True):
+            cand = sdk / "bin/monkeyc"
+            if cand.exists():
+                return str(cand)
+    return None
+
+
 def cmd_simtest(args) -> int:
     print("=== Software test suite (no hardware needed) ===\n")
     results: list[tuple[str, bool, str]] = []
@@ -2767,6 +2891,11 @@ def main() -> int:
     add("setup", cmd_setup, help="one-time toolchain install")
     add("gen", cmd_gen, help="regenerate firmware params header from config")
     add("simtest", cmd_simtest, help="full software test suite, no hardware")
+
+    p = add("status", cmd_status,
+            help="live machine-checked status: build, tests, hardware, doc freshness")
+    p.add_argument("--full", action="store_true",
+                   help="also run the host test suite (slower)")
 
     p = add("flash", cmd_flash, help="build + upload firmware, then self-test")
 
