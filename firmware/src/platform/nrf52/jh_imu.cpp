@@ -91,8 +91,24 @@ void init() {
   // got read as dead hardware. Falsified on the replacement board
   // 2026-08-12: same firmware, factory-fresh sensor, same "no_device" —
   // remove the cycle and the sensor reads 0.970 g. See the RCA addendum.
-  pinMode(PIN_LSM6DS3TR_C_POWER, OUTPUT);
-  digitalWrite(PIN_LSM6DS3TR_C_POWER, HIGH);
+  // HIGH DRIVE (H0H1), NOT the Arduino default. THIS IS THE BUG THAT COST
+  // THREE BOARDS AND FOUR DAYS (2026-08-14, proven on silicon):
+  // pinMode(OUTPUT) configures S0S1 — standard drive, ~2 mA. P1.08 does not
+  // merely enable a regulator on this module, it SOURCES the sensor domain
+  // (sensor VDD + the on-module I2C pull-ups). At standard drive the pad
+  // cannot supply that load: it sags to ground, the rail never comes up,
+  // the bus sits dead, and the sensor never ACKs — which is indistinguishable
+  // from a dead sensor and was twice diagnosed as exactly that. Measured on a
+  // factory-fresh board: S0S1 -> pad reads LOW, SDA/SCL held low, every
+  // transaction TIMEOUT; H0H1 (~10 mA) -> pad reads HIGH, bus idles high,
+  // sensor ACKs at 0x6A on the first try. Same board, same second, one
+  // register field apart. Never configure this pin with pinMode().
+  {
+    const uint32_t rail = g_ADigitalPinMap[PIN_LSM6DS3TR_C_POWER];
+    nrf_gpio_cfg(rail, NRF_GPIO_PIN_DIR_OUTPUT, NRF_GPIO_PIN_INPUT_CONNECT,
+                 NRF_GPIO_PIN_NOPULL, NRF_GPIO_PIN_H0H1, NRF_GPIO_PIN_NOSENSE);
+    nrf_gpio_pin_set(rail);
+  }
   // Boot-settle margin (review-nrf52.md finding #5 / SENSE_FIRST_BOOT.md
   // item 7, now RESOLVED-BY-DATASHEET): the real LSM6DS3TR-C datasheet's
   // electrical characteristics table gives Ton (turn-on time, power-up to
@@ -152,10 +168,14 @@ bool revive() {
   // margin before anyone touches the bus.
   bus_release();
   delay(2);
-  pinMode(PIN_LSM6DS3TR_C_POWER, OUTPUT);
-  digitalWrite(PIN_LSM6DS3TR_C_POWER, LOW);
+  const uint32_t rail = g_ADigitalPinMap[PIN_LSM6DS3TR_C_POWER];
+  // High drive here too — see init(). A standard-drive re-assert would
+  // leave the rail down and make revive() look like a failed recovery.
+  nrf_gpio_cfg(rail, NRF_GPIO_PIN_DIR_OUTPUT, NRF_GPIO_PIN_INPUT_CONNECT,
+               NRF_GPIO_PIN_NOPULL, NRF_GPIO_PIN_H0H1, NRF_GPIO_PIN_NOSENSE);
+  nrf_gpio_pin_clear(rail);
   delay(600);
-  digitalWrite(PIN_LSM6DS3TR_C_POWER, HIGH);
+  nrf_gpio_pin_set(rail);
   delay(45);
   return true;
 }
@@ -230,16 +250,83 @@ void bus_rail_sweep(uint8_t state, uint8_t& sda, uint8_t& scl, uint8_t& pin) {
     nrf_gpio_cfg(nrf_pin, NRF_GPIO_PIN_DIR_INPUT, NRF_GPIO_PIN_INPUT_CONNECT,
                  NRF_GPIO_PIN_NOPULL, NRF_GPIO_PIN_S0S1, NRF_GPIO_PIN_NOSENSE);
   } else {
+    // HIGH DRIVE (H0H1) for state 3, standard (S0S1) otherwise. This pin
+    // does not merely enable a regulator — the project's own RCA records
+    // it SOURCING the sensor rail ("inrush exceeds what the pin sources
+    // cleanly"). A standard-drive pad (~2 mA) loaded by the sensor plus
+    // its bus pull-ups sags to ground and reads back LOW, which is exactly
+    // what all three boards report. H0H1 raises that to ~10 mA.
+    const nrf_gpio_pin_drive_t drive =
+        (state == 3) ? NRF_GPIO_PIN_H0H1 : NRF_GPIO_PIN_S0S1;
     nrf_gpio_cfg(nrf_pin, NRF_GPIO_PIN_DIR_OUTPUT, NRF_GPIO_PIN_INPUT_CONNECT,
-                 NRF_GPIO_PIN_NOPULL, NRF_GPIO_PIN_S0S1, NRF_GPIO_PIN_NOSENSE);
+                 NRF_GPIO_PIN_NOPULL, drive, NRF_GPIO_PIN_NOSENSE);
     if (state) nrf_gpio_pin_set(nrf_pin); else nrf_gpio_pin_clear(nrf_pin);
   }
   delay(120);  // regulator start + sensor Ton + margin
   pin = (uint8_t)nrf_gpio_pin_read(nrf_pin);
   sda = (uint8_t)digitalRead(PIN_WIRE1_SDA);
   scl = (uint8_t)digitalRead(PIN_WIRE1_SCL);
+  // SECOND reading with internal PULL-UPS. This is the one that matters:
+  // pull-downs only prove "no powered external pull-up is winning", which
+  // is ALSO what you see on a board that simply has no external pull-ups —
+  // so a pull-down-only reading cannot tell a dead rail from a normal
+  // design, and two boards were convicted on exactly that ambiguity. With
+  // ~13k internal pull-ups engaged, a line that STILL reads 0 is genuinely
+  // held low by something; a line that reads 1 means the bus is free and
+  // any transaction timeout is ours, not the hardware's.
+  pinMode(PIN_WIRE1_SDA, INPUT_PULLUP);
+  pinMode(PIN_WIRE1_SCL, INPUT_PULLUP);
+  delay(5);
+  sda = (uint8_t)(sda | (digitalRead(PIN_WIRE1_SDA) << 1));
+  scl = (uint8_t)(scl | (digitalRead(PIN_WIRE1_SCL) << 1));
   pinMode(PIN_WIRE1_SDA, INPUT);
   pinMode(PIN_WIRE1_SCL, INPUT);
+}
+
+void pin_census(char* buf, int cap) {
+  // Read EVERY GPIO twice — once against a weak internal pull-DOWN, once
+  // against a weak internal pull-UP — and report the pair per pin.
+  //
+  // WHY: three pins on a factory-fresh board (P1.08 rail enable, P0.07 SDA,
+  // P0.27 SCL) read LOW even when driven or pulled high. Either those pins
+  // are genuinely held to ground, or our read path is lying. A census
+  // settles it without a meter: an unconnected pin MUST follow its pull
+  // (0 with pull-down, 1 with pull-up). If most pins follow and only ours
+  // do not, the finding is real hardware. If NOTHING follows, the
+  // instrument is broken and every rail conclusion built on it is void —
+  // which is the failure mode that has already produced two wrong verdicts.
+  //
+  // Safety: inputs and weak pulls only, never an output. QSPI pins are
+  // skipped so a pull cannot disturb the flash mid-operation.
+  const uint32_t kSkip[] = {21, 25, 20, 24, 22, 23};  // QSPI SCK/CS/IO0-3
+  int n = 0;
+  for (uint32_t pin = 0; pin < 48 && n < cap - 24; ++pin) {
+    if (pin >= 32 && pin < 32) continue;
+    bool skip = false;
+    for (unsigned k = 0; k < sizeof(kSkip) / sizeof(kSkip[0]); ++k) {
+      if (pin == kSkip[k]) skip = true;
+    }
+    if (skip) continue;
+    NRF_GPIO_Type* port = (pin < 32) ? NRF_P0 : NRF_P1;
+    const uint32_t bit = pin & 31;
+    const uint32_t saved = port->PIN_CNF[bit];
+    // pull-down read
+    port->PIN_CNF[bit] = (GPIO_PIN_CNF_DIR_Input << GPIO_PIN_CNF_DIR_Pos) |
+                         (GPIO_PIN_CNF_INPUT_Connect << GPIO_PIN_CNF_INPUT_Pos) |
+                         (GPIO_PIN_CNF_PULL_Pulldown << GPIO_PIN_CNF_PULL_Pos);
+    delayMicroseconds(200);
+    const uint32_t dn = (port->IN >> bit) & 1u;
+    port->PIN_CNF[bit] = (GPIO_PIN_CNF_DIR_Input << GPIO_PIN_CNF_DIR_Pos) |
+                         (GPIO_PIN_CNF_INPUT_Connect << GPIO_PIN_CNF_INPUT_Pos) |
+                         (GPIO_PIN_CNF_PULL_Pullup << GPIO_PIN_CNF_PULL_Pos);
+    delayMicroseconds(200);
+    const uint32_t up = (port->IN >> bit) & 1u;
+    port->PIN_CNF[bit] = saved;  // leave every pin exactly as found
+    n += snprintf(buf + n, cap - n, "%lu.%02lu:%lu%lu ",
+                  (unsigned long)(pin / 32), (unsigned long)(pin % 32),
+                  (unsigned long)dn, (unsigned long)up);
+  }
+  if (n < cap) buf[n] = 0;
 }
 
 bool bus_diag_twim(BusDiag& out) {

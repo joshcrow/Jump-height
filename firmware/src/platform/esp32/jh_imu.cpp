@@ -57,6 +57,7 @@ bool read_gyro_dps(float&, float&, float&) {
 
 void jh_imu::bus_rail_registers(uint32_t& a, uint32_t& b, uint32_t& c, uint32_t& d) { a=b=c=d=0; }
 void jh_imu::bus_rail_sweep(uint8_t, uint8_t& s, uint8_t& c, uint8_t& p) { s=c=p=0; }
+void jh_imu::pin_census(char* b, int c) { if (c) b[0] = 0; }
 bool jh_imu::bus_diag_rail(BusDiag&) { return false; }  // no sensor bus
 bool jh_imu::bus_diag_twim(BusDiag&) { return false; }
 bool jh_imu::bus_diag_wire(BusDiag&) { return false; }

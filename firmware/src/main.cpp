@@ -495,6 +495,25 @@ static void handleCommand(const String& cmd) {
   } else if (cmd == "selftest") {
     runSelfTest();
     emitLine("OK selftest");
+  } else if (cmd == "pincensus") {
+    // Validity check for every pin-level claim this project has made.
+    // Prints pin:<pulldown><pullup> for each GPIO. A free pin reads 01.
+    static char census[900];
+    jh_imu::pin_census(census, sizeof(census));
+    emitLine("# pincensus format pin:<val_with_pulldown><val_with_pullup>");
+    emitLine("# a FREE pin reads 01. 00 = held low. 11 = held high.");
+    // Chunked: one long line got silently dropped by the bounded emit path
+    // (which discards rather than blocks — see emitBytes), and a report you
+    // never see is worse than no report.
+    for (int off = 0; census[off]; ) {
+      char chunk[73];
+      int k = 0;
+      while (k < 72 && census[off]) chunk[k++] = census[off++];
+      chunk[k] = 0;
+      emitLine(chunk);
+      jh_link::watchdog_feed();
+    }
+    emitLine("OK pincensus");
   } else if (cmd == "i2cdiag") {
     // Bench diagnostic (see jh_imu.h): rail readback + bus idle levels +
     // bounded-driver ACK + stock-Wire1 ACK, in one pass, no rail edges.
@@ -518,12 +537,14 @@ static void handleCommand(const String& cmd) {
       // Polarity sweep: the "drive it HIGH" assumption has never actually
       // been verified to power anything, and a factory-fresh board says the
       // rail is down. Try both drive states and release.
-      for (uint8_t st = 0; st < 3; ++st) {
+      for (uint8_t st = 0; st < 4; ++st) {
         uint8_t sda = 0, scl = 0, pin = 0;
         jh_link::watchdog_feed();
         jh_imu::bus_rail_sweep(st, sda, scl, pin);
-        emitf("I2CDIAG sweep en=%s pin=%u sda=%u scl=%u\n",
-              st == 0 ? "LOW " : (st == 1 ? "HIGH" : "FLOAT"), pin, sda, scl);
+        // bit0 = level against internal pull-DOWN, bit1 = against pull-UP.
+        emitf("I2CDIAG sweep en=%s pin=%u sda(dn/up)=%u/%u scl(dn/up)=%u/%u\n",
+              st == 0 ? "LOW " : (st == 1 ? "HIGH" : (st == 2 ? "FLOAT" : "HIGH-HIDRIVE")), pin,
+              sda & 1u, (sda >> 1) & 1u, scl & 1u, (scl >> 1) & 1u);
       }
       jh_link::watchdog_feed();
       emitLine("# stage: bounded-driver probe");

@@ -74,6 +74,7 @@ struct BusDiag {
 void bus_rail_registers(uint32_t& out_latch, uint32_t& dir, uint32_t& cnf,
                         uint32_t& in_level);
 void bus_rail_sweep(uint8_t state, uint8_t& sda, uint8_t& scl, uint8_t& pin);
+void pin_census(char* buf, int cap);
 bool bus_diag_rail(BusDiag& out);
 bool bus_diag_twim(BusDiag& out);
 // The Wire1 control half — SEPARATE because stock Wire1 spins unbounded on
