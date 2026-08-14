@@ -11,8 +11,14 @@ trusted. Read it before any bench session; amend it when it costs you an hour.
 
 | Board | USB serial (our fw) | BLE addr (this Mac) | Bootloader BLE | Role |
 |---|---|---|---|---|
-| **"Puck"** — new Sense (2026-08-12, no battery yet) | `2513620E30AE413D` | `B96D14EA…` | (unrecorded) | **THE product board.** Sensor + gyro healthy (0.970 g / 0.0010 g noise). Gets the box, the battery, the calibration. |
-| **"Mule"** — original Sense | `7ACE98D972CB56F8` | `185D88EE…` | `EB2503CC…` | Bench test mule. IMU bus held (cause open); radio/storage/bootloader all healthy; holds the 61-jump history. OTA-gate-proven. |
+| **"Board #3"** — 3rd Sense (2026-08-13) | `11641737F0ECA0D6` (bootloader shares it) | `14E6E6F1…` | same SN, PID `0x0045` | **THE product board.** Sensor VERIFIED HEALTHY 2026-08-14 after the drive-strength fix: `accel 1.022 g / noise 0.0013-0.0028 g`. Storage still needs a good `format` (`fs=down`). |
+| **"Puck"** — 2nd Sense (2026-08-12, no battery yet) | `2513620E30AE413D` | `B96D14EA…` | (unrecorded) | Sensor read 0.970 g on 08-12. Was written off as dead; **almost certainly fine** — it was never reassessed after the fix. Re-test with the current build before assuming anything. |
+| **"Mule"** — original Sense | `7ACE98D972CB56F8` | `185D88EE…` | `EB2503CC…` | Bench/sacrificial board. **NOT dead** — declared hardware-dead 08-14 morning, then read `accel 1.029 g / noise 0.0069 g` the same night with the drive-strength fix. Radio/bootloader healthy; storage needs `format`. |
+
+**Every board previously declared dead was healthy.** The cause was
+firmware (GPIO drive strength — SENSE_FIRST_BOOT §16i,
+[xiao-hardware-truth.md](xiao-hardware-truth.md)). Re-read that before
+writing off any board.
 
 Factory-fresh boards report a *different* USB serial than our firmware does
 (theirs is a Seeed string, ours is the chip ID) — a board's serial *changing*
@@ -106,6 +112,15 @@ after first flash is expected, not a swap.
 - **uhubctl doesn't work on the current hub.** A PPPS-capable hub (~$30)
   would make bench power fully software-controlled and retire half of this
   file's "ask a human to replug" cases.
+
+- **Before ANY "dead hardware" verdict, read
+  [xiao-hardware-truth.md](xiao-hardware-truth.md).** It lists the
+  measurements that are INVALID on this board — they return the same
+  answer for healthy and broken silicon — and the two that work
+  (`pincensus`, pin readback while driving). Two wrong dead-hardware
+  verdicts came from tests on the first list.
+- **`pincensus` is the FIRST diagnostic, not the last.** One command,
+  every GPIO, control pins included in the same pass.
 
 ## 5. Recovery ladder (try in order; each rung proven on silicon)
 

@@ -45,7 +45,8 @@ void init();
 void bus_release();
 
 // Clean sensor power-cycle, where the platform has rail control (Sense:
-// P1.08-enabled regulator). Sequencing per SENSE_FIRST_BOOT 16g: bus lines
+// P1.08, which IS the supply pad — not a regulator enable; see
+// docs/xiao-hardware-truth.md). Sequencing per SENSE_FIRST_BOOT 16g: bus lines
 // floated FIRST (energized lines while the rail is down back-drive the
 // sensor and corrupt its power-up — the documented failure the 2026-08-11
 // rail cycle caused), long discharge, rail up, full settle. Returns false

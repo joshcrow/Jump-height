@@ -162,10 +162,18 @@ bool revive() {
   // cycle got wrong (16g): it cut the rail with TWIM + pull-ups energized,
   // back-driving the sensor through its bus pins during the LOW — the very
   // corruption it was trying to clear. Order here: release TWIM, float
-  // every MCU line into the sensor domain, THEN drop the rail (regulator
-  // EN via P1.08 — a logic input, no inrush path through the GPIO), long
-  // discharge, rail up, regulator start (3 ms) + sensor Ton (35 ms) with
+  // every MCU line into the sensor domain, THEN drop the rail, long
+  // discharge, rail up, settle (3 ms rail rise + sensor Ton 35 ms) with
   // margin before anyone touches the bus.
+  //
+  // CORRECTION (2026-08-14): an earlier version of this comment called
+  // P1.08 "regulator EN — a logic input, no inrush path through the GPIO".
+  // That is FALSE and it steered the sequencing design wrong. Seeed's
+  // schematic v1.1 sheet 2: there is no regulator. The GPIO pad connects
+  // straight to the sensor's VDD/VDDIO and to both 10k bus pull-ups — the
+  // pin IS the supply, and the inrush path runs through it. That is why
+  // this pin is configured H0H1 and never with pinMode().
+  // See docs/xiao-hardware-truth.md.
   bus_release();
   delay(2);
   const uint32_t rail = g_ADigitalPinMap[PIN_LSM6DS3TR_C_POWER];
