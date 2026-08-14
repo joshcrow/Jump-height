@@ -338,3 +338,45 @@ hints. Beyond those:
 | False jumps from chop | raise `landing_threshold_g` or `min_airtime_s` (same loop) |
 | `trace log full` during long session | `sync` then clear; ~45 min of *moving* time fits per session by design (grew with the Phase 3 partition map) |
 | Board won't charge / dead | battery polarity — see Safety |
+
+## Shock durability — what it can take, and what breaks first
+
+Researched 2026-08-14. The headline: **the silicon is not the weak link.**
+
+| Part | Rating | Source |
+|---|---|---|
+| LSM6DS3TR-C IMU | **10,000 g** for a 0.2 ms pulse (absolute max, i.e. a damage threshold) | ST datasheet DocID030071 Rev 3, Table 9 §4.5 p.29 |
+| LiPo pouch cell | Qualified to **150 g / 6 ms half-sine**, 18 shocks, 3 axes | UN Manual of Tests & Criteria Rev.6 §38.3.4.4 (Test T.4) |
+| nRF52840 | **No published shock rating at all** — Nordic gives only moisture-sensitivity (MSL 1/2) | nRF52840 PS v1.1, confirmed absence |
+| P25Q16H flash | No shock rating published either | Puya datasheet V2.1 |
+
+**What that means in practice.** A drop from 1–2 m onto water, or a hand
+toss onto a cushion, is nowhere near 10,000 g. Even a bad drop onto concrete
+is far more likely to *saturate the ±16 g reading* than to hurt the chip.
+The ST datasheet does note the part is "sensitive to mechanical shock" and
+that its number is a stress rating, not a promise — but the margin is large.
+
+**The realistic failure order** (informed engineering judgement, not measured):
+
+1. **The LiPo pigtail / JST joint**, from repeated flex fatigue — not one
+   impact, but hundreds. **Glue-dot the connector and anchor the wires.**
+2. **The adhesive mount or the enclosure seal.** Mounts bear leverage and
+   torque that a small, low-mass PCB inside does not.
+3. **Large MLCCs**, but mostly as a *potting* risk, not an impact one — see
+   below.
+4. The MCU/IMU silicon itself. Least likely by a wide margin.
+
+**If you ever pot it:** use a soft urethane or silicone, **not rigid epoxy**.
+Cure shrinkage plus CTE mismatch cracks MLCCs and can shift the IMU's zero
+offset through package stress. Standard practice is to dam or mask the IMU
+footprint rather than encapsulate directly over it. Compliant foam under the
+enclosure is the single best shock mitigation — it lengthens the deceleration
+pulse, which is what actually lowers peak g.
+
+**What nobody has measured:** there are **no published accelerometer numbers
+for kite/wing/surf landings**. PubMed and Scholar return nothing under any
+term tried; this is genuinely off the map. Our own recorded traces so far peak
+at **1.52 g** (desk handling only). The water session will be the first real
+measurement — worth noting the ±16 g setting is a deliberate choice
+(DECISIONS #25) and a hard landing may clip it, which is a data question, not
+a damage one.
