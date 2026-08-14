@@ -40,6 +40,25 @@ do not.**
 
 ## CHANGED AFTER THE AUDIT (2026-08-14, later the same day)
 
+### USB session download — WAS LOSSY, now fixed and verified
+- **State:** proven-on-hardware
+- **Evidence:** commit b7c3644. BEFORE: two downloads of the same stored trace
+  diverged at line 1653 — read A lost 0.58 s of samples, read B lost 0.42 s
+  elsewhere, both truncated the final line. AFTER: two consecutive downloads
+  byte-identical over the shared prefix, 6027 lines each, clean tail, no
+  warning. Root cause was `emitBytes` dropping a whole block when
+  `Serial.availableForWrite()` was momentarily short.
+- **Gap:** verified at ~36 KB / 6k lines. A full session is ~5 MB, so the
+  2 h walk-with-the-puck test is still owed before the water.
+
+### OG board on the current build
+- **State:** proven-on-hardware
+- **Evidence:** 2026-08-14 — `SELFTEST END result=PASS`, all rows: i2c 0x68,
+  whoami PASS 0x6A, accel 1.000 g, noise 0.0012 g, ble advertising, flash
+  2080004B free. Running on battery + USB.
+- **Gap:** no jump has yet been detected on this build — the desk test.
+
+
 These landed after the audit above was generated. They are listed here rather
 than merged in, so the provenance stays honest: the audit is a snapshot, this
 is the delta since.
