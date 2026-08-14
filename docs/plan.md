@@ -1,239 +1,148 @@
-# The plan — sequencing, priority, and what we are deliberately not doing
+# The plan
 
-Written 2026-08-14 by the engineering side, for the owner, after a
-four-day hardware incident produced a large backlog and not much clarity.
-This document exists to make the next two weeks obvious.
+Rewritten 2026-08-14 from [STATUS.md](STATUS.md) — an evidence-first audit of
+what is actually built — rather than from the previous plan's memory. That
+earlier version listed already-finished work as TODO. This plan is structured
+to make that impossible. (Archived: `plan-superseded-2026-08-14.md`.)
 
-## Where we actually are
+**Read [STATUS.md](STATUS.md) before adding anything here.** Run
+`./tools/jump status` before believing any of it.
 
-**The hardware crisis is over and it was never hardware.** Both boards
-pass every self-test row. The root cause (GPIO drive strength) is fixed,
-documented, and can't recur — it's encoded in DECISIONS #37-39 and
-`xiao-hardware-truth.md`. That chapter is closed.
+---
 
-**But the product's central question is still unanswered.** Three weeks
-in, we have never measured a real jump on water. Everything on the
-backlog — BLE reliability, power states, sealed enclosures, NFC — is
-polish on a hypothesis nobody has tested yet. Roadmap Phase 2 has said
-this in bold the whole time.
+## 1. Where we are, in one paragraph
 
-## The filter that sequences everything
+The hardware crisis is over and was never hardware: a GPIO drive-strength bug
+made healthy sensors look dead for four days. Both boards now pass every
+self-test row and have soaked 5/5 and 12/12. The puck detects jumps, logs to
+flash, serves BLE, takes wireless firmware updates, and reports battery. The
+watch renders on a real wrist over a real link. **And the product's central
+question — does the airtime method measure real foil jumps — has never been
+tested, because nobody has been on the water.**
 
-> **Does this block getting trustworthy data from one water session?**
+## 2. The constraint that shapes everything
 
-Run the backlog through it and almost nothing survives, because of one
-fact worth stating plainly:
+The water session needs the brother's board, a kayak, a windy day, and someone
+filming from the water. It is **one shot, hard to repeat, ~2 weeks out.**
 
-**The BLE bug cannot corrupt recorded data.** `main.cpp:1018` calls
-`logJump(ev)` — the flash write — independently of the `emitf()` that
-feeds the radio. The puck records to storage no matter what the link
-does; the watch is a *view*, and the session is downloaded over USB
-afterward. So the corruption bug threatens the live display, not the
-science.
+So the goal is not speed. It is: **make that one session impossible to waste,
+and make it answer the question even if the filming goes badly.**
 
-That single fact moves BLE work off the critical path.
+## 3. The three things that would waste it
 
-## REVISED 2026-08-14: the water session is ~2 weeks out, and it is expensive
+Ranked by how likely they are to actually happen.
 
-The owner's constraint, which changes the sequencing completely: getting
-on the water needs a brother's board, a kayak, a windy day, and someone
-filming from the kayak. That is **one shot, hard to repeat, roughly two
-weeks away.**
+### 3.1 The ground truth is circular — fix first, costs no build time
 
-So the goal is no longer "get to the water fast." It is:
+`data-pipeline.md` derives "true height" from counted airborne frames via
+`h = g·T²/8` — **the formula under test.** Scoring our `g·T²/8` against a
+label built with `g·T²/8` measures timing agreement and nothing else. It
+passes whether or not wings are ballistic, which is the entire open question.
 
-> **Use the two weeks of bench time to make that one session count —
-> and to be sure it cannot be wasted.**
+**Two changes:**
 
-Which flips the priority: work that *increases what we learn* from the
-session, or that *prevents the session from being wasted*, is now worth
-doing before it. Work that only matters for the finished product still
-waits.
+1. **An independent height measure.** The rig carries its own ruler: the mast
+   is a known length, in the same plane, at the same distance. Measure apex
+   board-underside-to-water in mast-lengths. ±15 % is plenty — the failure it
+   must catch (a kite-like 2.3× overshoot) is enormous. Requires the kayak
+   roughly abeam of the jump line: a briefing item, not code.
+2. **Make the primary result video-independent.** The real open question from
+   the sim work is whether airborne |a| sits in the predicted 0–0.07 g band.
+   That needs an intact 50 Hz trace and **no footage at all.** Promote it to
+   the primary deliverable; video becomes the secondary, height-scale check.
 
-**One hard rule for the two weeks: FEATURE FREEZE ~4 days before the
-session.** Land changes early, then run the dress rehearsal on the exact
-build that goes in the water. Never take a fresh build to a one-shot
-experiment — this project has already paid that tuition.
+Also unfixed: **video sync has no procedure that survives real filming.** One
+marker aligns one continuous recording; from a kayak you get 20–40 short
+clips, and the puck has **no wall clock** (trace time is boot-relative).
+Tolerance is ±0.8 s and a bad alignment fails *silently* — it matches a subset
+and prints a plausible RMSE. Needs a wall-clock↔trace anchor at both ends and
+a sync marker that survives 50 Hz decimation (drop the board flat 3×, not a
+finger tap).
 
-### PLAN REVIEW, 2026-08-14 — the finding that changes the session itself
+### 3.2 Nothing has been recorded end-to-end on the current build
 
-An adversarial review of this plan found something more important than
-any schedule item:
+`STATUS.md` is blunt: no jump has been detected on silicon on **any build
+since 2026-08-11**, and the only on-silicon jump history was erased by the
+`format` that fixed storage. The storage path, the IMU rail drive, and
+`begin()` have all changed since.
 
-> **The height ground truth as specified is CIRCULAR. The session as
-> designed cannot test the thesis it exists to test.**
+**The gate is `./tools/jump desktest`** — 3 untethered tosses, ~10 minutes,
+owner's hands. It proves battery-only operation, the detector on real motion,
+and that a jump *survives to storage*. Nothing else proves the last one.
 
-`data-pipeline.md`, `algorithm.md` and `roadmap.md` all define video
-truth the same way: count airborne frames to get true airtime, then
-compute height as `h = g·T²/8`. **That is the formula under test.**
-Scoring the device's `h = g·T²/8` against a label computed with
-`h = g·T²/8` can only ever measure timing agreement — it passes whether
-or not wings are ballistic, and the resulting RMSE is not comparable to
-the published Surfr/WOO numbers, which came from independently measured
-height.
+### 3.3 The data comes home through a path that can silently drop blocks
 
-Two changes, and neither costs build time:
+`main.cpp:150` — `emitBytes` discards a whole block whenever the serial buffer
+is short. That is the USB download path. It changed two days ago and has never
+been exercised at session scale. A session that records perfectly and
+downloads incompletely is the cruellest possible failure.
 
-1. **Add one independent height measure.** The rig carries its own
-   ruler: the mast is a known length, in the same plane, at the same
-   distance. At apex, measure board-underside-to-water in mast lengths.
-   ±15 % is plenty — the failure it must catch (a kite-like 2.3×
-   overshoot) is enormous. It is a briefing item for the two brothers,
-   not code: the kayak needs to be roughly abeam of the jump line.
-2. **Make the primary result video-independent.** `wing-ballistic-sim.md`
-   names the real open question: is airborne |a| inside the predicted
-   0-0.07 g band? That needs only an intact 50 Hz trace and **no footage
-   at all.** Promote it to the session's primary deliverable and demote
-   video to the secondary. It means the session can still answer the
-   physics question if the filming goes badly — which, from a kayak, in
-   wind, it might.
+**Fix:** make the download verifiable — a byte/line count the CLI checks, and
+a re-request on mismatch. Then exercise it at session scale.
 
-### Other review findings that change the two weeks
+## 4. Workstreams, prioritised
 
-- **Video sync has no workable procedure.** One marker aligns one
-  continuous recording; real filming produces 20-40 short clips, and the
-  device has **no wall clock** (trace time is boot-relative). Tolerance
-  is ±0.8 s, and a botched alignment fails *silently* — it matches a
-  subset and prints a plausible RMSE. Needs: a wall-clock↔trace anchor
-  recorded at both ends, verified camera clip timestamps, and a sync
-  marker that survives 50 Hz decimation (drop the board flat 3×, not a
-  finger tap).
-- **Battery endurance is a paper number.** "~60 h" is modeled, not
-  measured; the ADC behind `batt_pct` is itself uncalibrated. And `off`
-  is a **one-way door in a sealed case** — §16j proves it only wakes on a
-  VBUS edge or the reset button, neither reachable through a screwed-down
-  lid. Schedule a sealed 3 h untethered run in week 1, while a bad result
-  is still actionable.
-- **The mount is unbought and needs a 24 h cure — on the brother's
-  board.** That is a dependency on a person who is not in this plan. A
-  base that lets go mid-session does not produce "no data", it produces a
-  puck swinging on a leash logging free-fall and impacts that the
-  detector will happily call jumps.
-- **The USB download path can silently drop blocks** — `emitBytes`
-  discards a whole block when the serial buffer is short, and it changed
-  two days ago without being exercised at session scale. That is the
-  path the session data comes home through.
+### P0 — must be true before the water (in order)
 
-### Week 1 — de-risk and make the session yield more
+| # | Work | Why | Owner |
+|---|---|---|---|
+| 1 | **Desk test, 3 tosses** | The only proof a jump survives to storage on this build (§3.2) | **you, 10 min** |
+| 2 | **Flash + verify the P1 batch** | BLE silent-drop fix, LED off, slow advertising, `system_off` drive — all `built-unverified`, never on silicon | eng, needs a board |
+| 3 | **Download integrity** | §3.3 — the path the session comes home through | eng |
+| 4 | **Fix the labeling procedure** | §3.1 — circular ground truth; rewrite `data-pipeline.md` | eng |
+| 5 | **Sealed 3 h battery run** | "60 h" is a paper estimate. And `off` is a **one-way door in a sealed case** — §16j proves it wakes only on a VBUS edge or the reset button, neither reachable through a closed lid | both |
+| 6 | **Mount: order, stick, cure** | 24 h cure, on the brother's board — a dependency on a person not in this plan | **you** |
+| 7 | **Land dress rehearsal on the frozen build** | Mount, film, jump, download, label, `eval` end-to-end. Finds pipeline breaks on land instead of from a kayak | both |
 
-| Work | Why it earns its place now | Who |
-|---|---|---|
-| **Desk test** (3 untethered tosses) | The ONLY proof that a jump survives to storage on this board. A wasted trip otherwise. | **owner, 10 min** |
-| **P1 batch** — silent BLE drop fix, LED off, slower advertising, `system_off` drive strength | Small, safe, done in one flash. Removes the last shipped rule violation. **DONE in code, awaiting a board.** | eng |
-| ~~Watch corruption gate~~ **ALREADY BUILT** | Correction 2026-08-14: `Model.mc::_jumpIsCorrupt()` already rejects incomplete JUMP lines, glued JUMP+STATS lines, physically impossible values, and `best < height` — the wire invariant that alone would have caught the 2026-08-11 corruption — and counts rejections. 17 Model tests cover it. **The watch already refuses to render a corrupt line.** Nothing to build. | — |
-| **Full land dress rehearsal** | Mount, film, jump, download, label, `eval` — end to end on the frozen build. Finds the pipeline breaks that would otherwise be found in a kayak. | both |
-
-### Week 2 — rehearse, freeze, pack
+### P1 — makes the session yield more (do if P0 is clear)
 
 | Work | Why |
 |---|---|
-| Battery + state in the advertisement | Glanceable "it's alive" before pushing off. Cheap, no link risk. |
-| Detector tuning from rehearsal data | Land tosses are not foil jumps, but a missed toss on the bench is a missed jump on the water. |
-| Waterproofing: bucket test, tether, mount cure time | The failure that ends the session in the first five minutes. |
-| **Written session protocol** — a one-page card | Charge, arm, verify on the wrist, start video, sync marker, land, download. On the water nobody remembers a checklist. |
-| **FREEZE** | No firmware changes after this. |
+| **Close watch M2 with `fakejump`** | The field has **never displayed a correct jump on any wrist.** Ten `fakejump`s on the fixed firmware closes it — no water, wind or brother needed |
+| **Watch: bare-catch every boundary** | ~10 one-word edits. This field has already died twice on silicon from non-`Lang` errors escaping a filtered catch |
+| **Watch: show its own health** | Surface `rejectedCount()` and `tx_drops`; distinguish standby / out-of-range / flat. Converts "a number that might be lying" into an instrument |
+| **§9.9 background-page test** | 10 min, no code: does `compute()` run when another data page is visible? If not, the watch contributes nothing all session and nobody finds out until download |
+| **Lever-arm persistence + visibility** | It self-arms after the first spun jump, has **no persistence key** (dies every reboot), and appears on no protocol line. A correction that is invisible and amnesiac is worse than none |
+
+### P2 — after the water data exists
+
+Per-line checksum + sequence; advertisement battery/state; standby tier;
+`dfu` gating; the non-ballistic self-diagnosis flag; Instinct 3 Solar;
+sealed-product hardware.
 
 ### Explicitly NOT in the two weeks
 
-**The power/standby restructure (P3).** It is the biggest, riskiest piece
-of work available and it touches the main loop, the watchdog and the I2C
-peripheral. Destabilising the firmware in the fortnight before a one-shot
-experiment is exactly the wrong risk to take, and the device already runs
-~60 h per charge against a 2 h session. It waits until there is real
-water data to design against.
+**The power/standby restructure.** The largest and riskiest change available —
+main loop, watchdog, I2C peripheral — for a device that runs a 2-hour session
+comfortably today. Destabilising firmware in the fortnight before a one-shot
+experiment is the wrong risk. It waits for real data.
 
-## The original sequence (kept for reference)
+Also out: two-central *support* (fix the cause, don't chase the feature),
+NFC/solar/primary cells, store submission, bonding.
 
-### P0 — Get the water data (this week)
+## 5. The freeze protocol
 
-The only work item that can invalidate everything else.
+1. All firmware and watch changes land **≥4 days** before the session.
+2. Then the **dress rehearsal runs on the exact build that goes in the water.**
+3. After the freeze: no changes. Not "small" ones. This project has already
+   spent four days on bugs a fresh build introduced.
+4. If something breaks after the freeze, **the session moves — not the build.**
 
-| Step | Who | Time |
-|---|---|---|
-| `./tools/jump desktest` on the OG board — 3 untethered tosses | **owner** | 10 min |
-| Charge, capsule, mount, pair the WATCH ONLY | owner | — |
-| Water session, filmed for ground truth | owner | one session |
-| Download + label + `./tools/jump eval` | engineering | same day |
+## 6. Decisions needed from you
 
-**Why the desk test is a hard gate:** it is the only thing that proves a
-jump actually *survives to storage* on this board. The self-test proves
-the filesystem mounts; `fakejump` deliberately skips storage. If
-persistence is broken, the session records nothing and we learn nothing.
-Ten minutes now prevents a wasted trip.
+1. **Session date** — everything sequences off it, including the mount's 24 h
+   cure and the freeze.
+2. **Which watch goes in the water?** Recommendation: **your Epix Gen 2** — the
+   only device where the full chain is proven. The Instinct is your brother's
+   and is simulator-only.
+3. **Is the brother briefed?** He needs to mount the puck ≥24 h ahead, wear the
+   watch, and jump roughly abeam of the kayak so the mast-ruler works.
+4. **P1 order** if time is short: watch-first, or download-integrity-first.
 
-### P1 — The 90-minute batch, in ONE flash, before the water
+## 7. How this plan stays honest
 
-Small, safe, independently verifiable. Batched deliberately: seven-flash
-evenings are where mistakes compound (playbook rule 5).
-
-1. **`system_off()` stops cutting the rail** — removes the one shipped
-   contradiction of the rail-static rule and the last `pinMode()` on a
-   power pin. ~15 min.
-2. **`Bluefruit.autoConnLed(false)`** — the blue LED currently blinks at
-   50 % duty forever. Wasteful and absurd in a sealed puck. ~5 min.
-3. **Slow the advertising interval** — 152 ms is a session-grade rate for
-   a device that sits idle. ~10 min.
-
-Then **stop touching the board** until after the water session.
-
-### P2 — Make the live experience honest (after data)
-
-Only worth doing once we know the numbers themselves are right.
-
-1. Honor the transmit return + `tx_drops` counter — kills the silent
-   byte-loss path (`ble-dependability.md` §3 layer 1).
-2. ~~Watch-side corruption gate~~ — **already shipped** (Model.mc
-   `_jumpIsCorrupt`, 17 tests). Listed here in error; verified 2026-08-14.
-3. Battery + armed state in the advertisement — the "is it on?" fix.
-4. Per-line checksum + sequence — makes loss *detectable*, not just rare.
-
-### P3 — Power UX (the big one, deliberately last)
-
-`power-states.md` §5a is honest about the size: there is no low-power
-idle to build on, the main loop never sleeps, the I2C peripheral is left
-enabled, and the watchdog caps sleep at 3.4 s. This is a main-loop
-restructure, not a feature.
-
-**It is also not urgent.** The device runs ~60 hours on a charge today.
-A session is two hours. Standby matters for the *sealed product*, not
-for the next month of testing.
-
-### P4 — The sealed product
-
-Charging access (gasketed USB now, inductive dock later), enclosure,
-and the v2 hardware conversation. Everything here depends on decisions
-that real water data will inform.
-
-## What we are explicitly NOT doing, and why
-
-| Deferred | Why |
-|---|---|
-| Two-central BLE support | Product is one central (the watch). Fix the *cause*, keep the capability, don't chase the feature. |
-| Instinct 3 Solar on-watch work | It's your brother's watch. Simulator tests pass; wait for hardware. |
-| NFC, solar, primary cells | v2 hardware conversations. Researched and documented; no action until the product shape is settled. |
-| Standby tier | P3. Nothing before the water session needs it. |
-| Bonding / BLE security | Adds a pairing ritual to a device with no display, for a threat model that doesn't justify it. Revisit only if `dfu` stays open. |
-
-## The one thing that could still bite us
-
-`dfu` is an unauthenticated BLE command — anyone in range can reboot the
-puck into its bootloader, and in DFU mode it has no USB at all. That's a
-bench annoyance today and a real problem the day this leaves the bench.
-Gate it in P2.
-
-## Decisions needed from the owner
-
-1. **Water session date** — everything sequences off it.
-2. **P1 batch: yes or skip?** It's 90 minutes and one flash. My
-   recommendation: do it, because it removes the last shipped rule
-   violation before the board goes somewhere wet.
-3. **After the water session, which comes first: P2 (trustworthy live
-   display) or P3 (power)?** My recommendation: P2 — it's smaller, and a
-   wrong number on the wrist erodes trust in the product faster than a
-   flat battery does.
-
-## The standing rule this project earned the hard way
-
-No verdicts without measurements. No "dead hardware" without a
-`pincensus`. No new power code without the bench board first. Those
-aren't ceremony — each one was bought with a day we don't get back.
+- `STATUS.md` is the source of truth; this plan may only reference it.
+- `./tools/jump status` machine-checks the build, the suites, the hardware,
+  and whether `STATUS.md` has gone stale relative to the code.
+- No item enters this plan without first checking whether it is already done.
+- No verdict without a measurement. That rule has now been paid for twice.
