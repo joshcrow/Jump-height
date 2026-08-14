@@ -1064,6 +1064,33 @@ rail change stays mandatory.
   for this part: **0x6A is the correct LSM6DS3TR-C WHO_AM_I**. Cosmetic,
   but it is exactly the kind of misleading row that feeds a wrong verdict.
 
+## 16j. `off` does NOT wake from steady VBUS — item 25 answered. 2026-08-14
+
+Measured while trying to automate the off/wake soak (hardware-protection
+§5 item 2): send `off` with the USB cable already attached, and the board
+enters System OFF and **stays there**. It disappears from USB *and* stops
+advertising; nothing brings it back but a **VBUS rising edge (unplug/
+replug) or the reset button**.
+
+The open question in item 25 was whether VBUS-already-present would wake
+it immediately. It does not — the wake source is the *transition*, not
+the level.
+
+Consequences:
+- **The off/wake soak cannot be automated on this bench.** Each cycle
+  needs a physical replug. A PPPS-capable USB hub (~$30, already on the
+  playbook's wish list) would make it a software loop and retire this
+  whole class of "ask a human to replug" step.
+- **`off` is safe but final on a cabled bench** — treat it like DFU: do
+  not send it unless someone can physically touch the board.
+- Product-side this is exactly the behavior the power design wants
+  (docs/power-states.md §3): deep sleep is exited by putting the puck on
+  the charger. It confirms the charger-wake plan works on real silicon.
+
+The board sleeping this way is electrically safe: `system_off()` runs the
+audited detach (`bus_release()` → float SDA/SCL/INT1 → rail down), so the
+sensor sits unpowered with nothing driving into it.
+
 ## 17. PDM microphone rail — never measured
 
 **File:** not touched by this port at all (deliberately: no PDM code
