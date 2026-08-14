@@ -1272,7 +1272,16 @@ def cmd_sync(args) -> int:
                            .get("trace_max_bytes", 2000000))
         except (OSError, ValueError):
             _cap = 2000000
-        trace_capped = (sess / "trace.csv").stat().st_size >= _cap * 0.98
+        # DISABLED (review 2026-08-14): trace_max_bytes is an ESP32-era
+        # CSV-on-flash constant that the nRF52 store explicitly does NOT use —
+        # its real cap is the physical trace region, ~5.3 h of moving time.
+        # Comparing a decoded-CSV size against it fired a FALSE "trace hit its
+        # size cap" on any session longer than ~44 min, and that REPLACED the
+        # live-vs-offline agreement verdict with an informational note — losing
+        # the one automated cross-check on the evening it matters most.
+        # The honest cap check needs the device's own trace_bytes; until the
+        # download carries it, claim nothing.
+        trace_capped = False
         if trace_capped:
             agreement = ("ℹ️ trace hit its size cap — offline re-analysis only "
                          "covers the first ~45 min of moving time, so live vs "
@@ -2179,15 +2188,27 @@ def cmd_status(args) -> int:
                             cwd=str(REPO), capture_output=True, text=True).stdout.strip()
             st = sp.run(["git", "log", "-1", "--format=%ct", "--", "docs/STATUS.md"],
                         cwd=str(REPO), capture_output=True, text=True).stdout.strip()
-            if newest and st and int(newest) > int(st):
+            # FAIL LOUD, NEVER SILENT-GREEN. Every path that cannot produce
+            # both timestamps used to fall into the ✅ branch — an untracked
+            # STATUS.md, an empty git log, a non-repo checkout all printed
+            # "up to date" with rc=0. A staleness gate that fails green is
+            # worse than none: it actively tells you the thing it cannot
+            # check is fine. (Review 2026-08-14.)
+            if not newest or not st:
+                print("  ⚠️  CANNOT VERIFY freshness — git gave no timestamp for "
+                      + ("STATUS.md" if not st else "the code tree") + ".")
+                print("     Is STATUS.md committed? Treat its states as UNVERIFIED.")
+                rc_any = 1
+            elif int(newest) > int(st):
                 delta = (int(newest) - int(st)) / 3600.0
                 print(f"  ⚠️  STATUS.md is {delta:.1f} h OLDER than the newest code change.")
                 print("     Treat every state in it as suspect until reconciled.")
                 rc_any = 1
             else:
                 print("  STATUS.md is at least as new as the newest code change ✅")
-        except Exception:
-            print("  (could not compare git timestamps)")
+        except Exception as e:  # noqa: BLE001
+            print(f"  ⚠️  freshness check FAILED ({type(e).__name__}) — treat STATUS.md as unverified")
+            rc_any = 1
 
     print("\nNothing above is a promise. Re-run after any change.")
     return rc_any

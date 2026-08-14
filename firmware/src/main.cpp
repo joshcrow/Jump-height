@@ -60,6 +60,12 @@
 
 #define FW_VERSION "0.4.3"
 
+// Self-arming spin correction: OFF for the one-shot water session so the data
+// comes from the detector that was actually validated. See the commit site.
+#ifndef JH_SPIN_SELFARM_ENABLED
+#define JH_SPIN_SELFARM_ENABLED 0
+#endif
+
 static const float    G                  = JH_G;
 static const uint32_t SAMPLE_INTERVAL_US = 1000000UL / JH_SAMPLE_HZ;
 static const int      LOG_DECIMATE       = JH_SAMPLE_HZ / JH_LOG_HZ;
@@ -1011,7 +1017,27 @@ void loop() {
   // every other AIRBORNE exit discards its observations.
   if (was_airborne && detector.state() != jump::State::AIRBORNE) {
     if (jumped) {
-      if (lever_arm.commit()) detector.set_spin_lever_m(lever_arm.value());
+      // SELF-ARM GATED FOR THE ONE-SHOT WATER SESSION (review 2026-08-14).
+      //
+      // correct_for_spin() is applied to the magnitude FED INTO the detector's
+      // gates, not to the height afterwards — so once this arms it changes
+      // which jumps are detected at all and what airtimes they get. It is not
+      // a post-hoc scale factor and it is NOT reversible offline. It needs only
+      // 8 airborne observations at 200 Hz (~0.04 s) to commit, and wing riders
+      // rotate, so it WILL arm early in a real session. Meanwhile the value has
+      // no persistence key (a battery blip re-arms it to a different number)
+      // and appears on no protocol line, so afterwards nobody can tell which
+      // jumps were corrected or by how much. The correction has zero silicon
+      // time (STATUS.md).
+      //
+      // For the session we want the exact detector that was validated in sim.
+      // Re-enable deliberately once there is water data to validate against,
+      // and give it a persistence key and a wire field at the same time.
+      if (JH_SPIN_SELFARM_ENABLED) {
+        if (lever_arm.commit()) detector.set_spin_lever_m(lever_arm.value());
+      } else {
+        lever_arm.discard();
+      }
     } else {
       lever_arm.discard();
     }

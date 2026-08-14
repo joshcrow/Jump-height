@@ -80,15 +80,78 @@ downloads incompletely is the cruellest possible failure.
 **Fix:** make the download verifiable — a byte/line count the CLI checks, and
 a re-request on mismatch. Then exercise it at session scale.
 
+## 3.4 What the final review changed (2026-08-14)
+
+Three reviewers attacked this plan. The plan's shape survived; four things
+in it did not, and three real bugs fell out. **Fixed in code already:**
+
+- **A boot scan could reset the board and disable storage for the session.**
+  `findJumpsAppendPoint`/`findTraceAppendPoint` walk the region block by block
+  at boot with **no watchdog feed** — ~19k blocks on a full trace region. A
+  well-used puck would reset there, latch StoreGuard, and run the whole
+  session storage-less behind a `flash FAIL` row nobody reads at a beach.
+  Never seen only because no region has ever been filled — which this session
+  would do first. Feeds added.
+- **`jump status`'s staleness gate failed GREEN.** Every path that could not
+  produce both timestamps fell into the ✅ branch. A gate that fails green is
+  worse than none: it asserts the thing it cannot check is fine. Now fails
+  loud.
+- **`jump sync` would have cried "trace hit its size cap"** on any session
+  over ~44 minutes — an ESP32-era constant compared against a decoded-CSV
+  size — and that *replaces* the live-vs-offline agreement verdict with a
+  note. Disabled until the download carries the device's own `trace_bytes`.
+- **The self-arming spin correction is now gated OFF.** It commits after ~8
+  airborne samples, and it is applied to the magnitude *fed into the
+  detector's gates* — so it changes which jumps are detected and what airtimes
+  they get. Not reversible offline, no persistence key, on no protocol line,
+  zero silicon time. The session runs the detector that was actually
+  validated.
+
+**Still to fix, and they change the session design:**
+
+1. **The primary deliverable is not measurable as specified.** "Airborne |a|
+   in the 0-0.07 g band" is confounded by rotation: the trace records `t,mag`
+   only, `mag` is raw and carries ω²r, and 90 °/s of ordinary board pitch
+   injects 0.13-0.25 g against a band 0.07 g wide. The gyro is read every
+   sample and thrown away. **The fix is small and already sits in the file:**
+   `JumpRecord` has 11 unused pad bytes — spend 8 on median airborne |a|,
+   median |ω|, corrected |a| and window sample count, computed at 200 Hz over
+   the detector's own airborne window. No format change, no region resize.
+   Plus a 10-minute desk drop calibration to establish the instrument's own
+   free-fall zero (a_v is exactly 0 in free fall by definition).
+2. **The mast is the wrong ruler and the horizon is not the waterline.** A
+   camera 0.8 m above the water sees the water plane 0.8 m below its own level
+   line *at every distance* — using the horizon as zero adds **+53 % on a
+   1.5 m jump**, a bias that does not average out. Use the board's own position
+   in the takeoff/landing frames as zero, and **rider height in gear** as the
+   ruler (2× the mast, roughly vertical, high contrast against sky). Shoot
+   **1080p/120, not 4K/30** — frame quantisation at 30 fps is 6.7 %, the size
+   of the effect under test. Better still: with a known ruler and known frame
+   rate, fit the flight and recover `g_eff` directly — the same quantity the
+   accelerometer measures, giving two independent measurements of the one
+   number the project turns on.
+3. **No build identity.** `FW_VERSION` has read "0.4.3" through every fix; no
+   sha, no timestamp on `INFO`. The freeze protocol is unenforceable and a
+   rollback unverifiable. ~30 min to add.
+4. **The capsule has never been water-tested** and `data/sessions/` is
+   gitignored — the exact conditions that lost the 61-jump history. Bucket
+   test (empty, then loaded for float) and a written two-copies-before-`clear`
+   backup rule both go in P0.
+5. **P0 order was self-invalidating** — the desk test was scheduled before the
+   flash that voids it. Corrected below: flash first, then desk test, and the
+   desk test is a **gate that runs after every flash**, not a one-time task.
+
 ## 4. Workstreams, prioritised
 
 ### P0 — must be true before the water (in order)
 
 | # | Work | Why | Owner |
 |---|---|---|---|
-| 1 | **Desk test, 3 tosses** | The only proof a jump survives to storage on this build (§3.2) | **you, 10 min** |
-| 2 | **Flash + verify the P1 batch** | BLE silent-drop fix, LED off, slow advertising, `system_off` drive — all `built-unverified`, never on silicon | eng, needs a board |
-| 3 | **Download integrity** | §3.3 — the path the session comes home through | eng |
+| 1 | **Flash + verify the batch** | BLE silent-drop fix, LED off, slow advertising, `system_off` drive, boot-scan watchdog feeds, spin self-arm gated — all `built-unverified`, never on silicon | eng, needs a board |
+| 2 | **Download integrity** | §3.3 — and the desk test reads its own result back through this path | eng |
+| 3 | **Desk test, 3 tosses — AFTER the flash, and after EVERY flash** | The only proof a jump survives to storage on this build (§3.2). A gate, not a task | **you, 10 min** |
+| 3b | **Record median airborne \|a\| and \|ω\| per jump** | §3.4 item 1 — without it the primary deliverable is unmeasurable | eng |
+| 3c | **Bucket-test the capsule; write the backup rule** | §3.4 item 4 | **you, 15 min** |
 | 4 | **Fix the labeling procedure** | §3.1 — circular ground truth; rewrite `data-pipeline.md` | eng |
 | 5 | **Sealed 3 h battery run** | "60 h" is a paper estimate. And `off` is a **one-way door in a sealed case** — §16j proves it wakes only on a VBUS edge or the reset button, neither reachable through a closed lid | both |
 | 6 | **Mount: order, stick, cure** | 24 h cure, on the brother's board — a dependency on a person not in this plan | **you** |

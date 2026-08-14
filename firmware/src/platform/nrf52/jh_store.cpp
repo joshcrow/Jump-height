@@ -95,6 +95,9 @@ namespace jh_link { __attribute__((weak)) void watchdog_feed() {} }
 
 namespace jh_store {
 
+// Boot-scan watchdog pacing — see findJumpsAppendPoint/findTraceAppendPoint.
+static uint32_t s_scan_feed = 0;
+
 namespace {
 
 // ---------------------------------------------------------------- geometry
@@ -299,6 +302,13 @@ void findJumpsAppendPoint() {
   // write recovery (below) can jump `off` forward by more than one record's
   // width, so a fixed per-iteration step no longer fits.
   while (off + JUMP_RECORD_BYTES <= JUMPS_REGION_BYTES) {
+    // WATCHDOG FEED (review 2026-08-14). This scan walks the region block
+    // by block at boot — on a full trace region that is ~19k blocks — and
+    // had NO feed. A well-used puck could therefore reset right here, latch
+    // StoreGuard, and run an entire session storage-less behind a `flash
+    // FAIL` row nobody reads at a beach. Never observed only because no
+    // region has ever been filled — which the water session would do first.
+    if ((++s_scan_feed & 63) == 0) ::jh_link::watchdog_feed();
     JumpRecord rec;
     s_flash.readBuffer(s_jumps_region_start + off, (uint8_t*)&rec, sizeof(rec));
     if (!jumpRecordValid(rec)) {
@@ -379,6 +389,13 @@ void findTraceAppendPoint() {
   uint32_t csv_total = 0;
   uint8_t block_buf[trace_codec::HEADER_BYTES];
   while (off + trace_codec::HEADER_BYTES <= s_trace_region_bytes) {
+    // WATCHDOG FEED (review 2026-08-14). This scan walks the region block
+    // by block at boot — on a full trace region that is ~19k blocks — and
+    // had NO feed. A well-used puck could therefore reset right here, latch
+    // StoreGuard, and run an entire session storage-less behind a `flash
+    // FAIL` row nobody reads at a beach. Never observed only because no
+    // region has ever been filled — which the water session would do first.
+    if ((++s_scan_feed & 63) == 0) ::jh_link::watchdog_feed();
     s_flash.readBuffer(s_trace_region_start + off, block_buf, sizeof(block_buf));
     const uint32_t t0_ms = (uint32_t)block_buf[0] | ((uint32_t)block_buf[1] << 8) |
                           ((uint32_t)block_buf[2] << 16) | ((uint32_t)block_buf[3] << 24);
