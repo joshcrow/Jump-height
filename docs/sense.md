@@ -1,5 +1,17 @@
 # XIAO nRF52840 Sense — the v2 puck *(port spec & gap analysis)*
 
+> ## ⚠️ SUPERSEDED IN PART — check [docs/STATUS.md](STATUS.md) first
+>
+> This file contains claims that were true when written and are now known to be
+> WRONG. It is kept for its reasoning trail, not for its status. `STATUS.md` is
+> the single source of truth; where they disagree, this file is stale.
+> **The status banner is ~17 days and one whole bring-up out of date** (it predates
+> first power-on; three boards have been on silicon since 2026-07-31), and every
+> runtime figure assumes a 500 mAh cell — the installed cell is 250 mAh, so §5's
+> power table is 2x optimistic throughout.
+
+
+
 **Status:** ALL-IN (owner, 2026-07-28). Board + 500 mAh battery ordered,
 arriving within days. Written before first power-on: this is the honest
 list of what the plan had NOT covered, plus the bring-up sequence — items

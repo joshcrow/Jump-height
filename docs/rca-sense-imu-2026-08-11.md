@@ -1,5 +1,18 @@
 # RCA — Sense IMU failure, 2026-08-11
 
+> ## ⚠️ SUPERSEDED IN PART — check [docs/STATUS.md](STATUS.md) first
+>
+> This file contains claims that were true when written and are now known to be
+> WRONG. It is kept for its reasoning trail, not for its status. `STATUS.md` is
+> the single source of truth; where they disagree, this file is stale.
+> **Its headline verdict is inverted.** This RCA concluded the LSM6DS3TR-C failed
+> in hardware and "firmware is exonerated". The real cause was firmware: `pinMode()`
+> selects 0.5 mA standard drive on P1.08, which IS the sensor's supply. No sensor was
+> ever damaged; both boards read gravity again after one register field changed.
+> See SENSE_FIRST_BOOT.md 16i and DECISIONS #37.
+
+
+
 **Verdict: hardware failure of the LSM6DS3TR-C (or its power path) on the
 XIAO nRF52840 Sense module. Firmware is exonerated by direct experiment.**
 Written 2026-08-12, the morning after; investigation was demanded and it was

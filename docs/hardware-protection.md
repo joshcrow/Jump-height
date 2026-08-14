@@ -1,5 +1,18 @@
 # Hardware protection plan — how we never cook a board again
 
+> ## ⚠️ SUPERSEDED IN PART — check [docs/STATUS.md](STATUS.md) first
+>
+> This file contains claims that were true when written and are now known to be
+> WRONG. It is kept for its reasoning trail, not for its status. `STATUS.md` is
+> the single source of truth; where they disagree, this file is stale.
+> **Its founding premise is refuted.** This plan opens with "two IMUs went
+> unresponsive... this project's own firmware electrically mistreating the sensor's
+> switched power domain". No sensor was ever damaged, and there is no regulator on
+> that net — the GPIO pad IS the supply (docs/xiao-hardware-truth.md). The sequencing
+> discipline it teaches is still sound; its diagnosis and its mule verdict are not.
+
+
+
 Written 2026-08-13, the night after the second sensor stopped answering.
 Two XIAO nRF52840 Sense IMUs went unresponsive in three days. The common
 factor was not static, not shipping damage, not coincidence: it was this

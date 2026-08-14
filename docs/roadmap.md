@@ -1,5 +1,16 @@
 # Roadmap
 
+> ## ⚠️ SUPERSEDED IN PART — check [docs/STATUS.md](STATUS.md) first
+>
+> This file contains claims that were true when written and are now known to be
+> WRONG. It is kept for its reasoning trail, not for its status. `STATUS.md` is
+> the single source of truth; where they disagree, this file is stale.
+> **Several Phase 2 boxes are done but unticked** (battery soldered with working
+> telemetry, capsule bought, drop calibration measured), and the milestone this file
+> calls open disagrees with docs/garmin-datafield.md. Trust STATUS.md.
+
+
+
 A phased plan that de-risks the hard parts early. Each phase has a concrete
 **"done when"** so you know when to move on. You can get real value (and answer
 "how high does my brother jump?") by the end of Phase 2.

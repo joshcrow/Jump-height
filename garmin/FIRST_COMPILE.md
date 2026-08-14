@@ -1,5 +1,17 @@
 # First-compile checklist
 
+> ## ⚠️ SUPERSEDED IN PART — check [docs/STATUS.md](../docs/STATUS.md) first
+>
+> This file contains claims that were true when written and are now known to be
+> WRONG. It is kept for its reasoning trail, not for its status. `STATUS.md` is
+> the single source of truth; where they disagree, this file is stale.
+> **The "OPEN BUG — cause NOT yet found" section is closed.** The corruption had a
+> firmware root cause (the BLE TX queue discarded a chunk whose notify failed —
+> jh_link.cpp, commit 216f75f), and the watch-side gate this file proposes as future
+> work shipped the next day (Model.mc `_jumpIsCorrupt`, 17 tests).
+
+
+
 This code was written without access to the Connect IQ SDK (login-gated
 download, not available in the authoring environment) or a real device/
 simulator. Every API used below was checked as carefully as possible —

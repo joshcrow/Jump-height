@@ -1,5 +1,15 @@
 # Build guide — the hardware-day runbook
 
+> ## ⚠️ SUPERSEDED IN PART — check [docs/STATUS.md](docs/STATUS.md) first
+>
+> This file contains claims that were true when written and are now known to be
+> WRONG. It is kept for its reasoning trail, not for its status. `STATUS.md` is
+> the single source of truth; where they disagree, this file is stale.
+> **This runbook describes the FROZEN ESP32/FireBeetle v1 build**, not the board the
+> README tells you to build (Seeed XIAO nRF52840 Sense). No Sense runbook exists yet.
+
+
+
 Your job is **hardware**: wires, glue, sealing, water. Everything else —
 flashing, testing, calibrating, downloading data — is one command each, via
 `./tools/jump`. This guide is the script for the day your parts arrive

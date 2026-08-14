@@ -1,5 +1,17 @@
 # Data pipeline — capture, label, evaluate, improve
 
+> ## ⚠️ SUPERSEDED IN PART — check [docs/STATUS.md](STATUS.md) first
+>
+> This file contains claims that were true when written and are now known to be
+> WRONG. It is kept for its reasoning trail, not for its status. `STATUS.md` is
+> the single source of truth; where they disagree, this file is stale.
+> **The labeling procedure is CIRCULAR and must change before the water session.**
+> It derives "true height" from counted airborne frames via h = g*T^2/8 — the very
+> formula under test — so it can only measure timing agreement and passes whether or
+> not wings are ballistic. See docs/plan.md for the independent-measure fix.
+
+
+
 Every open question now converges on one dependency: **real labeled water data.**
 The arm-ceiling check ([wing-ballistic-sim.md](wing-ballistic-sim.md)), `height_scale`
 calibration, landing-attitude direction, wing-rotation accuracy
