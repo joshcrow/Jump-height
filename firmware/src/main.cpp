@@ -290,12 +290,17 @@ static bool runSelfTest() {
       all_ok = false;
     } else {
       const uint8_t who = jh_imu::who_am_i();
-      if (who == 0x68) {
+      // 0x68 = MPU-6050 (v1 ESP32 boards). 0x6A = LSM6DS3TR-C (the Sense).
+      // BOTH are correct silicon. 0x6A was reported as "likely a clone
+      // MPU-6050" for weeks on the very board it is the RIGHT answer for —
+      // a self-test row that cries wolf about healthy hardware is exactly
+      // how this project talked itself into two dead-hardware verdicts.
+      if (who == 0x68 || who == 0x6A) {
         emitf("SELFTEST whoami PASS detail=0x%02X\n", who);
       } else {
         // Clone chips report odd IDs but usually work fine — warn, don't fail.
         emitf("SELFTEST whoami WARN detail=0x%02X\n", who);
-        emitLine("# hint: unexpected chip ID — likely a clone MPU-6050. Usually fine;");
+        emitLine("# hint: unexpected chip ID — likely a clone. Usually fine;");
         emitLine("# hint: the accel/noise checks below are what actually matter.");
       }
     }

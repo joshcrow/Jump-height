@@ -75,6 +75,24 @@
 #include "params.gen.h"
 #include "trace_codec.h"
 
+// Watchdog feed, forward-declared here (not via jh_link.h, whose Arduino
+// String types break the host-side store test harness) and defined WEAK so
+// the host harness links without a jh_link at all; on device the strong
+// definition in jh_link.cpp wins.
+//
+// THIS MUST STAY AT GLOBAL SCOPE. It used to be declared *inside* namespace
+// jh_store, which created `jh_store::jh_link::watchdog_feed` — a different
+// function from `::jh_link::watchdog_feed`. C++ name lookup from inside
+// jh_store then bound every call in this file to the empty stub, so the
+// watchdog was NEVER fed during a chip erase: the board reset ~3.5 s in
+// (measured: right after sector 96 of 512) and every `format` silently
+// failed, leaving storage unmountable. Two symbols in the ELF is the tell:
+//   T jh_link::watchdog_feed          <- real
+//   W jh_store::jh_link::watchdog_feed <- the stub that won
+// Every call below is written `::jh_link::watchdog_feed()` so a nested
+// namespace can never capture it again.
+namespace jh_link { __attribute__((weak)) void watchdog_feed() {} }
+
 namespace jh_store {
 
 namespace {
@@ -534,24 +552,58 @@ void produceNextUnit() {
 
 // ------------------------------------------------------------------- init
 
-// Watchdog feed, forward-declared (not via jh_link.h, whose Arduino String
-// types break the host-side store test harness) and defined WEAK so the
-// host harness links without a jh_link at all; on device the strong
-// definition in jh_link.cpp wins.
-namespace jh_link { __attribute__((weak)) void watchdog_feed() {} }
+// (The weak watchdog_feed stub lives at GLOBAL scope, above — see the
+// comment there. Defining it here, inside namespace jh_store, is what
+// silently broke every feed in this file for weeks.)
 
 // Chip erase, chunked and watchdog-fed. A monolithic eraseChip() blocks for
 // up to a minute; with the watchdog now armed from the top of setup() (see
 // jh_link.h), any >3.5 s blocking call in the boot path is a reset. 4 KB
 // sector erases run ~40 ms each (same call clear() already uses) — feed
 // every few sectors.
+static void (*s_erase_progress)(const char*) = nullptr;  // optional reporter
+
 static bool eraseChipFed() {
   const uint32_t sectors = s_flash.size() / 4096;
-  for (uint32_t sec = 0; sec < sectors; ++sec) {
-    if ((sec & 7) == 0) { jh_link::watchdog_feed(); }
-    if (!s_flash.eraseSector(sec)) return false;
+  // PROGRESS + PER-SECTOR RESULT. The first version reported only
+  // pass/fail at the end, and when a format silently stopped producing
+  // output there was no way to tell "erase is slow", "erase failed at
+  // sector N" and "the board reset" apart — three very different bugs.
+  if (s_erase_progress) {
+    char line[64];
+    snprintf(line, sizeof(line), "# erase: %lu sectors", (unsigned long)sectors);
+    s_erase_progress(line);
   }
-  jh_link::watchdog_feed();
+  for (uint32_t sec = 0; sec < sectors; ++sec) {
+    // Feed the watchdog AND yield. A 512-sector erase is ~20 s of tight
+    // loop; without a yield the USB stack is never serviced and the host
+    // drops the CDC mid-format (measured: the port dies right after
+    // sector ~64), which makes a working erase look like a crashed board
+    // and leaves no way to see the result. yield() runs the RTOS idle
+    // path, which is what services TinyUSB on this core.
+    if ((sec & 7) == 0) {
+      ::jh_link::watchdog_feed();
+#if defined(NRF52840_XXAA)
+      yield();  // device only — the host store harness has no Arduino
+#endif
+    }
+    if (!s_flash.eraseSector(sec)) {
+      if (s_erase_progress) {
+        char line[64];
+        snprintf(line, sizeof(line), "# erase: FAILED at sector %lu",
+                 (unsigned long)sec);
+        s_erase_progress(line);
+      }
+      return false;
+    }
+    if (s_erase_progress && (sec & 31) == 31) {
+      char line[64];
+      snprintf(line, sizeof(line), "# erase: %lu/%lu", (unsigned long)(sec + 1),
+               (unsigned long)sectors);
+      s_erase_progress(line);
+    }
+  }
+  ::jh_link::watchdog_feed();
   return true;
 }
 
@@ -668,7 +720,11 @@ bool hard_format(void (*announce)(const char* line)) {
                              ? s_flash_total_bytes - s_trace_region_start
                              : 0;
   announce("# hard format: erasing chip (up to a minute)...");
+  s_erase_progress = announce;
   const bool erased = eraseChipFed();
+  s_erase_progress = nullptr;
+  announce(erased ? "# hard format: erase OK, writing superblock"
+                  : "# hard format: erase FAILED");
   const bool wrote  = erased && writeSuperblock();
   if (!wrote) {
     announce("# hard format: erase/superblock FAILED");
