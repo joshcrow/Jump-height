@@ -158,7 +158,7 @@ in it did not, and three real bugs fell out. **Fixed in code already:**
 | 3 | **Desk test, 3 tosses — AFTER the flash, and after EVERY flash** | The only proof a jump survives to storage on this build (§3.2). A gate, not a task | **you, 10 min** |
 | 3b | **Record median airborne \|a\| and \|ω\| per jump** | §3.4 item 1 — without it the primary deliverable is unmeasurable | eng |
 | 3c | **Bucket-test the capsule; write the backup rule** | §3.4 item 4 | **you, 15 min** |
-| 4 | **Fix the labeling procedure** | §3.1 — circular ground truth; rewrite `data-pipeline.md` | eng |
+| 4 | ~~**Fix the labeling procedure**~~ **DONE 2026-08-15** | §3.1 — `data-pipeline.md` rewritten around an independent ruler measurement, and enforced in code: `labels.csv` gains `height_src`, `sim/evaluate.py` excludes non-independent heights from RMSE and says why | eng |
 | 5 | **Sealed 3 h battery run** | "60 h" is a paper estimate. And `off` is a **one-way door in a sealed case** — §16j proves it wakes only on a VBUS edge or the reset button, neither reachable through a closed lid | both |
 | 6 | **Mount: order, stick, cure** | 24 h cure, on the brother's board — a dependency on a person not in this plan | **you** |
 | 7 | **Land dress rehearsal on the frozen build** | Mount, film, jump, download, label, `eval` end-to-end. Finds pipeline breaks on land instead of from a kayak | both |

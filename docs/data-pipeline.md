@@ -1,14 +1,18 @@
 # Data pipeline — capture, label, evaluate, improve
 
-> ## ⚠️ SUPERSEDED IN PART — check [docs/STATUS.md](STATUS.md) first
+> ## ⚠️ PARTLY SUPERSEDED — check [docs/STATUS.md](STATUS.md) first
 >
-> This file contains claims that were true when written and are now known to be
-> WRONG. It is kept for its reasoning trail, not for its status. `STATUS.md` is
-> the single source of truth; where they disagree, this file is stale.
-> **The labeling procedure is CIRCULAR and must change before the water session.**
-> It derives "true height" from counted airborne frames via h = g*T^2/8 — the very
-> formula under test — so it can only measure timing agreement and passes whether or
-> not wings are ballistic. See docs/plan.md for the independent-measure fix.
+> `STATUS.md` is the single source of truth; where they disagree, this file is
+> stale.
+>
+> **The circular-labeling defect this banner used to warn about is FIXED
+> (2026-08-15).** The old procedure derived "true height" from counted airborne
+> frames via `h = g·T²/8` — the very formula under test — so it could only ever
+> measure timing agreement and would pass whether or not wings are ballistic.
+> *Labeling* below is rewritten around an independent ruler measurement, and
+> the fix is now **enforced in code, not just documented**: `labels.csv` carries
+> a `height_src` column and `sim/evaluate.py` excludes non-independent heights
+> from RMSE rather than quietly scoring them.
 
 
 
@@ -57,21 +61,34 @@ data/sessions/<id>/
 One row per ground-truth event, keyed to **trace time**. Header required.
 
 ```
-event,t_start_s,t_end_s,height_m,rotation_deg,landing,notes
-jump,12.34,,1.82,,flat,clean
-jump,41.07,,2.65,,tail,slight tail-first
-trick,58.9,60.4,,360,flat,backside 360
-foil,70.0,138.5,,,,long foil run
-carve,95.2,96.1,,,,hard bottom turn
+event,t_start_s,t_end_s,height_m,height_src,rotation_deg,landing,notes
+jump,12.34,,1.82,ruler,,flat,clean
+jump,41.07,,2.65,ruler,,tail,slight tail-first
+trick,58.9,60.4,,,360,flat,backside 360
+foil,70.0,138.5,,,,,long foil run
+carve,95.2,96.1,,,,,hard bottom turn
 ```
 
 - `event`: `jump | trick | foil | carve | pump | wave | crash | …` (extensible).
 - `t_start_s`: trace time of the event — a jump's **takeoff**.
 - `height_m`: video-derived TRUE apex — the accuracy/calibration truth. **Scored today.**
+- `height_src`: **how that height was obtained. This decides whether it counts.**
+  - `ruler` — apex measured against a known length in frame (see *Labeling*).
+    Independent of the accelerometer and of `h = g·T²/8`. **Real truth.**
+  - `sim` — a synthetic session, where the apex is an *input* to the generator
+    rather than a re-derivation of the device's own output. Valid for testing
+    the machinery; says nothing about real wings.
+  - `timing` — frame-counted airtime put through `h = g·T²/8`. **Circular:
+    that is the formula the firmware uses.** Kept for the record, excluded
+    from RMSE by `sim/evaluate.py`.
+  - blank — unknown provenance, treated as `timing`. Assuming the friendly
+    reading is precisely how a circular number becomes a published accuracy
+    claim.
 - `rotation_deg`, `landing` (`flat|nose|tail|rail`), `t_end_s`, `notes`: for the
   trick / landing / riding families as those labels accumulate. Blank is fine.
 
-Only `event=jump` rows with a `height_m` are scored right now; the schema is
+Only `event=jump` rows with a `height_m` **and an independent `height_src`**
+are scored for accuracy right now (detection is scored regardless); the schema is
 deliberately one file so riding/trick labels grow in place.
 
 ### session.json (optional but recommended)
@@ -89,18 +106,98 @@ to three of your brother's sessions. Missing file → split `unknown`.
 ## Procedures
 
 ### Capture ritual (makes labeling possible)
-1. Power on; do a **sync marker** — one distinct, sharp event the sensor *and* the
-   camera both catch (a firm triple-tap on the board, or a deliberate small hop).
-   It gives video↔trace a shared `t=0`.
-2. Ride. Film at **240 fps** for jumps (airtime to ±1 frame ≈ ±4 ms → height via
-   `h = g·T²/8`); a wider, lower-fps shot is fine for riding/wave context.
-3. Repeat the sync marker at the end. `jump sync` to pull the trace.
+1. Power on; do a **sync marker** — **three deliberate flat drops of the board
+   onto a soft surface, ~2 s apart**, which the sensor and the camera both
+   catch. Not a finger tap: a tap is 2-5 ms, and the stored trace is decimated
+   to 50 Hz, so a tap may not appear in it **at all**. A flat drop is ~0.3 s of
+   free-fall plus a spike — unmissable, auto-detectable, and it doubles as a
+   zero-g reference.
+2. **Also write down the wall-clock time and run `./tools/jump sync`**, which
+   records `trace_epoch_utc` in `session.json`. The puck has no RTC; trace time
+   is seconds since boot. That anchor is what makes 20-40 short kayak clips
+   alignable at all — a single sync marker only aligns one continuous recording.
+3. Ride. Film **1080p/120, not 4K/30** — see *frame rate* below; it is not a
+   quality preference, it is the difference between measuring the effect and
+   measuring the quantisation.
+4. **Get the camera roughly abeam of the jump line**, and get the rider
+   full-height in frame at apex. This is a briefing item for whoever is in the
+   kayak, and it is the single thing that decides whether height is measurable.
+5. Repeat the sync marker at the end. `jump sync` to pull the trace.
 
 ### Labeling
-Align video to trace on the sync marker, then tag events into `labels.csv` at their
-trace timestamps. For jumps: takeoff time + true height from counted airtime frames.
-Start with a spreadsheet; a scrub-and-tag tool is only worth building once volume
-justifies it.
+
+> **The old procedure here was circular and produced a number that could not
+> fail.** It derived "true height" from counted airborne frames via
+> `h = g·T²/8` — the formula the firmware uses. Scoring our `g·T²/8` against a
+> label built from `g·T²/8` measures timing agreement and nothing else. It
+> would report a small, confident RMSE whether or not wings are ballistic,
+> which is the entire open question the water session exists to answer.
+> Rewritten 2026-08-15; `sim/evaluate.py` now enforces it via `height_src`.
+
+There are **two independent truth channels**, and they answer different
+questions. Record both; never let one masquerade as the other.
+
+#### Channel A — timing (validates the detector, NOT the height model)
+Count airborne frames, divide by frame rate, get airtime `T`. Compare against
+the device's `airtime_s`. This is a genuine, useful check: it proves the
+detector finds takeoff and landing correctly on real water motion.
+
+What it **cannot** do is validate height, because height is computed *from*
+airtime. Put a timing-derived height in `labels.csv` if you like, but mark it
+`height_src=timing` and it will be excluded from RMSE — deliberately.
+
+#### Channel B — the ruler (validates the height model — this is the new part)
+Measure apex displacement against a **known length that is in the same plane,
+at the same distance, and roughly vertical**.
+
+**Use rider height in gear as the ruler.** Not the mast:
+- The rider is ~2× the mast, so the same pixel error is half the relative error.
+- The rider is high-contrast against sky; a mast is dark against dark water.
+- The rider is unambiguously vertical at apex; a mast is at whatever angle.
+
+**Zero is the board's own position, NOT the horizon.** This one matters more
+than it sounds:
+
+> A camera 0.8 m above the water sees the water plane 0.8 m *below* its own
+> level line — **at every distance**. Using the horizon as the zero therefore
+> adds a fixed offset to every jump, and on a 1.5 m jump that is **+53 %**.
+> It does not average out, it does not show up as scatter, and it survives
+> every sanity check you would think to run. It just makes the device look
+> like it reads low, forever.
+
+So: take the board's underside in the **takeoff** frame as zero, the board's
+underside in the **apex** frame as the height, and express the difference in
+rider-heights. ±15 % is plenty — the failure this has to catch is a kite-like
+**2.3× overshoot**, which is enormous. Record it as `height_src=ruler`.
+
+#### Frame rate: 1080p/120, not 4K/30
+At 30 fps a 1.0 s flight is quantised to ±1 frame = ±33 ms, which propagates
+to height as `dh = g·T·dT/4 ≈ 8 cm` — **6.7 %**, the same size as the effect
+under test. At 120 fps that falls to ~2 cm. Resolution buys you nothing here;
+temporal resolution buys you the measurement. 240 fps is better still if the
+light allows it, but 120 is the point at which quantisation stops mattering.
+
+#### The strongest version: fit `g_eff` directly
+With a known ruler and a known frame rate you have the board's vertical
+position in every frame of the flight. Fit a parabola to it and you recover
+`g_eff` — the vertical acceleration during flight — **directly from the
+video**.
+
+That is the same quantity the accelerometer measures, from a completely
+different instrument. It turns the water session from "does our number look
+about right?" into two independent measurements of the one physical quantity
+this whole project turns on: *is a wing-foil jump ballistic?* The sim says
+1.0-1.07× ballistic; a kite is 2.3×. Those are not close, and this measurement
+separates them outright.
+
+Start with a spreadsheet; a scrub-and-tag tool is only worth building once
+volume justifies it.
+
+#### And the primary result needs no video at all
+Worth stating plainly, because it is the insurance policy: the airborne-|a|
+check — median airborne |a| and |ω| per jump, now recorded in `JumpRecord` —
+comes from the trace alone. **If the filming goes badly, the session still
+answers its question.** Video is the secondary, height-scale check.
 
 #### How good does the sync marker have to be? (measured, 2026-08-11)
 

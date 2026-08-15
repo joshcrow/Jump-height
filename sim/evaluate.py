@@ -55,6 +55,25 @@ DATA_SESSIONS = Path(__file__).resolve().parent.parent / "data" / "sessions"
 
 # --------------------------------------------------------------------- I/O
 
+# Which height_src values may be used as accuracy truth, and why.
+#
+#   "ruler" — apex displacement measured against a known length in frame.
+#             Comes from a different physical channel than the accelerometer
+#             and does not use h = g*T^2/8. This is real ground truth.
+#   "sim"   — a synthetic session, where the apex is an INPUT to the generator
+#             that synthesised the motion, not a re-derivation of the device's
+#             own output. The device independently recovers it from the trace,
+#             so the comparison is a controlled experiment rather than a
+#             tautology. Valid for machinery/regression tests; it says nothing
+#             about whether real wings are ballistic, because the generator
+#             assumes they are.
+#
+# Everything else — notably "timing", and anything blank — is circular: it puts
+# frame-counted airtime through the same h = g*T^2/8 the firmware uses, so it
+# agrees by construction. See docs/data-pipeline.md, "Labeling".
+INDEPENDENT_SRC = frozenset({"ruler", "sim"})
+
+
 def load_labels(path: Path) -> List[dict]:
     """Load labels.csv. Returns all rows as dicts with parsed numeric fields;
     non-jump / unlabeled rows are kept (reported) but only scored where usable."""
@@ -77,6 +96,20 @@ def load_labels(path: Path) -> List[dict]:
                 "t_start_s": num("t_start_s"),
                 "t_end_s": num("t_end_s"),
                 "height_m": num("height_m"),
+                # HOW the truth height was obtained. This is not bookkeeping —
+                # it decides whether the height is usable as truth at all.
+                # "timing"  : counted airborne frames put through h = g*T^2/8.
+                #             That is THE FORMULA UNDER TEST, so scoring against
+                #             it measures timing agreement and nothing else; it
+                #             passes whether or not wings are ballistic, which is
+                #             the entire open question. NOT accuracy truth.
+                # "ruler"   : apex displacement measured against a known length
+                #             in frame (see docs/data-pipeline.md). Independent
+                #             of the accelerometer AND of g*T^2/8. Real truth.
+                # ""/absent : unknown provenance — treated as circular, because
+                #             assuming otherwise is how a circular number gets
+                #             published as an accuracy claim.
+                "height_src": (r.get("height_src") or "").strip().lower() or None,
                 "rotation_deg": num("rotation_deg"),
                 "landing": (r.get("landing") or "").strip() or None,
                 "notes": (r.get("notes") or "").strip() or None,
@@ -153,10 +186,25 @@ def eval_session(sess: Path, params: Params) -> Optional[dict]:
 
     spurious = len(detected) - len(used)
 
-    # Height error over matched jumps that carry a truth height.
+    # Height error over matched jumps that carry an INDEPENDENT truth height.
+    #
+    # Timing-derived truth (frame-counted airtime -> h = g*T^2/8) is excluded on
+    # purpose: the device computes height with that same formula, so the two
+    # agree by construction and the resulting RMSE is a measurement of nothing.
+    # Counting it would produce a small, confident, meaningless error bar --
+    # the most dangerous possible output.
+    def _independent(t):
+        return t["height_m"] is not None and t.get("height_src") in INDEPENDENT_SRC
+
     herr = [p["det"].height_m - p["true"]["height_m"]
             for p in pairs
-            if p["det"] is not None and p["true"]["height_m"] is not None]
+            if p["det"] is not None and _independent(p["true"])]
+
+    # Counted separately so the report can say WHY there is no RMSE rather than
+    # printing a bare dash and letting someone assume the labels were missing.
+    circular = sum(1 for p in pairs
+                   if p["det"] is not None and p["true"]["height_m"] is not None
+                   and not _independent(p["true"]))
 
     meta = load_session_meta(sess)
     return {
@@ -168,6 +216,7 @@ def eval_session(sess: Path, params: Params) -> Optional[dict]:
         "missed": missed,
         "spurious": spurious,
         "height_errors": herr,
+        "circular_heights": circular,
         "device_jumps": len(load_device_jumps(sess)),
         "other_labels": sorted({l["event"] for l in labels if l["event"] != "jump"}),
         "pairs": pairs,
@@ -199,6 +248,7 @@ def eval_corpus(root: Path, params: Params, split: str = "all") -> dict:
         results.append(r)
 
     all_err = [e for r in results for e in r["height_errors"]]
+    tot_circular = sum(r.get("circular_heights", 0) for r in results)
     tot_true = sum(r["n_true"] for r in results)
     tot_match = sum(r["matched"] for r in results)
     tot_missed = sum(r["missed"] for r in results)
@@ -211,6 +261,7 @@ def eval_corpus(root: Path, params: Params, split: str = "all") -> dict:
         "spurious": tot_spur,
         "detection_rate": (tot_match / tot_true) if tot_true else None,
         "height": _agg_height(all_err),
+        "circular_heights": tot_circular,
         "sessions": results,
     }
 
@@ -242,6 +293,19 @@ def print_report(agg: dict, verbose: bool = False) -> None:
     print(f"  height    : n={h['n']}  RMSE {_fmt(h['rmse'],'m')}  bias {_fmt(h['bias'],'m')}  "
           f"MAE {_fmt(h['mae'],'m')}  max|err| {_fmt(h['max_abs'],'m')}")
     print(f"  benchmark : Marčiš'21 video-validated — Surfr 0.51 m, WOO3 0.70 m RMSE (kite big-air)")
+    # Say WHY there is no RMSE. A bare dash reads as "you forgot to label";
+    # this case is the opposite — the labels are there and are not admissible.
+    nc = agg.get("circular_heights", 0)
+    if nc:
+        print()
+        print(f"  ⚠️  {nc} matched jump(s) carry a truth height that is NOT independent")
+        print( "      (height_src is not 'ruler'), so they are EXCLUDED from RMSE above.")
+        print( "      A height derived from counted airtime via h = g*T^2/8 is the very")
+        print( "      formula the device uses. Scoring one against the other measures")
+        print( "      timing agreement and would pass whether or not wings are")
+        print( "      ballistic — which is the entire open question.")
+        print( "      Fix: measure apex against a known length in frame and set")
+        print( "      height_src=ruler. See docs/data-pipeline.md 'Labeling'.")
 
 
 def summary_metrics(agg: dict) -> dict:

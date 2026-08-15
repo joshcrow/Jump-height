@@ -40,6 +40,37 @@ do not.**
 
 ## CHANGED AFTER THE AUDIT (2026-08-14, later the same day)
 
+### Circular ground truth — FIXED, and enforced in code
+- **State:** tested-in-sim-or-host (2 new regression tests, 111 passing)
+- **What was wrong:** `docs/data-pipeline.md` derived "true height" from counted
+  airborne frames via `h = g·T²/8` — the formula the firmware uses. Scoring our
+  `g·T²/8` against a label built from `g·T²/8` measures timing agreement and
+  nothing else. It would have produced a small, confident RMSE **whether or not
+  wings are ballistic**, which is the entire question the water session exists
+  to answer. This was P0 item 4 in `docs/plan.md`.
+- **The fix is mechanical, not just editorial.** `labels.csv` gains a
+  `height_src` column and `sim/evaluate.py` refuses to compute RMSE from
+  anything that is not independent (`INDEPENDENT_SRC = {ruler, sim}`).
+  Detection is still scored; only the *height* is barred. Blank provenance
+  defaults to inadmissible — assuming the friendly reading is exactly how a
+  circular number becomes a published accuracy claim. When it excludes rows it
+  prints why, so a missing RMSE cannot be misread as "you forgot to label".
+- **The procedure it replaces it with:** measure apex against **rider height in
+  gear** (~2× the mast, high-contrast against sky, vertical at apex), with the
+  **board's own position at takeoff as zero — not the horizon**. A camera 0.8 m
+  above the water sees the water plane 0.8 m below its level line at *every*
+  distance, so a horizon zero adds **+53 % on a 1.5 m jump**, as a fixed bias
+  that never shows up as scatter. Film **1080p/120, not 4K/30**: 30 fps
+  quantises a 1 s flight to ±8 cm ≈ 6.7 %, the size of the effect under test.
+- **The strongest version, now written down:** with a known ruler and known
+  frame rate, fit the flight and recover `g_eff` directly from video — the same
+  quantity the accelerometer measures, from an independent instrument. Sim says
+  wings are 1.0–1.07× ballistic; a kite is 2.3×. Those are not close.
+- **Insurance:** the primary result (median airborne |a| and |ω| per jump) comes
+  from the trace alone. If the filming goes badly the session still answers its
+  question.
+
+
 ### Build identity on INFO — the freeze protocol is now checkable
 - **State:** built-unverified on the nRF52 board (not yet flashed); **proven
   on the host build**, which compiles the same `src/main.cpp`.

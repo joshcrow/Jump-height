@@ -43,12 +43,22 @@ def _write_session(root: Path, name: str, jumps, seed: int = 1,
             w.writerow([f"{t:.4f}", f"{a:.4f}"])
     with open(sess / "labels.csv", "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["event", "t_start_s", "t_end_s", "height_m",
+        # height_src="sim": in a synthetic session the apex is an INPUT to the
+        # generator, not a re-derivation of the device's own measurement, so it
+        # is admissible truth (sim/evaluate.py INDEPENDENT_SRC). A real session
+        # labelled from counted video frames would be "timing" and would be
+        # excluded from RMSE — deliberately.
+        w.writerow(["event", "t_start_s", "t_end_s", "height_m", "height_src",
                     "rotation_deg", "landing", "notes"])
         for (t0, at) in jumps:
-            w.writerow(["jump", f"{t0:.2f}", "", f"{height_for_airtime(at):.3f}",
+            w.writerow(["jump", f"{t0:.2f}", "", f"{height_for_airtime(at):.3f}", "sim",
                         "", "flat", "synthetic"])
         for row in extra_labels:
+            # Callers still pass the original 7-column shape; splice the new
+            # height_src column in so later fields do not shift by one.
+            row = list(row)
+            if len(row) == 7:
+                row = row[:4] + [""] + row[4:]
             w.writerow(row)
     (sess / "session.json").write_text(json.dumps(
         {"unit": "sense-01", "firmware": "0.4.3", "split": split}))
@@ -75,6 +85,43 @@ class EvaluatorTest(unittest.TestCase):
         self.assertEqual(agg["detection_rate"], 1.0)
         # clean synthetic -> height error is essentially zero
         self.assertLess(agg["height"]["rmse"], 0.1)
+
+    def test_circular_height_truth_is_excluded_from_rmse(self):
+        """A height derived from counted airtime must NOT produce an RMSE.
+
+        This is the failure the whole labelling procedure is designed around:
+        h = g*T^2/8 is the formula the firmware uses, so a "truth" height built
+        the same way agrees by construction. It yields a small, confident,
+        meaningless error bar — and it would pass whether or not wings are
+        ballistic, which is the entire question the water session exists to
+        answer. Detection must still be scored; only the height is barred."""
+        root = Path(tempfile.mkdtemp()) / "sessions"
+        _write_session(root, "20260805-c", self.jumps, seed=1, split="train")
+        # Downgrade the provenance to the circular kind, changing nothing else.
+        lp = root / "20260805-c" / "labels.csv"
+        lp.write_text(lp.read_text().replace(",sim,", ",timing,"))
+
+        agg = evaluate.eval_corpus(root, self.params, split="all")
+        self.assertEqual(agg["matched"], len(self.jumps),
+                         "detection must still be scored")
+        self.assertIsNone(agg["height"]["rmse"],
+                          "circular truth must not produce an accuracy number")
+        self.assertEqual(agg["height"]["n"], 0)
+        self.assertEqual(agg["circular_heights"], len(self.jumps),
+                         "and the report must be able to say why")
+
+    def test_blank_height_src_is_treated_as_circular(self):
+        """Unknown provenance defaults to inadmissible.
+
+        Assuming the friendly interpretation is exactly how a circular number
+        gets published as an accuracy claim."""
+        root = Path(tempfile.mkdtemp()) / "sessions"
+        _write_session(root, "20260805-d", self.jumps, seed=1, split="train")
+        lp = root / "20260805-d" / "labels.csv"
+        lp.write_text(lp.read_text().replace(",sim,", ",,"))
+        agg = evaluate.eval_corpus(root, self.params, split="all")
+        self.assertIsNone(agg["height"]["rmse"])
+        self.assertEqual(agg["circular_heights"], len(self.jumps))
 
     def test_extensible_labels_parsed(self):
         agg = evaluate.eval_corpus(self.root, self.params, split="all")
