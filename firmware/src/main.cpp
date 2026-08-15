@@ -521,7 +521,7 @@ static bool runSelfTest() {
 
 // ---------------- Commands ----------------
 static void printHelp() {
-  emitLine("# commands: help | stats | jumps | trace | dump | clear | selftest | revive | i2cdiag | info | off | dfu | uf2 | fakejump | mount | format");
+  emitLine("# commands: help | stats | jumps | trace | dump | clear | selftest | revive | i2cdiag | dcdc | info | off | dfu | uf2 | fakejump | mount | format");
   emitLine("#           set <airtime_offset_s|height_scale|vbat_scale> <value|default>");
   emitLine("#           vbatscan  (bench: battery ADC vs acquisition time)");
   emitLine("#           gyro      (bench: raw + bias-corrected rate, 2 s)");
@@ -639,6 +639,29 @@ static void handleCommand(const String& cmd) {
       jh_link::watchdog_feed();
     }
     emitLine("OK pincensus");
+#if defined(NRF52840_XXAA)
+  } else if (cmd == "dcdc") {
+    // BENCH EXPERIMENT, deliberately NOT at boot. The nRF52840's internal
+    // DC/DC typically saves ~40% of MCU current, but it needs external
+    // inductors on the DCC pins and it is NOT established that this board
+    // has them (the web budget ran out before it could be confirmed, and
+    // guessing is the habit that cost this project four days).
+    //
+    // If they are absent, enabling DC/DC browns out the regulator. DCDCEN
+    // clears on reset, so a brownout costs one reboot and self-recovers —
+    // UNLESS it is enabled at boot, which would turn that into a boot loop.
+    // Hence: runtime only, on request. If the board answers after this, the
+    // hardware supports it; if it silently reboots, it does not, and we have
+    // our answer at the cost of nothing.
+    emitLine("# dcdc: enabling internal DC/DC. If this board lacks the");
+    emitLine("# inductors it will brown out and reboot — which is the answer,");
+    emitLine("# and it recovers by itself (DCDCEN clears on reset).");
+    emitLine("OK dcdc");
+    delay(120);                       // let the lines above actually get out
+    sd_power_dcdc_mode_set(NRF_POWER_DCDC_ENABLE);  // <nrf_soc.h> via Arduino.h on this target
+    delay(50);
+    emitLine("# dcdc: still alive — the hardware supports it. Measure now.");
+#endif
   } else if (cmd == "i2cdiag") {
     // Bench diagnostic (see jh_imu.h): rail readback + bus idle levels +
     // bounded-driver ACK + stock-Wire1 ACK, in one pass, no rail edges.
@@ -1035,7 +1058,33 @@ void loop() {
 
   static int64_t next_us = jh_clock::micros64();
   const int64_t  now_us  = jh_clock::micros64();
-  if (now_us < next_us) return;  // pace to SAMPLE_HZ
+  if (now_us < next_us) {
+    // SLEEP the leftover time instead of spinning it away (2026-08-15).
+    //
+    // This `return` used to hand straight back to the Arduino/FreeRTOS loop
+    // task, which called loop() again immediately — so the task never
+    // blocked, the RTOS idle task never ran, and the core never slept. At
+    // 200 Hz the real work (one I2C burst, the detector, an occasional flash
+    // block) is a few hundred microseconds out of 5 ms, so the CPU spent
+    // ~90% of its life re-reading a clock at 64 MHz. That is the dominant
+    // term in the MEASURED 11.6 mA — against a plan that had assumed ~4 mA
+    // from an idle that did not exist.
+    //
+    // delay() here is vTaskDelay: it yields to the idle task, which sleeps
+    // the core until the next ~0.98 ms tick. The 1200 us guard band means we
+    // can never oversleep a deadline — one tick still leaves >200 us for the
+    // final tight approach, so the sample cadence stays precise where it
+    // matters.
+    //
+    // Jitter budget, because AIRTIME IS THE MEASUREMENT: the pacer keeps
+    // long-run rate exact (next_us += INTERVAL), so only individual samples
+    // shift, by at most ~1 ms. Height error goes as dh = g*T*dT/4, i.e.
+    // 2.5 mm at a 1 s flight — negligible against 0.8-1.6 m jumps.
+    // Falsifier on record: if post-change sample deltas run >2 ms off
+    // cadence, or desk-test airtimes shift systematically, revert.
+    if (next_us - now_us > 1200) delay(1);
+    return;
+  }
   next_us += SAMPLE_INTERVAL_US;
   // After a long stall (e.g. a 100 s serial dump) don't "catch up" with a
   // burst of thousands of back-to-back samples — resynchronize instead.
