@@ -8,6 +8,10 @@ to make that impossible. (Archived: `plan-superseded-2026-08-14.md`.)
 **Read [STATUS.md](STATUS.md) before adding anything here.** Run
 `./tools/jump status` before believing any of it.
 
+**On the day: [session-card.md](session-card.md)** — the one-page beach card
+(checklist, the power-on ritual, what to film, what to write down, and what
+the common failures actually mean).
+
 ---
 
 ## 1. Where we are, in one paragraph
