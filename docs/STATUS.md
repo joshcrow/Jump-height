@@ -40,6 +40,35 @@ do not.**
 
 ## CHANGED AFTER THE AUDIT (2026-08-14, later the same day)
 
+### Offline detector vs the device, on REAL recorded motion — first ever
+- **State:** proven-on-hardware
+- **Evidence:** 2026-08-15. The 638,852-sample walk trace replayed through
+  `sim/detector.py` found **exactly the same 10 jumps**, same order, same
+  times, as the device found live. Agreement: **max airtime difference
+  14.7 ms** (one 50 Hz sample is 20 ms), **mean height difference 1.82 %**,
+  max 5.07 %.
+- **Why it matters:** C++/Python parity had only ever been checked on
+  synthetic data. This is the first proof on real motion, and it validates
+  the premise the whole trace exists for — that a session can be re-analysed
+  and re-tuned offline. The residual difference is explained: the device
+  detects at 200 Hz, the stored trace is 4:1 decimated to 50 Hz, so offline
+  takeoff/landing quantise to 20 ms instead of 5 ms.
+- **Consequence for the water session:** the DEVICE's numbers are primary;
+  offline re-analysis is for tuning, and carries ~2 % height spread.
+
+### Labelling: `tools/label.py`, and an honest limit on it
+- **State:** tested-in-sim-or-host
+- **Evidence:** converts human wall-clock notes into the `labels.csv` schema
+  `sim/evaluate.py` has always expected and never had, using the
+  `trace_epoch_utc` anchor. Verified round-trip on a real session.
+- **The limit, measured:** the scorer matches within `MATCH_WINDOW_S = 1.0 s`.
+  A time written down by hand is typically tens of seconds out (the demo was
+  28 s off). So **`none` regions are the valuable output** — they give a
+  false-positive rate, and coarse timing is fine for that. **`jump` rows will
+  not reliably match**; per-jump accuracy timing has to come from video. The
+  tool now prints this rather than emitting labels that silently never match.
+
+
 ### Sleep-between-samples — shipped, jitter falsifier PASSED
 - **State:** proven-on-hardware
 - **Evidence:** 2026-08-15, commit dfdf4cf. Post-change desk test: 3/3 tosses
