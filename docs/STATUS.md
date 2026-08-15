@@ -40,6 +40,55 @@ do not.**
 
 ## CHANGED AFTER THE AUDIT (2026-08-14, later the same day)
 
+### Session-scale USB download — PROVEN at 2x a real water session
+- **State:** proven-on-hardware
+- **Evidence:** 2026-08-15. Device reported `trace_bytes=9872675`; the
+  downloaded `trace.csv` is **9,872,675 bytes** — byte-exact. 638,853 lines,
+  clean final line, **zero** `INCOMPLETE` warnings. This is ~2x the ~5 MB a
+  real session produces and **49x** the largest download this project had
+  ever done (201 kB).
+- **Gap:** none for USB. BLE bulk export at this scale is still unmeasured.
+
+### Battery endurance — MEASURED, and the plan's figure was 4x optimistic
+- **State:** proven-on-hardware
+- **Evidence:** 2026-08-15 accidental overnight run. 93% -> 7% over 18.55 h
+  of wall clock (span of the recorded trace) = 215 mAh, i.e. **11.6 mA
+  average, ~21.6 h from full**. `docs/plan.md` had assumed ~4 mA / ~60 h from
+  a paper estimate.
+- **Consequence:** a 2 h session is still comfortable (~10% of the cell), but
+  the margin is 8x, not 30x. Charging the night before is mandatory, and
+  leaving it running overnight flattens it.
+
+### 18.5 h continuous run with ZERO resets
+- **State:** proven-on-hardware
+- **Evidence:** the 638k-sample trace contains **0 timebase restarts** —
+  trace time never went backwards, so the board did not reset once in 18.5 h
+  of untethered running, including 3.55 h of active recording.
+- **Why it matters:** the watchdog, the storage append path and the bounded
+  I2C driver all ran unattended for a day without a single reboot.
+
+### Motion gate duty cycle
+- **State:** proven-on-hardware
+- **Evidence:** 3.55 h of recorded motion inside an 18.55 h window = **19%
+  duty cycle** — a pocket/desk day. Storage sizing should use recorded time,
+  not elapsed time.
+
+### Per-jump flight physics — first real values, and a false-positive discriminator
+- **State:** proven-on-hardware
+- **Evidence:** 10 jumps recorded with the new columns. Nine read
+  `med_a` 0.039-0.154 g (median 0.079 g) against the sim's predicted
+  0-0.070 g ballistic band. Jump 7 reads **1.393 g** over 44 samples with a
+  plausible-looking 0.33 s / 0.13 m — i.e. a false positive that NOTHING
+  else in the record distinguishes.
+- **Why it matters:** `med_a` is a physical discriminator between a real
+  flight (weightless) and a jostle (not). It answers "will chop trigger false
+  jumps?" offline, and could later filter in firmware.
+- **Gap:** these are hand tosses, not foil jumps, and there is **no zero
+  calibration** — the instrument's own free-fall floor is unmeasured, so
+  0.079 g cannot yet be split into real signal vs sensor offset. A 10-minute
+  drop calibration fixes that and is now the highest-value pre-water task.
+
+
 ### Watch: error-boundary hardening, FIT summary guard, STATS completeness
 - **State:** tested-in-sim-or-host
 - **Evidence:** commit f2861ee. Both device targets BUILD SUCCESSFUL;
