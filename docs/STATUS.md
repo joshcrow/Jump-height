@@ -40,6 +40,33 @@ do not.**
 
 ## CHANGED AFTER THE AUDIT (2026-08-14, later the same day)
 
+### Sleep-between-samples — shipped, jitter falsifier PASSED
+- **State:** proven-on-hardware
+- **Evidence:** 2026-08-15, commit dfdf4cf. Post-change desk test: 3/3 tosses
+  detected and stored with physics columns. Sample cadence measured from the
+  trace: median/mean/p99 all **20.000 ms**, max 21.000, **zero** deltas more
+  than 2 ms off cadence.
+- **Honest caveat:** that run is 3,900 samples against the 638,655-sample
+  baseline. The baseline's outlier rate was 0.004%, so ~0.15 outliers would be
+  expected at this size — seeing zero is **no degradation detected**, not
+  evidence of improvement. The walk is the real comparison.
+- **Gap:** the actual power saving is UNMEASURED. That is the idle-floor run.
+
+### Wall-clock anchor — round-tripped on real data
+- **State:** proven-on-hardware
+- **Evidence:** `session.json` from the jitter-check sync gave
+  `trace_epoch_utc = 18:37:40`; the first toss at trace t=15647.230 converts
+  to **18:58:28 local**, which is when the tosses were actually thrown, ~2
+  minutes before the 19:00 sync. A recorded jump now has a real-world
+  timestamp — the thing that made video alignment and labelling impossible.
+
+### Fast charge (100 mA while charging)
+- **State:** built-unverified
+- **Evidence:** commit 68f32d1, selftest PASS with it live and `chg=1`.
+- **Gap:** the effect is unmeasured — it went live near the top of a charge.
+  The honest test is the next charge from a low starting point.
+
+
 ### Session-scale USB download — PROVEN at 2x a real water session
 - **State:** proven-on-hardware
 - **Evidence:** 2026-08-15, THREE-WAY agreement. Device reported
