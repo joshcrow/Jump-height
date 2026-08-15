@@ -42,11 +42,15 @@ do not.**
 
 ### Session-scale USB download — PROVEN at 2x a real water session
 - **State:** proven-on-hardware
-- **Evidence:** 2026-08-15. Device reported `trace_bytes=9872675`; the
-  downloaded `trace.csv` is **9,872,675 bytes** — byte-exact. 638,853 lines,
-  clean final line, **zero** `INCOMPLETE` warnings. This is ~2x the ~5 MB a
-  real session produces and **49x** the largest download this project had
-  ever done (201 kB).
+- **Evidence:** 2026-08-15, THREE-WAY agreement. Device reported
+  `trace_bytes=9872675`; two independent downloads each produced
+  **9,872,675 bytes** and are **byte-identical to each other**. 638,853
+  lines, clean final line, **zero** `INCOMPLETE` warnings. That is ~2x the
+  ~5 MB a real session produces and **49x** the largest download this project
+  had ever done (201 kB). Yesterday the same two-read test on a 36 kB file
+  produced two DIFFERENT files.
+  (Bonus: pull-b matched pull-a in size, i.e. the motion gate correctly
+  recorded nothing while the board sat still between reads.)
 - **Gap:** none for USB. BLE bulk export at this scale is still unmeasured.
 
 ### Battery endurance — MEASURED, and the plan's figure was 4x optimistic
