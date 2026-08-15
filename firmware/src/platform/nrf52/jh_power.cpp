@@ -56,6 +56,29 @@ namespace {
 const uint32_t PIN_DIVIDER_EN = 14;  // D14 / P0.14, LOW = divider on
 const uint32_t PIN_VBAT_ADC   = 32;  // D32 / P0.31 (variant.h PIN_VBAT)
 const uint32_t PIN_CHG_STATE  = 23;  // D23 / P0.17, LOW = charging
+const uint32_t PIN_HICHG      = 22;  // D22 / P0.13, LOW = 100 mA charge
+
+// FAST CHARGE (2026-08-15). The BQ25101 selects between two preset charge
+// currents on HICHG: released = 50 mA, driven LOW = 100 mA (docs/sense.md
+// §2). For the installed 250 mAh cell that is 0.2C vs 0.4C — and 0.5C is
+// the industry-standard "standard charge" rate for LiPo pouch cells, so
+// 0.4C is still conservative, not aggressive.
+//
+// Why it matters more than the raw numbers suggest: THE DEVICE IS AWAKE
+// WHILE IT CHARGES and draws ~6-12 mA of the charger's output, so at the
+// 50 mA setting a quarter of the charge current never reaches the cell.
+// Net charge rate goes from ~38 mA to ~94 mA, i.e. roughly 6 h -> under 3 h.
+//
+// DRIVEN ONLY WHILE CHARGING, released otherwise. That is deliberate and
+// it is about a thing we do NOT know: whether HICHG has an internal
+// pull-up and what it is referenced to. If it were referenced to the
+// battery rail, holding the pin low would sink current forever — tens of
+// microamps, which is more than the entire standby budget the power design
+// is aiming at. Driving it only while USB is present makes the question
+// moot: any pull-up current comes from the charger's own input, and when
+// unplugged the pin is high-Z with no path at all. Correct under either
+// answer, which is the right way to treat an unverified datasheet detail.
+bool s_fast_charge_on = false;
 
 // Resting-voltage → percent, single-cell LiPo, small piecewise-linear
 // table (interpolated). Coarse on purpose: the product question is
@@ -82,6 +105,25 @@ void init() {
   pinMode(PIN_DIVIDER_EN, OUTPUT);
   digitalWrite(PIN_DIVIDER_EN, HIGH);   // divider off until a read wants it
   pinMode(PIN_CHG_STATE, INPUT_PULLUP); // ~CHG is open-drain: pullup, LOW=charging
+  pinMode(PIN_HICHG, INPUT);            // released = 50 mA until we see charging
+  s_fast_charge_on = false;
+}
+
+void update_charge_current() {
+  // Cheap enough to call at any rate: one digitalRead, and a pinMode only on
+  // an actual transition. See PIN_HICHG's comment for why this is gated on
+  // charging rather than simply set once at boot.
+#if JH_FAST_CHARGE_ENABLED
+  const bool charging_now = digitalRead(PIN_CHG_STATE) == LOW;
+  if (charging_now == s_fast_charge_on) return;          // no change
+  if (charging_now) {
+    pinMode(PIN_HICHG, OUTPUT);
+    digitalWrite(PIN_HICHG, LOW);                        // 100 mA
+  } else {
+    pinMode(PIN_HICHG, INPUT);                           // release -> 50 mA
+  }
+  s_fast_charge_on = charging_now;
+#endif
 }
 
 // Acquisition time for the production read: 15 µs (SAADC_CH_CONFIG_TACQ_15us).

@@ -81,6 +81,12 @@ int vbat_mv_tacq(int tacq_code);
 // -1 = unknown/unsupported.
 int charging();
 
+// Select the charger's fast (100 mA) current while USB is actually charging,
+// and release it otherwise. Safe to call often. No-op on platforms without a
+// selectable charge current, and compiled out entirely when
+// JH_FAST_CHARGE_ENABLED is 0.
+void update_charge_current();
+
 // Soft power-off — the `off` command's engine (docs/sense.md §3.5's
 // smallest useful slice, built 2026-08-04 because a battery-powered board
 // with no sleep otherwise runs until the cell is flat). On the Sense:

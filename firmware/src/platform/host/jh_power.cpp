@@ -47,6 +47,8 @@ int charging() {
   return env_int("JH_CHG", 0) ? 1 : 0;
 }
 
+void update_charge_current() {}  // host: no selectable charge current
+
 // The host mock reports JH_VBAT_MV verbatim; scaling it would make the
 // env var lie about what it set. No-op on purpose.
 void set_vbat_scale(float) {}

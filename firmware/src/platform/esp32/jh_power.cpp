@@ -26,4 +26,7 @@ void set_vbat_scale(float) {}
 // explicitly deferred v1 item and stays that way. `off` answers ERR.
 bool system_off() { return false; }
 
+
+void update_charge_current() {}  // v1 board: no selectable charge current
+
 }  // namespace jh_power

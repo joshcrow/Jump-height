@@ -60,6 +60,13 @@
 
 #define FW_VERSION "0.4.3"
 
+// Fast charge: 100 mA instead of 50 mA while USB is charging (0.4C on the
+// 250 mAh cell, against a 0.5C industry-standard rate). Set to 0 to revert
+// to the charger's default. See jh_power.cpp's PIN_HICHG comment.
+#ifndef JH_FAST_CHARGE_ENABLED
+#define JH_FAST_CHARGE_ENABLED 1
+#endif
+
 // Self-arming spin correction: OFF for the one-shot water session so the data
 // comes from the detector that was actually validated. See the commit site.
 #ifndef JH_SPIN_SELFARM_ENABLED
@@ -1055,6 +1062,16 @@ void loop() {
   jh_link::pump();               // send at most one paced BLE chunk — never blocks
   if (jh_link::takeGreetPending()) bleGreet();  // greet a client that just subscribed
   if (!sensor_ok) { delay(10); return; }  // command loop still runs; sampling paused
+
+  // Charger current select, once a second (see jh_power::update_charge_current).
+  {
+    static uint32_t last_chg_ms = 0;
+    const uint32_t now_ms_chg = millis();
+    if (now_ms_chg - last_chg_ms >= 1000) {
+      last_chg_ms = now_ms_chg;
+      jh_power::update_charge_current();
+    }
+  }
 
   static int64_t next_us = jh_clock::micros64();
   const int64_t  now_us  = jh_clock::micros64();
