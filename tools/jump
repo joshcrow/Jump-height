@@ -1204,6 +1204,38 @@ def _write_session_info(sess: Path, dev: "Device") -> None:
     cal_line = next((ln for ln in lines if ln.startswith("CAL ")), "CAL unknown")
     (sess / "session-info.txt").write_text(f"fw={fw}\n{cal_line}\n")
 
+    # WALL-CLOCK ANCHOR. The puck has no RTC: trace time is seconds since
+    # boot, so on its own a recording can never be aligned to video, to a
+    # written log, or to anything that happened in the real world. Capture
+    # the device's uptime and this machine's clock in the SAME breath, and
+    # every timestamp in the session becomes convertible forever after:
+    #
+    #     wall_clock(t) = trace_epoch_utc + t
+    #
+    # Written as session.json, the provenance file docs/data-pipeline.md
+    # specifies and nothing has ever produced.
+    try:
+        import datetime, json as _json
+        st = dev.command("stats", timeout=8)
+        kv = _last_tagged(st, "STATS ")
+        uptime = float(kv.get("uptime_s", "nan"))
+        now = datetime.datetime.now(datetime.timezone.utc)
+        blob = {
+            "unit": None,          # fill in by hand: which board
+            "firmware": fw,
+            "cal": cal_line,
+            "synced_at_utc": now.isoformat(),
+            "device_uptime_s_at_sync": uptime,
+            # The instant trace time t=0 corresponds to, in the real world.
+            "trace_epoch_utc": (now - datetime.timedelta(seconds=uptime)).isoformat()
+                               if uptime == uptime else None,
+            "note": ("Add wall-clock ranges to labels.csv using trace_epoch_utc; "
+                     "see docs/bench-program.md section 4."),
+        }
+        (sess / "session.json").write_text(_json.dumps(blob, indent=2) + "\n")
+    except Exception:
+        pass  # best-effort: never cost a download
+
 
 def cmd_sync(args) -> int:
     from detector import Detector, load_params

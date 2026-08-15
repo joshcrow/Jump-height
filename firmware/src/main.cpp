@@ -570,21 +570,32 @@ static void handleCommand(const String& cmd) {
     // line is unchanged and existing parsers keep working. Non-zero means a
     // client's LIVE view lost bytes; the RECORDED session is unaffected
     // (jh_store writes independently of the radio).
+    // UPTIME — the anchor that makes every recorded timestamp convertible to
+    // wall clock. Trace time is seconds since boot and the puck has no RTC,
+    // so on its own a trace can never be aligned to video, to a written log,
+    // or to anything else that happened in the real world. Report uptime and
+    // the host can compute, once: wall_clock_of_trace_zero = now - uptime.
+    // After that every sample and every jump has a real timestamp. This is
+    // the cheapest fix available for both the kayak-video alignment problem
+    // and for labelling ordinary bench sessions.
+    char up_key[40];
+    snprintf(up_key, sizeof(up_key), " uptime_s=%.3f",
+             (double)(jh_clock::micros64() - t0_us) * 1e-6);
     char drop_key[32] = "";
     if (jh_link::tx_drops() > 0) {
       snprintf(drop_key, sizeof(drop_key), " tx_drops=%lu",
                (unsigned long)jh_link::tx_drops());
     }
     if (vbat >= 0) {
-      emitf("STATS session_jumps=%lu session_best_m=%.3f stored_jumps=%lu stored_best_m=%.3f trace_bytes=%lu vbat_mv=%d batt_pct=%d chg=%d%s%s%s\n",
+      emitf("STATS session_jumps=%lu session_best_m=%.3f stored_jumps=%lu stored_best_m=%.3f trace_bytes=%lu vbat_mv=%d batt_pct=%d chg=%d%s%s%s%s\n",
             (unsigned long)session_jumps, session_best,
             (unsigned long)stored_jumps, stored_best, (unsigned long)jh_store::trace_bytes(),
-            vbat, jh_power::batt_pct(), jh_power::charging(), fs_key, fail_key, drop_key);
+            vbat, jh_power::batt_pct(), jh_power::charging(), fs_key, fail_key, drop_key, up_key);
     } else {
-      emitf("STATS session_jumps=%lu session_best_m=%.3f stored_jumps=%lu stored_best_m=%.3f trace_bytes=%lu%s%s%s\n",
+      emitf("STATS session_jumps=%lu session_best_m=%.3f stored_jumps=%lu stored_best_m=%.3f trace_bytes=%lu%s%s%s%s\n",
             (unsigned long)session_jumps, session_best,
             (unsigned long)stored_jumps, stored_best, (unsigned long)jh_store::trace_bytes(),
-            fs_key, fail_key, drop_key);
+            fs_key, fail_key, drop_key, up_key);
     }
     emitLine("OK stats");
   } else if (cmd == "jumps") {
