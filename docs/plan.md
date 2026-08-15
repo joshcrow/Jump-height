@@ -130,9 +130,15 @@ in it did not, and three real bugs fell out. **Fixed in code already:**
    rate, fit the flight and recover `g_eff` directly — the same quantity the
    accelerometer measures, giving two independent measurements of the one
    number the project turns on.
-3. **No build identity.** `FW_VERSION` has read "0.4.3" through every fix; no
-   sha, no timestamp on `INFO`. The freeze protocol is unenforceable and a
-   rollback unverifiable. ~30 min to add.
+3. ~~**No build identity.**~~ **DONE 2026-08-15.** `INFO` now carries
+   `src=<hash>` — a hash of the firmware sources themselves
+   (`tools/gen_build.py`), not a git sha. A sha was the obvious choice and is
+   wrong twice over: writing HEAD into a tracked header is self-invalidating
+   (the commit changes the sha it just recorded), and a dirty tree makes it
+   lie outright — the compiler reads the working tree, not the commit. A
+   source hash cannot be fooled by either. `./tools/jump selftest` now says
+   in one line whether the board is running this tree, and every synced
+   session records `build_src=` alongside its data.
 4. **The capsule has never been water-tested** and `data/sessions/` is
    gitignored — the exact conditions that lost the 61-jump history. Bucket
    test (empty, then loaded for float) and a written two-copies-before-`clear`
@@ -185,6 +191,12 @@ NFC/solar/primary cells, store submission, bonding.
 
 ## 5. The freeze protocol
 
+0. **How "the exact build" is checked** (added 2026-08-15). `INFO` reports
+   `src=<hash of the firmware sources>`. Run `./tools/jump selftest`: it
+   prints either `✅ device is running THIS source tree (src=…)` or a warning
+   naming both hashes. Before this, "the exact build" was an intention with
+   no way to verify it — every build in this project's history reports
+   `fw=0.4.3`, including the one that cost four days.
 1. All firmware and watch changes land **≥4 days** before the session.
 2. Then the **dress rehearsal runs on the exact build that goes in the water.**
 3. After the freeze: no changes. Not "small" ones. This project has already

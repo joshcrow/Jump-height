@@ -44,6 +44,10 @@ from generate import DEMO_JUMPS, synth_session  # noqa: E402
 import gen_params  # noqa: E402
 
 FW_VERSION = "0.4.3"
+# A fake device is genuinely NOT running the compiled firmware, so it reports
+# an identity that can never collide with a real source hash (which is 8 hex
+# chars). The mismatch the CLI then reports is correct, not a bug.
+BUILD_SRC = "fakedev0"
 INJECTED_BIAS_S = 0.015  # pretend detection latency, for the drop scenario
 
 
@@ -287,7 +291,7 @@ class FakeDevice:
             # Rates come from the config, exactly like the firmware's JH_ macros
             # do — hardcoding them here would drift the moment config changes.
             fw_cfg = cfg["firmware"]
-            self.send(f"INFO fw={FW_VERSION} sample_hz={fw_cfg['sample_hz']} "
+            self.send(f"INFO src={BUILD_SRC} fw={FW_VERSION} sample_hz={fw_cfg['sample_hz']} "
                       f"log_hz={fw_cfg['log_hz']} "
                       f"motion_thresh_g={fw_cfg['motion_thresh_g']:.2f} "
                       f"idle_timeout_s={fw_cfg['idle_timeout_s']} ble=1"

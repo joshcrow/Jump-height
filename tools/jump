@@ -565,7 +565,48 @@ def check_device_params(dev: Device) -> bool:
             _print_config_diffs("calibration differs", cal_diffs)
             return False
     print("  ✅ device settings match config/params.json")
+    _report_build_identity(info_kv)
     return True
+
+
+def local_build_src() -> str | None:
+    """The source hash this working tree would compile to, or None."""
+    try:
+        sys.path.insert(0, str(REPO / "tools"))
+        import gen_build
+        return gen_build.source_hash()
+    except Exception:
+        return None
+
+
+def _report_build_identity(info_kv: dict) -> None:
+    """Say whether the board is running THIS tree.
+
+    Config values matching does not mean the firmware matches — every build of
+    this project has reported fw=0.4.3, including the one whose GPIO drive
+    strength made healthy sensors look dead for four days. `src=` is a hash of
+    the firmware sources (tools/gen_build.py), so this is the one check that
+    can tell "flashed" from "not flashed yet".
+
+    Deliberately NOT a hard failure: running an older build is a normal state
+    (you have not flashed yet), not a broken one. It is loud, and the freeze
+    protocol is what makes it binding — see docs/plan.md §5."""
+    dev_src = info_kv.get("src")
+    if not dev_src:
+        print("  ℹ️  device reports no build identity — firmware predates src= "
+              "(flash to make the freeze protocol checkable)")
+        return
+    local = local_build_src()
+    if local is None:
+        print(f"  ℹ️  device build src={dev_src} (could not hash local sources)")
+    elif local == dev_src:
+        print(f"  ✅ device is running THIS source tree (src={dev_src})")
+    else:
+        print(f"  ⚠️  device is NOT running this source tree")
+        print(f"       device: src={dev_src}")
+        print(f"       tree:   src={local}")
+        print( "       -> ./tools/jump flash   (or accept it deliberately: any")
+        print( "          measurement you take now describes the OTHER build)")
 
 
 def cmd_selftest(args) -> int:
@@ -1200,9 +1241,14 @@ def _write_session_info(sess: Path, dev: "Device") -> None:
         lines = dev.command("info", timeout=8)
     except Exception:
         return
-    fw = _last_tagged(lines, "INFO ").get("fw", "unknown")
+    info_kv = _last_tagged(lines, "INFO ")
+    fw = info_kv.get("fw", "unknown")
+    # Build identity travels WITH the data. Without it, a session file six
+    # weeks from now cannot say which firmware produced its numbers, and
+    # fw=0.4.3 does not narrow it down — every build says that.
+    src = info_kv.get("src", "unknown")
     cal_line = next((ln for ln in lines if ln.startswith("CAL ")), "CAL unknown")
-    (sess / "session-info.txt").write_text(f"fw={fw}\n{cal_line}\n")
+    (sess / "session-info.txt").write_text(f"fw={fw}\nbuild_src={src}\n{cal_line}\n")
 
     # WALL-CLOCK ANCHOR. The puck has no RTC: trace time is seconds since
     # boot, so on its own a recording can never be aligned to video, to a
@@ -2278,6 +2324,13 @@ def cmd_simtest(args) -> int:
     results.append(("params.gen.h in sync with config/params.json", r.returncode == 0,
                     "" if r.returncode == 0 else "run ./tools/jump gen"))
 
+    # 2b. Build identity is in sync with the sources it claims to identify.
+    # A stale build.gen.h is worse than none: the device would report a src=
+    # for code it is not running, which is precisely the lie this replaces.
+    r = _run([sys.executable, "tools/gen_build.py", "--check"])
+    results.append(("build.gen.h identity matches firmware sources", r.returncode == 0,
+                    "" if r.returncode == 0 else "run ./tools/jump gen"))
+
     # 3. C++ (firmware) vs Python (sim) detector parity
     gxx = shutil.which("g++") or shutil.which("c++")
     if gxx:
@@ -2430,10 +2483,17 @@ def cmd_setup(args) -> int:
 
 def cmd_gen(args) -> int:
     import gen_params
+    import gen_build
 
     gen_params.HEADER_PATH.write_text(
         gen_params.render_header(gen_params.load_config(CONFIG_PATH)))
     print(f"wrote {gen_params.HEADER_PATH}")
+
+    # Build identity LAST: it hashes the firmware sources, and params.gen.h is
+    # one of them, so regenerating params first is what keeps the two consistent.
+    src = gen_build.source_hash()
+    gen_build.HEADER_PATH.write_text(gen_build.render_header(src))
+    print(f"wrote {gen_build.HEADER_PATH}  (src={src})")
     return 0
 
 

@@ -48,6 +48,7 @@
 #include <stdarg.h>
 #include <string.h>
 #include "params.gen.h"
+#include "build.gen.h"
 #include "gyro_bias.h"
 #include "jump_detector.h"
 #include "lever_arm.h"
@@ -58,6 +59,11 @@
 #include "platform/jh_power.h"
 #include "platform/jh_store.h"
 
+// FW_VERSION is a human-facing product version and is NOT the build identity:
+// it has read "0.4.3" through every fix this project has shipped, including
+// the four-day drive-strength crisis. The identity is JH_BUILD_SRC (build.gen.h)
+// — a hash of the firmware sources — which is what `src=` on INFO reports and
+// what makes the freeze protocol checkable. See tools/gen_build.py.
 #define FW_VERSION "0.4.3"
 
 // Fast charge: 100 mA instead of 50 mA while USB is charging (0.4C on the
@@ -222,7 +228,7 @@ static void emitf(const char* fmt, ...) {                             // like pr
 // garmin-datafield.md §5.2 requires clients to skip unknown lines/keys), so
 // this is treated as a harmless, acceptable side effect rather than a bug.
 static void bleGreet() {
-  static const char banner[] = "# JumpHeight fw v" FW_VERSION "\n";
+  static const char banner[] = "# JumpHeight fw v" FW_VERSION " src=" JH_BUILD_SRC "\n";
   jh_link::write(banner, sizeof(banner) - 1);
   jh_link::write("READY\n", 6);
 }
@@ -793,14 +799,14 @@ static void handleCommand(const String& cmd) {
     const int vbat = jh_power::vbat_mv();
     if (vbat >= 0) {
       emitf("INFO fw=%s sample_hz=%d log_hz=%d motion_thresh_g=%.2f "
-            "idle_timeout_s=%d ble=1 vbat_mv=%d batt_pct=%d chg=%d\n",
+            "idle_timeout_s=%d ble=1 vbat_mv=%d batt_pct=%d chg=%d src=%s\n",
             FW_VERSION, JH_SAMPLE_HZ, JH_LOG_HZ,
             (double)JH_MOTION_THRESH_G, (int)JH_IDLE_TIMEOUT_S,
-            vbat, jh_power::batt_pct(), jh_power::charging());
+            vbat, jh_power::batt_pct(), jh_power::charging(), JH_BUILD_SRC);
     } else {
       emitf("INFO fw=%s sample_hz=%d log_hz=%d motion_thresh_g=%.2f "
-            "idle_timeout_s=%d ble=1\n", FW_VERSION, JH_SAMPLE_HZ, JH_LOG_HZ,
-            (double)JH_MOTION_THRESH_G, (int)JH_IDLE_TIMEOUT_S);
+            "idle_timeout_s=%d ble=1 src=%s\n", FW_VERSION, JH_SAMPLE_HZ, JH_LOG_HZ,
+            (double)JH_MOTION_THRESH_G, (int)JH_IDLE_TIMEOUT_S, JH_BUILD_SRC);
     }
     emitLine("PARAMS " JH_PARAMS_SUMMARY);
     // Effective calibration (PARAMS above shows compiled defaults).
@@ -999,7 +1005,7 @@ void setup() {
   jh_link::watchdog_init();   // FIRST — no pre-watchdog hang window, ever
   Serial.begin(115200);
   delay(300);
-  emitLine("# JumpHeight fw v" FW_VERSION);  // serial-only here: BLE isn't up yet
+  emitLine("# JumpHeight fw v" FW_VERSION " src=" JH_BUILD_SRC);  // serial-only here: BLE isn't up yet
 
   jh_imu::init();
   jh_power::init();

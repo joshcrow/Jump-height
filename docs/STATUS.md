@@ -40,6 +40,32 @@ do not.**
 
 ## CHANGED AFTER THE AUDIT (2026-08-14, later the same day)
 
+### Build identity on INFO — the freeze protocol is now checkable
+- **State:** built-unverified on the nRF52 board (not yet flashed); **proven
+  on the host build**, which compiles the same `src/main.cpp`.
+- **Evidence:** the natively-compiled core prints
+  `# JumpHeight fw v0.4.3 src=03189592` and `INFO … src=03189592`, and
+  `python3 tools/gen_build.py --print` on the same tree returns `03189592`.
+  `./tools/jump selftest` against the fake device correctly reports the
+  mismatch case.
+- **What it replaces:** `FW_VERSION` has read `0.4.3` through every fix this
+  project has ever shipped, including the build whose GPIO drive strength made
+  healthy sensors look dead for four days. There was no way to ask a board
+  which firmware it was running.
+- **Why a source hash and not a git sha** (the design decision worth keeping):
+  a sha fails twice. It is *self-invalidating* — writing HEAD into a tracked
+  header changes the tree, producing a new commit whose sha the header no
+  longer holds — and it *lies on a dirty tree*, because the compiler reads the
+  working tree while the sha names a commit. Catching exactly that is the
+  freeze protocol's job. So the identity is a hash of the bytes the compiler
+  reads: deterministic, order-independent, CRLF-normalised, and it excludes
+  its own output file so a fixed point exists.
+- **Where it shows up:** boot banner, BLE subscribe banner, `INFO src=`,
+  `session-info.txt` (`build_src=`) so recorded data carries the build that
+  produced it, and a `simtest` row that fails if the header goes stale.
+  `./tools/jump flash` regenerates it via `cmd_gen` before building.
+
+
 ### Offline detector vs the device, on REAL recorded motion — first ever
 - **State:** proven-on-hardware
 - **Evidence:** 2026-08-15. The 638,852-sample walk trace replayed through
