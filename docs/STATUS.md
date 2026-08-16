@@ -40,6 +40,46 @@ do not.**
 
 ## CHANGED AFTER THE AUDIT (2026-08-14, later the same day)
 
+### Idle-floor power — MEASURED, and it misses the prediction
+- **State:** proven-on-hardware (OG board, 2026-08-15/16)
+- **Method:** `tools/battlog.py` sampled the puck over BLE for 7.5 h. This does
+  NOT use the documented "unplug, wait, read `stats`" protocol, because that
+  protocol divides by `uptime_s` — time since BOOT, not since unplug — so any
+  time on USB inflates the denominator and understates the current. Slopes
+  between our own timestamped samples need no such assumption.
+- **Result: 71 % → 22 % in 7.51 h, idle, never recording** (`stored_jumps` and
+  `trace_bytes` both unchanged throughout; uptime monotonic, no resets).
+  **≈15.3 h of idle endurance from full** — a figure that needs no capacity
+  assumption. Against a 250 mAh nameplate that implies ~16.3 mA.
+- **This is WITH the sleep optimisation already on the board** (see the build
+  identification below). `docs/power-optimisation.md` predicted 6-7 mA. It is
+  not there. The previously-quoted 11.6 mA baseline carries the `uptime_s`
+  flaw, so the before/after pair was never valid — the *after* number is the
+  trustworthy one, and it is well short of prediction.
+- **BLE sampling did not contaminate it.** The schedule included a 3.49 h
+  unsampled control gap, which drew 17.21 mA against 13.66 and 17.37 mA in the
+  sampled phases — the quiet window was not cheaper, so the cost of sampling is
+  below the noise.
+- **The gauge cannot measure CHARGE current.** While charging, terminal voltage
+  reads high and the percentage curve is calibrated for a rested cell (see the
+  4160 mV anchor comment in `jh_power.cpp`): observed 28 % → 39 % in under
+  10 minutes, which would imply ~170 mA on a ≤100 mA charger. Use the
+  `chg` 1→0 transition and total elapsed time instead.
+
+### Which build the OG is actually running — established by forensics, not by asking
+- **State:** proven-on-hardware
+- **Method:** the board's `uptime_s` (58,141 s at 06:46:45 on 08-16) dates its
+  last flash to **2026-08-15 14:37:44**. Cross-referenced against commit times:
+  - `dfdf4cf` sleep between samples — 08-15 **12:35** → **IS on the board**
+  - `68f32d1` fast charge 100 mA — 08-15 **14:38** → **is NOT** (by ~1 minute)
+- **Consequences:** the OG charges at the 50 mA default, and the idle figure
+  above is a post-sleep-optimisation number.
+- **This is exactly the work `src=` exists to abolish.** The board reports
+  `fw=0.4.3` like every build ever made here, and has no `src=` because it
+  predates the change that added one. After the next flash,
+  `./tools/jump selftest` answers this in one line.
+
+
 ### Detector thresholds vs REAL motion (E7/E8) — a recommendation, not yet a change
 - **State:** tested-in-sim-or-host. `config/params.json` is UNCHANGED.
 - **The shipped configuration keeps a false positive.** Across all 638,852
