@@ -169,3 +169,51 @@ just inside the region where this class of false positive survives, and there
 are two wide, independent plateaus that reject it at no measured cost.**
 
 Reproduce: `python3 sim/experiments/e7_threshold_sweep.py` (~1 min, 6 workers).
+
+
+---
+
+## E8 — does E7's recommendation survive a different world? (2026-08-15)
+
+E7's result rests on **one recording, ten events, a trouser pocket, on land.**
+Tuning against that is how detectors get overfitted, and carrying false
+confidence into a one-shot session is worse than changing nothing. So E8
+re-runs the sweep against 12 systematically perturbed versions of the same
+recording — added noise (σ = 0.01/0.02/0.05 g), gain error (±5 %), offset
+(±0.02 g), sample-clock error (±0.5 %), and two combined worst cases that are
+noisy, mis-scaled and biased at once.
+
+"Correct" keeps E7's meaning: find all nine free-fall-consistent events, reject
+the 1.393 g one, and add nothing spurious.
+
+### Result
+
+| operating point | correct in |
+|---|---|
+| **shipped** — enter 0.35 / min_air 0.25 / confirm 0.08 | **0 of 12 worlds** |
+| **recommended** — enter 0.26 / min_air 0.30 / confirm 0.08 | **12 of 12 worlds** |
+
+63 of the 120 tested points are correct in all 12 worlds, so this is a broad
+region, not a needle. The densest part of it is `freefall_enter_g` 0.24-0.28
+(11-12 of 15 sub-combinations robust, versus 6 of 15 at both 0.20 and 0.35),
+which is why the recommendation sits at 0.26 rather than at the edge.
+
+### The nuance that matters
+**The shipped configuration never misses a real jump** — 9/9 in every world,
+including 0.05 g of added noise. This is a *precision* problem, not a
+sensitivity one. The change buys rejection of a false positive; it does not
+rescue any missed jump, and nothing here suggests the detector is deaf.
+
+Under gain 0.95 and offset −0.02 the shipped point also picks up a spurious
+event beyond the known one (11 events), so its error grows as conditions
+degrade, while the recommended point returns exactly 9 in every world.
+
+### Honest limit — read this before changing anything
+These 12 worlds perturb the **sensor**, not the **motion**. They say the
+operating point tolerates noise, scale and clock error. They cannot say it
+tolerates water: a foil jump is longer and smoother than a hand toss, a rigid
+mount transmits impacts a pocket absorbs, and none of that is in this data.
+E8 shows the recommendation is not an artefact of one clean recording. It does
+not show it is right for the water.
+
+Reproduce: `python3 sim/experiments/e8_robustness.py` (~1 min).
