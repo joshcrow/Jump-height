@@ -793,6 +793,18 @@ static void handleCommand(const String& cmd) {
       }
     }
   } else if (cmd == "info") {
+    // `info` is a REQUESTED multi-line response, not chatter, and its three
+    // lines are emitted back to back with no chance for the host to drain
+    // between them. INFO + PARAMS together exceed the CDC buffer, so under the
+    // default drop policy PARAMS was silently discarded on USB — which made
+    // `jump selftest` report "device didn't report its params — old firmware?"
+    // on a board that had just been flashed. (Found 2026-08-16, immediately
+    // after `src=` lengthened INFO enough to make it deterministic.)
+    //
+    // Same reasoning as a file export: dropping is right for chatter, wrong
+    // for something the operator asked for and a gate then parses. Bounded
+    // wait, watchdog fed, and it self-clears below.
+    s_serial_must_not_drop = true;
     // ble=1 advertises the capability (this firmware speaks BLE); the runtime
     // health of the radio is the self-test's `ble` row, not this flag.
     // Battery keys appended only where measurable — same adder rule as STATS.
@@ -823,6 +835,7 @@ static void handleCommand(const String& cmd) {
             cal_from_nvs ? "device" : "defaults");
     }
     emitLine("OK info");
+    s_serial_must_not_drop = false;   // back to drop-is-fine for chatter
   } else if (cmd == "off") {
     // Soft power-off (jh_power seam; the S2 sleep design's manual slice).
     // Farewell BEFORE the attempt: on a supporting platform system_off()
