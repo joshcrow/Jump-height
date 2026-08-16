@@ -11,7 +11,19 @@ over an 18.55 h run that was 19 % recording and 81 % idle-but-awake.
 
 ---
 
-## 0. The measurement protocol (do this first, and identically every time)
+## 0. The measurement protocol — SUPERSEDED 2026-08-16
+
+> **This section's method is not valid.** It derives current from `batt_pct`
+> deltas, and `batt_pct` is a voltage lookup — a method documented not to work
+> in the middle of a lithium discharge curve, which is where every long run
+> lives. It also divides by `uptime_s`, which is time since *boot*, not since
+> unplug. Both figures it produced (11.6 mA, 16.3 mA) are unreliable and
+> mutually contradictory.
+>
+> **Use [battery-measurement.md](battery-measurement.md) instead.** Measure
+> time between fixed voltages; compare only like with like.
+
+## 0-OLD. The original protocol (kept for the reasoning trail)
 
 A before/after number is worthless unless the two runs are the same
 experiment. The overnight run mixed recording and idle, so it cannot be

@@ -40,7 +40,14 @@ do not.**
 
 ## CHANGED AFTER THE AUDIT (2026-08-14, later the same day)
 
-### Idle-floor power — MEASURED, and it misses the prediction
+### Idle-floor power — RETRACTED as a current figure; see battery-measurement.md
+> **2026-08-16: the mA numbers below are not reliable and should not be
+> quoted.** They derive from `batt_pct`, a voltage lookup, and the run lived
+> entirely in the flat middle of the discharge curve where that method is
+> documented not to work. What survives is the *timing*: 3961 mV → 3748 mV in
+> 7.51 h, idle. Plan: [battery-measurement.md](battery-measurement.md).
+
+### Idle-floor power — measured (figures retracted, timing retained)
 - **State:** proven-on-hardware (OG board, 2026-08-15/16)
 - **Method:** `tools/battlog.py` sampled the puck over BLE for 7.5 h. This does
   NOT use the documented "unplug, wait, read `stats`" protocol, because that
