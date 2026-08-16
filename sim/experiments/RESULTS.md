@@ -108,3 +108,64 @@ All five run experiments carry an independent verify note that re-derived the lo
 - **`const_lift` is the worst-case envelope, not the wing's actual profile.** Physical wings decay after takeoff (aero force is largest at peak apparent wind, then falls as the rider accelerates downwind) and are arm-capped, so their effective a_v is lower and time-varying than the constant-lift maps assume. The real operating point is more favorable than the bounding maps.
 
 - **Sensor saturation at extreme spins** (lever 0.8 m, ≥2.25 rps hits the 16 g clip) is excluded from E4's specificity claim — unphysical for a wing rider, but a real firmware guard should handle clipped samples gracefully.
+
+
+---
+
+## E7 — threshold sweep against REAL recorded motion (2026-08-15)
+
+**The first experiment in this file that is not run on synthetic data.** E1-E6
+all used `sim/generate.py`, which builds its signal from the same physical model
+the detector assumes — so they show the detector is self-consistent, not how it
+behaves on motion a person actually made. This sweeps 6,174 parameter
+combinations across all 638,852 samples of the 2026-08-15 pocket-carry
+recording. Every combination was verified to consume every sample
+(`update()` call count == row count).
+
+### Ground truth, and why it is not circular
+The device found 10 events. Nine have a median airborne |a| of 0.039-0.154 g.
+One — event 7, t=4650.087 — sits at **1.393 g**. Free fall reads ~0 g by
+definition, so that is not a badly-measured jump; it is not a jump. The
+criterion separates the set with a 10x gap, needs no tuning, and is independent
+of the gates being swept (it looks at what the acceleration *did* inside the
+window, not at the thresholds that opened it).
+
+### Finding 1 — the shipped configuration keeps the false positive
+At `freefall_enter_g=0.35, freefall_confirm_s=0.08, landing_threshold_g=2.50,
+min_airtime_s=0.25` the detector returns **10 events: all 9 real ones, plus the
+1.393 g event.** 3,035 of the 6,174 combinations do strictly better.
+
+### Finding 2 — two independent, wide plateaus fix it
+Holding everything else at shipped values:
+
+| `freefall_enter_g` | events | real kept | keeps the 1.393 g event |
+|---|---|---|---|
+| 0.15 - 0.30 | 9 | 9/9 | **no** |
+| 0.32 - 0.36 | 10 | 9/9 | yes |
+| 0.40 / 0.50 / 0.60 | 12 / 24 / 47 | 9/9 | yes |
+
+| `min_airtime_s` | events | real kept | keeps the 1.393 g event |
+|---|---|---|---|
+| 0.20 - 0.30 | 10-11 | 9/9 | yes |
+| **0.35 - 0.45** | **9** | **9/9** | **no** |
+| 0.50 | 8 | 8/9 | no — but now losing a real jump |
+
+Either change alone removes it with no loss. `freefall_enter_g <= 0.30` is a
+plateau a full factor of two wide (0.15-0.30, all identical and correct).
+`min_airtime_s` in 0.35-0.45 is correct across the whole band, and the shortest
+real airtime in the recording was 0.505 s, so 0.35 leaves 0.15 s of margin.
+
+### Finding 3 — the sensitivity avalanche lives above 0.38
+Event count explodes as `freefall_enter_g` rises: 11 at 0.38, 12 at 0.40, 16 at
+0.45, 24 at 0.50, **47 at 0.60**. The shipped 0.35 sits on the quiet side of
+that, which is reassuring — but it is only ~0.03 from where the count starts
+climbing, and the water is noisier than a pocket.
+
+### Honest limits
+One recording, ten events, hand tosses and pocket motion — not water. Tuning
+hard against a single false positive is exactly how a detector gets overfitted.
+The defensible reading is not "set it to 0.30" but: **the shipped point sits
+just inside the region where this class of false positive survives, and there
+are two wide, independent plateaus that reject it at no measured cost.**
+
+Reproduce: `python3 sim/experiments/e7_threshold_sweep.py` (~1 min, 6 workers).
