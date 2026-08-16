@@ -78,6 +78,11 @@ do not.**
   fast-charge build driving HICHG, took **30 min**. In the CC region span
   duration scales inversely with current, so 100 mA would read ~15 min.
   **Ratio ≈ 1.0: the cell is charging at the 50 mA rate.**
+- **Third confirmation, full-cycle (09:14):** charge terminated (`chg` 1→0
+  between 08:48 and 08:58). Time from the 3775 mV anchor to termination:
+  **~122-132 min today vs 140 min in the 50 mA baseline** from the same
+  anchor — ratio ~0.9, against ~0.5-0.6 for a working 100 mA CC phase.
+  Same verdict by span timing, by matched sub-span, and by full cycle.
 - **Cause unknown**: firmware drive unconfirmed (no HICHG readback exists;
   `pincensus` releases the drive before reading, so it cannot see it) vs
   board HICHG topology not responding to OUTPUT-LOW as documented. Next:
