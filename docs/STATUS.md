@@ -83,6 +83,15 @@ do not.**
   **~122-132 min today vs 140 min in the 50 mA baseline** from the same
   anchor — ratio ~0.9, against ~0.5-0.6 for a working 100 mA CC phase.
   Same verdict by span timing, by matched sub-span, and by full cycle.
+- **Free calibration datum from the post-charge tail (10:16):** after >1 h of
+  rest off-charge (USB powering the board, cell unloaded), the device's own
+  ADC reads a steady **4094-4097 mV — which its gauge maps to 92-93 %.** So a
+  genuinely full, rested cell reads ~93 % on this board: the {4160 mV = 100 %}
+  top anchor does not match this unit's ADC at full (4095/4160 ≈ 0.984 —
+  plausibly the documented ADC gain error). Consequence for every protocol
+  that says "charge to 100 %": on this board, full IS ~93 %, and waiting for
+  100 % waits forever. Do not retune the curve mid-campaign — note it, and
+  fold into the per-unit vbat_scale work if that ever lands.
 - **Cause unknown**: firmware drive unconfirmed (no HICHG readback exists;
   `pincensus` releases the drive before reading, so it cannot see it) vs
   board HICHG topology not responding to OUTPUT-LOW as documented. Next:
