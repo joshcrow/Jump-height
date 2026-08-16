@@ -101,7 +101,14 @@ const int kCurveLen = (int)(sizeof(kCurve) / sizeof(kCurve[0]));
 
 }  // namespace
 
+static uint32_t s_reset_reas = 0;
+
 void init() {
+  // Capture-and-clear FIRST: RESETREAS bits accumulate across resets until
+  // written (nRF52840 PS), so a stale bit from last week would otherwise be
+  // indistinguishable from this boot's cause.
+  s_reset_reas = NRF_POWER->RESETREAS;
+  NRF_POWER->RESETREAS = 0xFFFFFFFF;
   pinMode(PIN_DIVIDER_EN, OUTPUT);
   digitalWrite(PIN_DIVIDER_EN, HIGH);   // divider off until a read wants it
   pinMode(PIN_CHG_STATE, INPUT_PULLUP); // ~CHG is open-drain: pullup, LOW=charging
@@ -277,6 +284,20 @@ int batt_pct() {
 }
 
 int charging() { return digitalRead(PIN_CHG_STATE) == LOW ? 1 : 0; }
+
+uint32_t reset_reason() { return s_reset_reas; }
+
+int fast_charge_state() {
+  // Read the actual register state, not s_fast_charge_on — the point is to
+  // catch the cases where the mirror and the silicon disagree.
+  const uint32_t pin = g_ADigitalPinMap[PIN_HICHG];   // D22 -> P0.13
+  NRF_GPIO_Type* port = (pin < 32) ? NRF_P0 : NRF_P1;
+  const uint32_t bit = pin & 31;
+  const bool is_output =
+      ((port->PIN_CNF[bit] >> GPIO_PIN_CNF_DIR_Pos) & 1) == GPIO_PIN_CNF_DIR_Output;
+  if (!is_output) return 0;                            // released = 50 mA
+  return ((port->OUT >> bit) & 1) ? 0 : 1;             // driving LOW = 100 mA
+}
 
 bool system_off() {
   // The LSM6DS3 is the one always-on consumer System OFF doesn't kill by

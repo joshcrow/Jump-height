@@ -434,6 +434,11 @@ static bool runSelfTest() {
     // is bounded so a genuinely zero-stuck part still reaches the stats
     // below and fails there honestly.
     for (int i = 0; i < 30; ++i) {
+      jh_link::watchdog_feed();  // sampling loops ran feed-less inside one
+                                 // handler pass; on a degraded bus every read
+                                 // maxes its bound and the sum can cross the
+                                 // 3.5 s window (2026-08-16 reboots, cause
+                                 // still open — this removes one candidate)
       float ax, ay, az;
       if (jh_imu::read_accel_g(ax, ay, az) &&
           (ax != 0.0f || ay != 0.0f || az != 0.0f)) break;
@@ -443,6 +448,7 @@ static bool runSelfTest() {
     int   good = 0;
     const int N = 100;
     for (int i = 0; i < N; ++i) {
+      jh_link::watchdog_feed();
       float ax, ay, az;
       if (jh_imu::read_accel_g(ax, ay, az)) {
         float m = sqrtf(ax * ax + ay * ay + az * az);
@@ -651,6 +657,17 @@ static void handleCommand(const String& cmd) {
       emitLine(chunk);
       jh_link::watchdog_feed();
     }
+    // The census yanks weak pulls across the LIVE I2C bus and the sensor's
+    // own supply pin. Measured consequence (2026-08-16): a census mid-sampling
+    // left the sensor streaming garbage — the motion gate latched open and
+    // recorded ~460 KB of noise before a reboot cleared it. The audited
+    // recovery pair exists for exactly this, so run it unconditionally: a
+    // diagnostic that silently poisons the instrument is worse than none.
+    jh_link::watchdog_feed();
+    emitLine("# census touched live sensor pins — running audited revive");
+    const bool census_revived = jh_imu::revive();
+    jh_link::watchdog_feed();
+    emitf("# revive %s\n", census_revived ? "ok" : "FAILED — sensor left down; reboot or `revive`");
     emitLine("OK pincensus");
 #if defined(NRF52840_XXAA)
   } else if (cmd == "dcdc") {
@@ -820,6 +837,15 @@ static void handleCommand(const String& cmd) {
             "idle_timeout_s=%d ble=1 src=%s\n", FW_VERSION, JH_SAMPLE_HZ, JH_LOG_HZ,
             (double)JH_MOTION_THRESH_G, (int)JH_IDLE_TIMEOUT_S, JH_BUILD_SRC);
     }
+    // Adder keys, per the rule above: reas= only when the last reset had a
+    // recorded cause (0 = clean power-on or platform without the register),
+    // hichg= only where charge-current select exists. reas made three blind
+    // reboot diagnoses (2026-08-16) into a register read; hichg is the
+    // firmware half of the failing fast-charge verification.
+    if (jh_power::reset_reason() != 0)
+      emitf("# reas=0x%08lX\n", (unsigned long)jh_power::reset_reason());
+    if (jh_power::fast_charge_state() >= 0)
+      emitf("# hichg=%d chg=%d\n", jh_power::fast_charge_state(), jh_power::charging());
     emitLine("PARAMS " JH_PARAMS_SUMMARY);
     // Effective calibration (PARAMS above shows compiled defaults).
     // vbat_scale appended only when it is doing something (!= 1.0), keeping

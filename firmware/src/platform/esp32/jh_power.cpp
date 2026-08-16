@@ -27,6 +27,8 @@ void set_vbat_scale(float) {}
 bool system_off() { return false; }
 
 
-void update_charge_current() {}  // v1 board: no selectable charge current
+void update_charge_current() {}
+uint32_t reset_reason() { return 0; }        // no retained reset register here
+int fast_charge_state() { return -1; }       // no selectable charge current  // v1 board: no selectable charge current
 
 }  // namespace jh_power

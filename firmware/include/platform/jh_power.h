@@ -87,6 +87,23 @@ int charging();
 // JH_FAST_CHARGE_ENABLED is 0.
 void update_charge_current();
 
+// Why the chip remembers its own death: three unexplained reboots on
+// 2026-08-16 (BLE `selftest`/`revive`, cause still open) were diagnosed
+// blind because nobody reads the nRF52840's RESETREAS register — it
+// distinguishes watchdog, CPU lockup, soft reset and pin reset. Captured
+// once at init() (and cleared, per the PS: bits accumulate across resets
+// until written), reported on INFO. 0 = clean power-on or unsupported
+// platform.
+uint32_t reset_reason();
+
+// HICHG drive readback: 1 = driving the 100 mA select, 0 = released
+// (50 mA), -1 = unknown/unsupported. Exists because fast charge shipped as
+// `built-unverified` and the first span-timing measurement (2026-08-16)
+// found the cell charging at the 50 mA rate with the driver code
+// confirmed present — this answers the firmware half of that question
+// from the device itself instead of by inference.
+int fast_charge_state();
+
 // Soft power-off — the `off` command's engine (docs/sense.md §3.5's
 // smallest useful slice, built 2026-08-04 because a battery-powered board
 // with no sleep otherwise runs until the cell is flat). On the Sense:

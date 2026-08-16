@@ -40,6 +40,35 @@ do not.**
 
 ## CHANGED AFTER THE AUDIT (2026-08-14, later the same day)
 
+### INCIDENT 2026-08-16 ~07:49-08:06: pincensus poisoned the sensor; BLE selftest resets the board
+- **State:** board recovered and healthy (USB selftest all-PASS, accel 1.021 g,
+  noise 0.0014 g); one root cause measured, one OPEN with instrumentation built.
+- **What happened, from the logs:** `pincensus` was run casually over BLE at
+  07:48:56 on the live system. It toggles weak pulls across the ACTIVE I2C bus
+  and the sensor's own supply pin. Within that minute the motion gate latched
+  open and the board recorded **~460 KB of garbage trace while sitting still**
+  (flat 142,984 bytes for hours before; growing ~766 B/s after). It kept
+  recording for ~11 minutes until the first reboot cleared it.
+- **Then three reboots:** two during BLE `selftest` (07:59, 08:02), one during
+  BLE `revive` (08:00). The same `selftest` over USB passes 3/3 the same
+  morning. Code read ruled out the queue-drain path (feeds WDT), `free_bytes`
+  (cached), and the ble row (boolean). **Cause OPEN — do not run `selftest` or
+  `revive` over BLE on this board until task #16's instrumented repro.**
+- **Why diagnosis was blind:** nobody reads RESETREAS. The nRF52840 records
+  watchdog/lockup/soft/pin reset causes in a register; three reboots were
+  diagnosed by uptime arithmetic instead.
+- **Shipped in src=1c72f10f (built, simtest-clean, NOT yet flashed):**
+  `reas=` on INFO (RESETREAS captured+cleared at init), `hichg=` drive
+  readback (the firmware half of the fast-charge question), watchdog feeds in
+  the selftest sampling loops, and `pincensus` now ends with the audited
+  `revive` — a diagnostic that silently poisons the instrument is worse than
+  none.
+- **Cost:** ~460 KB of the trace region holds noise (region has multi-hour
+  headroom; clear per protocol after download). The 3 stored verification
+  tosses are intact. Charging was unaffected throughout (BQ25101 is
+  independent of the MCU).
+
+
 ### Fast charge — verification FAILING on first measurement (2026-08-16)
 - **State:** partial — code confirmed on the board (`src=87b0ecaf`), **effect
   contradicted by measurement**.
