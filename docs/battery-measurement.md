@@ -163,17 +163,33 @@ endurance run's starting point is stated honestly.
    Report hours-to-3900/3800/3700/3600 mV. **Label: bounds check.**
 4. `hichg=` readback lands with the next routine flash — not a special flash.
 
-**Phase B — PPK2, ordered now (~$100, owner decision)**
+**Phase B — DEFERRED by owner decision (2026-08-16): no PPK2 purchase now**
 
-Run conditions, per review finding 5: battery **unclipped at the JST**
-(routine per bench-playbook §4), PPK2 in source mode into the battery
-connector at 3.8-4.2 V — the BAT node, never the 3V3 pad, which bypasses the
-board's own regulator and measures a different power tree — **USB
-disconnected for every source-mode run**, activity marked via the PPK2's
-digital inputs or BLE. Then, in minutes each: true idle floor, recording
-draw, BLE-connection cost, sleep-change verification, and the DC/DC
-experiment (`dcdc on`) — which stays on this board per the owner's recorded
-call (§9), with the Seeed-schematic inductor check done first per
+The PPK2 buys **speed and decomposition, not truth**: each A/B question costs
+a night with time-as-instrument versus minutes with the instrument, and only
+the waveform view (is the CPU actually sleeping between samples; what each
+microsecond costs) has no free substitute. Since §3 concludes power is not a
+session risk, that need is not current. Revisit post-water if a sealed
+product's power budget ever matters.
+
+Free equivalents, time being the instrument:
+
+| Phase B question | free method | cost |
+|---|---|---|
+| idle floor | bounded discharge run, hours-to-fixed-mV | 1 night (already Phase A) |
+| recording draw | second run at a known recording duty; compare spans | 1 night |
+| BLE-connection cost | dense/quiet/dense battlog schedule | **already measured: below noise** |
+| fast charge | CC-span timing vs the 50 mA baseline | **already measured: not working** |
+| DC/DC gain | two runs, same voltage window, `dcdc on` vs off | 2 nights |
+| sleep-change waveform | none free — the one PPK2 exclusive | — |
+
+If a PPK2 is ever bought, the run conditions from review finding 5 apply:
+battery **unclipped at the JST** (routine per bench-playbook §4), source mode
+into the battery connector at 3.8-4.2 V — the BAT node, never the 3V3 pad,
+which bypasses the board's own regulator and measures a different power
+tree — **USB disconnected for every source-mode run**, activity marked via
+the digital inputs. The DC/DC experiment stays on this board per the owner's
+recorded call (§9), with the Seeed-schematic inductor check first per
 hardware-protection rule 2.
 
 **Phase C — the reference number, inside the freeze window**
@@ -191,7 +207,8 @@ to-death discharge if a true-zero endpoint is ever worth one cell cycle.
 ## 6. Owner decisions surfaced (review: previously assumed silently)
 
 1. **USB power meter purchase** (~$10-15) — unblocks the fast-charge verdict.
-2. **PPK2 purchase** (~$100) — unblocks every real power number.
+2. ~~PPK2 purchase~~ — **declined 2026-08-16**; buys speed, not truth
+   (Phase B table has the free equivalents). Revisit post-water.
 3. **Desk test timing** — 10 minutes of hands, gates everything above.
 4. **Session date** — still unset; Phase C's freeze-window run sequences off
    it, and "~2 weeks" in earlier docs was an assumption, not a commitment.
