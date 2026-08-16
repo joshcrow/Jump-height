@@ -40,6 +40,52 @@ do not.**
 
 ## CHANGED AFTER THE AUDIT (2026-08-14, later the same day)
 
+### Detector thresholds vs REAL motion (E7/E8) — a recommendation, not yet a change
+- **State:** tested-in-sim-or-host. `config/params.json` is UNCHANGED.
+- **The shipped configuration keeps a false positive.** Across all 638,852
+  samples of the 2026-08-15 recording it returns 10 events: the 9 real ones,
+  plus one at t=4650.087 whose median airborne |a| is **1.393 g**. Free fall
+  reads ~0 g by definition, so that is not a jump. 3,035 of 6,174 swept
+  combinations do strictly better.
+- **A robust alternative exists:** `freefall_enter_g` 0.35 → **0.26**,
+  `min_airtime_s` 0.25 → **0.30** (confirm unchanged at 0.08). Correct in
+  **12 of 12** perturbed worlds — noise to 0.05 g, ±5 % gain, ±0.02 g offset,
+  ±0.5 % clock, and two combined worst cases — where the shipped point is
+  correct in **0 of 12**. 63 of 120 tested points survive all 12, so this is a
+  broad region, not a needle.
+- **This is a PRECISION problem, not a sensitivity one.** The shipped settings
+  never miss a real jump: 9/9 in every world, including 0.05 g of added noise.
+  The change buys false-positive rejection and rescues nothing.
+- **Why it has not been applied:** the evidence is one recording, on land, in a
+  pocket. E8 perturbs the *sensor*, not the *motion* — it cannot speak to a
+  rigid mount, or to a foil jump being longer and smoother than a hand toss.
+  Changing detector gates before a freeze, on land-only evidence, is the
+  owner's call.
+
+### Trace cap behaviour past full — first observation, on the host
+- **State:** tested-in-sim-or-host (host CSV store, NOT the nRF52 region)
+- **Evidence:** pre-filled to 1,995,006 bytes and run past the 2,000,000 cap.
+  `trace_bytes` froze at 2,000,334 and stopped growing; jump detection and
+  storage continued at full rate (4 per cycle, 4 → 16); every subsequent boot
+  against a full store succeeded. **Losing the raw trace does not cost the jump
+  records**, which is what the primary deliverable needs.
+- **Explicit limit:** `platform/host/jh_store.cpp` is CSV, deliberately not the
+  nRF52 binary region, so the block-walking append-point scan is still
+  unexercised. Only silicon closes that.
+
+### Silent-corruption rate of the trace codec — measured
+- **State:** tested-in-sim-or-host (7 tests, `tools/tests/test_codec_fuzz.py`)
+- **Numbers:** single-bit corruption slips through **0 / 4000** (guaranteed by
+  CRC algebra, so this is arithmetic rather than evidence); **random
+  multi-byte corruption slips through 8 / 6000 = 0.13 %**, i.e. roughly **1
+  corrupted block in 770** would decode as plausible data. Better than the
+  ~0.39 % textbook figure for an 8-bit check, because most random damage also
+  breaks the block's count field and is rejected structurally first.
+- Also asserted: `decode_region()` never raises on 3,000 random blobs,
+  truncation never increases the sample count, and a lost chunk never
+  retroactively alters earlier samples.
+
+
 ### Circular ground truth — FIXED, and enforced in code
 - **State:** tested-in-sim-or-host (2 new regression tests, 111 passing)
 - **What was wrong:** `docs/data-pipeline.md` derived "true height" from counted
