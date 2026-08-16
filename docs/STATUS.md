@@ -64,11 +64,18 @@ do not.**
 
 ### Trace cap behaviour past full — first observation, on the host
 - **State:** tested-in-sim-or-host (host CSV store, NOT the nRF52 region)
-- **Evidence:** pre-filled to 1,995,006 bytes and run past the 2,000,000 cap.
-  `trace_bytes` froze at 2,000,334 and stopped growing; jump detection and
-  storage continued at full rate (4 per cycle, 4 → 16); every subsequent boot
-  against a full store succeeded. **Losing the raw trace does not cost the jump
-  records**, which is what the primary deliverable needs.
+- **Evidence, 400-cycle overnight soak (2026-08-16):** **400/400 boots
+  succeeded, zero failures**, 1,600 jumps stored. The trace filled naturally at
+  cycle 110 and the run continued for **290 more cycles past full**:
+  `trace_bytes` froze at exactly 2,000,333 and never moved again (no overrun,
+  no wraparound), while the jump rate stayed at **4.00 per cycle before AND
+  after** the cap. **Losing the raw trace does not cost the jump records**,
+  which is what the primary deliverable needs.
+- **Boot time did not degrade:** 0.3181 s mean over cycles 1-50 versus 0.3189 s
+  over cycles 301-400, with jumps.csv grown to 1,600 records. **This does NOT
+  predict the nRF52.** The host store resumes from file size — an O(1) stat —
+  whereas the nRF52 walks the region block by block, so flat boot time here is
+  expected by construction and says nothing about the real scan.
 - **Explicit limit:** `platform/host/jh_store.cpp` is CSV, deliberately not the
   nRF52 binary region, so the block-walking append-point scan is still
   unexercised. Only silicon closes that.
