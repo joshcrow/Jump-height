@@ -40,6 +40,24 @@ do not.**
 
 ## CHANGED AFTER THE AUDIT (2026-08-14, later the same day)
 
+### Fast charge — verification FAILING on first measurement (2026-08-16)
+- **State:** partial — code confirmed on the board (`src=87b0ecaf`), **effect
+  contradicted by measurement**.
+- **Evidence:** voltage-span timing under charge, against the 50 mA baseline
+  in `data/soaks/20260810-charge-and-stability-soak.csv` (same board, same
+  cell): 3890→3970 mV took 29 min at 50 mA; the same span today, with the
+  fast-charge build driving HICHG, took **30 min**. In the CC region span
+  duration scales inversely with current, so 100 mA would read ~15 min.
+  **Ratio ≈ 1.0: the cell is charging at the 50 mA rate.**
+- **Cause unknown**: firmware drive unconfirmed (no HICHG readback exists;
+  `pincensus` releases the drive before reading, so it cannot see it) vs
+  board HICHG topology not responding to OUTPUT-LOW as documented. Next:
+  `hichg=` STATS readback on next routine flash; USB inline power meter is
+  the from-outside arbiter (~70 vs ~120 mA at the port).
+- Full reasoning: docs/battery-measurement.md §4 (revised after the
+  12-agent adversarial review, workflow wf_6677eb1e-e3d).
+
+
 ### Idle-floor power — RETRACTED as a current figure; see battery-measurement.md
 > **2026-08-16: the mA numbers below are not reliable and should not be
 > quoted.** They derive from `batt_pct`, a voltage lookup, and the run lived
