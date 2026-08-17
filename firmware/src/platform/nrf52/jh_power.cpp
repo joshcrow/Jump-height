@@ -49,6 +49,9 @@
 #include "platform/jh_imu.h"    // bus_release() — detach before rail cut
 #include "platform/jh_power.h"
 
+#include <nrf_sdm.h>
+#include <nrf_soc.h>
+
 namespace jh_power {
 
 namespace {
@@ -107,8 +110,22 @@ void init() {
   // Capture-and-clear FIRST: RESETREAS bits accumulate across resets until
   // written (nRF52840 PS), so a stale bit from last week would otherwise be
   // indistinguishable from this boot's cause.
-  s_reset_reas = NRF_POWER->RESETREAS;
-  NRF_POWER->RESETREAS = 0xFFFFFFFF;
+  //
+  // MUST be SoftDevice-aware. POWER is an SD-owned peripheral: with the SD
+  // enabled, direct NRF_POWER access hard-faults. The first build that did it
+  // directly (src=1c72f10f, 2026-08-17) died before its own boot banner and
+  // parked the board in the bootloader — while watchdog_init's direct NRF_WDT
+  // writes kept working, because WDT is not SD-owned. Ask the SD first; fall
+  // back to the register only when it is genuinely off.
+  uint8_t sd_en = 0;
+  sd_softdevice_is_enabled(&sd_en);
+  if (sd_en) {
+    sd_power_reset_reason_get(&s_reset_reas);
+    sd_power_reset_reason_clr(0xFFFFFFFF);
+  } else {
+    s_reset_reas = NRF_POWER->RESETREAS;
+    NRF_POWER->RESETREAS = 0xFFFFFFFF;
+  }
   pinMode(PIN_DIVIDER_EN, OUTPUT);
   digitalWrite(PIN_DIVIDER_EN, HIGH);   // divider off until a read wants it
   pinMode(PIN_CHG_STATE, INPUT_PULLUP); // ~CHG is open-drain: pullup, LOW=charging

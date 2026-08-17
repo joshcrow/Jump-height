@@ -40,6 +40,34 @@ do not.**
 
 ## CHANGED AFTER THE AUDIT (2026-08-14, later the same day)
 
+### 2026-08-17 background session: BLE-selftest reset ROOT-CAUSED AND FIXED; two traps found on the way
+- **State:** proven-on-hardware (board runs `src=0c09863c`, verified over BLE)
+- **The headline:** `selftest` over BLE — 0/2 survival on 08-16 — now passes
+  **2/2 with all rows**, on the same board over the same transport. Only
+  relevant change: watchdog feeds inside `runSelfTest`'s sampling loops.
+  **Root cause confirmed by intervention: watchdog starvation** — the loops
+  ran feed-less inside one handler pass, and BLE emit pacing stretched the
+  handler past the 3.5 s window; USB stayed just under, which is why the
+  transport looked like the variable.
+- **Trap 1 — the first instrumented image killed the boot.** Direct
+  `NRF_POWER->RESETREAS` access at init: POWER is a SoftDevice-owned
+  peripheral. Died before its own banner; board parked in the bootloader.
+  Recovered **hands-free** (the bootloader accepts uploads after a bad app —
+  a valuable recovery fact in its own right). Fix: SD-aware access.
+- **Trap 2 — stale DFU zip.** An incremental build regenerated the ELF but
+  not `firmware.zip`, so the "fixed" upload re-flashed the previous dead
+  image and the fix looked ineffective. **Rule: clean build before flash, and
+  verify `src=` after every flash** — the second half of which is exactly
+  what build identity exists for.
+- **Open, spun to task #18:** `revive` over BLE still resets (reproduced
+  deliberately). Bench rule: revive over USB only. No session path calls it.
+- **Instrument finding:** RESETREAS is consumed by the bootloader before the
+  app runs — `reas=` reads 0 seconds after a real reset. App-level
+  reset-cause telemetry needs GPREGRET breadcrumbs instead.
+- **Also live now:** `hichg=` readback (reads 0/released while not charging —
+  correct; the informative reading comes on the next real charge cycle).
+
+
 ### Idle endurance — now MEASURED from full, and the method is proven repeatable
 - **State:** proven-on-hardware, two independent runs (2026-08-15/16 and 16/17)
 - **The repeat, matched window 3961→3751 mV, idle on a desk, same board:**
