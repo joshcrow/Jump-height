@@ -40,6 +40,36 @@ do not.**
 
 ## CHANGED AFTER THE AUDIT (2026-08-14, later the same day)
 
+### Idle endurance — now MEASURED from full, and the method is proven repeatable
+- **State:** proven-on-hardware, two independent runs (2026-08-15/16 and 16/17)
+- **The repeat, matched window 3961→3751 mV, idle on a desk, same board:**
+  night 1 **7.26 h**, night 2 **7.18 h** — **1.1 % agreement.** Span timing
+  between fixed voltages is reproducible at the ~1 % level, which converts it
+  from a bounds check into a usable instrument.
+- **First reference curve from a RESTED-FULL cell (night 2):**
+
+  | to (mV) | hours from full |
+  |---|---|
+  | 4000 | 2.33 |
+  | 3900 | 6.12 |
+  | 3800 | 9.22 |
+  | 3751 | **10.56** |
+
+  Read: **10.6 h measured from full to ~quarter charge, idle**, ~2 h session
+  = **≥5× margin on the measured portion alone.** (The old "≈15.3 h to empty"
+  extrapolation is superseded by this direct measurement; true-empty remains
+  unmeasured by design — the 3600 mV floor rule.)
+- **The plateau, in our own data:** segment rates ran 35.8 → 30.6 → **18.9**
+  → 30.8 → 38.3 mV/h — fast off the top, flat through the middle, steepening
+  into the knee. This is the BU-903 lithium curve exactly, measured on our
+  cell: the flat 19 mV/h middle is *why* voltage-based percent was retracted.
+- **Stability:** zero resets across both runs; night 2 closed a **23.8 h
+  continuous run** on the freeze-candidate build (`src=87b0ecaf`).
+- **What the 1 % noise floor unlocks:** the free A/B method is real. The DC/DC
+  experiment's claimed ~40 % MCU saving would move a matched-window time by
+  far more than 1 % — measurable in two nights, no instrument purchase.
+
+
 ### INCIDENT 2026-08-16 ~07:49-08:06: pincensus poisoned the sensor; BLE selftest resets the board
 - **State:** board recovered and healthy (USB selftest all-PASS, accel 1.021 g,
   noise 0.0014 g); one root cause measured, one OPEN with instrumentation built.
