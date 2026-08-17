@@ -84,11 +84,44 @@
     <button class="tab-btn is-active" data-tab="connect" role="tab" aria-selected="true" aria-controls="tab-connect">Connect</button>
     <button class="tab-btn" data-tab="live" role="tab" aria-selected="false" aria-controls="tab-live">Live</button>
     <button class="tab-btn" data-tab="sessions" data-testid="tab-sessions" role="tab" aria-selected="false" aria-controls="tab-sessions">Sessions</button>
+    <button class="tab-btn" data-tab="label" data-testid="tab-label" role="tab" aria-selected="false" aria-controls="tab-label">Label</button>
   </nav>
 
   <main>
     <!-- 1. CONNECT. Headings are sr-only throughout: the tab bar is the visible
          heading; repeating it in ink buys nothing. -->
+    <section id="tab-label" class="tab-panel" role="tabpanel">
+      <!-- Field labelling: timestamped notes captured with one tap, exported in
+           EXACTLY the format tools/label.py parses. Works fully offline once
+           the page is loaded (localStorage only — no server, no BLE needed),
+           which is the whole point: label from a pocket, mid-walkabout.
+           Honesty note (docs/bench-program.md 4): tap-precision supports
+           `none` regions and rough jump counts; per-jump accuracy timing
+           still comes from video. -->
+      <div class="card">
+        <div class="row-between">
+          <strong>Mark events as they happen</strong>
+          <span id="label-count" class="pill" hidden></span>
+        </div>
+        <div class="label-btn-row">
+          <button id="btn-label-jump" class="btn btn-primary label-big" type="button">Jump / toss NOW</button>
+          <button id="btn-label-quiet" class="btn btn-ghost label-big" type="button">Start quiet period</button>
+        </div>
+        <div class="label-btn-row">
+          <input id="label-note-text" class="label-note-input" type="text" placeholder="quick note (walking, driving, ...)" />
+          <button id="btn-label-note" class="btn btn-ghost" type="button">Note</button>
+        </div>
+        <ul id="label-list" class="label-list"></ul>
+        <div class="label-btn-row">
+          <button id="btn-label-export" class="btn btn-primary" type="button">Download notes.txt</button>
+          <button id="btn-label-copy" class="btn btn-ghost" type="button">Copy for Claude</button>
+          <button id="btn-label-clear" class="btn btn-ghost" type="button">Clear all</button>
+        </div>
+        <p class="hint">Taps are second-accurate: great for "nothing happened here" spans
+        and toss counts. Per-jump height truth still needs video.</p>
+      </div>
+    </section>
+
     <section id="tab-connect" class="tab-panel is-active" role="tabpanel">
       <h2 class="sr-only">Connect</h2>
       <p class="muted">Bluetooth for the beach, USB for the fastest sync.</p>

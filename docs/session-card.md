@@ -46,6 +46,11 @@ staying connected.
 Write segments: `14:32-14:51 riding`, `15:05-15:12 nothing, sat on the board`,
 `15:20 big one, felt like the highest`.
 
+Two hands-free ways to do this: the web app's **Label tab** (load the page
+before leaving — it works offline; tap Jump / Start-End quiet as things
+happen, export `notes.txt` after) or just **message Claude** as events happen —
+messages are timestamped and become labels the same way.
+
 - **"Nothing happened here" is as valuable as "3 jumps here."** It is the
   false-positive rate, and there is no other way to get it.
 - Note anything odd: a crash, a dropped board, a swim, a knock on the rocks.

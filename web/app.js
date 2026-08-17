@@ -1695,10 +1695,138 @@ function setupMock() {
   window.__mock = { feed: (line) => t.receive(line), sent: t.sent };
 }
 
+
+// ------------------------------------------------------ field labelling tab
+//
+// One-tap timestamped labels, exported in EXACTLY the notes format
+// tools/label.py parses (see its docstring):
+//     HH:MM:SS jump  <note>
+//     HH:MM:SS-HH:MM:SS none <note>
+// Entirely client-side: localStorage, no transport, works offline once the
+// page is loaded — labelling must not depend on being in BLE range or on the
+// laptop being reachable, because the whole use case is a pocket, outdoors.
+//
+// Deliberate limits (docs/bench-program.md §4): tap precision serves `none`
+// regions and jump counts; per-jump accuracy timing comes from video. The
+// export is the bridge to `python3 tools/label.py <session> notes.txt`.
+
+const LABELS_KEY = 'jh-labels-v1';
+
+function labelsLoad() {
+  try { return JSON.parse(localStorage.getItem(LABELS_KEY) || '[]'); }
+  catch (_e) { return []; }
+}
+function labelsSave(rows) { localStorage.setItem(LABELS_KEY, JSON.stringify(rows)); }
+
+function clockOf(ms) {
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+// A row is {t, t2, kind, note}: t/t2 epoch-ms (t2 null for instants).
+function labelLine(r) {
+  // Free-text notes export as comment LINES (leading '#'): label.py strips
+  // everything after a '#' and silently ignores empty results, whereas an
+  // unknown kind in the kind column would be misread as a `none` region.
+  if (r.kind === '#') return `# ${clockOf(r.t)}  ${r.note}`;
+  const when = r.t2 ? `${clockOf(r.t)}-${clockOf(r.t2)}` : clockOf(r.t);
+  return `${when}  ${r.kind}${r.note ? '  ' + r.note : ''}`;
+}
+function labelsText() {
+  const rows = labelsLoad();
+  const day = rows.length ? new Date(rows[0].t).toDateString() : '';
+  return `# labels captured by the web app — ${day}\n` +
+         rows.map(labelLine).join('\n') + (rows.length ? '\n' : '');
+}
+
+let quietStartMs = null;  // open `none` range, if any
+
+function labelRender() {
+  const list = $('label-list');
+  if (!list) return;
+  const rows = labelsLoad();
+  list.innerHTML = '';
+  rows.forEach((r, i) => {
+    const li = document.createElement('li');
+    const txt = document.createElement('span');
+    txt.textContent = labelLine(r);
+    const del = document.createElement('button');
+    del.className = 'del'; del.type = 'button'; del.textContent = '✕';
+    del.setAttribute('aria-label', 'delete this label');
+    del.addEventListener('click', () => {
+      const rs = labelsLoad(); rs.splice(i, 1); labelsSave(rs); labelRender();
+    });
+    li.append(txt, del);
+    list.appendChild(li);
+  });
+  const pill = $('label-count');
+  if (pill) {
+    pill.hidden = rows.length === 0 && quietStartMs === null;
+    const open = quietStartMs !== null ? ' · quiet OPEN' : '';
+    pill.textContent = `${rows.length}${open}`;
+  }
+  const qbtn = $('btn-label-quiet');
+  if (qbtn) qbtn.textContent = quietStartMs === null ? 'Start quiet period' : 'End quiet period';
+}
+
+function labelAdd(kind, note, t2) {
+  const rows = labelsLoad();
+  rows.push({ t: Date.now(), t2: t2 || null, kind, note: note || '' });
+  // Ranges are stored at the moment they CLOSE, so re-sort by start time to
+  // keep the export chronological — label.py doesn't require order, humans
+  // reading the file do.
+  rows.sort((a, b) => a.t - b.t);
+  labelsSave(rows); labelRender();
+}
+
+function initLabelTab() {
+  if (!$('btn-label-jump')) return;  // markup absent (old cached page) — degrade silently
+  $('btn-label-jump').addEventListener('click', () => {
+    labelAdd('jump', $('label-note-text').value.trim());
+    $('label-note-text').value = '';
+  });
+  $('btn-label-quiet').addEventListener('click', () => {
+    if (quietStartMs === null) { quietStartMs = Date.now(); labelRender(); return; }
+    const start = quietStartMs; quietStartMs = null;
+    const rows = labelsLoad();
+    rows.push({ t: start, t2: Date.now(), kind: 'none',
+                note: $('label-note-text').value.trim() });
+    rows.sort((a, b) => a.t - b.t);
+    labelsSave(rows);
+    $('label-note-text').value = '';
+    labelRender();
+  });
+  $('btn-label-note').addEventListener('click', () => {
+    const note = $('label-note-text').value.trim();
+    if (!note) return;
+    // A bare note is a comment line for the humans; label.py ignores it.
+    labelAdd('#', note);
+    $('label-note-text').value = '';
+  });
+  $('btn-label-export').addEventListener('click', () => {
+    const blob = new Blob([labelsText()], { type: 'text/plain' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `notes-${new Date().toISOString().slice(0, 10)}.txt`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+  $('btn-label-copy').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(labelsText()); } catch (_e) {}
+  });
+  $('btn-label-clear').addEventListener('click', () => {
+    if (!confirm('Delete all captured labels?')) return;
+    labelsSave([]); quietStartMs = null; labelRender();
+  });
+  labelRender();
+}
+
 function init() {
   initThemeUnit();
   document.querySelectorAll('.tab-btn').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
   initConnectTab();
+  initLabelTab();
   $('btn-disconnect').addEventListener('click', doDisconnect);
   // No refresh button: stats arrive on connect and with every jump, and
   // switching to Live quietly re-asks — the user never has to think about it.
