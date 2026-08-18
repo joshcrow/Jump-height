@@ -437,8 +437,9 @@ main { max-width: 680px; margin: 0 auto; padding: 1.25rem 1rem; }
 .sessions-foot { margin-top: 1.5rem; padding-top: .8rem; border-top: 1px solid var(--hairline); }
 
 /* ---------- install (lives inside Connect) ---------- */
+/* Just a signpost since the ESP32 v1 platform and its <esp-web-install-button>
+   browser flasher were retired (2026-08-18); app.js fills this with text. */
 #install-container { margin: .75rem 0; }
-esp-web-install-button { display: inline-block; }
 
 /* ---------- console drawer ---------- */
 .console {

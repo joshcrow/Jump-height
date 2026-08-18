@@ -1,5 +1,13 @@
 # The plan — sequencing, priority, and what we are deliberately not doing
 
+> ## ⚠️ SUPERSEDED — see [docs/plan.md](plan.md)
+>
+> This file was replaced on 2026-08-14 by [plan.md](plan.md), which was rewritten
+> from [STATUS.md](STATUS.md) rather than from this plan's memory. It is kept for
+> its reasoning trail, not for its status: **nothing below is current guidance**,
+> including the "next two weeks" sequencing it opens with. `STATUS.md` is the
+> single source of truth; where they disagree, this file is stale.
+
 Written 2026-08-14 by the engineering side, for the owner, after a
 four-day hardware incident produced a large backlog and not much clarity.
 This document exists to make the next two weeks obvious.

@@ -4,9 +4,23 @@ Goal: a small, waterproof, battery-powered puck that mounts on the board, sample
 IMU, and runs the jump detector. Below is a phased BOM — start cheap on a breadboard,
 upgrade as you go.
 
-> **Building the actual v1?** This page is the general menu of options. The specific,
-> decided build (FireBeetle 2 ESP32-E + MPU-6050, bought capsule, GoPro mount) with a
-> step-by-step guide and shopping list is in **[../BUILD.md](../BUILD.md)**.
+> ## ⚠️ SUPERSEDED IN PART — check [docs/STATUS.md](STATUS.md) first
+>
+> This file contains claims that were true when written and are now known to be
+> WRONG. It is kept for its reasoning trail, not for its status. `STATUS.md` is
+> the single source of truth; where they disagree, this file is stale.
+> **The Phase 1/2 BOM tables below are the ESP32 + MPU-6050 era**, and that
+> platform was **retired 2026-08-18** (STATUS.md → *HARDWARE DEPRECATION*): its
+> code, PlatformIO envs and browser flasher are deleted. The accelerometer range
+> below (±8 g) is also wrong for the current board — the Sense ships **±16 g** by
+> deliberate decision (DECISIONS #25).
+>
+> **Building the actual puck?** The current board is the **Seeed XIAO nRF52840
+> Sense**, whose spec and gap analysis are in **[sense.md](sense.md)**. The
+> older step-by-step guide and shopping list in **[../BUILD.md](../BUILD.md)**
+> describes only the retired FireBeetle 2 ESP32-E + MPU-6050 build; no
+> Sense-specific runbook exists yet. What *does* still apply from this page,
+> whatever the board: the waterproofing and mounting sections.
 
 ## Bill of materials
 

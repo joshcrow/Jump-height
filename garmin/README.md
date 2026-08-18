@@ -6,7 +6,7 @@ couple seconds of landing, and writes jumps into the saved activity's FIT
 file — no phone, no taps, same protocol the CLI and web app already speak.
 
 Owns its own toolchain (a completely different SDK from the firmware's
-PlatformIO/ESP32 one), hence a separate top-level directory. Read
+PlatformIO/nRF52 one), hence a separate top-level directory. Read
 [`FIRST_COMPILE.md`](FIRST_COMPILE.md) before your first build — this code
 was authored without access to the Connect IQ SDK (it's a login-gated
 download) or a simulator, so every API call was researched as carefully as

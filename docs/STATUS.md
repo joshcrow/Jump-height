@@ -38,22 +38,11 @@ do not.**
 
 ---
 
-## CHANGED AFTER THE AUDIT (2026-08-14, later the same day)
+## CHANGED AFTER THE AUDIT — grouped by date, newest first (2026-08-14 → 2026-08-18)
+
+## 2026-08-18
 
 ### WATCH M2 CLOSED: jumps rendered on a real wrist (2026-08-18 ~17:00)
-
-### FIT recording path VERIFIED on the same activity
-- **State:** proven-on-hardware. The activity FIT pulled off the Epix over MTP
-  and parsed: developer fields present and correct — `jumps=13` (exact),
-  `best_jump=4.216 ft` (exactly the 1.285 m real toss, in the owner's units),
-  and a 95-sample `jump_height` record stream. Sessions now land in Garmin's
-  own history with jump data embedded.
-- **Gap found by the parse:** `best_airtime=0.70 s` (best among live-seen
-  fakes) sits beside the reconciled `best_jump=1.285 m` — an inconsistent
-  pair. Root cause: STATS carries `stored_best_m` but no best-airtime, so
-  reconcile-on-connect can restore one and not the other. Post-water fix:
-  add best-airtime to STATS (adder key) and reconcile both.
-
 - **State:** proven-on-hardware — the milestone the watch effort existed for.
   "The field has never displayed a correct jump on any wrist" is retired.
 - **The run:** field sideloaded to the owner's Epix Gen 2 over headless MTP
@@ -75,6 +64,17 @@ do not.**
   background-page test, watch self-health surfacing. None gate the session
   the way M2 did.
 
+### FIT recording path VERIFIED on the same activity
+- **State:** proven-on-hardware. The activity FIT pulled off the Epix over MTP
+  and parsed: developer fields present and correct — `jumps=13` (exact),
+  `best_jump=4.216 ft` (exactly the 1.285 m real toss, in the owner's units),
+  and a 95-sample `jump_height` record stream. Sessions now land in Garmin's
+  own history with jump data embedded.
+- **Gap found by the parse:** `best_airtime=0.70 s` (best among live-seen
+  fakes) sits beside the reconciled `best_jump=1.285 m` — an inconsistent
+  pair. Root cause: STATS carries `stored_best_m` but no best-airtime, so
+  reconcile-on-connect can restore one and not the other. Post-water fix:
+  add best-airtime to STATS (adder key) and reconcile both.
 
 ### HARDWARE DEPRECATION: the ESP32 v1 platform is retired (owner decision, 2026-08-18)
 - **What went:** `firmware/src/platform/esp32/` (all six seams + the MPU-6050
@@ -92,7 +92,6 @@ do not.**
   platform was removed, so the deprecation was a decision, not a surrender.
 - **Product surface now:** one board family (XIAO nRF52840 Sense), one flash
   path (USB via `jump flash`, OTA via `otadfu.py`), one BLE stack.
-
 
 ### Spare board soak-gated on the fast-charge-fix build (2026-08-18 afternoon)
 - **State:** proven-on-hardware. A spare (owner plugged in one of the two;
@@ -112,7 +111,6 @@ do not.**
 - **No-battery fingerprint:** floating divider read "3745 mV/24 %" then
   "4136 mV/97 %" twenty minutes apart — a useful signature for recognising a
   cell-less board from its own telemetry.
-
 
 ### Fast charge — ROOT CAUSE FOUND: the feature was never in any binary
 - **State:** cause proven (hichg readback + preprocessor); fix built as
@@ -137,6 +135,29 @@ do not.**
 - **Verification pending:** after tonight's flash, `hichg=1` during charge +
   a charge-span at ~half the 50 mA baseline closes this for good.
 
+
+### BLE batch: on silicon since 08-17, effect still unmeasured — two entries in this file disagree
+- **State:** bookkeeping entry. Raised because the *BLE silent-drop fix:
+  per-connection retry + tx_drops counter* and *BLE per-connection retry —
+  chunk length latched* entries below still read `built-unverified` /
+  "never flashed — no bench log after 2026-08-14 10:29", and that is no longer
+  literally true.
+- **What is measurable:** commits `216f75f` (2026-08-14 10:29) and `9277821`
+  (2026-08-14 10:46) both precede `src=0c09863c` (flashed and running 08-17)
+  and `src=66b5137b` (flashed on the spare 08-18). `src=` is a hash of the
+  sources the compiler read, so the retry path and the chunk latch are in both
+  binaries. **The code has booted; "never on silicon" is stale.**
+- **What is NOT established:** that the fix *works*. Nothing has read back
+  `tx_drops` after a loaded transfer, and no bulk export has been run over two
+  concurrent centrals. The 08-18 M2 session ran two pucks and one watch with
+  "zero cross-talk", but that observation is about advertising identity and
+  address pinning, not about the transmit queue.
+- **What closes it:** `tx_drops` sampled before/after a full `jumps.csv` +
+  `trace.csv` dump over BLE with a second central subscribed. Until that
+  measurement exists neither entry should be promoted — this note exists so the
+  contradiction is visible rather than resolved by guesswork.
+
+## 2026-08-17
 
 ### 2026-08-17 background session: BLE-selftest reset ROOT-CAUSED AND FIXED; two traps found on the way
 - **State:** proven-on-hardware (board runs `src=0c09863c`, verified over BLE)
@@ -164,7 +185,6 @@ do not.**
   reset-cause telemetry needs GPREGRET breadcrumbs instead.
 - **Also live now:** `hichg=` readback (reads 0/released while not charging —
   correct; the informative reading comes on the next real charge cycle).
-
 
 ### Idle endurance — now MEASURED from full, and the method is proven repeatable
 - **State:** proven-on-hardware, two independent runs (2026-08-15/16 and 16/17)
@@ -195,6 +215,7 @@ do not.**
   experiment's claimed ~40 % MCU saving would move a matched-window time by
   far more than 1 % — measurable in two nights, no instrument purchase.
 
+## 2026-08-16
 
 ### INCIDENT 2026-08-16 ~07:49-08:06: pincensus poisoned the sensor; BLE selftest resets the board
 - **State:** board recovered and healthy (USB selftest all-PASS, accel 1.021 g,
@@ -223,7 +244,6 @@ do not.**
   headroom; clear per protocol after download). The 3 stored verification
   tosses are intact. Charging was unaffected throughout (BQ25101 is
   independent of the MCU).
-
 
 ### Fast charge — verification FAILING on first measurement (2026-08-16)
 - **State:** partial — code confirmed on the board (`src=87b0ecaf`), **effect
@@ -255,7 +275,6 @@ do not.**
   the from-outside arbiter (~70 vs ~120 mA at the port).
 - Full reasoning: docs/battery-measurement.md §4 (revised after the
   12-agent adversarial review, workflow wf_6677eb1e-e3d).
-
 
 ### Idle-floor power — RETRACTED as a current figure; see battery-measurement.md
 > **2026-08-16: the mA numbers below are not reliable and should not be
@@ -303,6 +322,25 @@ do not.**
   predates the change that added one. After the next flash,
   `./tools/jump selftest` answers this in one line.
 
+### Trace cap behaviour past full — first observation, on the host
+- **State:** tested-in-sim-or-host (host CSV store, NOT the nRF52 region)
+- **Evidence, 400-cycle overnight soak (2026-08-16):** **400/400 boots
+  succeeded, zero failures**, 1,600 jumps stored. The trace filled naturally at
+  cycle 110 and the run continued for **290 more cycles past full**:
+  `trace_bytes` froze at exactly 2,000,333 and never moved again (no overrun,
+  no wraparound), while the jump rate stayed at **4.00 per cycle before AND
+  after** the cap. **Losing the raw trace does not cost the jump records**,
+  which is what the primary deliverable needs.
+- **Boot time did not degrade:** 0.3181 s mean over cycles 1-50 versus 0.3189 s
+  over cycles 301-400, with jumps.csv grown to 1,600 records. **This does NOT
+  predict the nRF52.** The host store resumes from file size — an O(1) stat —
+  whereas the nRF52 walks the region block by block, so flat boot time here is
+  expected by construction and says nothing about the real scan.
+- **Explicit limit:** `platform/host/jh_store.cpp` is CSV, deliberately not the
+  nRF52 binary region, so the block-walking append-point scan is still
+  unexercised. Only silicon closes that.
+
+## 2026-08-15
 
 ### Detector thresholds vs REAL motion (E7/E8) — a recommendation, not yet a change
 - **State:** tested-in-sim-or-host. `config/params.json` is UNCHANGED.
@@ -325,24 +363,6 @@ do not.**
   rigid mount, or to a foil jump being longer and smoother than a hand toss.
   Changing detector gates before a freeze, on land-only evidence, is the
   owner's call.
-
-### Trace cap behaviour past full — first observation, on the host
-- **State:** tested-in-sim-or-host (host CSV store, NOT the nRF52 region)
-- **Evidence, 400-cycle overnight soak (2026-08-16):** **400/400 boots
-  succeeded, zero failures**, 1,600 jumps stored. The trace filled naturally at
-  cycle 110 and the run continued for **290 more cycles past full**:
-  `trace_bytes` froze at exactly 2,000,333 and never moved again (no overrun,
-  no wraparound), while the jump rate stayed at **4.00 per cycle before AND
-  after** the cap. **Losing the raw trace does not cost the jump records**,
-  which is what the primary deliverable needs.
-- **Boot time did not degrade:** 0.3181 s mean over cycles 1-50 versus 0.3189 s
-  over cycles 301-400, with jumps.csv grown to 1,600 records. **This does NOT
-  predict the nRF52.** The host store resumes from file size — an O(1) stat —
-  whereas the nRF52 walks the region block by block, so flat boot time here is
-  expected by construction and says nothing about the real scan.
-- **Explicit limit:** `platform/host/jh_store.cpp` is CSV, deliberately not the
-  nRF52 binary region, so the block-walking append-point scan is still
-  unexercised. Only silicon closes that.
 
 ### Silent-corruption rate of the trace codec — measured
 - **State:** tested-in-sim-or-host (7 tests, `tools/tests/test_codec_fuzz.py`)
@@ -387,7 +407,6 @@ do not.**
   from the trace alone. If the filming goes badly the session still answers its
   question.
 
-
 ### Build identity on INFO — the freeze protocol is now checkable
 - **State:** built-unverified on the nRF52 board (not yet flashed); **proven
   on the host build**, which compiles the same `src/main.cpp`.
@@ -412,7 +431,6 @@ do not.**
   `session-info.txt` (`build_src=`) so recorded data carries the build that
   produced it, and a `simtest` row that fails if the header goes stale.
   `./tools/jump flash` regenerates it via `cmd_gen` before building.
-
 
 ### Offline detector vs the device, on REAL recorded motion — first ever
 - **State:** proven-on-hardware
@@ -442,7 +460,6 @@ do not.**
   not reliably match**; per-jump accuracy timing has to come from video. The
   tool now prints this rather than emitting labels that silently never match.
 
-
 ### Sleep-between-samples — shipped, jitter falsifier PASSED
 - **State:** proven-on-hardware
 - **Evidence:** 2026-08-15, commit dfdf4cf. Post-change desk test: 3/3 tosses
@@ -468,7 +485,6 @@ do not.**
 - **Evidence:** commit 68f32d1, selftest PASS with it live and `chg=1`.
 - **Gap:** the effect is unmeasured — it went live near the top of a charge.
   The honest test is the next charge from a low starting point.
-
 
 ### Session-scale USB download — PROVEN at 2x a real water session
 - **State:** proven-on-hardware
@@ -522,6 +538,11 @@ do not.**
   0.079 g cannot yet be split into real signal vs sensor offset. A 10-minute
   drop calibration fixes that and is now the highest-value pre-water task.
 
+## 2026-08-14
+
+These landed after the audit above was generated. They are listed here rather
+than merged in, so the provenance stays honest: the audit is a snapshot, this
+is the delta since.
 
 ### Watch: error-boundary hardening, FIT summary guard, STATS completeness
 - **State:** tested-in-sim-or-host
@@ -538,7 +559,6 @@ do not.**
   `garmin/README.md`, key at `~/.garmin-ciq/developer_key.der`.
 - **Gap:** none. This unblocks every future watch change being compiled and
   tested rather than eyeballed.
-
 
 ### END-TO-END: a jump detected on real motion and read back from flash — GATE CLOSED
 - **State:** proven-on-hardware
@@ -563,7 +583,6 @@ do not.**
   these were gentle tosses, so the detector's LOW edge is now exercised but
   its behaviour on 1 s+ airtimes is still only simulated.
 
-
 ### USB session download — WAS LOSSY, now fixed and verified
 - **State:** proven-on-hardware
 - **Evidence:** commit b7c3644. BEFORE: two downloads of the same stored trace
@@ -581,11 +600,6 @@ do not.**
   whoami PASS 0x6A, accel 1.000 g, noise 0.0012 g, ble advertising, flash
   2080004B free. Running on battery + USB.
 - **Gap:** no jump has yet been detected on this build — the desk test.
-
-
-These landed after the audit above was generated. They are listed here rather
-than merged in, so the provenance stays honest: the audit is a snapshot, this
-is the delta since.
 
 ### Boot-scan watchdog feeds (jumps + trace append-point scans)
 - **State:** built-unverified
@@ -687,7 +701,7 @@ is the delta since.
 
 ### FIT developer fields declared and SESSION values written into a real saved activity
 - **Evidence:** Two FIT files pulled off the Epix Gen 2 on 2026-08-11 (/private/tmp/claude-501/-Users-joshcrow-Jump-height/a57fec5c-c76c-440f-8536-9f8067f25d7e/scratchpad/2026-08-11-17-43-13.fit and 2026-08-11-18-02-00.fit). I decoded them: field_description records jump_height(RECORD, units 'ft'), jumps(SESSION,'count'), best_jump(SESSION,'ft'), best_airtime(SESSION,'s') — exactly FitOut.mc:46-60's table — and the 18:02 activity carries one SESSION message with jumps=0, best_jump=0.0, best_airtime=0.0, in a Windsurf activity.
-- **Gap:** Every RECORD jump_height in both files is NaN — no jump value has ever reached a FIT. Garmin Connect rendering (M4 AC, docs/garmin-datafield.md:269-271) never checked. Note the 17:43 file declares only jump_height and no session fields: that is the activity the field crashed in 58 s after start (CIQ_LOG_2.YML, 2026-08-11T21:44:11Z).
+- **Gap:** Every RECORD jump_height in both files is NaN — no jump value has ever reached a FIT. Garmin Connect rendering (M4 AC, docs/garmin-datafield.md:294-296) never checked. Note the 17:43 file declares only jump_height and no session fields: that is the activity the field crashed in 58 s after start (CIQ_LOG_2.YML, 2026-08-11T21:44:11Z).
 
 ### Gyro read on silicon (LSM6DS3TR-C, +/-2000 dps)
 - **Evidence:** firmware/src/platform/nrf52/lsm6ds3_min.h:186 readGyroDps(); measured 2026-08-11 via the `gyro` command: rest |w| = 3.1 dps, hand-rotation peak 257.8 dps, return to rest (firmware/SENSE_FIRST_BOOT.md:1565-1573)
@@ -779,7 +793,7 @@ is the delta since.
 
 ### jump web (local dev server + firmware staging)
 - **Evidence:** 4 non---fake web logs: data/logs/20260804-193034-web.log, 20260804-193046, 20260804-193101 (`web --port 8766`), 20260804-214955. Serves web/ on localhost so Web Bluetooth/Serial get a secure context.
-- **Gap:** No automated test for stage_firmware (tools/jump:2500-2525).
+- **Gap:** No automated test for stage_firmware (tools/jump:2500-2525). **(moot 2026-08-18: `stage_firmware` was removed with the browser flasher; this row is historical.)**
 
 ### tools/blecmd.py (BLE bench console)
 - **Evidence:** firmware/SENSE_FIRST_BOOT.md:414-421 — 2026-08-11, `blecmd.py --watch` held a persistent central alongside the Garmin Epix Gen 2 for over an hour; 'the Mac's stats round-tripped correctly the whole time'.
@@ -807,7 +821,7 @@ is the delta since.
 
 ### BLE pacing to the negotiated connection interval
 - **Evidence:** firmware/src/platform/nrf52/jh_link.cpp:236-251 (MTU-23 measurement) and :288-298 (pace to slowest subscriber); the pacing fix was flashed 2026-08-11 ~18:25 (ad51a24 content, docs/rca-sense-imu-2026-08-11.md:17)
-- **Gap:** Ran on silicon but was never re-validated on the wrist — README.md:44-46 records on-wrist validation as the next watch session.
+- **Gap:** Ran on silicon but was never re-validated on the wrist — README.md:49-53 records on-wrist validation as the next watch session.
 
 ### Gyro bias estimator (planing baseline)
 - **Evidence:** firmware/include/gyro_bias.h:65 update(); converged on silicon 2026-08-11 to (1.2,-2.5,1.1) dps and pulled 3.1 -> 0.5 dps; freeze-while-airborne and the >=1900 dps rail guard covered only by tools/tests/test_gyro_bias.py
@@ -822,7 +836,7 @@ is the delta since.
 - **Gap:** The only on-silicon jump history (61 jumps) was erased by `format` on 2026-08-14 (docs/bench-playbook.md:20-23). No jump has been written AND read back on the current build; that is exactly what the desk test would prove.
 
 ### Settings/properties (US7)
-- **Evidence:** properties.xml defaults are what actually runs — sideload installs receive no settings (docs/garmin-datafield.md:355-362). Defaults proven live: units (above) and puckName 'JumpHeight' matching the firmware's advertised name (firmware/src/main.cpp:889 jh_link::begin("JumpHeight"), jh_link.cpp:418 Bluefruit.setName).
+- **Evidence:** properties.xml defaults are what actually runs — sideload installs receive no settings (docs/garmin-datafield.md:380-387). Defaults proven live: units (above) and puckName 'JumpHeight' matching the firmware's advertised name (firmware/src/main.cpp:889 jh_link::begin("JumpHeight"), jh_link.cpp:418 Bluefruit.setName).
 - **Gap:** resources/settings/settings.xml (the Garmin Connect UI) has never been exercised at all — it requires the Connect IQ Store channel, which does not exist yet (M5 not started).
 
 ### Two concurrent BLE centrals served by the puck
@@ -843,7 +857,7 @@ is the delta since.
 
 ### Web app — in-browser flasher (ESP Web Tools)
 - **Evidence:** web/manifest.json declares exactly one build, `"chipFamily": "ESP32"`, pointing at firmware/bootloader.bin + partitions.bin + firmware.bin. web/app.js:1381-1382 mounts <esp-web-install-button manifest="manifest.json">. web/firmware/*.bin on this machine are dated Aug 4 (ESP32-era) and web/firmware/ is gitignored.
-- **Gap:** Cannot flash the nRF52840 Sense — the board README.md:35 calls the product. The Install tab's fallback text (web/app.js:1372) also tells users to run `./tools/jump flash`, which fails on that board.
+- **Gap:** Cannot flash the nRF52840 Sense — the board README.md:38 calls the product. The Install tab's fallback text (web/app.js:1372) also tells users to run `./tools/jump flash`, which fails on that board.
 
 ### `off` / System OFF
 - **Evidence:** firmware/src/platform/nrf52/jh_power.cpp:239 system_off() (bus_release -> rail down -> sd_power_system_off); entry proven 2026-08-04; measured 2026-08-14: with USB attached it enters System OFF and stays there — wake needs a VBUS rising edge or the reset button (SENSE_FIRST_BOOT.md:1091-1116)
@@ -895,7 +909,7 @@ is the delta since.
 
 ### Vibration on new jump (US3)
 - **Evidence:** JumpFieldView.mc:568-591 — property read, `has :vibrate` guard, try/catch, all three degrade silently. No commit, log, image or doc records it ever firing.
-- **Gap:** It can only fire behind Model.consumeNewJump(), which has never returned true on hardware. docs/garmin-datafield.md:339 §9 item 3 (is Attention.vibrate permitted from a data field) is still genuinely open on both watch models.
+- **Gap:** It can only fire behind Model.consumeNewJump(), which has never returned true on hardware. docs/garmin-datafield.md:364 §9 item 3 (is Attention.vibrate permitted from a data field) is still genuinely open on both watch models.
 
 ### Web app — export/import/share-image/delete-session/console drawer
 - **Evidence:** Implemented at web/app.js:744 (deleteSession), :1024 (drawShareCanvas), :1419 (console form), :1711-1719 (export-all, import-file, clear-device). None of the 10 Playwright test names in tools/tests/test_web.py touch export-all, import, share, delete or the console.
@@ -906,7 +920,7 @@ is the delta since.
 - **Gap:** No bench record of the command itself ever being issued.
 
 ### compute() keeps running while another data page is on-glass
-- **Evidence:** The whole design depends on it — PuckLink.poll(), the vibrate trigger and the FIT writes are all driven from compute() (JumpFieldView.mc:102-124). Called out as an untested bet in FIRST_COMPILE.md:414-428 item 12 and docs/garmin-datafield.md:352-353 §9 item 9.
+- **Evidence:** The whole design depends on it — PuckLink.poll(), the vibrate trigger and the FIT writes are all driven from compute() (JumpFieldView.mc:102-124). Called out as an untested bet in FIRST_COMPILE.md:414-428 item 12 and docs/garmin-datafield.md:377-378 §9 item 9.
 - **Gap:** Two-screen test: put the field on data screen 2, leave screen 1 showing, toss the puck, confirm the jump was captured.
 
 ### jump desktest — untethered flow (the path real hardware takes)
@@ -1062,12 +1076,12 @@ is the delta since.
 - **Gap:** one filmed water session; and per plan.md:63-73 the label schema itself must change (current video truth is circular)
 
 ### Memory/peak budget under the data-field limit (spec §5.6, <28 KB)
-- **Evidence:** No measurement exists anywhere in the repo; the simulator memory view has never been run. docs/garmin-datafield.md:240-247 defers it to M3, which has not started.
+- **Evidence:** No measurement exists anywhere in the repo; the simulator memory view has never been run. docs/garmin-datafield.md:265-272 defers it to M3, which has not started.
 - **Gap:** One simulator session with the memory view open.
 
 ### Non-ballistic self-diagnosis flag (median airborne |a| > 0.12 g)
 - **Evidence:** sim/selfdiag.py exists; zero matches for selfdiag/median-|a| gating in firmware/include/jump_detector.h or firmware/src/main.cpp
-- **Gap:** RESULTS.md:86-88 and wing-ballistic-sim.md:128 call it a firmware requirement; sense.md:196 describes it as already "riding along"
+- **Gap:** RESULTS.md:86-88 and wing-ballistic-sim.md:128 call it a firmware requirement; sense.md:199 describes it as already "riding along"
 
 ### Standby / motion-wake power tier
 - **Evidence:** INT1 only ever floated (jh_imu.cpp:206); no LED code in src/platform/nrf52 (grep empty); advertisement carries no battery or armed state
@@ -1088,6 +1102,23 @@ is the delta since.
 Found by the same audit. Until each is fixed, treat the claim as false.
 The worst offenders carry a SUPERSEDED banner pointing here.
 
+> **Amendments 2026-08-18 — two rows below have themselves gone stale.** This
+> table is a 2026-08-14 snapshot; the delta section at the top of this file is
+> newer than it, and where they disagree the delta section wins.
+>
+> - **The browser-flasher rows** (`README.md:37 and docs/roadmap.md:75-76`,
+>   `README.md:37`) cite `web/manifest.json` and `web/firmware/` as their
+>   evidence. Those files no longer exist: the ESP32 deprecation deleted the
+>   flasher outright on 2026-08-18 (see *HARDWARE DEPRECATION* under
+>   `## 2026-08-18` above). The corrected claim stands — there is no browser
+>   flash path — but its evidence must now be read from git history.
+> - **The "no jump has ever been correctly displayed on a watch" rows**
+>   (`README.md:53-57`, and the M2-unsigned framing in `garmin/README.md`,
+>   `docs/garmin-datafield.md`, `docs/roadmap.md`) are superseded by *WATCH M2
+>   CLOSED* under `## 2026-08-18` above: 3 reconciled real tosses plus 10 live
+>   fakejumps rendered on the owner's Epix Gen 2. Those rows' corrective text
+>   was accurate on 2026-08-14 and is now itself out of date.
+
 | File | Claims | Actually |
 |---|---|---|
 | `docs/rca-sense-imu-2026-08-11.md` | Top-line verdict, lines 3-4: 'hardware failure of the LSM6DS3TR-C (or its power path)... Firmware is exonerated by direct experiment.' The 2026-08-12  | Overturned on 2026-08-14. The cause was firmware: pinMode() selected standard GPIO drive on P1.08, which sources the sensor's VDD (SENSE_FIRST_BOOT.md:938-1004, DECISIONS #37). That same boa |
@@ -1106,16 +1137,16 @@ The worst offenders carry a SUPERSEDED banner pointing here.
 | `firmware/src/main.cpp` | FW_VERSION "0.4.3" (line 61) — reported to every client as INFO fw=0.4.3 and in the BLE greet banner. | Unchanged since the seam split in late July, across the bounded-TWIM driver, the drive-strength fix, the storage watchdog fix, the begin() retry and the BLE transmit fix. No client — and no  |
 | `README.md` | Status table line 35: 'the original became the bench mule after an IMU-bus fault'; lines 41-47: the watch-numbers bug is 'Fixed on both ends (puck pac | The original board never had an IMU-bus fault; it is healthy and is the chosen product board (docs/bench-playbook.md:13). The puck-side pacing change did ship and run, but the transmit fix t |
 | `/Users/joshcrow/Jump-height/garmin/README.md:16-22` | "Status: compiles clean and all 24 unit tests PASS in the simulator (2026-08-04)... You are M2: sideload to the real watch and scan for the real puck. | There are 43 tests, not 24 (17 ModelTest + 13 ProtocolTest + 13 LayoutTest). I ran them today: 43/43 PASS on epix2 AND instinct3solar45mm. The sideload happened 2026-08-10 and the live link  |
-| `/Users/joshcrow/Jump-height/docs/garmin-datafield.md:3-4` | "24/24 simulator unit tests pass" | 43/43, measured 2026-08-14 on both device targets. |
+| `/Users/joshcrow/Jump-height/docs/garmin-datafield.md:28-29` | "24/24 simulator unit tests pass" | 43/43, measured 2026-08-14 on both device targets. |
 | `/Users/joshcrow/Jump-height/docs/roadmap.md:177-186` | "all 24 sim unit tests PASS"; "Not yet signed off as M1"; "the single-central control run is the next thing to do"; "a real toss registering (session_ | 43 tests. It is M2 that is unsigned — M1 was met and docs/garmin-datafield.md:6 says so, so the two docs disagree on which milestone is open. The control run is no longer the open question:  |
 | `/Users/joshcrow/Jump-height/garmin/FIRST_COMPILE.md:140-193` | "OPEN BUG — corrupted values on the watch, cause NOT yet found. Status 2026-08-11: open." / "Leading hypothesis (untested): Connect IQ drops BLE notif | All four are out of date, and this is the file every other doc points at. The experiment was run the same day (the DIAG build showed a line missing exactly one 20-byte MTU-23 payload). The c |
-| `/Users/joshcrow/Jump-height/README.md:41-47` | "Watch-numbers bug, root-caused... Fixed on both ends (puck paces to the negotiated link; the watch rejects lines that fail protocol invariants)." | The watch end is fixed and hardware-validated. The puck end is NOT on silicon: commit ad51a24 says "Neither is silicon-verified yet", commit 216f75f says "Not yet on silicon: both boards are |
+| `/Users/joshcrow/Jump-height/README.md:44-57` | "Watch-numbers bug, root-caused... Fixed on both ends (puck paces to the negotiated link; the watch rejects lines that fail protocol invariants)." | The watch end is fixed and hardware-validated. The puck end is NOT on silicon: commit ad51a24 says "Neither is silicon-verified yet", commit 216f75f says "Not yet on silicon: both boards are |
 | `/Users/joshcrow/Jump-height/README.md:53-57` | Under "Running on hardware": jump height "streamed live over BLE... and displayed on the watch alongside the puck's own battery level." | No jump has ever been correctly displayed on a watch, and the puck-battery sub-line has never been observed on any watch — the battery parse is unit-tested only (ModelTest testStats_batteryA |
 | `/Users/joshcrow/Jump-height/docs/ble-dependability.md:128-131` | Build order item 2: "Watch-side corruption gate. Pure Monkey C, no firmware coupling. Correct regardless of root cause." — listed as work to do, doc w | Built 2026-08-11 and hardware-validated the same day. This is the identical stale item that was found and removed from docs/plan.md on 2026-08-14 (commit 642d5a7) — the correction was never  |
 | `/Users/joshcrow/Jump-height/docs/ble-dependability.md:145-148` | "The raw-line diagnostic on the watch: render received line length and tail for one sideload. That is the experiment garmin/FIRST_COMPILE.md has been  | Already performed on 2026-08-11 — bin/JumpField-DIAG-epix2.prg. Its output (a JUMP line missing exactly the 20 characters " height_ft=5.3 best_") is what produced the ATT_MTU-23 finding this |
-| `/Users/joshcrow/Jump-height/docs/garmin-datafield.md:11-16` | "M2 is NOT signed off: with a second BLE central subscribed the displayed values are corrupt... the single-central control run is the next step and ha | M2 is indeed unsigned, but the two-central framing is superseded: docs/ble-dependability.md:36-39 concludes a single central under load hits the same path — "a single-central product risk, n |
-| `/Users/joshcrow/Jump-height/docs/garmin-datafield.md:344-345` | §9 still-open item 8: "Whether the owner's watch mounts as USB mass storage or MTP-only on macOS." | Answered 2026-08-10: MTP-only, and mtp-sendfile fails on Garmin — a custom libmtp sender was written and the push verified (commit 370080a, garmin/README.md:92-118). |
-| `/Users/joshcrow/Jump-height/docs/garmin-datafield.md:286-292` | §7: "Two concurrent BLE centrals — ✅ DONE (firmware v0.4.2)... NimBLE's own default max is 3... tested watch + phone live." | Describes the ESP32/NimBLE build. The watch's actual peer is the nRF52/Bluefruit puck (Bluefruit.begin(2,0)), and "tested watch + phone live" is the exact configuration in which corrupted va |
+| `/Users/joshcrow/Jump-height/docs/garmin-datafield.md:36-41` | "M2 is NOT signed off: with a second BLE central subscribed the displayed values are corrupt... the single-central control run is the next step and ha | M2 is indeed unsigned, but the two-central framing is superseded: docs/ble-dependability.md:36-39 concludes a single central under load hits the same path — "a single-central product risk, n |
+| `/Users/joshcrow/Jump-height/docs/garmin-datafield.md:369-370` | §9 still-open item 8: "Whether the owner's watch mounts as USB mass storage or MTP-only on macOS." | Answered 2026-08-10: MTP-only, and mtp-sendfile fails on Garmin — a custom libmtp sender was written and the push verified (commit 370080a, garmin/README.md:92-118). |
+| `/Users/joshcrow/Jump-height/docs/garmin-datafield.md:311-317` | §7: "Two concurrent BLE centrals — ✅ DONE (firmware v0.4.2)... NimBLE's own default max is 3... tested watch + phone live." | Describes the ESP32/NimBLE build. The watch's actual peer is the nRF52/Bluefruit puck (Bluefruit.begin(2,0)), and "tested watch + phone live" is the exact configuration in which corrupted va |
 | `/Users/joshcrow/Jump-height/garmin/jumpfield/monkey.jungle:2-8` | "One source tree for one device family (Instinct 3 Solar) — deliberately simple. Per-family source overrides are a spec §5.1/§9 M5 concern, not now." | epix2 has been a built, sideloaded and shipping target since 2026-08-10 and is the only device the field has ever run on. |
 | `/Users/joshcrow/Jump-height/garmin/jumpfield/manifest.xml:19-23` | "Instinct 3 Solar only for M0-M4... Fenix/Epix/Forerunner families are added at M5 once the simulator layout passes on this device"; and (lines 31-40) | Self-contradicted five lines below by <iq:product id="epix2"/>. The tier breakpoints are now pinned by LayoutTest against epix2's real per-slot geometry from the SDK's own simulator.json (41 |
 | `/Users/joshcrow/Jump-height/garmin/README.md:164-179` | "Three things to check first in the simulator" #1: "The layout-tier breakpoints (FULL_MIN_H/HALF_MIN_H) are unverified guesses; nudge them once you se | The breakpoints are unit-tested against both devices' real slot tables (LayoutTest.mc:201-211, passing). Profile registration reached STATUS_SUCCESS and scanning found the puck on hardware 2 |
@@ -1124,7 +1155,7 @@ The worst offenders carry a SUPERSEDED banner pointing here.
 | `/Users/joshcrow/Jump-height/docs/plan.md:123` | "17 Model tests cover it [the corruption gate]." | ModelTest.mc has 17 tests in total; 6 of them (testCorrupt_*) are the gate's. The gate is real and hardware-validated — only the count is the file's, not the feature's. |
 | `/Users/joshcrow/Jump-height/docs/STATUS.md` | tools/jump:2168-2178 treats docs/STATUS.md as the project's single source of truth and warns when code is newer than it. | The file does not exist. Today's run recorded "⚠️ docs/STATUS.md missing — there is no single source of truth" (data/logs/20260814-105535-status.log). The one machine-checked staleness guard |
 | `docs/roadmap.md:18,25,31` | 'Phase 1 — Bench firmware ✅ COMPLETE (hardware-validated 2026-07-25)' … 'on hardware, a passed desk test on the real assembly (untethered tosses) plus | docs/plan.md:153 (2026-08-14) still lists '`./tools/jump desktest` on the OG board — 3 untethered tosses / owner / 10 min' as an open P0 action, calling it 'the ONLY proof that a jump surviv |
-| `README.md:37 and docs/roadmap.md:64-67` | 'Browser app / ✅ Live BLE stats, session sync, charts, in-browser flashing' and 'A zero-install browser flasher (ESP Web Tools) adds an Install button | web/manifest.json declares one build with "chipFamily": "ESP32". The board README.md:35 names as the product is the XIAO nRF52840 Sense, which ESP Web Tools cannot flash. The Sense's .uf2 IS |
+| `README.md:40 and docs/roadmap.md:64-67` | 'Browser app / ✅ Live BLE stats, session sync, charts, in-browser flashing' and 'A zero-install browser flasher (ESP Web Tools) adds an Install button | web/manifest.json declares one build with "chipFamily": "ESP32". The board README.md:38 names as the product is the XIAO nRF52840 Sense, which ESP Web Tools cannot flash. The Sense's .uf2 IS |
 | `docs/roadmap.md:67-69` | 'On hardware: BLE validated end-to-end (Bluefy on iPhone, live jumps, sync, bench flows)'. | Connect + INFO readout is evidenced (SENSE_FIRST_BOOT.md:466-472) and the bench drop flow is evidenced (commit a6e477d). I found no primary record of a web-app *sync* (dump) on hardware, and |
 | `docs/data-pipeline.md:10` | 'You already have ~70% of it.' | The capture/analysis half exists; the ground-truth half is 0%. `find . -name labels.csv` and `-name session.json` both return nothing, `./tools/jump eval --verbose` prints 'No labeled sessio |
 | `docs/data-pipeline.md:141` | 'airtime_offset_s — `jump drop` (bench drop tests). Already wired.' | `jump drop` has never run on hardware — all 178 drop logs are `--fake`, and its real-hardware branch (tools/jump:1002) is unreachable in --fake mode. The one calibration that exists (commit  |
@@ -1134,9 +1165,9 @@ The worst offenders carry a SUPERSEDED banner pointing here.
 | `tools/jump:2171-2174` | cmd_status treats docs/STATUS.md as 'the single source of truth' and warns/exits 1 if code is newer than it. | docs/STATUS.md does not exist. `./tools/jump status` prints '⚠️ docs/STATUS.md missing — there is no single source of truth' and returns rc=1 on a clean checkout. The command built today (co |
 | `tools/jump:2717-2718 (wizard) and web/index.html:7` | Wizard step 3 instructs 'Make sure the 4 sensor wires are connected … VCC→3V3 GND→GND SDA→SDA(IO21) SCL→SCL(IO22)'; index.html's header comment says ' | Both are ESP32 + external MPU-6050 era. The current product board has an on-board LSM6DS3TR-C and no wiring step. The wizard would then call cmd_flash, which builds firebeetle32 only (firmwa |
 | `web/app.js:1372 (Install-tab fallback) and BUILD.md:302` | 'To build and flash them yourself, run ./tools/jump flash — it builds the firmware locally and uploads it over USB' / '`./tools/jump flash` / settings | tools/jump:2420 issues `pio run -t upload` with no `-e`, so it always builds the ESP32 default env. Against the Sense it fails with 'A fatal error occurred: Failed to connect to ESP32' (data |
-| `README.md:35` | The puck is the "second unit" and "the original became the bench mule after an IMU-bus fault — full story in docs/rca-sense-imu-2026-08-11.md" | There was never an IMU-bus fault. DECISIONS #37 / SENSE_FIRST_BOOT.md:938-1004: GPIO drive strength; "Nothing was ever damaged." The original IS the product board again as of 2026-08-14 (ben |
-| `README.md:41-47` | "Watch-numbers bug, root-caused: Connect IQ negotiates the minimum BLE packet size, so jump lines fragment five ways and under-paced sending lost frag | Superseded. The confirmed defect (code read, 2026-08-14) is the ignored BLEUart::write() return in jh_link.cpp — ble-dependability.md:15-39 states pacing was not it. The firmware half was on |
-| `README.md:37` | Browser app: "in-browser flashing" listed with an unqualified green check | ESP Web Tools is ESP32-only; web/firmware/ holds only bootloader.bin/firmware.bin/partitions.bin. The Sense — the board README:218 tells you to build — has no browser flash path at all (sens |
+| `README.md:38` | The puck is the "second unit" and "the original became the bench mule after an IMU-bus fault — full story in docs/rca-sense-imu-2026-08-11.md" | There was never an IMU-bus fault. DECISIONS #37 / SENSE_FIRST_BOOT.md:938-1004: GPIO drive strength; "Nothing was ever damaged." The original IS the product board again as of 2026-08-14 (ben |
+| `README.md:44-57` | "Watch-numbers bug, root-caused: Connect IQ negotiates the minimum BLE packet size, so jump lines fragment five ways and under-paced sending lost frag | Superseded. The confirmed defect (code read, 2026-08-14) is the ignored BLEUart::write() return in jh_link.cpp — ble-dependability.md:15-39 states pacing was not it. The firmware half was on |
+| `README.md:40` | Browser app: "in-browser flashing" listed with an unqualified green check | ESP Web Tools is ESP32-only; web/firmware/ holds only bootloader.bin/firmware.bin/partitions.bin. The Sense — the board README:218 tells you to build — has no browser flash path at all (sens |
 | `docs/rca-sense-imu-2026-08-11.md:3-4` | "Verdict: hardware failure of the LSM6DS3TR-C (or its power path)... Firmware is exonerated by direct experiment." | Exactly inverted. The cause was firmware (pinMode selecting standard drive). The 08-12 addendum stops short of this; nothing marks the file superseded by the 08-14 answer, and README:35 stil |
 | `docs/rca-sense-imu-2026-08-11.md:172-176` | The shipped crash-loop guard is "a magic+flag pair in .noinit RAM" | .noinit does not exist in this core's linker scripts — measured. The guard lives in jh_persist (internal LittleFS), which "survives everything" (bench-playbook.md:145-148). |
 | `docs/rca-sense-imu-2026-08-11.md:191-198` | "Still open" list: old board's held bus unexplained; new board's QSPI mount fails; boot selftest 0.960g/0.0966 noise "benign-looking, unverified" | All three closed. Held bus = unpowered rail (16i). QSPI fixed 2026-08-13 (bd0334d — watchdog_feed stub in a nested namespace). The odd noise row is DECISIONS #35, fixed in dca2985. |
@@ -1166,8 +1197,8 @@ The worst offenders carry a SUPERSEDED banner pointing here.
 | `docs/roadmap.md:38-51` | Phase 2 checklist: all six boxes unchecked, including "Battery power" and "Waterproof capsule; bucket-test it empty first" | Battery is soldered on with working telemetry; the capsule was bought 2026-08-11 (Hammond 1551WHGY, BUILD.md:24). Neither box was ticked or annotated, so the roadmap reads as if nothing happ |
 | `docs/sense.md:3-6` | "Status: ALL-IN (owner, 2026-07-28). Board + 500 mAh battery ordered, arriving within days. Written before first power-on" | Three boards have been on silicon since 2026-07-31. The status banner is 17 days and one entire bring-up out of date. |
 | `docs/sense.md:14` | SENSE_FIRST_BOOT.md has "(21 items)" | It now runs to item 26 plus sections 16b through 16j — roughly 1,635 lines. |
-| `docs/sense.md:324-345` | "§7 VERIFY at bring-up (answer on the bench, then edit this doc)" — a 10-item list, entirely unannotated | The doc's own stated convention was not followed. Items 1, 2, 3 and 9 were answered on silicon (SENSE_FIRST_BOOT items 14, 15, 4, 10); item 4 (nRF Connect DFU) was superseded by tools/otadfu |
-| `docs/sense.md:288-300` | §5 power/runtime table headed "500 mAh means" — e.g. recording "~60-160 h" | 250 mAh installed. Every figure in the column is 2x optimistic. README:236 warns about this from outside; sense.md never fixed it, and the same 500 mAh appears at :36, :42, :122 and :340. |
+| `docs/sense.md:327-348` | "§7 VERIFY at bring-up (answer on the bench, then edit this doc)" — a 10-item list, entirely unannotated | The doc's own stated convention was not followed. Items 1, 2, 3 and 9 were answered on silicon (SENSE_FIRST_BOOT items 14, 15, 4, 10); item 4 (nRF Connect DFU) was superseded by tools/otadfu |
+| `docs/sense.md:291-303` | §5 power/runtime table headed "500 mAh means" — e.g. recording "~60-160 h" | 250 mAh installed. Every figure in the column is 2x optimistic. README:236 warns about this from outside; sense.md never fixed it, and the same 500 mAh appears at :36, :42, :122 and :340. |
 | `firmware/SENSE_FIRST_BOOT.md:390` | Item 14 heading: "Bluefruit two-central mechanics — re-derived from source, never run against real centrals" | Its own body at :415 reads "TWO CENTRALS RAN FOR REAL, 2026-08-11." The heading is the pre-silicon claim; a skim of headings gets the wrong answer. |
 | `firmware/SENSE_FIRST_BOOT.md:503` | Item 16b heading: "OTA DFU — the sealed box's only firmware path, and it is NOT yet trustworthy" | Its own body at :583 reads "GATE PASSED 2026-08-12 ~15:00" — two complete loops, checkpoint-verified, commit c4306d3. |
 | `firmware/SENSE_FIRST_BOOT.md:1314` | Item 24 heading: "Battery telemetry ADC accuracy — built 2026-08-04, never checked against a meter" | Two meter points in its own body (:1361-1365): 3490mV meter vs 3390 ADC, 4160 vs 4050, plus a full TACQ sweep and a shipped fix. |
@@ -1178,11 +1209,11 @@ The worst offenders carry a SUPERSEDED banner pointing here.
 | `docs/algorithm.md:78-79` | "overshoots by only 1.00-1.07x (vs the kite's 2.31x), with a Monte-Carlo physics-floor RMSE of ~4.2 cm" | 4.2 cm is the superseded N=5000 figure. The N=200,000 rerun gives 4.6 cm (DECISIONS #30, wing-ballistic-sim.md:57, README:125). algorithm.md is the doc README points at for "the physics." |
 | `sim/experiments/RESULTS.md:27,45` | E1 "100% detected"; "frac_detected = 1.000 (3072/3072)"; E2 "RMSE 4.2 cm" | The 2026-08-11 rerun killed "100% detected" — 5 silent misses in 200,000, all at the 0.35 g gate (DECISIONS #30). wing-ballistic-sim.md:56 marks E2 "superseded, see E2′"; RESULTS.md carries  |
 | `docs/data-pipeline.md:84-90` | Capture/labeling procedure: film at 240fps, count airborne frames, derive "true height from counted airtime frames" via h = g·T²/8 | docs/plan.md:63-73 (2026-08-14) rules this ground truth CIRCULAR — it scores the formula under test against a label built with the same formula, and passes whether or not wings are ballistic |
-| `docs/garmin-datafield.md:287-292` | §7: "Two concurrent BLE centrals — DONE (firmware v0.4.2)... the app re-advertises after each connect while getConnectedCount() < 2... NimBLE's own de | That is the ESP32/NimBLE path. The Sense runs Bluefruit.begin(2, 0) (jh_link.cpp:417). FIRST_COMPILE.md:163-168 warns explicitly against blaming the wrong platform's link layer, which is the |
-| `docs/garmin-datafield.md:223-224` | §5.5: "One developer-data UUID (constant in FitOut.mc)" | FIRST_COMPILE.md:399-412 found the confirmed createField() signature takes no UUID; DEVELOPER_DATA_ID is documentation-only. The spec still reads as if it is wired up. |
-| `docs/garmin-datafield.md:129-142` | §5.1: "Primary target device: Garmin Instinct 3 Solar (the rider's watch) — API 5.1, 176x176 semi-octagon MIP", with layout, dimming and font decision | The rider's watch is an Epix Gen 2, 416x416 round AMOLED; the Instinct belongs to his brother. The layout was rebuilt with chord math for the round screen (FIRST_COMPILE.md:119-124) after th |
+| `docs/garmin-datafield.md:312-317` | §7: "Two concurrent BLE centrals — DONE (firmware v0.4.2)... the app re-advertises after each connect while getConnectedCount() < 2... NimBLE's own de | That is the ESP32/NimBLE path. The Sense runs Bluefruit.begin(2, 0) (jh_link.cpp:417). FIRST_COMPILE.md:163-168 warns explicitly against blaming the wrong platform's link layer, which is the |
+| `docs/garmin-datafield.md:248-249` | §5.5: "One developer-data UUID (constant in FitOut.mc)" | FIRST_COMPILE.md:399-412 found the confirmed createField() signature takes no UUID; DEVELOPER_DATA_ID is documentation-only. The spec still reads as if it is wired up. |
+| `docs/garmin-datafield.md:154-167` | §5.1: "Primary target device: Garmin Instinct 3 Solar (the rider's watch) — API 5.1, 176x176 semi-octagon MIP", with layout, dimming and font decision | The rider's watch is an Epix Gen 2, 416x416 round AMOLED; the Instinct belongs to his brother. The layout was rebuilt with chord math for the round screen (FIRST_COMPILE.md:119-124) after th |
 | `BUILD.md (whole file)` | "the hardware-day runbook" — shopping list, MPU-6050 header soldering (:114-127), FireBeetle wiring table, wizard flow, partition-upgrade warning (:28 | Every word describes the frozen FireBeetle/ESP32 build, while README:218 says "Build this one — Seeed XIAO nRF52840 Sense." No Sense build runbook exists anywhere in the repo. DECISIONS #27  |
-| `docs/hardware.md:63-65` | "Accelerometer range: set ±8 g (or ±16 g). ...±8 g keeps free-fall resolution good while capturing landings." | The Sense ships ±16 g by deliberate decision (DECISIONS #25, lsm6ds3_min.h CTRL1_XL=0x54). README:240 sends readers here for "full BOM, wiring, power budget", and the whole page is ESP32-era |
+| `docs/hardware.md:77-79` | "Accelerometer range: set ±8 g (or ±16 g). ...±8 g keeps free-fall resolution good while capturing landings." | The Sense ships ±16 g by deliberate decision (DECISIONS #25, lsm6ds3_min.h CTRL1_XL=0x54). README:240 sends readers here for "full BOM, wiring, power budget", and the whole page is ESP32-era |
 | `DECISIONS.md:69-70 (#32, #33)` | #32: the off-path back-feed was "proven 'both directions' on silicon... the very day before the mule's sensor stopped ACKing". #33: "The Puck, a fresh | #37 (:74), five rows later, establishes that no board was ever damaged and drive strength explains every symptom including the intermittency. #32/#33 carry no superseded marker, so read alon |
 | `firmware/src/main.cpp:424 (shipped `help` text)` | "# commands: help / stats / jumps / trace / dump / clear / selftest / revive / i2cdiag / info / off / dfu / uf2 / fakejump / mount / format" | Omits `pincensus`, which exists at main.cpp:512 and which DECISIONS #38, xiao-hardware-truth.md:91 and bench-playbook.md:129 all designate as THE first diagnostic to run before any hardware  |
 

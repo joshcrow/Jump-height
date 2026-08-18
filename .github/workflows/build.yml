@@ -1,10 +1,13 @@
-# Builds the firmware and publishes the web app (with flasher binaries) to
-# GitHub Pages — this is what makes the zero-install story real: anyone can
-# open the Pages URL, click Install, and flash a board from the browser.
-# Also builds the Sense (nRF52) target and publishes a drag-and-drop `.uf2`
-# next to the ESP32 binaries (docs/sense.md §3.3/§3.9) — that board has no
-# ESP Web Tools-style browser flasher, so the .uf2 + the bootloader's own
-# double-tap-reset "XIAO-SENSE" USB drive is the whole flashing story for it.
+# Builds the firmware and publishes the web app to GitHub Pages.
+#
+# The Sense (nRF52) is the only firmware target since the ESP32 v1 platform was
+# retired on 2026-08-18 (commit 12480c6) — which also removed the in-browser
+# flasher, because ESP Web Tools cannot flash that board. What survives of the
+# zero-install story is the drag-and-drop `.uf2` published here next to the web
+# app (docs/sense.md §3.3/§3.9): that file plus the bootloader's own
+# double-tap-reset "XIAO-SENSE" USB drive is the whole browser-free flashing
+# path. Everything else flashes from the bench — `./tools/jump flash` over USB,
+# `tools/otadfu.py` over the air.
 #
 # One-time repo setup for the Pages half: Settings → Pages → Source: "GitHub
 # Actions". Until then, the pages job fails harmlessly and the firmware
@@ -68,36 +71,25 @@ jobs:
         # params.gen.h would silently ship wrong detector thresholds.
         run: python3 tools/gen_params.py --check
 
-      - name: Build firmware
-        run: |
-          pip install platformio
-          pio run -d firmware -e firebeetle32
-
       - name: Build firmware (Sense / nRF52)
-        # A separate step (not folded into the one above) so a failure here
-        # is unambiguous in the Actions log about which target broke.
-        # continue-on-error: a Sense-only regression must not block the
-        # ESP32 build/upload or the web/Pages publish below (uploads still
-        # happen further down this same job) — the "Enforce Sense build
-        # result" step at the end turns this loud again once they have.
+        # The only firmware target: the firebeetle32 (ESP32 v1) env this step
+        # used to run alongside was deleted with the platform on 2026-08-18
+        # (commit 12480c6), and firmware/platformio.ini no longer defines it.
+        # continue-on-error: the web app is a plain static page that does not
+        # depend on any firmware binary, so a firmware regression must not
+        # block the web/Pages publish below (uploads still happen further down
+        # this same job) — the "Enforce Sense build result" step at the end
+        # turns this loud again once they have.
         id: build_sense
         continue-on-error: true
-        run: pio run -d firmware -e xiaoblesense_adafruit
-
-      - name: Stage web app + flasher binaries
         run: |
-          mkdir -p web/firmware
-          cp firmware/.pio/build/firebeetle32/bootloader.bin web/firmware/
-          cp firmware/.pio/build/firebeetle32/partitions.bin web/firmware/
-          cp firmware/.pio/build/firebeetle32/firmware.bin   web/firmware/
-          # No boot_app0.bin: the partition map is factory-only (no OTA), so the
-          # manifest doesn't flash an OTA selector — same bytes as a USB flash.
-          ls -la web/firmware/
+          pip install platformio
+          pio run -d firmware -e xiaoblesense_adafruit
 
       - name: Convert Sense firmware to .uf2
         # Only attempted if the Sense build actually produced a .hex, and
-        # itself continue-on-error, so a conversion regression can't block
-        # ESP32/web/Pages either — same reasoning as the build step above.
+        # itself continue-on-error, so a conversion regression can't block the
+        # web/Pages publish either — same reasoning as the build step above.
         # This step both converts AND stages the result into web/firmware/,
         # so gating it on build_sense having succeeded is what keeps a
         # half-built/missing .uf2 out of web/ when Sense regresses.
@@ -109,6 +101,9 @@ jobs:
         # passed as a raw hex literal since we don't vendor the companion
         # uf2families.json name table (see uf2conv.py's own comment on why).
         run: |
+          # web/firmware/ is gitignored and was previously created by the
+          # (now-removed) ESP32 staging step, so create it here.
+          mkdir -p web/firmware
           FW_VERSION=$(grep -oP '#define\s+FW_VERSION\s+"\K[^"]+' firmware/src/main.cpp)
           python3 tools/uf2conv.py \
             firmware/.pio/build/xiaoblesense_adafruit/firmware.hex \
@@ -120,30 +115,31 @@ jobs:
         with:
           name: firmware-binaries
           path: web/firmware/
+          if-no-files-found: warn  # explicit: Sense-build failure leaves no dir; the enforce step still fails the run
 
-      - name: Upload Pages artifact (web app + binaries)
+      - name: Upload Pages artifact (web app + .uf2)
         uses: actions/upload-pages-artifact@v3
         with:
           path: web/
 
       - name: Enforce Sense build result
-        # The Sense/.uf2 steps above are continue-on-error so a Sense-only
-        # regression can never block the ESP32 firmware or the web/Pages
-        # publish (both already uploaded above, unaffected) — but a real
-        # regression must still fail this workflow loudly rather than go
-        # silently green forever. steps.*.outcome (unlike .conclusion)
-        # reflects the step's real pass/fail, ignoring continue-on-error.
+        # The Sense/.uf2 steps above are continue-on-error so a firmware
+        # regression can never block the web/Pages publish (already uploaded
+        # above, unaffected) — but a real regression must still fail this
+        # workflow loudly rather than go silently green forever.
+        # steps.*.outcome (unlike .conclusion) reflects the step's real
+        # pass/fail, ignoring continue-on-error.
         if: steps.build_sense.outcome == 'failure' || steps.convert_sense.outcome == 'failure'
         run: |
-          echo "::error::Sense (nRF52) build or .uf2 conversion failed — see the 'Build firmware (Sense / nRF52)' / 'Convert Sense firmware to .uf2' steps above. ESP32 firmware and the web/Pages artifacts were still published."
+          echo "::error::Sense (nRF52) build or .uf2 conversion failed — see the 'Build firmware (Sense / nRF52)' / 'Convert Sense firmware to .uf2' steps above. The web/Pages artifact was still published, without a .uf2."
           exit 1
 
   pages:
     needs: firmware
-    # A Sense-only regression makes the firmware job's own conclusion
-    # `failure` (its last step turns that loud on purpose — see above), but
-    # the ESP32 + web/Pages artifacts were already uploaded earlier in that
-    # same job, so publishing them must not be skipped just because of it.
+    # A firmware regression makes the firmware job's own conclusion `failure`
+    # (its last step turns that loud on purpose — see above), but the web/Pages
+    # artifact was already uploaded earlier in that same job, so publishing it
+    # must not be skipped just because of it.
     if: (success() || failure()) && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment:

@@ -10,7 +10,7 @@ CoM specific force:
   * the rotation-arm term (the sensor is off the CoM, so a spin adds
     centripetal omega^2*r even in ballistic flight — the primary false positive
     for the self-diagnosis signal, exercised by experiment E4),
-  * sensor noise + range clipping (+-16 g Sense / +-8 g ESP32),
+  * sensor noise + range clipping (+-16 g on the Sense's LSM6DS3TR-C),
 resampled onto the 200 Hz sample grid the detector consumes.
 
 The output (times, mag_g) is exactly the (t, |a|) stream detector.Detector
@@ -41,7 +41,7 @@ class SensorConfig:
     landing_g: float = 4.8        # landing spike peak (Simons 2025: 4.2-5.5 g)
     landing_s: float = 0.03       # spike duration
     noise_g: float = 0.02         # per-sample gaussian sensor noise
-    clip_g: float = 16.0          # accel range (Sense +-16 g; use 8.0 for ESP32)
+    clip_g: float = 16.0          # accel full-scale range (Sense: +-16 g)
     # Rotation confound: a constant spin of `spin_rps` about an axis with the
     # sensor at lever arm `lever_m` from the CoM adds omega^2*r centripetal.
     spin_rps: float = 0.0

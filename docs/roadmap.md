@@ -1,5 +1,11 @@
 # Roadmap
 
+> **2026-08-18:** the ESP32/v1 platform this roadmap was written around is
+> retired (owner decision — see STATUS.md "HARDWARE DEPRECATION"). The browser
+> flasher, NimBLE stack and partition-map plans below are historical; the
+> product is the XIAO nRF52840 Sense only. Kept for the reasoning trail.
+
+
 > ## ⚠️ SUPERSEDED IN PART — check [docs/STATUS.md](STATUS.md) first
 >
 > This file contains claims that were true when written and are now known to be

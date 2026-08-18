@@ -4,8 +4,8 @@
 STRETCH utility (see the host-platform port notes): bridges a pty — the
 same kind of device node a real board shows up as — to the REAL
 firmware core (firmware/src/main.cpp, built for firmware/platformio.ini's
-env:host via `pio run -e host`). Byte-for-byte the same core the esp32/nrf52
-boards run; only the platform seams underneath it (firmware/src/platform/
+env:host via `pio run -e host`). Byte-for-byte the same core the nrf52
+board runs; only the platform seams underneath it (firmware/src/platform/
 host/**) differ. Lets any serial-speaking client (a terminal program,
 pyserial, ./tools/jump's own low-level SerialPort) drive the real command
 dispatch / self-test / motion gate / emit layer exactly as it would a real

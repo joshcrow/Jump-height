@@ -1,5 +1,30 @@
 # Garmin wrist companion — deep scope & build spec
 
+> ## ⚠️ SUPERSEDED IN PART — check [docs/STATUS.md](STATUS.md) first
+>
+> This file contains claims that were true when written and are now known to be
+> WRONG. It is kept for its reasoning trail, not for its status. `STATUS.md` is
+> the single source of truth; where they disagree, this file is stale.
+>
+> - **The Status block below is out of date on two counts.** The test count is
+>   not 24/24 — it is 44 `(:test)` functions, all passing on both device targets.
+>   And **M2 is CLOSED as of 2026-08-18**: the field rendered 3 reconciled desk
+>   tosses plus 10 live `fakejump`s on the owner's Epix Gen 2, and the saved
+>   activity's FIT carried the developer fields. The corruption bug the block
+>   describes as open was root-caused (ATT_MTU-23 fragmentation, not pacing) and
+>   fixed on both ends.
+> - **§5.2's "absent on the ESP32/FireBeetle build by design" and §7's "Two
+>   concurrent BLE centrals — DONE (firmware v0.4.2) … NimBLE's own default max
+>   is 3 … tested watch + phone live" describe the wrong BLE stack.** The watch's
+>   only peer is the nRF52/Bluefruit puck (`Bluefruit.begin(kMaxPrphConnections, 0)`, `kMaxPrphConnections = 2` —
+>   `firmware/src/platform/nrf52/jh_link.cpp:167,420`); NimBLE was the ESP32 path,
+>   and that whole platform was **retired 2026-08-18**. The ESP32 caveat on the
+>   battery adder keys is therefore moot — every shipping board measures vbat.
+>   Worse, "tested watch + phone live" is the exact two-central configuration in
+>   which the corrupted values were observed, so it must not be read as a
+>   passing result. `garmin/FIRST_COMPILE.md:163-168` warns specifically against
+>   diagnosing this link from the other platform's link layer.
+
 **Status:** scaffold built and integrated; **first compile succeeded 2026-08-04**
 (SDK 9.2.0, `BUILD SUCCESSFUL`, **24/24 simulator unit tests pass**,
 five rounds to green — see [../garmin/FIRST_COMPILE.md](../garmin/FIRST_COMPILE.md)).

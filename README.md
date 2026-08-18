@@ -22,8 +22,11 @@ Every software step is one command via `./tools/jump`, and all of it is
 ./tools/jump report           # stuck? one bundle with everything needed to debug
 ```
 
-New here? **[BUILD.md](BUILD.md)** is the hardware runbook,
-**[DECISIONS.md](DECISIONS.md)** is what was chosen and why.
+New here? **[DECISIONS.md](DECISIONS.md)** is what was chosen and why.
+**[BUILD.md](BUILD.md)** is the hardware runbook **for the retired v1
+(FireBeetle ESP32 + MPU-6050) build only** — shopping list, soldering, wiring.
+For the board you should actually build, the Sense, the current reference is
+**[`docs/sense.md`](docs/sense.md)**; no Sense-specific runbook exists yet.
 
 ---
 
@@ -33,18 +36,24 @@ New here? **[BUILD.md](BUILD.md)** is the hardware runbook,
 |---|---|
 | **Detection algorithm** | ✅ Proven in sim and on the bench. Shared C++ core, mirrored in Python. |
 | **The puck** — XIAO nRF52840 Sense | ✅ On silicon, second unit (sensor + gyro verified; the original became the bench mule after an IMU-bus fault — full story in [`docs/rca-sense-imu-2026-08-11.md`](docs/rca-sense-imu-2026-08-11.md)). Fully wireless firmware pipeline: OTA update gate passed twice back-to-back, bootloader itself upgraded over the air. |
-| **v1 prototype** — FireBeetle ESP32 | 🧊 **Feature-frozen**, bugfix-only (DECISIONS #27). Bench-validated, and still the rig booked for the first water day until the Sense passes the same gauntlet — then it retires to spare. |
-| **Browser app** | ✅ Live BLE stats, session sync, charts, in-browser flashing. |
-| **Garmin watch field** | 🟡 **Live on the wrist** (Epix Gen 2, 2026-08-11) — a real toss registered. Numbers are **not yet trustworthy**: see the open bug below. |
+| **v1 prototype** — FireBeetle ESP32 | 🪦 **Retired 2026-08-18** (owner decision), not merely frozen. It is the rig the algorithm was proven on and it stays listed as history — but the platform code, its PlatformIO envs, its partition map and the browser flasher are all deleted, so it cannot be built, flashed or flown any more. The Sense carries the water day. See [`docs/STATUS.md`](docs/STATUS.md) → *HARDWARE DEPRECATION*. |
+| **Browser app** | ✅ Live BLE stats, session sync, charts. In-browser flashing was **removed 2026-08-18** with the ESP32 platform (ESP Web Tools cannot flash an nRF52). The Sense flashes by `.uf2` drag-drop or `./tools/jump flash` over USB, and over the air via `tools/otadfu.py`. |
+| **Garmin watch field** | ✅ **M2 closed 2026-08-18** — jumps rendered on a real wrist (Epix Gen 2): 3 stored desk tosses reconciled on connect, then 10 live `fakejump`s one by one, and the saved activity's FIT carries the developer fields. |
 | **Phase 2 — the water day** | 🌊 **Next.** Nothing here has been in the ocean yet. |
 
-**Watch-numbers bug, root-caused:** Connect IQ negotiates the minimum BLE
-packet size, so jump lines fragment five ways and under-paced sending lost
-fragments — the watch then displayed values the puck never sent. Fixed on both
-ends (puck paces to the negotiated link; the watch rejects lines that fail
-protocol invariants instead of displaying them). On-wrist validation of the fix
-is the next watch session; the two confidently-wrong diagnoses along the way are
-kept as dead ends in [`garmin/FIRST_COMPILE.md`](garmin/FIRST_COMPILE.md).
+**Watch-numbers bug, root-caused and now closed on the wrist (2026-08-18).**
+Connect IQ negotiates the minimum BLE packet size, so jump lines fragmented five
+ways and under-paced sending lost fragments — the watch then displayed values the
+puck never sent. Fixed on both ends (puck paces to the negotiated link; the watch
+rejects lines that fail protocol invariants instead of displaying them). On the
+closing run the field found and paired a puck by itself, reconciled the 3 stored
+desk tosses on connect, then rendered 10 live `fakejump`s one by one, and the
+saved activity's FIT carried `jumps=13` / `best_jump=4.216 ft` — the 1.285 m desk
+toss, in the owner's units. Full account and the remaining watch work (Instinct
+field sizes, the background-page test, watch self-health) are in
+[`docs/STATUS.md`](docs/STATUS.md); the two confidently-wrong diagnoses along the
+way are kept as dead ends in
+[`garmin/FIRST_COMPILE.md`](garmin/FIRST_COMPILE.md).
 
 ---
 
@@ -165,22 +174,27 @@ flowchart LR
     Sense -->|binary trace| QSPI["External QSPI flash"]
     Bat2["250 mAh LiPo"] --> Sense
 
-    IMU1["IMU (accel only)\nMPU-6050"] -->|I²C ~200 Hz| ESP32["FireBeetle 2 ESP32-E\n(v1 prototype, frozen)"]
-    ESP32 -->|jump-detection\nstate machine| ESP32
-    ESP32 -->|BLE notify — NUS| Phone
-    ESP32 -->|CSV log| Flash["On-board flash"]
-    Bat1["2500 mAh LiPo"] --> ESP32
+    %% historical branch — retired 2026-08-18, drawn dashed, no longer buildable
+    IMU1["IMU (accel only)\nMPU-6050"] -.->|I²C ~200 Hz| ESP32["FireBeetle 2 ESP32-E\n(v1 prototype — RETIRED 2026-08-18)"]
+    ESP32 -.->|jump-detection\nstate machine| ESP32
+    ESP32 -.->|BLE notify — NUS| Phone
+    ESP32 -.->|CSV log| Flash["On-board flash"]
+    Bat1["2500 mAh LiPo"] -.-> ESP32
+    style ESP32 stroke-dasharray: 5 5
 ```
+
+The dashed branch is history, kept so the two-board story stays legible. That
+platform's code was deleted on 2026-08-18 — git keeps it, the build does not.
 
 One detector, three places it runs, kept deliberately in sync:
 
 - **[`firmware/`](firmware/)** — the shared C++ detector
   (`include/jump_detector.h`) runs unmodified on every board; a thin platform
-  seam (`src/platform/{esp32,nrf52,host}/`) supplies the IMU/BLE/storage glue
-  per chip. `host` compiles the real firmware core natively for the test suite,
-  so most bugs die without a board. The two-board split is why: keeping the
-  detector chip-neutral is what let the project change chips without rewriting
-  the thing that actually measures jumps.
+  seam (`src/platform/{nrf52,host}/` — `esp32/` was deleted 2026-08-18)
+  supplies the IMU/BLE/storage glue per chip. `host` compiles the real firmware
+  core natively for the test suite, so most bugs die without a board. The
+  two-board split is why: keeping the detector chip-neutral is what let the
+  project change chips without rewriting the thing that actually measures jumps.
 - **[`sim/`](sim/)** — a pure-Python mirror (`detector.py`) plus a synthetic-data
   generator and a physics model of a wing jump, so the algorithm can be developed,
   tuned and *statistically characterised* with no hardware at all.
@@ -221,14 +235,16 @@ puck, bring-up complete on real silicon, and the only build that talks to a
 Garmin watch. Spec and gap analysis: [`docs/sense.md`](docs/sense.md).
 
 <details>
-<summary><b>v1 prototype — FireBeetle ESP32 + MPU-6050</b> (frozen; kept honest, not recommended for new builds)</summary>
+<summary><b>v1 prototype — FireBeetle ESP32 + MPU-6050</b> (RETIRED 2026-08-18; history, not a build option)</summary>
 
 DFRobot FireBeetle 2 ESP32-E + MPU-6050 + 2500 mAh LiPo + waterproof capsule.
-This is the rig the algorithm was actually proven on, and it is **feature-frozen
-— bugfix-only** (DECISIONS #27). It keeps water-day duty until the Sense clears
-the identical bench → drop-cal → bucket → water gauntlet, then retires to spare:
-measurement continuity over novelty (DECISIONS #24). Accel-only, ±8 g, and it
-does not drive the watch.
+This is the rig the algorithm was actually proven on. It was feature-frozen on
+2026-07-29 (DECISIONS #27) and **retired outright on 2026-08-18** — the platform
+seams, the MPU-6050 driver, the `firebeetle32` PlatformIO envs, the partition map
+and the browser flasher were all deleted, so this build can no longer be compiled
+or flashed. It never took water-day duty: the Sense carries that. Accel-only,
+±8 g, and it does not drive the watch. Git history keeps every line of it, and
+the reasoning is in [`docs/STATUS.md`](docs/STATUS.md) → *HARDWARE DEPRECATION*.
 
 </details>
 
@@ -236,8 +252,10 @@ Note on power: the Sense cell is **250 mAh** as actually installed, while much o
 `docs/sense.md`'s power arithmetic still assumes the 500 mAh part originally
 ordered (flagged at `docs/sense.md:138`) — halve those runtimes when reading it.
 
-Full BOM, wiring, power budget and **waterproofing notes** (the part that
-actually kills these projects): [`docs/hardware.md`](docs/hardware.md).
+**Waterproofing notes** (the part that actually kills these projects) and the
+general BOM/power-budget menu: [`docs/hardware.md`](docs/hardware.md) — but read
+its banner first: its Phase 1/2 part tables are the retired ESP32 + MPU-6050 era,
+not the Sense.
 
 ---
 
@@ -281,12 +299,12 @@ Jump-height/
 │   ├── blecmd.py        ← talk to the puck over BLE from the laptop (no phone)
 │   ├── chargelog.py     ← battery logging over serial → CSV
 │   └── fake_device.py   ← simulated device: rehearse and test with no hardware
-├── web/                 ← browser app: live BLE stats, session sync, flasher
+├── web/                 ← browser app: live BLE stats, session sync, charts
 ├── .github/workflows/   ← CI: full test suite + firmware build; publishes the
-│                          ESP32 binaries and the Sense .uf2 to Pages
+│                          Sense .uf2 to Pages
 ├── firmware/
 │   ├── include/jump_detector.h          ← portable detection state machine
-│   ├── src/platform/{esp32,nrf52,host}/ ← per-board glue (host = tests, no board)
+│   ├── src/platform/{nrf52,host}/       ← per-board glue (host = tests, no board)
 │   └── SENSE_FIRST_BOOT.md              ← the nRF52 doubt list (see above)
 ├── garmin/
 │   ├── jumpfield/       ← the Connect IQ data field

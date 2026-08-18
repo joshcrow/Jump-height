@@ -78,8 +78,11 @@ Ordered by how much they change the plan.
 
 ### 3.1 The BLE layer is a rewrite (the one real one)
 
-`firmware/src/platform/esp32/jh_link.cpp` (formerly `ble_link.h`) is
-written against NimBLE (ESP32-only). The Seeed/Adafruit
+`firmware/src/platform/esp32/jh_link.cpp` (formerly `ble_link.h`) was
+written against NimBLE (ESP32-only). *(That path was removed 2026-08-18 in the
+ESP32 deprecation — see STATUS.md; git history keeps it. The rewrite described
+below did happen, and the Bluefruit version now shipping lives at
+`firmware/src/platform/nrf52/jh_link.cpp`.)* The Seeed/Adafruit
 nRF52 core uses **Bluefruit**, whose `BLEUart` service IS the Nordic
 UART Service — likely *less* code than we have now, but different
 semantics: connection callbacks, per-connection MTU, TX buffering, and

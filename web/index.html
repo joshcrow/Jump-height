@@ -4,14 +4,18 @@
 
   One static, dependency-free page. No build step, no framework: it is served
   as-is by `./tools/jump web` at http://localhost:8765 and by GitHub Pages
-  later. It talks to the same ESP32 firmware two ways — Web Bluetooth (Nordic
-  UART Service) and Web Serial (USB) — using the *identical* newline protocol
-  the USB CLI uses, so there is exactly one protocol to learn and maintain.
+  later. It talks to the same nRF52/Sense firmware two ways — Web Bluetooth
+  (Nordic UART Service) and Web Serial (USB) — using the *identical* newline
+  protocol the USB CLI uses, so there is exactly one protocol to learn and
+  maintain.
 
   WHY plain HTML/CSS/JS: the owner is a non-engineer and this has to keep
-  working with zero maintenance for years. A CDN-flashing widget (ESP Web
-  Tools, on the Install tab) is the one external dependency, and it degrades
-  to a friendly note when the binaries or the internet aren't there.
+  working with zero maintenance for years. Nothing at all loads from the
+  internet: the page's one external dependency used to be a CDN-flashing
+  widget (ESP Web Tools, on the Install tab), and it was removed with the
+  ESP32 v1 platform on 2026-08-18 — the Sense flashes over USB
+  (`./tools/jump flash`) or over the air (`tools/otadfu.py`), neither of
+  which a browser can speak.
 
   The head/body skeleton is real here (unlike an Artifact) because this file is
   served directly. All app logic lives in app.js (an ES module); all styling in
@@ -22,7 +26,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Jump Height</title>
-  <meta name="description" content="Live stats, session history and browser flashing for the Jump Height wing-foil jump tracker." />
+  <meta name="description" content="Live stats and session history for the Jump Height wing-foil jump tracker." />
   <meta name="theme-color" content="#0e1116" media="(prefers-color-scheme: dark)" />
   <meta name="theme-color" content="#fcfcfb" media="(prefers-color-scheme: light)" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%231d55a0' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 6c.6.5 1.2 1 2.5 1C7 7 7 5 9.5 5c2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1'/%3E%3Cpath d='M2 12c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1'/%3E%3Cpath d='M2 18c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1'/%3E%3C/svg%3E" />
@@ -46,8 +50,9 @@
     })();
   </script>
   <link rel="stylesheet" href="style.css" />
-  <!-- Browser flasher. Loads from the internet; the Install tab explains that
-       and handles the offline / not-built-yet cases gracefully. -->
+  <!-- All app logic. A local ES module — the browser flasher that used to load
+       from a CDN alongside it left with the ESP32 v1 platform (2026-08-18), so
+       this page now fetches nothing from the internet. -->
   <script type="module" src="app.js"></script>
 </head>
 <body>
@@ -163,13 +168,15 @@
       </div>
 
       <!-- Install lives here, not in top-level navigation: flashing firmware is
-           a once-per-device task, and navigation should be weighted by use. -->
+           a once-per-device task, and navigation should be weighted by use.
+           This is a signpost, not a flasher: the in-browser flashing this card
+           used to offer went away with the ESP32 v1 platform (2026-08-18).
+           app.js fills #install-container with the commands that replace it. -->
       <div class="mt">
         <h3>New device</h3>
-        <p class="muted small">Flash a blank board straight from this page — no software to
-        install. Chrome or Edge on a computer, USB cable.</p>
+        <p class="muted small">Firmware is flashed from a computer over USB, or sent to
+        the puck over the air — not from this page.</p>
         <div id="install-container"></div>
-        <div id="install-note" class="card" hidden></div>
       </div>
     </section>
 

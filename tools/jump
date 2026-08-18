@@ -217,9 +217,13 @@ class SerialPort:
 
 KNOWN_USB_GLOBS = [
     "/dev/ttyUSB*", "/dev/ttyACM*",
-    # macOS: always the cu.* device, never tty.* (tty blocks on carrier-detect)
-    "/dev/cu.usbserial*", "/dev/cu.wchusbserial*", "/dev/cu.SLAB*",
+    # macOS: always the cu.* device, never tty.* (tty blocks on carrier-detect).
+    # The Sense is native USB CDC, so cu.usbmodem* is the live pattern; the
+    # usbserial/wchusbserial/SLAB entries are vestigial USB-serial-bridge
+    # patterns from the retired ESP32 boards, kept only so an old board on
+    # someone's desk still shows up in this pyserial-less fallback.
     "/dev/cu.usbmodem*",
+    "/dev/cu.usbserial*", "/dev/cu.wchusbserial*", "/dev/cu.SLAB*",
 ]
 
 
@@ -243,8 +247,9 @@ def autodetect_port() -> str:
         return candidates[0]
     if not candidates:
         raise SystemExit(
-            "No USB serial device found. Plug the FireBeetle in (data USB cable, "
-            "not charge-only), or pass --port /dev/ttyUSB0")
+            "No USB serial device found. Plug the board in (data USB cable, "
+            "not charge-only), or pass --port /dev/cu.usbmodem101 "
+            "(Linux: /dev/ttyACM0)")
     raise SystemExit(
         f"Multiple serial devices found: {', '.join(candidates)} — pick one with --port")
 
@@ -441,7 +446,10 @@ def open_device(args, fake_scenario: str = "ok", fake_extra: list[str] | None = 
         port = None
     if not port:
         port = autodetect_port()
-    print(f"Connecting to {port} (the board resets when the port opens — normal)...")
+    # No "the board resets when the port opens" note: that was the ESP32
+    # auto-download circuit. The Sense is native USB CDC and keeps running
+    # across an open (SENSE_FIRST_BOOT.md item 10, silicon 2026-07-31).
+    print(f"Connecting to {port}...")
     try:
         dev = Device(port)
     except OSError as e:  # pyserial's SerialException is an OSError too
@@ -1344,12 +1352,6 @@ def cmd_sync(args) -> int:
 
         # A capped trace can't cover the whole session, so live-vs-offline
         # disagreement is expected and NOT a detector problem — don't cry wolf.
-        try:
-            with open(CONFIG_PATH) as f:
-                _cap = int(json.load(f).get("firmware", {})
-                           .get("trace_max_bytes", 2000000))
-        except (OSError, ValueError):
-            _cap = 2000000
         # DISABLED (review 2026-08-14): trace_max_bytes is an ESP32-era
         # CSV-on-flash constant that the nRF52 store explicitly does NOT use —
         # its real cap is the physical trace region, ~5.3 h of moving time.
@@ -2514,9 +2516,10 @@ In order of likelihood:
      power, NOT data). Most spare micro-USB cables are charge-only.
   2. Different USB port, or plug in directly instead of through a hub.
   3. macOS + no port even with a good cable: check  > About This Mac >
-     System Report > USB. If a CH340/USB-Serial device shows there but no
-     /dev/cu.usbserial* exists, install the CH34x driver (older macOS
-     doesn't bundle it), approve it in Privacy & Security, reboot.
+     System Report > USB. The board is native USB (no CH34x/CP210x driver
+     to install) — if it doesn't appear there at all, the cable or port is
+     the problem. If it appears but no /dev/cu.usbmodem* exists, double-tap
+     RESET — the UF2 bootloader mounts as an XIAO-SENSE drive (docs/sense.md).
 If you're certain it's connected anyway: ./tools/jump flash --port <port>""")
             return 1
         if len(ports) > 1:
@@ -2631,32 +2634,13 @@ def cmd_eval(args) -> int:
 # this is the way to run the app during development.
 
 
-def stage_firmware(web_dir: Path) -> None:
-    """Copy a fresh firmware build into web/firmware/ for the browser flasher.
-
-    ESP Web Tools (the app's Install tab) flashes three files: the bootloader,
-    the partition table, and the app image — all from the PlatformIO build dir.
-    (No boot_app0.bin: that's the OTA-slot selector, and our partition map is
-    factory-only with no OTA, so flashing it would just scribble on the unused
-    phy_init region and diverge from what a USB flash writes.) If the build
-    hasn't happened yet we just say so — the app already degrades to a friendly
-    'not built yet' note when the binaries aren't served.
-    """
-    build = REPO / "firmware" / ".pio" / "build" / "firebeetle32"
-    wanted = ["bootloader.bin", "partitions.bin", "firmware.bin"]
-    if not all((build / f).exists() for f in wanted):
-        print("Firmware binaries aren't built yet — the app's Install tab will "
-              "say so.\n(Run  ./tools/jump flash  to build them.)\n")
-        return
-    out = web_dir / "firmware"
-    out.mkdir(parents=True, exist_ok=True)
-    for f in wanted:
-        shutil.copy2(build / f, out / f)
-    # Drop a stale boot_app0 from an older staging so the served set matches
-    # the manifest exactly.
-    (out / "boot_app0.bin").unlink(missing_ok=True)
-    print(f"Staged firmware into {out} for the in-browser flasher: "
-          + ", ".join(wanted) + "\n")
+# REMOVED 2026-08-18: stage_firmware(). It copied firmware/.pio/build/
+# firebeetle32/{bootloader,partitions,firmware}.bin into web/firmware/ for the
+# ESP Web Tools install button (DECISIONS #20/#21). Both ends are gone: the
+# firebeetle32 PlatformIO env was deleted with the ESP32 platform (commit
+# 12480c6), so the source path can never be populated, and web/app.js no longer
+# fetches or reads anything under web/firmware/. Flashing now goes through
+# ./tools/jump flash (USB) or tools/otadfu.py (BLE DFU).
 
 
 def cmd_web(args) -> int:
@@ -2667,8 +2651,6 @@ def cmd_web(args) -> int:
     if not (web_dir / "index.html").exists():
         print(f"❌ no browser app found at {web_dir} — is the repo intact?")
         return 1
-
-    stage_firmware(web_dir)
 
     port = args.port
     url = f"http://localhost:{port}/"
@@ -2763,7 +2745,7 @@ def wizard_connect(args, st: dict) -> str | None:
         if sys.stdin.isatty():
             input(">> Unplugged (or it never was plugged in)?  [Enter] ")
         before = set(scan_ports())
-    print("\n  Now plug the FireBeetle into this computer with a USB DATA cable.")
+    print("\n  Now plug the board into this computer with a USB DATA cable.")
     print("  (Charge-only cables are the #1 gotcha — if in doubt, try another cable.)")
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
@@ -2776,9 +2758,10 @@ def wizard_connect(args, st: dict) -> str | None:
     print("""  ❌ No new serial device appeared in 60s. In order of likelihood:
      1. The USB cable is charge-only — swap cables (most common by far).
      2. Try a different USB port / skip any hub.
-     3. macOS: open  > About This Mac > System Report > USB — if the board
-        shows up there but no /dev/cu.* port exists, the USB-serial chip
-        driver is missing (search: "CH34x macOS driver" or "CP210x driver").
+     3. macOS: open  > About This Mac > System Report > USB — the board is
+        native USB, so no driver to install; if it shows there but no
+        /dev/cu.usbmodem* appears, double-tap RESET (the UF2 bootloader
+        mounts as an XIAO-SENSE drive) and try again.
      4. Run ./tools/jump report and send the file to Claude.""")
     return None
 
@@ -2848,9 +2831,13 @@ def cmd_wizard(args) -> int:
             if cmd_selftest(_ns(args)) != 0:
                 return bail("Self-test failed.")
         else:
-            print("  Make sure the 4 sensor wires are connected (BUILD.md wiring table):")
-            print("    VCC→3V3   GND→GND   SDA→SDA(IO21)   SCL→SCL(IO22)")
-            if not _confirm(args, "Wired up and plugged in — flash the firmware now?"):
+            # No wiring step: the XIAO nRF52840 Sense carries its IMU on-board
+            # (docs/xiao-hardware-truth.md). The 4-wire GY-521 table this used
+            # to print belongs to the retired ESP32/FireBeetle v1 build — see
+            # BUILD.md's SUPERSEDED banner. Retired 2026-08-18 with the ESP32
+            # platform (commit 12480c6 fixed cmd_flash but missed this step).
+            print("  Nothing to wire — the board's motion sensor is on-board.")
+            if not _confirm(args, "Board plugged in — flash the firmware now?"):
                 return bail("Flash skipped.")
             if cmd_flash(_ns(args)) != 0:
                 return bail("Flashing or the wiring self-test failed (hints above).")
