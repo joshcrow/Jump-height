@@ -40,6 +40,26 @@ do not.**
 
 ## CHANGED AFTER THE AUDIT (2026-08-14, later the same day)
 
+### Spare board soak-gated on the fast-charge-fix build (2026-08-18 afternoon)
+- **State:** proven-on-hardware. A spare (owner plugged in one of the two;
+  which one is irrelevant to the gate) now runs `src=66b5137b` — the
+  fast-charge-fix build — and passed **selftest 5/5 (all rows) and revive
+  5/5** over USB. Task #14 closed.
+- **Why it matters tonight:** `66b5137b` had never booted on silicon (the OG
+  runs its predecessor). The spare pathfound it, so the OG's post-death-run
+  flash tonight is a known-booting image, not a first flight.
+- **Flash note for the record:** the first upload looked dead — the
+  "Activating new firmware" reset raced the port-open probe. A plain retry
+  booted clean. Distinct from the stale-zip trap (build was clean); lesson:
+  give a fresh flash ~20 s before declaring it dark.
+- **Off/wake soak slice deferred:** this spare has no battery, so
+  unplug/replug is a cold boot, not a System OFF wake. That slice only means
+  something on the battery board, which has ≥20 lifetime off/wake cycles.
+- **No-battery fingerprint:** floating divider read "3745 mV/24 %" then
+  "4136 mV/97 %" twenty minutes apart — a useful signature for recognising a
+  cell-less board from its own telemetry.
+
+
 ### Fast charge — ROOT CAUSE FOUND: the feature was never in any binary
 - **State:** cause proven (hichg readback + preprocessor); fix built as
   `src=66b5137b`, clean-built, simtest-clean, **flashes at tonight's recharge**.
