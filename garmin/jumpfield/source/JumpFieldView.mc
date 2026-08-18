@@ -195,6 +195,14 @@ class JumpFieldView extends WatchUi.DataField {
         // deliberately starts a tier below the status line so the glanceable
         // thing on the glass is the state, not the puck's name.
         var countText = _model.jumpCount().toString() + " jumps";
+        // Corruption tally, P1 "show its own health": every line the gates
+        // dropped, on the glass. The whole integrity design rests on "a
+        // rejected line is dropped and counted, never rendered" — this is
+        // where the COUNT becomes visible instead of dying in a hidden var.
+        // Silent-when-zero: the marker appearing at all is the news.
+        if (_model.rejectedCount() > 0) {
+            countText += " !" + _model.rejectedCount().toString();
+        }
         var nameX = hLeft + dotR * 2 + gap;
         var minGap = w / 16;
         var headerFont = _fitPair(dc, _puckName, countText,
