@@ -110,6 +110,12 @@ A rider's body between a board-mounted puck and a wrist watch is a wet
   key-management failure mode to a device with no display, for a
   threat model (someone in BLE range spoofing jump heights) that does
   not justify it. Revisit only if `dfu` stays open (§6).
+  **Observed in the first live multi-puck session (the M2 test):** with two
+  pucks on-air the watch connected to whichever it found first — it picked
+  the dying OG over the fresh spare. Correct for one-puck life; for the
+  quiver, per-puck selection already works today by setting the field's
+  `puckName` property to a full unique name ("JumpHeight-45ED") — a
+  settings-UX story, not a firmware gap.
 
 ### Layer 5 — the user must be able to tell states apart
 Today the watch shows one "no BLE" appearance whether the puck is
