@@ -21,7 +21,7 @@
 //   READY                      — boot complete
 //   STATE recording|idle       — motion gate transitions
 //   JUMP n=.. airtime_raw_s=.. airtime_s=.. height_m=.. height_ft=.. best_m=..
-//   STATS session_jumps=.. session_best_m=.. stored_jumps=.. stored_best_m=.. trace_bytes=..
+//   STATS session_jumps=.. session_best_m=.. session_best_airtime_s=.. stored_jumps=.. stored_best_m=.. trace_bytes=..
 //   INFO fw=.. sample_hz=.. log_hz=.. ble=1 / PARAMS <key=value ...>
 //   FILE <name> BEGIN ... FILE <name> END
 //   OK <cmd> | ERR <detail>    — every typed command finishes with one of these
@@ -116,6 +116,12 @@ static bool ble_ok    = false;  // BLE stack came up; reported by the self-test
 // Session stats (since this power-up) + stored stats (across power-ups)
 static uint32_t session_jumps = 0;
 static float    session_best  = 0.0f;
+static float    session_best_airtime = 0.0f;  // best airtime this session — on
+                                              // STATS so the watch can reseed it
+                                              // after a dropout (FIT parse of
+                                              // 2026-08-18 found best_jump
+                                              // reconciled but best_airtime
+                                              // stuck at the live-seen max)
 static uint32_t stored_jumps  = 0;
 static float    stored_best   = 0.0f;
 // 64-bit microsecond timebase: 32-bit micros() wraps at ~71.6 min, which is
@@ -606,13 +612,13 @@ static void handleCommand(const String& cmd) {
                (unsigned long)jh_link::tx_drops());
     }
     if (vbat >= 0) {
-      emitf("STATS session_jumps=%lu session_best_m=%.3f stored_jumps=%lu stored_best_m=%.3f trace_bytes=%lu vbat_mv=%d batt_pct=%d chg=%d%s%s%s%s\n",
-            (unsigned long)session_jumps, session_best,
+      emitf("STATS session_jumps=%lu session_best_m=%.3f session_best_airtime_s=%.3f stored_jumps=%lu stored_best_m=%.3f trace_bytes=%lu vbat_mv=%d batt_pct=%d chg=%d%s%s%s%s\n",
+            (unsigned long)session_jumps, session_best, session_best_airtime,
             (unsigned long)stored_jumps, stored_best, (unsigned long)jh_store::trace_bytes(),
             vbat, jh_power::batt_pct(), jh_power::charging(), fs_key, fail_key, drop_key, up_key);
     } else {
-      emitf("STATS session_jumps=%lu session_best_m=%.3f stored_jumps=%lu stored_best_m=%.3f trace_bytes=%lu%s%s%s%s\n",
-            (unsigned long)session_jumps, session_best,
+      emitf("STATS session_jumps=%lu session_best_m=%.3f session_best_airtime_s=%.3f stored_jumps=%lu stored_best_m=%.3f trace_bytes=%lu%s%s%s%s\n",
+            (unsigned long)session_jumps, session_best, session_best_airtime,
             (unsigned long)stored_jumps, stored_best, (unsigned long)jh_store::trace_bytes(),
             fs_key, fail_key, drop_key, up_key);
     }
@@ -762,12 +768,23 @@ static void handleCommand(const String& cmd) {
     // Clean sensor power-cycle (16g sequencing) then a full retry — the
     // recovery for power-up-corrupted-but-undamaged silicon. Bench command;
     // safe to repeat, ~0.7 s of deliberate delays inside.
+    //
+    // BREADCRUMBED (task #18): revive-over-BLE resets the board reproducibly
+    // (2026-08-16 and 08-18) and RESETREAS is bootloader-consumed, so stage
+    // stamps are the only witness. crumb=1 -> died inside jh_imu::revive();
+    // crumb=2 -> died in runSelfTest(); crumb=3 -> died emitting the result.
+    // Cleared on clean completion; read back as `crumb=` on the next INFO.
+    jh_power::breadcrumb_set(1);
     if (!jh_imu::revive()) {
+      jh_power::breadcrumb_set(0);
       emitLine("ERR revive_unsupported no sensor rail on this platform");
     } else {
+      jh_power::breadcrumb_set(2);
       emitLine("# rail cycled clean (bus floated first) — retrying selftest");
       runSelfTest();
+      jh_power::breadcrumb_set(3);
       emitLine("OK revive");
+      jh_power::breadcrumb_set(0);
     }
   } else if (cmd.startsWith("set ")) {
     // set <airtime_offset_s|height_scale> <value|default> — runtime
@@ -848,6 +865,9 @@ static void handleCommand(const String& cmd) {
       emitf("# hichg=%d chg=%d\n", jh_power::fast_charge_state(), jh_power::charging());
     if (jh_link::local_name()[0])
       emitf("# name=%s\n", jh_link::local_name());  // WHICH puck — quiver world
+    if (jh_power::breadcrumb_last() != 0)
+      emitf("# crumb=%u\n", (unsigned)jh_power::breadcrumb_last());  // stage the last
+                                                  // reset died in (task #18)
     emitLine("PARAMS " JH_PARAMS_SUMMARY);
     // Effective calibration (PARAMS above shows compiled defaults).
     // vbat_scale appended only when it is doing something (!= 1.0), keeping
@@ -955,6 +975,7 @@ static void handleCommand(const String& cmd) {
     const float h_m = 0.30f + 0.05f * (float)(session_jumps % 7);
     const float at  = sqrtf(8.0f * h_m / 9.80665f);
     if (h_m > session_best) session_best = h_m;
+    if (at > session_best_airtime) session_best_airtime = at;
     emitf("JUMP n=%lu airtime_raw_s=%.3f airtime_s=%.3f height_m=%.3f height_ft=%.1f best_m=%.3f\n",
           (unsigned long)session_jumps, at, at, h_m, h_m * 3.28084f, session_best);
     emitLine("OK fakejump");

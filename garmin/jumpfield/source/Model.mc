@@ -277,6 +277,15 @@ module Model {
             var b = _toFloat(kv.get("session_best_m"));
             if (n != null) { _jumpCount = n; }
             if (b != null) { _sessionBestM = b; }
+            // Best-airtime reseed (adder key, firmware >= 2026-08-18). Found by
+            // parsing the M2 activity FIT: best_jump reconciled to the stored
+            // best while best_airtime stayed at the live-seen max, because
+            // STATS carried no airtime. Same sanity bound family as heights;
+            // absent key leaves prior state (v1-style lines stay valid).
+            var ba = _toFloat(kv.get("session_best_airtime_s"));
+            if (ba != null && ba >= 0.0 && ba <= 10.0 && ba > _bestAirtimeS) {
+                _bestAirtimeS = ba;
+            }
             // Battery adder keys (absent on v1 pucks — leave prior state).
             var bp = _toNumber(kv.get("batt_pct"));
             if (bp != null) { _puckBattPct = bp; }

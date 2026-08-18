@@ -105,6 +105,7 @@ const int kCurveLen = (int)(sizeof(kCurve) / sizeof(kCurve[0]));
 }  // namespace
 
 static uint32_t s_reset_reas = 0;
+static uint8_t  s_crumb_last = 0;
 
 void init() {
   // Capture-and-clear FIRST: RESETREAS bits accumulate across resets until
@@ -126,6 +127,10 @@ void init() {
     s_reset_reas = NRF_POWER->RESETREAS;
     NRF_POWER->RESETREAS = 0xFFFFFFFF;
   }
+  // Breadcrumb capture-and-clear (init runs pre-SD, direct access is legal
+  // here; see breadcrumb_set for the live-SD path).
+  s_crumb_last = (uint8_t)((NRF_POWER->GPREGRET2 >> 4) & 0x7u);
+  NRF_POWER->GPREGRET2 &= ~0x70u;
   pinMode(PIN_DIVIDER_EN, OUTPUT);
   digitalWrite(PIN_DIVIDER_EN, HIGH);   // divider off until a read wants it
   pinMode(PIN_CHG_STATE, INPUT_PULLUP); // ~CHG is open-drain: pullup, LOW=charging
@@ -303,6 +308,23 @@ int batt_pct() {
 int charging() { return digitalRead(PIN_CHG_STATE) == LOW ? 1 : 0; }
 
 uint32_t reset_reason() { return s_reset_reas; }
+
+void breadcrumb_set(uint8_t stage) {
+  // SD-aware, same lesson as reset_reason(): POWER is SD-owned; direct
+  // register writes with the SoftDevice live hard-fault before the banner.
+  const uint32_t mask = 0x70u;                    // bits 4-6
+  const uint32_t val  = ((uint32_t)stage & 0x7u) << 4;
+  uint8_t sd_en = 0;
+  sd_softdevice_is_enabled(&sd_en);
+  if (sd_en) {
+    sd_power_gpregret_clr(1, mask);
+    if (val) sd_power_gpregret_set(1, val);
+  } else {
+    NRF_POWER->GPREGRET2 = (NRF_POWER->GPREGRET2 & ~mask) | val;
+  }
+}
+
+uint8_t breadcrumb_last() { return s_crumb_last; }
 
 int fast_charge_state() {
   // Read the actual register state, not s_fast_charge_on — the point is to

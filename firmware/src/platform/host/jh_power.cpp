@@ -49,6 +49,8 @@ int charging() {
 
 void update_charge_current() {}
 uint32_t reset_reason() { return 0; }        // no retained reset register here
+void breadcrumb_set(uint8_t) {}
+uint8_t breadcrumb_last() { return 0; }
 int fast_charge_state() { return -1; }       // no selectable charge current  // host: no selectable charge current
 
 // The host mock reports JH_VBAT_MV verbatim; scaling it would make the

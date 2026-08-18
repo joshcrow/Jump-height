@@ -294,3 +294,24 @@ function testCorrupt_truncatedStatsIsRejected(logger) {
     Test.assertEqual(m.rejectedCount(), 1);
     return true;
 }
+
+(:test)
+function testStats_reseedsBestAirtime(logger) {
+    // The M2 FIT parse found best_jump reconciled while best_airtime stayed
+    // at the live-seen max — STATS carried no airtime. This locks the fix:
+    // the adder key reseeds best airtime on reconnect, absent key leaves
+    // prior state, and an absurd value is ignored.
+    var m = new Model.State();
+    m.onLine(Protocol.parseKV(
+        "STATS session_jumps=3 session_best_m=1.285 session_best_airtime_s=1.023 stored_jumps=3 stored_best_m=1.285 trace_bytes=42"));
+    Test.assertEqual(m.bestAirtimeS(), 1.023);
+    // absent key: prior value survives (v1-style line)
+    m.onLine(Protocol.parseKV(
+        "STATS session_jumps=3 session_best_m=1.285 stored_jumps=3 stored_best_m=1.285 trace_bytes=42"));
+    Test.assertEqual(m.bestAirtimeS(), 1.023);
+    // absurd value: ignored
+    m.onLine(Protocol.parseKV(
+        "STATS session_jumps=3 session_best_m=1.285 session_best_airtime_s=99.0 stored_jumps=3 stored_best_m=1.285 trace_bytes=42"));
+    Test.assertEqual(m.bestAirtimeS(), 1.023);
+    return true;
+}

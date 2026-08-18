@@ -220,6 +220,7 @@ class FakeDevice:
                 trace_bytes = 0
             self.send(f"STATS session_jumps={self.session_jumps} "
                       f"session_best_m={self.session_best:.3f} "
+                      f"session_best_airtime_s={getattr(self, 'session_best_airtime', 0.0):.3f} "
                       f"stored_jumps={len(self.jumps_rows)} "
                       f"stored_best_m={stored_best:.3f} "
                       f"trace_bytes={trace_bytes}{self.battery_suffix()}")

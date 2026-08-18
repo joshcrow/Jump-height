@@ -120,6 +120,17 @@ uint32_t reset_reason();
 // from the device itself instead of by inference.
 int fast_charge_state();
 
+// Crash breadcrumbs — the instrument RESETREAS could not be (the bootloader
+// consumes that register before the app runs; measured 2026-08-18). A stage
+// code stamped into GPREGRET2 bits 4-6 survives watchdog and soft resets;
+// init() captures and clears it, INFO reports it as crumb= when nonzero.
+// Bits 0-3 left alone: some Adafruit bootloaders claim the low bits.
+// First customer: the revive-over-BLE reset (task #18) — stage 1 = handler
+// entered, stage 2 = revive() returned, cleared on clean completion, so a
+// surviving crumb names the stage the board died in.
+void breadcrumb_set(uint8_t stage);   // 0 clears; 1-7 stamped
+uint8_t breadcrumb_last();            // stage found at boot (0 = clean)
+
 // Soft power-off — the `off` command's engine (docs/sense.md §3.5's
 // smallest useful slice, built 2026-08-04 because a battery-powered board
 // with no sleep otherwise runs until the cell is flat). On the Sense:
