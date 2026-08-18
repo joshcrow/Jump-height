@@ -40,6 +40,24 @@ do not.**
 
 ## CHANGED AFTER THE AUDIT (2026-08-14, later the same day)
 
+### HARDWARE DEPRECATION: the ESP32 v1 platform is retired (owner decision, 2026-08-18)
+- **What went:** `firmware/src/platform/esp32/` (all six seams + the MPU-6050
+  driver), the `firebeetle32` pio envs, the 4 MB partition map, the browser
+  flasher (esp-web-tools button, `web/firmware/` binaries, flash manifest).
+  Git history keeps everything.
+- **What it fixed for free:** the Sense env is now pio's DEFAULT, which
+  retargets `./tools/jump flash` — the tool that esptool'd the Sense on
+  2026-08-17. `cmd_flash` also gained the two bench lessons of this week:
+  a `uf2`-command bootloader-drop retry when the 1200-baud touch misses, and
+  a 20 s activation-settle before the post-flash selftest.
+- **Also caught in the same sweep:** `jh_power.h` used `uint32_t` without
+  `<stdint.h>` — the esp32 env had been silently unbuildable since the
+  reset_reason change (nothing in simtest builds that env). Fixed before the
+  platform was removed, so the deprecation was a decision, not a surrender.
+- **Product surface now:** one board family (XIAO nRF52840 Sense), one flash
+  path (USB via `jump flash`, OTA via `otadfu.py`), one BLE stack.
+
+
 ### Spare board soak-gated on the fast-charge-fix build (2026-08-18 afternoon)
 - **State:** proven-on-hardware. A spare (owner plugged in one of the two;
   which one is irrelevant to the gate) now runs `src=66b5137b` — the

@@ -2542,11 +2542,32 @@ If you're certain it's connected anyway: ./tools/jump flash --port <port>""")
         print(line, end="")
     proc.wait()
     if proc.returncode != 0:
-        print("\n❌ upload failed. Board plugged in? Data-capable USB cable? "
-              "Try --port <port>, and `./tools/jump report` to collect diagnostics.")
-        return 1
-    print("\n✅ flashed. Running self-test...")
-    time.sleep(1.5)
+        # nRF52 uploads sometimes miss the 1200-baud touch from app state.
+        # The firmware's own `uf2` command drops the board into its bootloader
+        # deliberately; one retry from there is the reliable path (bench
+        # experience 2026-08-17/18).
+        print("\nupload missed — dropping the board into its bootloader and retrying...")
+        try:
+            import serial as _ser
+            sp = _ser.Serial(port, 115200, timeout=2)
+            time.sleep(2.5)
+            sp.write(b"uf2\n"); sp.flush(); time.sleep(2); sp.close()
+        except Exception:
+            pass
+        time.sleep(6)
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True)
+        for line in proc.stdout:
+            print(line, end="")
+        proc.wait()
+        if proc.returncode != 0:
+            print("\n❌ upload failed. Board plugged in? Data-capable USB cable? "
+                  "Try --port <port>, and `./tools/jump report` to collect diagnostics.")
+            return 1
+    # A fresh flash plays dead for ~20 s while the activation reset settles
+    # (measured 2026-08-18) — probing early misdiagnoses a healthy flash.
+    print("\n✅ flashed. Letting the activation reset settle, then self-testing...")
+    time.sleep(20)
     return cmd_selftest(args)
 
 

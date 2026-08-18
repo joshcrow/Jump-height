@@ -1353,47 +1353,18 @@ function importBackup(file) {
 // ------------------------------------------------------------- INSTALL section
 
 async function initInstallTab() {
+  // ESP32 in-browser flashing REMOVED 2026-08-18: the owner deprecated all
+  // non-Seeed-Sense hardware. The Sense flashes over USB (./tools/jump flash)
+  // and over the air (tools/otadfu.py); browsers cannot speak either path's
+  // protocol, so this tab now just says where firmware really comes from.
   const container = $('install-container');
-  const note = $('install-note');
-  let present = false;
-  try {
-    // The flasher can only work if the binaries are actually served here.
-    const res = await fetch('firmware/firmware.bin', { method: 'HEAD', cache: 'no-store' });
-    present = res.ok;
-  } catch (_e) { present = false; }
-
-  container.textContent = '';
-  if (!present) {
-    note.hidden = false;
-    note.textContent = '';
-    note.append(
-      el('div', { class: 'info-line', text: "The firmware binaries aren't published here yet." }),
-      el('p', { class: 'muted', text:
-        "To build and flash them yourself, run  ./tools/jump flash  — it builds the " +
-        "firmware locally and uploads it over USB. Once the project's CI publishes the " +
-        "binaries, this button will flash them straight from the browser. (The flashing " +
-        "tool itself loads from the internet, so you'll need to be online either way.)" }),
-    );
-    return;
-  }
-
-  // Binaries are present: mount the ESP Web Tools button with styled slots.
-  const btn = document.createElement('esp-web-install-button');
-  btn.setAttribute('manifest', 'manifest.json');
-  btn.append(
-    el('button', { class: 'btn btn-primary', slot: 'activate', type: 'button' }, 'Install / Update firmware'),
-    el('span', { slot: 'unsupported', class: 'note' }, "This browser can't flash over USB — use Chrome or Edge on a desktop computer."),
-    el('span', { slot: 'not-allowed', class: 'note' }, 'Flashing needs a secure (https) page.'),
+  if (!container) return;
+  container.append(
+    el('p', { class: 'note' },
+      'Firmware ships from the bench: ./tools/jump flash over USB, or ' +
+      'tools/otadfu.py over the air. (The ESP32 v1 board and its browser ' +
+      'flasher were retired 2026-08-18.)'),
   );
-  container.append(btn);
-
-  // The custom element only exists once the CDN module has loaded.
-  setTimeout(() => {
-    if (!customElements.get('esp-web-install-button')) {
-      note.hidden = false;
-      note.textContent = "Couldn't load the in-browser flasher — it comes from the internet, so check your connection and reload.";
-    }
-  }, 2500);
 }
 
 // ------------------------------------------------------------- console drawer
