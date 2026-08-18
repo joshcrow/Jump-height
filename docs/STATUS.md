@@ -42,6 +42,24 @@ do not.**
 
 ## 2026-08-18
 
+### Evening: crash-breadcrumb instrument shipped; spare wedged in the dark bootloader
+- **State:** instrument built and committed (`7e34154`, build `de849fbb`,
+  simtest + both watch targets green); diagnosis of the revive-over-BLE reset
+  blocked on a physical power cycle of the spare.
+- **The wedge, and the acquittal:** three consecutive flashes to the spare
+  came up dark — including a re-flash of the KNOWN-GOOD image that had booted
+  on the same board two hours earlier. That acquits the new code and convicts
+  the flash/boot path: consistent with the characterized dark-bootloader
+  state (retained-RAM double-reset magic) going sticky under repeated rapid
+  flashing. The spare has no battery, so unplug/replug is a guaranteed clean
+  clear. **Recurrence of the dark bootloader under repeated flashing is
+  itself a finding for OTA/flash reliability.**
+- **Also in the same batch:** `session_best_airtime_s` on STATS + watch
+  reseed (closes the M2 FIT-parse gap; new watch test, 45/45 on epix2 AND
+  instinct3solar45mm), and the revive handler stage-stamped for the
+  breadcrumb (crumb=1 revive itself / 2 selftest / 3 emitting).
+
+
 ### WATCH M2 CLOSED: jumps rendered on a real wrist (2026-08-18 ~17:00)
 - **State:** proven-on-hardware — the milestone the watch effort existed for.
   "The field has never displayed a correct jump on any wrist" is retired.
