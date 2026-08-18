@@ -40,6 +40,30 @@ do not.**
 
 ## CHANGED AFTER THE AUDIT (2026-08-14, later the same day)
 
+### Fast charge — ROOT CAUSE FOUND: the feature was never in any binary
+- **State:** cause proven (hichg readback + preprocessor); fix built as
+  `src=66b5137b`, clean-built, simtest-clean, **flashes at tonight's recharge**.
+- **The smoking gun (08-18 08:56):** first-ever `hichg=` reading during an
+  active charge: **`hichg=0 chg=1`** — charging, pin not driven.
+- **The bug:** `JH_FAST_CHARGE_ENABLED` was `#define`d in `main.cpp` but
+  consumed by `#if JH_FAST_CHARGE_ENABLED` in `jh_power.cpp` — a different
+  translation unit that never saw it. Undefined macro in `#if` is 0, so
+  `update_charge_current()`'s entire body compiled out of the only file that
+  implements it. The function we code-read as "present and called at 1 Hz"
+  was present, called — and empty.
+- **Why every measurement was right:** all four charge-rate comparisons said
+  50 mA because the binary genuinely contained no other behaviour. The
+  hardware was never the suspect it appeared to be; Seeed's documentation was
+  never contradicted.
+- **The fix:** the define moved into `platform/jh_power.h` — the consumer's
+  own header — with the lesson written at the definition site: a macro
+  consumed across translation units must live in a header both sides include,
+  or it is a lie that compiles. (Same family as the watchdog-stub namespace
+  shadow: code that compiles cleanly and does nothing.)
+- **Verification pending:** after tonight's flash, `hichg=1` during charge +
+  a charge-span at ~half the 50 mA baseline closes this for good.
+
+
 ### 2026-08-17 background session: BLE-selftest reset ROOT-CAUSED AND FIXED; two traps found on the way
 - **State:** proven-on-hardware (board runs `src=0c09863c`, verified over BLE)
 - **The headline:** `selftest` over BLE — 0/2 survival on 08-16 — now passes

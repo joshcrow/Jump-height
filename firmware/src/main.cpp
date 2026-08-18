@@ -69,9 +69,9 @@
 // Fast charge: 100 mA instead of 50 mA while USB is charging (0.4C on the
 // 250 mAh cell, against a 0.5C industry-standard rate). Set to 0 to revert
 // to the charger's default. See jh_power.cpp's PIN_HICHG comment.
-#ifndef JH_FAST_CHARGE_ENABLED
-#define JH_FAST_CHARGE_ENABLED 1
-#endif
+// (JH_FAST_CHARGE_ENABLED now lives in platform/jh_power.h — the consumer's
+// own header — after the cross-TU define here left the feature compiled out
+// of jh_power.cpp entirely. See the header's comment for the full story.)
 
 // Self-arming spin correction: OFF for the one-shot water session so the data
 // comes from the detector that was actually validated. See the commit site.

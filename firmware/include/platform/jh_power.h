@@ -85,6 +85,20 @@ int charging();
 // and release it otherwise. Safe to call often. No-op on platforms without a
 // selectable charge current, and compiled out entirely when
 // JH_FAST_CHARGE_ENABLED is 0.
+// THE DEFINE LIVES HERE, IN THE HEADER, ON PURPOSE — cross-TU macro lesson,
+// paid for 2026-08-16..18: this default originally sat in main.cpp, but the
+// consumer is jh_power.cpp's `#if JH_FAST_CHARGE_ENABLED`, a different
+// translation unit that never saw it. An undefined macro in #if is 0, so the
+// entire fast-charge body silently compiled out of the only file that
+// implements it. It "shipped" on 08-16, was measured not working within
+// hours (charge-span timing vs the 50 mA baseline, x4), and the hichg=
+// readback finally caught the firmware not driving the pin on 08-18.
+// A macro consumed across translation units must be defined in a header
+// both sides include — or it is a lie that compiles.
+#ifndef JH_FAST_CHARGE_ENABLED
+#define JH_FAST_CHARGE_ENABLED 1
+#endif
+
 void update_charge_current();
 
 // Why the chip remembers its own death: three unexplained reboots on
