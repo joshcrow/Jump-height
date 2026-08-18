@@ -400,6 +400,9 @@ void watchdog_feed() { wdtFeed(); }
 
 uint32_t tx_drops() { return s_tx_drops; }
 
+static char s_adv_name[28] = "";
+const char* local_name() { return s_adv_name; }
+
 bool begin(const char* name) {
   wdtInit();  // idempotent-enough: TASKS_START on a running WDT is a no-op  // see the file comment: begin()/pump() are the only two
              // main.cpp call sites available to hook this from, since
@@ -415,7 +418,16 @@ bool begin(const char* name) {
                           BLE_GATTC_WRITE_CMD_TX_QUEUE_SIZE_DEFAULT);
 
   if (!Bluefruit.begin(kMaxPrphConnections, 0)) return false;
-  Bluefruit.setName(name);
+  // UNIQUE PER-BOARD NAME — "JumpHeight-3F2A", suffix from the factory-lasered
+  // FICR device address. Proven necessary 2026-08-18: with two boards both
+  // advertising bare "JumpHeight", the bench logger connected to the freshly
+  // soaked spare and logged its floating-divider "97%" into the OG's
+  // death-run record. In a quiver of pucks this is not an edge case, it is
+  // Tuesday. Every client matches by PREFIX (or by NUS service), so old bare
+  // names and new suffixed names coexist.
+  snprintf(s_adv_name, sizeof(s_adv_name), "%s-%04X", name,
+           (unsigned)(NRF_FICR->DEVICEADDR[0] & 0xFFFFu));
+  Bluefruit.setName(s_adv_name);
   Bluefruit.Periph.setConnectCallback(onConnect);
   Bluefruit.Periph.setDisconnectCallback(onDisconnect);
 

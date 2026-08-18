@@ -244,7 +244,11 @@ class ServerCallbacks : public NimBLEServerCallbacks {
 // Bring up the NUS server and start advertising as `name`. Returns false if any
 // step of the NimBLE init fails — the caller reports it in the self-test but
 // must keep running (BLE is optional; jump tracking works over USB regardless).
+static char s_adv_name[28] = "";
+const char* local_name() { return s_adv_name; }
+
 bool begin(const char* name) {
+  snprintf(s_adv_name, sizeof(s_adv_name), "%s", name);  // v1: no unique suffix
   // Call init() in statement form and check getInitialized() rather than init()'s
   // return: across 1.4.x point releases init() has returned both void and bool,
   // and this form compiles against either.

@@ -846,6 +846,8 @@ static void handleCommand(const String& cmd) {
       emitf("# reas=0x%08lX\n", (unsigned long)jh_power::reset_reason());
     if (jh_power::fast_charge_state() >= 0)
       emitf("# hichg=%d chg=%d\n", jh_power::fast_charge_state(), jh_power::charging());
+    if (jh_link::local_name()[0])
+      emitf("# name=%s\n", jh_link::local_name());  // WHICH puck — quiver world
     emitLine("PARAMS " JH_PARAMS_SUMMARY);
     // Effective calibration (PARAMS above shows compiled defaults).
     // vbat_scale appended only when it is doing something (!= 1.0), keeping

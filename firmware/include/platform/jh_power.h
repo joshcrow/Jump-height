@@ -33,6 +33,8 @@
 
 #pragma once
 
+#include <stdint.h>  // uint32_t in reset_reason() — the esp32 env caught this missing
+
 namespace jh_power {
 
 // Configure pins/state. Call once from setup(), any time after Arduino

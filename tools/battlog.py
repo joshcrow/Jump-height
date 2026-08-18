@@ -60,6 +60,11 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 BLECMD = REPO / "tools" / "blecmd.py"
 
+# Forwarded to blecmd (set from --name/--addr): pins WHICH puck this log
+# belongs to. Added after 2026-08-18, when a second same-named board answered
+# the logger mid-death-run and wrote its floating "97%" into the record.
+EXTRA_ARGS: list = []
+
 FIELDS = ["wall_utc", "wall_local", "mono_s", "phase", "ok",
           "uptime_s", "vbat_mv", "batt_pct", "chg",
           "stored_jumps", "trace_bytes", "connect_s", "note"]
@@ -75,7 +80,7 @@ def read_stats(timeout_s: float) -> tuple[dict, float, str]:
     t0 = time.monotonic()
     try:
         r = subprocess.run(
-            [sys.executable, str(BLECMD), "stats"],
+            [sys.executable, str(BLECMD), *EXTRA_ARGS, "stats"],
             capture_output=True, text=True, timeout=timeout_s)
         out = r.stdout
     except subprocess.TimeoutExpired:
@@ -102,7 +107,11 @@ def main() -> int:
     ap.add_argument("--quiet-gap", type=float, default=2.5 * 3600,
                     help="length of the unsampled control gap, seconds")
     ap.add_argument("--timeout", type=float, default=90.0)
+    ap.add_argument("--name", default=None, help="advertised-name prefix to pin")
+    ap.add_argument("--addr", default=None, help="address prefix to pin (strongest)")
     args = ap.parse_args()
+    if args.name: EXTRA_ARGS.extend(["--name", args.name])
+    if args.addr: EXTRA_ARGS.extend(["--addr", args.addr])
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

@@ -129,9 +129,12 @@ async def find(name, seconds=10.0):
     """
     want = os.environ.get("OTADFU_ADDR", "").upper()
     def match(d, adv):
-        if (adv.local_name or d.name or "").lower() != name.lower():
+        # PREFIX match since 2026-08-18: pucks advertise "JumpHeight-XXXX"
+        # (unique per board). Prefix keeps old bare-named firmware findable
+        # and makes the suffixed names selectable by full name.
+        if not (adv.local_name or d.name or "").lower().startswith(name.lower()):
             return False
-        if want and name.lower() == "jumpheight":
+        if want and name.lower().startswith("jumpheight"):
             return d.address.upper().startswith(want)
         return True
     return await BleakScanner.find_device_by_filter(match, timeout=seconds)

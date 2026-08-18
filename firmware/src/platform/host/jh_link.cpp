@@ -18,6 +18,7 @@
 namespace jh_link {
 
 bool begin(const char* /*name*/) { return false; }
+const char* local_name() { return ""; }  // host: no radio, no name
 
 void poll(void (*/*handle*/)(const String&)) {}
 

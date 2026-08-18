@@ -292,7 +292,11 @@ class PuckLink extends Ble.BleDelegate {
             }
         }
         var name = scanResult.getDeviceName();
-        return name != null && name.equals(_puckName);
+        // Prefix, not equality: pucks advertise "JumpHeight-XXXX" (unique per
+        // board, 2026-08-18) so a quiver of them stays distinguishable. The
+        // service-UUID branch above already matches any name; this fallback
+        // must not be stricter than it. find() == 0 is Monkey C's startsWith.
+        return name != null && name.find(_puckName) == 0;
     }
 
     hidden function _connectTo(scanResult) as Void {

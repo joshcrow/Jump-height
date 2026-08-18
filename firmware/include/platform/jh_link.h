@@ -38,6 +38,12 @@ namespace jh_link {
 // either way.
 bool begin(const char* name);
 
+// The name actually on the air — base plus a per-board suffix derived from
+// factory silicon ID on platforms that have one ("" before begin()). Exists
+// so INFO can tell a human WHICH puck they are talking to; the 2026-08-18
+// impersonation incident is why that matters.
+const char* local_name();
+
 // Drain any received command bytes, dispatching each completed line through
 // `handle` (the SAME dispatcher serial input uses, so a command is handled
 // identically regardless of which transport it arrived on). Call once per

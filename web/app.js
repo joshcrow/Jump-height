@@ -1515,7 +1515,10 @@ async function connectBle() {
     // Match the device by name OR by advertising the NUS service (two filter
     // objects = OR). optionalServices lets us reach NUS after a name match.
     device = await navigator.bluetooth.requestDevice({
-      filters: [{ name: DEVICE_NAME }, { services: [NUS_SERVICE] }],
+      // namePrefix, not name: pucks advertise "JumpHeight-XXXX" (unique per
+      // board) since 2026-08-18. The service filter already matched any name;
+      // the prefix keeps the name path working for old and new firmware both.
+      filters: [{ namePrefix: DEVICE_NAME }, { services: [NUS_SERVICE] }],
       optionalServices: [NUS_SERVICE],
     });
   } catch (_e) { setStatus(transport ? 'connected' : 'off', transportKind); return; } // user cancelled

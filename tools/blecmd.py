@@ -66,10 +66,15 @@ async def scan(seconds=6.0):
         print(f"  {adv.rssi:>4} dBm  {dev.address}  {adv.local_name or '(no name)'}{tag}")
 
 
-async def find(name, seconds=10.0):
-    """Return the first advertiser matching `name` (case-insensitive)."""
+async def find(name, seconds=10.0, addr=None):
+    """First advertiser whose name STARTS WITH `name` (case-insensitive), or —
+    when `addr` is given — whose address starts with it. Prefix, not equality:
+    pucks advertise "JumpHeight-XXXX" (unique per board) since 2026-08-18,
+    after two same-named boards impersonated each other on the bench. --addr
+    is the unambiguous pin for multi-puck benches."""
     dev = await BleakScanner.find_device_by_filter(
-        lambda d, adv: (adv.local_name or d.name or "").lower() == name.lower(),
+        lambda d, adv: (d.address.lower().startswith(addr.lower()) if addr else
+                        (adv.local_name or d.name or "").lower().startswith(name.lower())),
         timeout=seconds,
     )
     if dev is None:
@@ -107,7 +112,7 @@ class Link:
 
 async def session(args):
     """One connect-and-poll session. Returns when the link drops."""
-    dev = await find(args.name)
+    dev = await find(args.name, addr=getattr(args, "addr", None))
     print(f"connecting to {dev.address} ({dev.name or args.name}) ...")
     async with BleakClient(dev) as client:
         link = Link(client)
@@ -147,7 +152,8 @@ def main():
     p = argparse.ArgumentParser(description="Send a command to the puck over BLE.")
     p.add_argument("command", nargs="?", default="stats",
                    help="command to send (default: stats)")
-    p.add_argument("--name", default="JumpHeight", help="advertised name to match")
+    p.add_argument("--name", default="JumpHeight", help="advertised name PREFIX to match")
+    p.add_argument("--addr", default=None, help="pin to an address prefix (multi-puck bench)")
     p.add_argument("--watch", action="store_true", help="repeat until ^C")
     p.add_argument("--every", type=float, default=3.0, help="--watch period, seconds")
     p.add_argument("--timeout", type=float, default=4.0, help="reply window, seconds")

@@ -98,7 +98,14 @@ A rider's body between a board-mounted puck and a wrist watch is a wet
 ### Layer 4 — pairing that needs no ritual
 - Auto-reconnect to the remembered puck address; no taps at the beach.
 - Multi-puck: pin by address (the bench already needs `OTADFU_ADDR` for
-  this reason).
+  this reason). **Proven necessary and SHIPPED 2026-08-18** after a live
+  impersonation: two boards advertising bare "JumpHeight" — the bench logger
+  connected to the freshly-flashed spare mid-experiment and logged its
+  floating battery reading into the dying OG's record. Now: every puck
+  advertises `JumpHeight-XXXX` (suffix from factory silicon ID), every
+  client matches by prefix or NUS service (web, blecmd, otadfu, watch —
+  watch already matched service-first), `blecmd`/`battlog` accept `--addr`
+  pinning, and INFO reports `name=` so a human can tell which puck answered.
 - **Bonding: deliberately deferred.** It adds a pairing ceremony and a
   key-management failure mode to a device with no display, for a
   threat model (someone in BLE range spoofing jump heights) that does
