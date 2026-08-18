@@ -41,6 +41,19 @@ do not.**
 ## CHANGED AFTER THE AUDIT (2026-08-14, later the same day)
 
 ### WATCH M2 CLOSED: jumps rendered on a real wrist (2026-08-18 ~17:00)
+
+### FIT recording path VERIFIED on the same activity
+- **State:** proven-on-hardware. The activity FIT pulled off the Epix over MTP
+  and parsed: developer fields present and correct — `jumps=13` (exact),
+  `best_jump=4.216 ft` (exactly the 1.285 m real toss, in the owner's units),
+  and a 95-sample `jump_height` record stream. Sessions now land in Garmin's
+  own history with jump data embedded.
+- **Gap found by the parse:** `best_airtime=0.70 s` (best among live-seen
+  fakes) sits beside the reconciled `best_jump=1.285 m` — an inconsistent
+  pair. Root cause: STATS carries `stored_best_m` but no best-airtime, so
+  reconcile-on-connect can restore one and not the other. Post-water fix:
+  add best-airtime to STATS (adder key) and reconcile both.
+
 - **State:** proven-on-hardware — the milestone the watch effort existed for.
   "The field has never displayed a correct jump on any wrist" is retired.
 - **The run:** field sideloaded to the owner's Epix Gen 2 over headless MTP
