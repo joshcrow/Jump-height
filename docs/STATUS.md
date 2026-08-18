@@ -40,6 +40,29 @@ do not.**
 
 ## CHANGED AFTER THE AUDIT (2026-08-14, later the same day)
 
+### WATCH M2 CLOSED: jumps rendered on a real wrist (2026-08-18 ~17:00)
+- **State:** proven-on-hardware — the milestone the watch effort existed for.
+  "The field has never displayed a correct jump on any wrist" is retired.
+- **The run:** field sideloaded to the owner's Epix Gen 2 over headless MTP
+  (124,252 bytes, size-verified), activity started, watch found and paired a
+  puck on its own, showed the puck's battery, **reconciled the 3 stored desk
+  tosses on connect** (the layer-3 dropout design working on first contact),
+  then rendered **10 live fakejumps one by one** — owner calling out heights
+  from his wrist (1.6 ft, 1.8 ft, 2 ft, 1 ft, 1.1 ft...), in feet, per the
+  unit preference.
+- **The books balance exactly:** session_jumps 13 = 3 real + 10 fake;
+  stored_jumps stayed 3 (fakes are display-path only, correctly never
+  persisted); session_best stayed 1.285 m (a real toss — no fake beat it).
+- **The supporting cast:** the puck serving the watch was the OG at 4 %
+  battery, ten hours into its own deliberate death run, over the same link.
+  The identity system ran its first live multi-puck session simultaneously:
+  `JumpHeight-45ED` (spare) and bare `JumpHeight` (OG) on the air at once,
+  the death logger address-pinned to the OG throughout, zero cross-talk.
+- **Remaining watch work:** field sizes on the Instinct (task #6), the §9.9
+  background-page test, watch self-health surfacing. None gate the session
+  the way M2 did.
+
+
 ### HARDWARE DEPRECATION: the ESP32 v1 platform is retired (owner decision, 2026-08-18)
 - **What went:** `firmware/src/platform/esp32/` (all six seams + the MPU-6050
   driver), the `firebeetle32` pio envs, the 4 MB partition map, the browser
