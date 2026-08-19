@@ -42,6 +42,49 @@ do not.**
 
 ## 2026-08-18
 
+### BLE bulk export VERIFIED: 240 KB, zero drops, first real queue pressure
+- **State:** proven-on-hardware (spare, `fed76059`, 2026-08-18 ~23:00)
+- **The induced-failure test from `ble-dependability.md` §5**, which had never
+  run: a full `trace` export over BLE — **240,506 bytes, 17,031 valid data
+  rows, 61 s at ~3.9 KB/s — with `tx_drops` ABSENT afterwards (i.e. zero)**
+  and uptime unbroken.
+- **Why it matters:** the layer-1 silent-drop fix (honor `write()`'s return,
+  bounded per-connection retry, latched chunk length) shipped as
+  `built-unverified` on 2026-08-14 and had never faced real queue pressure.
+  A 240 KB dump IS that pressure — the exact condition under which the old
+  code discarded chunks silently. Zero drops, and every row well-formed.
+- **Also proven incidentally:** BLE is a viable session-download path at
+  ~4 KB/s (a 2 h session's trace would take a few minutes), which is the
+  sealed-puck fallback if USB ever fails at the beach.
+
+### The cell has a datasheet, and it overturns the idle-current estimate
+- **Cell identified (owner, 2026-08-18): Jauch LP502030JH-PCM**, Jauch no.
+  246484. Typ. capacity **260 mAh** (min 250) at 0.2C to 3.0 V; nominal
+  3.7 V; charge 4.2 V, standard 0.2C (**52 mA**), **max 0.5C (130 mA)**;
+  discharge cut-off **3.0 V**, max 1.0C; 500 cycles to 80 %; **integrated
+  PCM: over-discharge detect 3.00 ± 0.05 V**, overcharge 4.28 V, overcurrent
+  1–6 A.
+- **The capacity cross-check beats the gauge.** The death run has passed
+  **25.6 h** and the cell is NOT empty (3493 mV board-read, well above the
+  3.0 V cutoff). Even assuming it were fully depleted *now*, 260 mAh / 25.6 h
+  = **10.1 mA** — and the true figure is lower still, because there is charge
+  left. **The gauge-derived 16.3 mA is therefore impossible**, and the
+  retracted walk figure of 11.6 mA looks much closer to right. Idle draw is
+  **≤10 mA**, by conservation of charge rather than by voltage lookup.
+- **Two safety questions closed by datasheet:**
+  1. **The deep discharge was safe.** Our 3600 mV floor rule and even
+     tonight's ~3493 mV board-read (~3.55 V true) sit above the 3.0 V
+     cut-off, and the pack's own PCM would disconnect at 3.00 V regardless.
+     The "unverified protection threshold" caveat is retired — it is
+     specified, and it is a real PCM.
+  2. **Fast charge is comfortably legal.** 100 mA on a 260 mAh cell is
+     0.38C, inside the 0.5C (130 mA) maximum; the 50 mA default is 0.19C,
+     essentially the datasheet's standard rate.
+- **Consequence for the water session:** endurance is better than every
+  number this project has quoted, and the charge policy is within spec at
+  both settings.
+
+
 ### DC/DC regulator: the inductors ARE fitted — the last power lever is real
 - **State:** proven-on-hardware (spare, `fed76059`, 2026-08-18 ~22:45)
 - **The experiment the gated command was built for.** `dcdc` on the
