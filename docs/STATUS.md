@@ -42,6 +42,30 @@ do not.**
 
 ## 2026-08-19
 
+### Boot scan against a NEARLY-FULL trace region — the plan's §3.4 risk, closed
+- **State:** proven-on-hardware (spare, 2026-08-19)
+- **The risk, verbatim from `docs/plan.md` §3.4:** the boot-time append-point
+  scan walks the trace region block by block, *"~19k blocks on a full trace
+  region. A well-used puck would reset there, latch StoreGuard, and run the
+  whole session storage-less behind a `flash FAIL` row nobody reads at a
+  beach. Never seen only because no region has ever been filled — which this
+  session would do first."* Watchdog feeds were added 2026-08-14 and had
+  never been exercised against a full region.
+- **How it was finally testable:** a `fillstore <kb>` bench command writes
+  synthetic-but-valid trace through the REAL `trace_append()` path — same
+  encoder, same blocks, same CRCs — so the region ends up exactly as a long
+  session would leave it. Filling it honestly would take ~5 h of recording;
+  this took 6 minutes for 12 MB.
+- **Result:** region filled to **13,434,228 bytes with 220,716 free** (from
+  ~2 MB free). The board then **cold-booted at 08:30 against that region and
+  came up clean** — `SELFTEST flash PASS detail=220716B_free`, `result=PASS`,
+  no watchdog reset, no StoreGuard latch, and the free-space figure proves
+  the scan found the correct append point rather than giving up.
+- **The host build could never have caught this** — `platform/host/
+  jh_store.cpp` keeps CSV files and resumes from an O(1) file size. Only
+  silicon walks blocks. This is the item that needed real hardware most.
+
+
 ### FAST CHARGE WORKS — verified end to end, saga closed
 - **State:** proven-on-hardware (OG, `ef37e568`, 2026-08-19 ~10:30)
 - **Cause side:** `hichg=1` while `chg=1` — the firmware is driving P0.13 for
