@@ -42,6 +42,25 @@ do not.**
 
 ## 2026-08-19
 
+### Open-threads sweep: one finding CORRECTED — the spin correction is inert, not live
+- The 2026-08-19 sweep flagged *"gyro spin correction self-arms live, zero
+  silicon validation"* as a possible session risk. **Checked against the
+  build: it cannot arm.** Two independent gates, both off:
+  - `main.cpp:78` — `JH_SPIN_SELFARM_ENABLED 0`, and the self-arm block at
+    `:1348` sits behind `if (JH_SPIN_SELFARM_ENABLED)`, i.e. dead code;
+  - `config/params.json` — `spin_lever_m: 0.0`, and
+    `jump_detector.h::correct_for_spin()` opens with
+    `if (spin_lever_m <= 0.0f) return accel_mag_g;  // correction off`.
+- So the water session runs the **uncorrected** detector — which was the
+  deliberate decision recorded on 2026-08-14 ("the session runs the detector
+  that was actually validated"). The *unvalidated* part is real and stays on
+  the post-water list (item 26's silicon checks, lever-arm persistence and
+  protocol visibility); the *live risk* is not.
+- Kept as its own entry because a survey finding that reads scarier than
+  reality is the same class of problem as a stale doc: it spends attention
+  that belongs elsewhere.
+
+
 ### `jump sync` now VERIFIES the download — and refuses to clear an unverified one
 - **State:** proven-on-hardware (OG, 2026-08-19 ~12:10):
   `✅ download verified: 150,034 bytes = the device's own trace_bytes`
