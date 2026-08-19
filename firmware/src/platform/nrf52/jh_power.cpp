@@ -127,10 +127,27 @@ void init() {
     s_reset_reas = NRF_POWER->RESETREAS;
     NRF_POWER->RESETREAS = 0xFFFFFFFF;
   }
-  // Breadcrumb capture-and-clear (init runs pre-SD, direct access is legal
-  // here; see breadcrumb_set for the live-SD path).
-  s_crumb_last = (uint8_t)((NRF_POWER->GPREGRET2 >> 4) & 0x7u);
-  NRF_POWER->GPREGRET2 &= ~0x70u;
+  // Breadcrumb capture-and-clear — SD-AWARE, unconditionally. The evening of
+  // 2026-08-18 proved the "init runs pre-SD so direct access is legal"
+  // assumption WRONG on this core: a direct GPREGRET2 RMW here killed the
+  // boot before its own banner (build de849fbb, dark on a healthy board that
+  // booted its predecessor minutes earlier), exactly as the direct RESETREAS
+  // write had killed 1c72f10f. The SoftDevice is live earlier than setup()
+  // on this core; POWER is SD-owned; there is no legal direct path. This is
+  // also why reas= reads 0: the sd_ getters run, not the raw register.
+  {
+    uint8_t sd_en2 = 0;
+    sd_softdevice_is_enabled(&sd_en2);
+    if (sd_en2) {
+      uint32_t g2 = 0;
+      sd_power_gpregret_get(1, &g2);
+      s_crumb_last = (uint8_t)((g2 >> 4) & 0x7u);
+      sd_power_gpregret_clr(1, 0x70u);
+    } else {
+      s_crumb_last = (uint8_t)((NRF_POWER->GPREGRET2 >> 4) & 0x7u);
+      NRF_POWER->GPREGRET2 &= ~0x70u;
+    }
+  }
   pinMode(PIN_DIVIDER_EN, OUTPUT);
   digitalWrite(PIN_DIVIDER_EN, HIGH);   // divider off until a read wants it
   pinMode(PIN_CHG_STATE, INPUT_PULLUP); // ~CHG is open-drain: pullup, LOW=charging
