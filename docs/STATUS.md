@@ -42,6 +42,27 @@ do not.**
 
 ## 2026-08-18
 
+### 22:31 — the revive-over-BLE reset: CAUSE PROVEN, FIXED, task #18 closed
+- **State:** proven-on-hardware by intervention. WDT feeds inside
+  `jh_imu::revive()`'s deliberate delays (the 600 ms discharge split into fed
+  300s, plus a settle feed; the sequencing physics untouched). Before: 3/3
+  resets across two days. After (`fed76059`): **3/3 survived** — uptime ran
+  46→92→164 s continuous across three BLE revives, and the full narration
+  reached the BLE client for the first time ever.
+- **Root cause:** watchdog starvation, the same mechanism as selftest's —
+  feed-less handler time plus BLE emit pacing crossing the 3.5 s window,
+  while USB stayed just under. The long-BLE-command crash class is now
+  closed with both known members fixed the same way.
+- **Instrumentation postscript:** both breadcrumb designs (RESETREAS,
+  GPREGRET2) proved bootloader-cleared and ended up unnecessary —
+  **intervention beat instrumentation.** The persist-based third design is
+  cancelled; the SD-aware register code stays as good hygiene.
+- **Delivery lessons banked:** serial-DFU wedges under rapid flash cycling
+  and reports success without activation; physical double-tap→UF2 is the
+  gold path; `cp` fails silently onto the MSC volume where `cat >` works;
+  the software `uf2` command mounts MSC minutes late or not at all.
+
+
 ### Late night: the flash-roulette RCA, the crash reproduced, the instrument blind again
 - **The evening's dark flashes were DELIVERY, not code.** Unconfounded trial
   at 21:09: UF2-via-double-tap delivered `dac58553` and it booted immediately
