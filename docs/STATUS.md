@@ -42,6 +42,30 @@ do not.**
 
 ## 2026-08-19
 
+### TWO-CENTRAL concurrent export: PASS — the original corruption bug's own configuration
+- **State:** proven-on-hardware (OG, `ef37e568`, 2026-08-19 ~10:55)
+- **The test `ble-dependability.md` §5 asked for and nobody had run.** Two
+  simultaneous centrals on one puck: A pulled the full trace export while B
+  polled `stats` 20 times throughout.
+- **Result:** both centrals received **150,034 bytes, byte-identical
+  (matching sha256)**, 9,315 well-formed data rows each, **`tx_drops` absent
+  before and after — zero**, uptime unbroken. Link evidence confirms two real
+  peripheral connections (A saw 2 READY greets, B saw 1).
+- **Why this specific configuration matters:** two subscribers double the
+  demand on one shared SoftDevice TX buffer pool, which is what made the
+  original watch-corruption bug visible — bytes vanished mid-line, the other
+  central saw clean lines at the same moment, and `LineReader` glued the
+  survivors into a `JUMP` that still parsed but carried wrong numbers. That
+  bug spent three days without a root cause. The layer-1 fix (honor
+  `write()`'s return, bounded per-connection retry, latched chunk length)
+  shipped 2026-08-14 `built-unverified`, was verified with ONE central under
+  240 KB on 08-18, and is now verified in the configuration that broke.
+- **Harness:** `tools/dualcentral.py` — compares the centrals' RAW byte
+  streams rather than decoded lines, deliberately: decoding first lets a lost
+  chunk re-glue into a plausible line, which is exactly how the original bug
+  survived three days of looking.
+
+
 ### Boot scan against a NEARLY-FULL trace region — the plan's §3.4 risk, closed
 - **State:** proven-on-hardware (spare, 2026-08-19)
 - **The risk, verbatim from `docs/plan.md` §3.4:** the boot-time append-point
