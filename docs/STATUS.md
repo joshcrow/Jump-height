@@ -42,6 +42,25 @@ do not.**
 
 ## 2026-08-18
 
+### Endurance, corrected upward: ≥25.7 h idle, not ~15 h
+- Every "~15 h" figure in this project traces to one `batt_pct` extrapolation
+  through a region nobody had measured. The death run measured it: **25.7 h
+  and still alive**, on a cell whose datasheet capacity (250 mAh) independently
+  bounds idle draw at ≤9.7 mA.
+- **Session margin restated honestly:** ~2 h session against ≥25.7 h idle and
+  18.55 h *including 19 % recording* → **≥9× on the recording-inclusive
+  number, ~13× on idle**. Power is not a session risk, now by a wider margin
+  and with no retracted figures in the argument.
+- **Consequence for the DC/DC prize:** the win is real but smaller than the
+  16 mA framing implied. If idle is ~9-10 mA and the MCU is most of it, the
+  ~40 % MCU cut lands nearer **7 mA → ~35 h**. Still the largest available
+  win; no longer a rescue.
+- **Gauge curve bottom is now known conservative:** our table calls 3300 mV
+  "0 %" while the cell's own cut-off is 3.0 V ± 0.1 and the PCM disconnects
+  there. We reserve ~300 mV of real capacity below our zero — deliberate
+  headroom, and worth re-anchoring when the calibration lands.
+
+
 ### BLE bulk export VERIFIED: 240 KB, zero drops, first real queue pressure
 - **State:** proven-on-hardware (spare, `fed76059`, 2026-08-18 ~23:00)
 - **The induced-failure test from `ble-dependability.md` §5**, which had never
@@ -334,7 +353,7 @@ do not.**
   | 3751 | **10.56** |
 
   Read: **10.6 h measured from full to ~quarter charge, idle**, ~2 h session
-  = **≥5× margin on the measured portion alone.** (The old "≈15.3 h to empty"
+  = **≥5× margin on the measured portion alone.** (The old "≈15.3 h to empty" — now known low, ≥25.7 h measured"
   extrapolation is superseded by this direct measurement; true-empty remains
   unmeasured by design — the 3600 mV floor rule.)
 - **The plateau, in our own data:** segment rates ran 35.8 → 30.6 → **18.9**
@@ -424,8 +443,11 @@ do not.**
   between our own timestamped samples need no such assumption.
 - **Result: 71 % → 22 % in 7.51 h, idle, never recording** (`stored_jumps` and
   `trace_bytes` both unchanged throughout; uptime monotonic, no resets).
-  **≈15.3 h of idle endurance from full** — a figure that needs no capacity
-  assumption. Against a 250 mAh nameplate that implies ~16.3 mA.
+  ~~**≈15.3 h of idle endurance from full**~~ — **SUPERSEDED 2026-08-18: the
+  real figure is ≥25.7 h.** That extrapolation ran through the never-measured
+  22 %→0 % region on a discredited curve; the death run walked the region
+  instead and was still alive at 25.7 h. Endurance is ~70 % better than this
+  entry claimed. Against a 250 mAh nameplate that implies ~16.3 mA.
 - **This is WITH the sleep optimisation already on the board** (see the build
   identification below). `docs/power-optimisation.md` predicted 6-7 mA. It is
   not there. The previously-quoted 11.6 mA baseline carries the `uptime_s`
