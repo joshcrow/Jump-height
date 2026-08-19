@@ -1085,18 +1085,39 @@ void clear() {
   // region whose true state is now uncertain. Every step is still attempted
   // (not short-circuited) — one sector glitching is no reason to skip the
   // rest — the aggregate `all_erased` is what ends up governing s_fs_ok.
-  bool all_erased = s_flash.eraseSector(0);  // superblock
+  // WATCHDOG FEEDS — added 2026-08-19 after REPRODUCING the reset on silicon.
+  // A 4 KB sector erase is ~40 ms; a full trace region is 495 sectors, i.e.
+  // ~20 s of tight loop against a 3.5 s watchdog, so a `clear` on a well-used
+  // region resets the board around sector ~87. Worse, the superblock (sector
+  // 0) is erased FIRST, so the board comes back UNMOUNTABLE and the 30 s
+  // auto-remount cannot save it — try_mount deliberately refuses to format a
+  // virgin chip. Measured on the spare with a 13.4 MB region: the CDC port
+  // dropped mid-command and uptime came back 0.001 s.
+  //
+  // This is the SAME failure already found and fixed for format() in bd0334d
+  // (eraseChipFed, ~30 lines above, whose comment even says "same call
+  // clear() already uses"); clear() never received the fix. It is on the
+  // water-day path twice in docs/session-card.md, over BLE, in a sealed
+  // capsule.
+  auto erase_fed = [](uint32_t sector) -> bool {
+    ::jh_link::watchdog_feed();
+    const bool ok = s_flash.eraseSector(sector);
+    ::jh_link::watchdog_feed();   // feed AFTER too: the erase itself is the
+                                  // long part, not the loop overhead
+    return ok;
+  };
+  bool all_erased = erase_fed(0);  // superblock
 
   const uint32_t jumps_sectors_used =
       (s_jumps_append_off + SECTOR_BYTES - 1) / SECTOR_BYTES;
   for (uint32_t i = 0; i < jumps_sectors_used; ++i) {
-    all_erased &= s_flash.eraseSector((s_jumps_region_start / SECTOR_BYTES) + i);
+    all_erased &= erase_fed((s_jumps_region_start / SECTOR_BYTES) + i);
   }
 
   const uint32_t trace_sectors_used =
       (s_trace_append_off + SECTOR_BYTES - 1) / SECTOR_BYTES;
   for (uint32_t i = 0; i < trace_sectors_used; ++i) {
-    all_erased &= s_flash.eraseSector((s_trace_region_start / SECTOR_BYTES) + i);
+    all_erased &= erase_fed((s_trace_region_start / SECTOR_BYTES) + i);
   }
 
   const bool wrote_sb = all_erased && writeSuperblock();

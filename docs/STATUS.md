@@ -42,6 +42,33 @@ do not.**
 
 ## 2026-08-19
 
+### SESSION-BLOCKING BUG FOUND AND REPRODUCED: `clear` bricks storage on a full region
+- **State:** reproduced on hardware, fix built (`src` pending flash to the spare)
+- **The bug:** `jh_store::clear()` erases the superblock and then every used
+  sector of both regions in a tight loop with **no watchdog feed**. A 4 KB
+  sector erase is ~40 ms; a full trace region is 495 sectors ≈ **20 s against
+  a 3.5 s watchdog**. The board resets around sector ~87 — and because the
+  **superblock is erased FIRST**, it comes back **unmountable**. The new 30 s
+  auto-remount cannot rescue it either: `try_mount` deliberately refuses to
+  format a virgin chip.
+- **REPRODUCED 2026-08-19** on the spare with a 13.4 MB region: the CDC port
+  dropped mid-command (the classic reset signature) and the board returned
+  with **`uptime_s=0.001`**. Every previous `clear` in this project's life ran
+  on a near-empty region (~37 sectors, ~1.5 s), which is why it was never seen.
+- **Why it is session-blocking:** `docs/session-card.md` puts `clear` on the
+  water-day path **twice** — before the session and after the download — over
+  BLE, in a sealed capsule that the card itself says not to open.
+- **The galling part:** this is the SAME failure already found and fixed for
+  `format()` in `bd0334d`. The fixed loop (`eraseChipFed`) sits ~30 lines
+  above `clear()` and its own comment reads *"4 KB sector erases run ~40 ms
+  each (same call clear() already uses)"* — the fix was applied to one caller
+  and not the other.
+- **Fix:** every `eraseSector` in `clear()` now goes through a fed wrapper
+  (feed before and after — the erase itself is the long part). Built clean;
+  awaiting delivery to the spare, then a repeat of the reproduction as proof.
+- **Credit:** found by the 2026-08-19 open-threads sweep, not by use.
+
+
 ### Download integrity at 13.4 MB — byte-exact, twice; and the OG's data survived its death
 - **State:** proven-on-hardware (2026-08-19 ~11:35)
 - **The big one:** the spare's filled region (**13,434,228 bytes**) downloaded
