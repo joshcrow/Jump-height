@@ -113,7 +113,16 @@ If the post-change delta distribution shows samples arriving **later than
 
 ---
 
-## 2. Change two: the DC/DC regulator — UNVERIFIED, test live, never at boot
+## 2. Change two: the DC/DC regulator — **HARDWARE CONFIRMED 2026-08-18**
+
+> **The inductors are fitted.** `dcdc` run on the spare: board stayed up
+> (uptime 960→998 s unbroken), selftest 6/6 including sensor/BLE/flash, a
+> full revive rail-cycle clean. The "we do not know if the hardware supports
+> it" premise below is RESOLVED — what remains unmeasured is the size of the
+> saving, which the free matched-window A/B will give once the OG is back.
+> Still never at boot until then. Detail: STATUS.md, 2026-08-18.
+
+## 2-OLD. The original reasoning (kept for the trail)
 
 ### The prize
 The nRF52840's internal DC/DC typically cuts MCU current by ~40 % versus the

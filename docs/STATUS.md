@@ -42,6 +42,29 @@ do not.**
 
 ## 2026-08-18
 
+### DC/DC regulator: the inductors ARE fitted — the last power lever is real
+- **State:** proven-on-hardware (spare, `fed76059`, 2026-08-18 ~22:45)
+- **The experiment the gated command was built for.** `dcdc` on the
+  sacrificial board: it printed its own verdict — `# dcdc: still alive — the
+  hardware supports it` — and **uptime ran straight through** (960 → 974 →
+  998 s, no reset). `power-optimisation.md` §2 could only say the inductors
+  were "NOT established"; they are established now, on this board family, at
+  zero risk to the session board.
+- **Stable under DC/DC, not merely alive:** selftest 6/6 PASS rows including
+  I2C, sensor, BLE and flash; a full `revive` rail-cycle also clean; uptime
+  continuous throughout. The two subsystems most likely to mind a regulator
+  change (the sensor rail and the radio) both fine.
+- **What it's worth:** the nRF52840's internal DC/DC typically cuts MCU
+  current ~40 %, and the MCU is the dominant consumer in our ~16 mA idle.
+  This is now the largest *available* power win, and unlike the standby tier
+  it is a one-line change to code that already exists.
+- **NOT enabled at boot, deliberately.** `DCDCEN` clears on reset, so runtime
+  is the safe place to prove it; boot enablement turns a brownout into a boot
+  loop. Sequencing unchanged: it earns a place in boot only after the free
+  A/B (two matched-window discharge nights) measures the actual saving —
+  and that A/B needs the OG, which is currently busy dying.
+
+
 ### 22:31 — the revive-over-BLE reset: CAUSE PROVEN, FIXED, task #18 closed
 - **State:** proven-on-hardware by intervention. WDT feeds inside
   `jh_imu::revive()`'s deliberate delays (the 600 ms discharge split into fed
