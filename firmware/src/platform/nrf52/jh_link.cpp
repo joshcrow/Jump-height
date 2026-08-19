@@ -156,6 +156,9 @@
 #include <bluefruit.h>
 
 #include "platform/jh_clock.h"
+#include "platform/jh_power.h"  // batt_pct/charging for the advertised payload
+
+namespace jh_link { static void refreshAdvPayload(); }  // defined near begin()
 
 namespace jh_link {
 
@@ -177,6 +180,7 @@ String s_line;
 void onConnect(uint16_t conn_hdl) {
   (void)conn_hdl;
   if (Bluefruit.Periph.connected() < kMaxPrphConnections) {
+    refreshAdvPayload();             // fresh battery reading on every re-arm
     Bluefruit.Advertising.start(0);  // keep the 2nd slot discoverable — see
                                      // the file comment's advertising section
   }
@@ -403,6 +407,37 @@ uint32_t tx_drops() { return s_tx_drops; }
 static char s_adv_name[28] = "";
 const char* local_name() { return s_adv_name; }
 
+// ADVERTISED BATTERY + STATE — "puck 78%" on the watch WITHOUT connecting,
+// the cheapest UX win in ble-dependability.md §5 (layer 5: the user must be
+// able to tell states apart). Manufacturer-specific data, company ID 0xFFFF
+// (the SIG's reserved-for-development ID — we have no assigned one, and an
+// invented real ID would be squatting).
+//
+// Payload: [FF FF][batt_pct][flags]. batt_pct 0xFF = unmeasurable (v1 boards).
+// flags bit0 = charging. Room for armed/recording in bit1 when main.cpp gets
+// a setter; battery+charging is the part that needs no new seam surface.
+//
+// It lives in the SCAN RESPONSE, not the primary packet: the primary is
+// already 24 of its 31 bytes (flags 3 + txPower 3 + 128-bit NUS UUID 18) and
+// a failed advertising start is a dead puck, whereas the scan response has
+// ~14 bytes free next to the name. Every scanner that reads the name at all
+// does an active scan, so anything that can see us can see this.
+//
+// Refreshed at every advertising (re)start rather than on a timer: updating
+// live means stop/clear/restart, which would disturb a client mid-connect.
+// Every disconnect and re-arm therefore publishes a fresh reading.
+static void refreshAdvPayload() {
+  uint8_t mfr[4];
+  mfr[0] = 0xFF;                       // company ID 0xFFFF, little-endian
+  mfr[1] = 0xFF;
+  const int pct = jh_power::batt_pct();
+  mfr[2] = (pct < 0) ? 0xFF : (uint8_t)pct;
+  mfr[3] = (uint8_t)(jh_power::charging() == 1 ? 0x01 : 0x00);
+  Bluefruit.ScanResponse.clearData();
+  Bluefruit.ScanResponse.addManufacturerData(mfr, sizeof(mfr));
+  Bluefruit.ScanResponse.addName();
+}
+
 bool begin(const char* name) {
   wdtInit();  // idempotent-enough: TASKS_START on a running WDT is a no-op  // see the file comment: begin()/pump() are the only two
              // main.cpp call sites available to hook this from, since
@@ -460,7 +495,8 @@ bool begin(const char* name) {
   Bluefruit.Advertising.addService(s_bleuart);  // 128-bit NUS UUID in the
                                                 // primary advertising packet
                                                 // (docs/sense.md §3.1)
-  Bluefruit.ScanResponse.addName();             // name in the scan response —
+  refreshAdvPayload();                          // battery+state, then the name
+  // (kept below for the trail: the name lives in the scan response because —
                                                 // no room left in the primary
                                                 // packet once the 128-bit
                                                 // service UUID is in it

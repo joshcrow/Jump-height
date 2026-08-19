@@ -35,10 +35,11 @@ For the board you should actually build, the Sense, the current reference is
 | Piece | State |
 |---|---|
 | **Detection algorithm** | ✅ Proven in sim and on the bench. Shared C++ core, mirrored in Python. |
-| **The puck** — XIAO nRF52840 Sense | ✅ On silicon, second unit (sensor + gyro verified; the original became the bench mule after an IMU-bus fault — full story in [`docs/rca-sense-imu-2026-08-11.md`](docs/rca-sense-imu-2026-08-11.md)). Fully wireless firmware pipeline: OTA update gate passed twice back-to-back, bootloader itself upgraded over the air. |
+| **The puck** — XIAO nRF52840 Sense | ✅ On silicon, **three healthy units**, each advertising a unique name (`JumpHeight-XXXX`) since 2026-08-18. There was never an IMU-bus fault: two "dead board" verdicts were both wrong, and the cause was GPIO drive strength — `pinMode()` silently selects a 0.5 mA driver for a pin that IS the sensor's power supply. **Nothing was ever damaged** (DECISIONS #37; the wrong turns are kept in [`docs/rca-sense-imu-2026-08-11.md`](docs/rca-sense-imu-2026-08-11.md)). Fully wireless firmware pipeline: OTA gate passed twice back-to-back, bootloader upgraded over the air. |
 | **v1 prototype** — FireBeetle ESP32 | 🪦 **Retired 2026-08-18** (owner decision), not merely frozen. It is the rig the algorithm was proven on and it stays listed as history — but the platform code, its PlatformIO envs, its partition map and the browser flasher are all deleted, so it cannot be built, flashed or flown any more. The Sense carries the water day. See [`docs/STATUS.md`](docs/STATUS.md) → *HARDWARE DEPRECATION*. |
 | **Browser app** | ✅ Live BLE stats, session sync, charts. In-browser flashing was **removed 2026-08-18** with the ESP32 platform (ESP Web Tools cannot flash an nRF52). The Sense flashes by `.uf2` drag-drop or `./tools/jump flash` over USB, and over the air via `tools/otadfu.py`. |
 | **Garmin watch field** | ✅ **M2 closed 2026-08-18** — jumps rendered on a real wrist (Epix Gen 2): 3 stored desk tosses reconciled on connect, then 10 live `fakejump`s one by one, and the saved activity's FIT carries the developer fields. |
+| **Battery & power** | ✅ **Measured, not estimated (2026-08-18).** ≥25.7 h idle on one charge — the death run walked past the gauge's "empty" and kept going. Cell is LP502030+PCM, 250 mAh, 3.0 V cut-off. Idle draw **≤10 mA by conservation of charge**, which refutes the 16 mA the voltage gauge produced. The internal DC/DC regulator was confirmed usable on hardware — the largest remaining power win, still one line of existing code. |
 | **Phase 2 — the water day** | 🌊 **Next.** Nothing here has been in the ocean yet. |
 
 **Watch-numbers bug, root-caused and now closed on the wrist (2026-08-18).**
@@ -248,9 +249,17 @@ the reasoning is in [`docs/STATUS.md`](docs/STATUS.md) → *HARDWARE DEPRECATION
 
 </details>
 
-Note on power: the Sense cell is **250 mAh** as actually installed, while much of
-`docs/sense.md`'s power arithmetic still assumes the 500 mAh part originally
-ordered (flagged at `docs/sense.md:138`) — halve those runtimes when reading it.
+Note on power (**measured 2026-08-18, supersedes every estimate in the docs**):
+the cell is an **LP502030 + PCM, 250 mAh typ**, 3.7 V nominal, 3.0 ± 0.1 V
+over-discharge cut-off, max charge 250 mA (1.0C), JST-PHR-02 2 mm pigtail.
+Measured endurance is **≥25.7 h idle on one charge** — a deliberate run-to-death
+walked past the gauge's "empty" and was still answering — which bounds idle draw
+at **≤10 mA** by conservation of charge. Any "~15 h" or "~60 h" figure elsewhere
+in the docs predates that measurement. `docs/sense.md`'s power arithmetic also
+still assumes the 500 mAh part originally ordered (flagged at
+`docs/sense.md:138`). The live numbers are in [`docs/STATUS.md`](docs/STATUS.md);
+the method, and why the percentage gauge was retired, in
+[`docs/battery-measurement.md`](docs/battery-measurement.md).
 
 **Waterproofing notes** (the part that actually kills these projects) and the
 general BOM/power-budget menu: [`docs/hardware.md`](docs/hardware.md) — but read
