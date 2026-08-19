@@ -1310,6 +1310,41 @@ def cmd_sync(args) -> int:
         (sess / "trace.csv").write_text(trace_csv + "\n")
         _write_session_info(sess, dev)
 
+        # DOWNLOAD INTEGRITY GATE. docs/plan.md §3.3 calls a session that
+        # records perfectly and downloads incompletely "the cruellest possible
+        # failure", and this exact path HAD a silent-drop bug (emitBytes
+        # discarding whole blocks on a short serial buffer, reproduced and
+        # fixed 2026-08-14). Until now nothing compared what arrived against
+        # what the device says it holds — and the very next prompt offers to
+        # ERASE the device. A byte-exact 13.4 MB proof exists (2026-08-19) but
+        # it was done with a throwaway harness, not through this path.
+        #
+        # The device already reports `trace_bytes` on STATS, and main.cpp
+        # flushes before dumping so the two are meant to match exactly.
+        integrity_ok = None
+        dev_trace_bytes = None
+        try:
+            st = _last_tagged(dev.command("stats", timeout=10), "STATS ")
+            if st.get("trace_bytes") is not None:
+                dev_trace_bytes = int(st["trace_bytes"])
+        except Exception:
+            pass
+        if dev_trace_bytes is not None:
+            got = len(trace_csv) + 1          # +1 for the trailing newline
+            integrity_ok = (got == dev_trace_bytes)
+            if integrity_ok:
+                print(f"  ✅ download verified: {got:,} bytes = the device's own "
+                      f"trace_bytes")
+            else:
+                delta = got - dev_trace_bytes
+                print(f"  ❌ DOWNLOAD INCOMPLETE — got {got:,} bytes, device says "
+                      f"{dev_trace_bytes:,} ({delta:+,})")
+                print( "     The session file is SHORT. Do NOT clear the device.")
+                print( "     Re-run `./tools/jump sync` — the data is still on the puck.")
+        else:
+            print("  ℹ️  download not verified: device reported no trace_bytes "
+                  "(old firmware) — treat this session file as unconfirmed")
+
         # Device's own jump list
         dev_jumps: list[dict] = []
         for row in files.get("jumps.csv", [])[1:]:
@@ -1359,6 +1394,7 @@ def cmd_sync(args) -> int:
         # size cap" on any session longer than ~44 min, and that REPLACED the
         # live-vs-offline agreement verdict with an informational note — losing
         # the one automated cross-check on the evening it matters most.
+        # (integrity_ok, set above, gates the clear prompt below)
         # The honest cap check needs the device's own trace_bytes; until the
         # download carries it, claim nothing.
         trace_capped = False
@@ -1402,12 +1438,29 @@ def cmd_sync(args) -> int:
                   "see the report.")
         print(f"\nSaved: {sess}/report.md (+ raw CSVs for re-tuning)")
 
+        # NEVER offer to erase a device whose download did not verify. This
+        # ordering is the whole point of the integrity gate above: the old
+        # flow wrote an unchecked file and then immediately invited the owner
+        # to destroy the only other copy.
         do_clear = args.clear
-        if not do_clear and sys.stdin.isatty() and not getattr(args, "fake", False):
+        if integrity_ok is False:
+            print("\n⛔ refusing to clear: the download did not match the "
+                  "device's own byte count.")
+            print("   Re-sync first. The data is still on the puck until you "
+                  "clear it.")
+            do_clear = False
+        elif not do_clear and sys.stdin.isatty() and not getattr(args, "fake", False):
+            if integrity_ok is None:
+                print("(download unverified — old firmware; clearing is at "
+                      "your own risk)")
             do_clear = input(
                 "Clear the device for the next session? [y/N] ").strip().lower() == "y"
         if do_clear:
-            dev.command("clear", timeout=10)
+            # `clear` erases every used sector — ~40 ms each, so a well-used
+            # region is ~20 s of work. The old 10 s timeout reported failure
+            # on a clear that was merely SLOW. (The watchdog reset that used
+            # to accompany this was fixed in firmware 2026-08-19.)
+            dev.command("clear", timeout=60)
             print("✅ device cleared")
         return 0
     finally:

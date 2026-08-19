@@ -42,6 +42,30 @@ do not.**
 
 ## 2026-08-19
 
+### `jump sync` now VERIFIES the download — and refuses to clear an unverified one
+- **State:** proven-on-hardware (OG, 2026-08-19 ~12:10):
+  `✅ download verified: 150,034 bytes = the device's own trace_bytes`
+- **What was wrong:** STATUS's own NOT-BUILT row "Download integrity
+  verification (CLI + web)" was literally true. `cmd_sync` ran `dump`, wrote
+  the files, and **never compared what arrived against what the device says it
+  holds** — then immediately offered *"Clear the device for the next session?"*
+  The 13.4 MB byte-exact proof earlier today used a throwaway harness, not
+  this path, so the tool the owner actually uses at a beach had no gate at all.
+- **The fix, three parts:**
+  1. compare received bytes against the device's own `trace_bytes` (STATS
+     already reports it; `main.cpp` flushes before dumping so they are meant
+     to match exactly);
+  2. **refuse to clear** when the check fails — the old flow wrote an
+     unchecked file and then invited the owner to destroy the only other copy;
+  3. say so plainly when the device is too old to report `trace_bytes`, rather
+     than passing silently.
+- **Also fixed here:** `dev.command("clear", timeout=10)` against an operation
+  that legitimately takes ~20 s on a used region — it would have reported
+  failure on a clear that merely worked slowly. Now 60 s.
+- Closes the highest-value item from the 2026-08-19 open-threads sweep after
+  the `clear` watchdog bug.
+
+
 ### SESSION-BLOCKING BUG FOUND AND REPRODUCED: `clear` bricks storage on a full region
 - **State:** reproduced on hardware, fix built (`src` pending flash to the spare)
 - **The bug:** `jh_store::clear()` erases the superblock and then every used
