@@ -40,7 +40,34 @@ do not.**
 
 ## CHANGED AFTER THE AUDIT — grouped by date, newest first (2026-08-14 → 2026-08-18)
 
-## 2026-08-18
+## 2026-08-19
+
+
+### DEATH-RUN AFTERMATH: a brownout reboot leaves the flash UNMOUNTED — session-critical
+- **State:** observed on hardware (OG, `0c09863c`, 2026-08-19 ~08:20), recovery
+  test pending.
+- **What happened:** the OG ran its battery to genuine collapse (34 h, final
+  board-read ~2.35 V), was plugged in, and rebooted while the cell was still
+  around **2.9 V**. It came up, radio fine, sensor fine — and
+  **`SELFTEST flash FAIL detail=mount_failed`**, with `stats` reporting
+  `stored_jumps=0 trace_bytes=0` where 3 jumps and 150,374 bytes had been.
+- **This is almost certainly NOT data loss.** The QSPI flash chip has a
+  minimum operating voltage (~2.7 V class); at ~2.9 V under load the mount can
+  fail while the MCU and radio, which run much lower, are perfectly happy. The
+  store then reports zeros because it is not mounted — not because it is
+  empty. Recovery test: charge, reboot, re-read.
+- **WHY IT MATTERS FOR THE WATER SESSION — this is the exact failure
+  `docs/plan.md` §3.4 predicted from a different cause:** a puck that browns
+  out and restarts mid-session comes back looking *healthy* — BLE up, sensor
+  up, watch connected — while silently recording nothing, behind a
+  `flash FAIL` row nobody reads at a beach. The plan feared a watchdog reset
+  in the boot scan; the real trigger turns out to be simpler and more likely:
+  **any restart at low battery.**
+- **Mitigations to consider (none built yet):** retry the flash mount once the
+  supply recovers rather than only at boot; surface "STORAGE DOWN" on the
+  watch and in `STATS` as a first-class alarm instead of a self-test row; and
+  refuse to start a session silently when the store is unmounted.
+
 
 ### Advertised battery + state: "puck 78%" WITHOUT connecting — PROVEN
 - **State:** proven-on-hardware (spare `55d41d67`, 2026-08-18 ~23:25)
