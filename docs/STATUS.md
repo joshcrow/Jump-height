@@ -190,6 +190,31 @@ do not.**
 > polls beyond the logger — from a comparable starting voltage. Cheap, and it
 > is the only honest way to close this.
 
+> **UPDATE, same day ~12:45 — the full-cycle comparison, which is the better
+> test.** Both runs now have a like-for-like endpoint (charger's own `chg`
+> 1→0) from near-identical starting voltages:
+>
+> | run | start | to termination |
+> |---|---|---|
+> | 50 mA baseline (08-10) | 3612 mV | **208 min** |
+> | with the fix (08-19) | 3585 mV | **146 min** |
+>
+> **Ratio 0.70 — a 30 % faster full charge.** This beats the span numbers as
+> evidence: same endpoints, same termination condition, 27 mV apart at the
+> start, no interpolation.
+>
+> It is still not 0.5, and the likely reason is structural rather than a
+> failure: the **CV taper is current-independent**, so it dilutes any ratio
+> measured across a whole cycle. If the taper is ~60 min in both runs, the
+> CC-phase ratio implied is 86/148 ≈ **0.58** — close to the ~0.44 expected
+> after the board's own draw.
+>
+> **Standing verdict:** the pin is driven (proven), and the cell charges
+> meaningfully faster (0.70 full-cycle, from a clean comparison). The precise
+> multiple remains uncertain, and one undisturbed charge would still tighten
+> it. This is stronger than the amendment above implied, and weaker than the
+> original "verified end to end" claim.
+
 ### Fast charge — the original entry (claims amended above)
 - **State:** proven-on-hardware (OG, `ef37e568`, 2026-08-19 ~10:30)
 - **Cause side:** `hichg=1` while `chg=1` — the firmware is driving P0.13 for
