@@ -109,7 +109,37 @@ do not.**
   silicon walks blocks. This is the item that needed real hardware most.
 
 
-### FAST CHARGE WORKS — verified end to end, saga closed
+### Fast charge: the PIN is proven driven; the CURRENT gain is NOT cleanly proven
+> **AMENDED 2026-08-19 ~12:00 — I overclaimed.** The heading below originally
+> read "FAST CHARGE WORKS — verified end to end, saga closed" on the strength
+> of ONE span. Three more spans completed since and they disagree:
+>
+> | span | 50 mA baseline | today | ratio |
+> |---|---|---|---|
+> | 3600→3700 mV | 51 min | 32 min | **0.63** |
+> | 3700→3800 mV | 28 min | 27 min | **0.96** |
+> | 3800→4000 mV | 36 min | 30 min | 0.84 |
+> | 3600→3800 mV | 79 min | 59 min | 0.74 |
+>
+> A working 100 mA setting should give ~0.44 net of the board's own draw. We
+> got 0.74 overall and one span at 0.96 — no better than the old rate.
+>
+> **What IS proven:** `hichg=1` under charge where the pre-fix build read
+> `hichg=0` on the same board minutes earlier. The firmware drives the pin.
+> That half is unambiguous.
+>
+> **What is NOT proven:** that the extra current reaches the cell. Known
+> confounds, none controlled: today's run started at ~2945 mV (deep-discharge
+> precharge phase) versus the baseline's 3612 mV; and **I ran BLE load tests
+> against this very board during the 3700→3800 window** (the dual-central
+> export at ~10:51), which draws current away from charging in the exact span
+> that came out worst.
+>
+> **To settle it:** one clean charge with the board left alone — no syncs, no
+> polls beyond the logger — from a comparable starting voltage. Cheap, and it
+> is the only honest way to close this.
+
+### Fast charge — the original entry (claims amended above)
 - **State:** proven-on-hardware (OG, `ef37e568`, 2026-08-19 ~10:30)
 - **Cause side:** `hichg=1` while `chg=1` — the firmware is driving P0.13 for
   the first time ever. The same readback said `hichg=0` on the pre-fix build
