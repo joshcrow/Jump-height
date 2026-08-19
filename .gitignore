@@ -39,6 +39,9 @@ sim/experiments/out/
 # Connect IQ build output (garmin/README.md §3) — like the firmware
 # binaries, built fresh, never committed.
 garmin/jumpfield/bin/
-# …except the Connect IQ launcher icon: a 192-byte generated source asset,
-# required by the compiler (FIRST_COMPILE.md findings #2), not a screenshot.
+garmin/puckglance/bin/
+# …except the Connect IQ launcher icons: generated source assets (148-192
+# bytes), required by the compiler (FIRST_COMPILE.md findings #2), not
+# screenshots. The `*.png` rule above would otherwise swallow them.
 !garmin/jumpfield/resources/drawables/launcher_icon.png
+!garmin/puckglance/resources/drawables/launcher_icon.png

@@ -676,6 +676,45 @@ static void handleCommand(const String& cmd) {
     emitf("# revive %s\n", census_revived ? "ok" : "FAILED — sensor left down; reboot or `revive`");
     emitLine("OK pincensus");
 #if defined(NRF52840_XXAA)
+  } else if (cmd.startsWith("fillstore")) {
+    // BENCH ONLY — fill the trace region fast, to test the ONE storage path
+    // no test has ever reached: findTraceAppendPoint() walking a nearly-full
+    // region at boot. docs/plan.md §3.4 flags it as a session risk ("~19k
+    // blocks on a full trace region... a well-used puck would reset there,
+    // latch StoreGuard, and run the whole session storage-less"). Watchdog
+    // feeds were added on 2026-08-14 and have never been exercised against a
+    // full region, because filling one honestly takes ~5 h of recording.
+    //
+    // This writes synthetic-but-VALID trace lines through the real
+    // trace_append() path — same encoder, same blocks, same CRCs — so the
+    // boot scan afterwards faces exactly what a long session would leave.
+    // Usage: `fillstore <kb>` (default 256). Feeds the watchdog every line.
+    long kb = 256;
+    const int sp = cmd.indexOf(' ');
+    if (sp > 0) { const long v = cmd.substring(sp + 1).toInt(); if (v > 0) kb = v; }
+    emitf("# fillstore: writing ~%ld KB of synthetic trace...\n", kb);
+    char line[40];
+    uint32_t written = 0;
+    const uint32_t target = (uint32_t)kb * 1024u;
+    float t = 1000.0f;
+    bool full = false;
+    while (written < target && !full) {
+      t += 0.02f;
+      const int n = snprintf(line, sizeof(line), "%.3f,%.3f\n",
+                             (double)t, (double)(1.0f + 0.001f * (written % 100)));
+      if (n <= 0) break;
+      full = jh_store::trace_append(line, (size_t)n);
+      written += (uint32_t)n;
+      jh_link::watchdog_feed();
+      if ((written % 65536u) < (uint32_t)n) {
+        emitf("# fillstore: %lu KB, trace_bytes=%lu%s\n",
+              (unsigned long)(written / 1024u),
+              (unsigned long)jh_store::trace_bytes(), full ? " FULL" : "");
+      }
+    }
+    emitf("# fillstore: wrote %lu bytes, trace_bytes=%lu, region_full=%d\n",
+          (unsigned long)written, (unsigned long)jh_store::trace_bytes(), (int)full);
+    emitLine("OK fillstore");
   } else if (cmd == "dcdc") {
     // BENCH EXPERIMENT, deliberately NOT at boot. The nRF52840's internal
     // DC/DC typically saves ~40% of MCU current, but it needs external

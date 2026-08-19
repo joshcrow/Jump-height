@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<!--
+  Only the app name lives here. Everything the glance draws ("searching",
+  "no BLE", the percentage) is a plain Monkey C literal in the view, same
+  call jumpfield's strings.xml documents: those are fixed UI chrome inside
+  a memory-budgeted context, not localisable settings.
+-->
+<strings>
+    <string id="AppName">Puck Battery</string>
+</strings>

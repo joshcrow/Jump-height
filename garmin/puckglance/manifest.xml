@@ -1,0 +1,70 @@
+<?xml version="1.0"?>
+<!--
+  Puck Battery glance — manifest.
+
+  WHY A SEPARATE PROJECT FROM garmin/jumpfield/:
+  a manifest declares exactly ONE <iq:application> with ONE type=. The data
+  field is type="datafield"; a glance can only be attached to an app the
+  system puts in the glance list (watch app / widget). One .prg = one app
+  type, so shipping both means shipping two .prg files. They can share
+  source via monkey.jungle include paths later, but they cannot share a
+  manifest. See README.md "Two apps, not one".
+
+  WHY type="watch-app" AND NOT type="widget":
+  the string is "watch-app", hyphenated. The camelCase spelling is the JSON
+  one and monkeyc rejects it in XML:
+    ERROR: Could not read manifest file '.../manifest.xml':
+           Unknown app type: watchApp
+  (observed 2026-08-18, SDK 9.2.0). The full XML set, read out of
+  monkeybrains.jar's AppTypeManager$AppType, is: audio-content-provider-app,
+  background, datafield, glance, watch-app, watchface, widget, barrel.
+
+  "widget" ALSO compiles for epix2 — that was measured, not assumed, and it
+  produced a byte-identical .prg. It is still the wrong choice here:
+  ~/Library/Application Support/Garmin/ConnectIQ/Devices/epix2/compiler.json
+  lists what this device actually defines —
+    audioContentProvider, background, datafield, glance, watchApp, watchFace
+  — and "widget" is NOT among them. epix2 ships Connect IQ 5.2.0 (same file,
+  partNumbers[].connectIQVersion), where the widget carousel is gone and a
+  glance-able mini-app IS a watch app that implements getGlanceView(). So the
+  compiler is not the authority on this; the device file is. If the sideload
+  in README.md's "How to build and sideload" ever shows no glance row, the
+  first thing to try is flipping this one attribute to "widget".
+
+  minApiLevel 4.0.0, not 3.1.0: GlanceView and getGlanceView() exist from
+  3.1.0, but the SDK's Glances doc (doc/docs/Core_Topics/Glances.html) says
+  "In API level 4.0.0 and above, apps and widgets must implement a glance
+  view to appear in the glance list" — 4.0.0 is the level at which the
+  behaviour this app depends on is the documented one rather than the
+  fallback-to-default-glance one.
+-->
+<iq:manifest version="3" xmlns:iq="http://www.garmin.com/xml/connectiq">
+    <iq:application entry="PuckGlanceApp" id="4E3D1C7A9B2F45A6BE18C0D3F7512E64"
+                    name="@Strings.AppName" type="watch-app" minApiLevel="4.0.0"
+                    launcherIcon="@Drawables.LauncherIcon">
+        <!--
+          epix2 only, on purpose: it is the watch physically on the bench
+          (GarminDevice.xml part number 006-B3943-00 — see jumpfield's
+          manifest comment). Other products are a later concern; a .prg is
+          per-device anyway, so a speculative product list buys nothing and
+          costs a compile against layouts nobody has looked at.
+        -->
+        <iq:products>
+            <iq:product id="epix2"/>
+        </iq:products>
+        <iq:permissions>
+            <!--
+              BLE central: scan ONLY. This app never calls pairDevice() or
+              registerProfile() — it reads the puck's advertisement, which is
+              the whole point (the puck is already advertising
+              [batt_pct][flags] under company ID 0xFFFF in its scan response,
+              verified on hardware 2026-08-18). There is no separate
+              "scan-only" permission in Connect IQ; BluetoothLowEnergy is it.
+            -->
+            <iq:uses-permission id="BluetoothLowEnergy"/>
+        </iq:permissions>
+        <iq:languages>
+            <iq:language>eng</iq:language>
+        </iq:languages>
+    </iq:application>
+</iq:manifest>
