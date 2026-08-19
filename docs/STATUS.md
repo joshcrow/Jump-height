@@ -42,6 +42,25 @@ do not.**
 
 ## 2026-08-19
 
+### Download integrity at 13.4 MB — byte-exact, twice; and the OG's data survived its death
+- **State:** proven-on-hardware (2026-08-19 ~11:35)
+- **The big one:** the spare's filled region (**13,434,228 bytes**) downloaded
+  **twice over USB, byte-for-byte identical** — matching sha256
+  (`a037bb62…`), **874,203 well-formed data rows**, ~3.5 min per pull. That is
+  **36 % larger than the previous best verification** (9.87 MB, 2026-08-14)
+  and far beyond any real session.
+- **Why this path deserves the paranoia:** `docs/plan.md` §3.3 calls a session
+  that records perfectly and downloads incompletely "the cruellest possible
+  failure", and this exact path *had* a silent-drop bug — `emitBytes`
+  discarding whole blocks whenever the serial buffer ran short, reproduced
+  and fixed on 2026-08-14 with `emitBytesReliable`. Re-verifying it at 13.4 MB
+  says the fix scales well past anything the water day can produce.
+- **Separately: the OG's data survived a total battery death.** After the 34 h
+  run to collapse and the unmounted-flash scare, `jump sync` pulled all 3
+  jumps back cleanly (best 1.285 m — the toss the watch reconciled at M2).
+  Session `data/sessions/20260819-112656/`.
+
+
 ### TWO-CENTRAL concurrent export: PASS — the original corruption bug's own configuration
 - **State:** proven-on-hardware (OG, `ef37e568`, 2026-08-19 ~10:55)
 - **The test `ble-dependability.md` §5 asked for and nobody had run.** Two
