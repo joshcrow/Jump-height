@@ -203,6 +203,12 @@ class JumpFieldView extends WatchUi.DataField {
         if (_model.rejectedCount() > 0) {
             countText += " !" + _model.rejectedCount().toString();
         }
+        // Storage down outranks everything else in the header: a puck in this
+        // state looks perfectly healthy and saves NOTHING. Losing the jump
+        // count off the glass beats letting a silent no-record session run.
+        if (_model.storageDown()) {
+            countText = "NO REC";
+        }
         var nameX = hLeft + dotR * 2 + gap;
         var minGap = w / 16;
         var headerFont = _fitPair(dc, _puckName, countText,

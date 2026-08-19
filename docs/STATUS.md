@@ -43,6 +43,28 @@ do not.**
 ## 2026-08-19
 
 
+### DATA SURVIVES A TOTAL BATTERY DEATH — and storage now self-heals
+- **State:** proven-on-hardware (OG, 2026-08-19 ~09:00)
+- **The question the death run existed to answer: answered.** After a 34 h
+  run to genuine collapse (final board-read ~2.35 V, cell PCM latched off —
+  the owner's multimeter read 0 V at the pads, which is the protection
+  working), the OG rebooted with its flash unmounted and reported
+  `stored_jumps=0 trace_bytes=0`. One `mount` command once the supply
+  recovered restored **all 3 jumps, best 1.285 m, 150,034 trace bytes.
+  Nothing was lost.** A dead battery does not cost the session's data.
+- **But nobody types `mount` at a beach.** So the retry is now AUTOMATIC:
+  while storage is down the main loop retries `try_mount()` every 30 s inside
+  the same StoreGuard bracket as boot, silently, and announces
+  `# storage RECOVERED automatically` when it succeeds.
+- **And the watch now says so.** `fs=down` (already emitted by STATS) is
+  consumed by the field, and the header shows **`NO REC`** in place of the
+  jump count — deliberately outranking everything else, because a puck in
+  this state looks perfectly healthy and saves nothing. Not sticky: the
+  firmware can self-heal, and a stale alarm is its own kind of lie.
+  46/46 watch tests on epix2 and instinct3solar45mm.
+- **Correction to the entry below:** it called this "session-critical" and
+  feared data loss. The data was never at risk — the *recording window* was.
+
 ### DEATH-RUN AFTERMATH: a brownout reboot leaves the flash UNMOUNTED — session-critical
 - **State:** observed on hardware (OG, `0c09863c`, 2026-08-19 ~08:20), recovery
   test pending.

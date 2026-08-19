@@ -95,6 +95,13 @@ module Model {
                                               // tolerate-unknown rule in
                                               // reverse)
         hidden var _puckCharging as Boolean;
+        hidden var _storageDown as Boolean;   // puck flash not mounted — it
+                                              // looks healthy and records
+                                              // NOTHING (measured 2026-08-19:
+                                              // a reboot on a flat cell leaves
+                                              // the QSPI unmounted while BLE
+                                              // and sensor are fine). Reported
+                                              // by the STATS adder key fs=down.
         hidden var _rejected as Number;       // lines dropped by the corruption
                                                // gate; a nonzero value means the
                                                // link is delivering damaged data
@@ -106,6 +113,7 @@ module Model {
             _bestAirtimeS = 0.0;
             _jumpCount = 0;
             _rejected = 0;
+            _storageDown = false;
             _lastUpdateMs = null;
             _staleSinceMs = null;
             _puckBattPct = null;
@@ -171,6 +179,7 @@ module Model {
         function puckBattPct() { return _puckBattPct; }  // Number or null
         function puckCharging() as Boolean { return _puckCharging; }
         function rejectedCount() as Number { return _rejected; }
+        function storageDown() as Boolean { return _storageDown; }
 
         // Returns true if this JUMP line cannot have come intact off the wire.
         // Compatible with spec §5.2's "tolerate unknown lines/keys (skip)":
@@ -286,6 +295,12 @@ module Model {
             if (ba != null && ba >= 0.0 && ba <= 10.0 && ba > _bestAirtimeS) {
                 _bestAirtimeS = ba;
             }
+            // Storage state. fs=down is an adder key: present ONLY when the
+            // puck's flash is unmounted, so absence means healthy. Deliberately
+            // NOT sticky — the firmware retries the mount every 30 s and can
+            // self-heal, and a stale alarm is its own kind of lie.
+            var fs = kv.get("fs");
+            _storageDown = (fs != null && fs.equals("down"));
             // Battery adder keys (absent on v1 pucks — leave prior state).
             var bp = _toNumber(kv.get("batt_pct"));
             if (bp != null) { _puckBattPct = bp; }

@@ -1167,6 +1167,34 @@ void loop() {
   pollSerial();
   jh_link::poll(handleCommand);  // BLE commands run through the same path as serial
   jh_link::pump();               // send at most one paced BLE chunk — never blocks
+  // SELF-HEALING STORAGE. Measured 2026-08-19: a puck that reboots on a
+  // nearly-flat cell comes up with the QSPI flash unmounted — the chip needs
+  // more supply than the MCU and radio do — and then looks PERFECTLY healthy
+  // (BLE up, sensor up, watch connected) while recording nothing. The manual
+  // `mount` command already recovers it: on the OG, one `mount` after the
+  // supply came back restored all 3 jumps and 150,034 trace bytes, nothing
+  // lost. But nobody types `mount` at a beach, and the only other symptom is
+  // one self-test row.
+  //
+  // So retry it automatically, slowly (every 30 s) and only while down. The
+  // same StoreGuard bracket as boot and the `mount` command, so a hang costs
+  // one watchdog reset and re-latches the skip rather than repeating forever.
+  if (!fs_ok) {
+    static uint32_t last_remount_ms = 0;
+    const uint32_t now_rm = millis();
+    if (now_rm - last_remount_ms > 30000UL) {
+      last_remount_ms = now_rm;
+      jh_persist::save(jh_persist::Key::StoreGuard, 1.0f);
+      fs_ok = jh_store::try_mount(nullptr);   // silent: no chatter every 30 s
+      jh_persist::save(jh_persist::Key::StoreGuard, 0.0f);
+      if (fs_ok) {
+        scanStoredJumps();
+        emitf("# storage RECOVERED automatically: %lu jumps, best %.2f m\n",
+              (unsigned long)stored_jumps, (double)stored_best);
+      }
+    }
+  }
+
   if (jh_link::takeGreetPending()) bleGreet();  // greet a client that just subscribed
   if (!sensor_ok) { delay(10); return; }  // command loop still runs; sampling paused
 

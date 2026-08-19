@@ -315,3 +315,19 @@ function testStats_reseedsBestAirtime(logger) {
     Test.assertEqual(m.bestAirtimeS(), 1.023);
     return true;
 }
+
+(:test)
+function testStats_storageDownIsSurfacedAndClears(logger) {
+    // Measured on hardware 2026-08-19: a puck rebooting on a flat cell comes
+    // up with its flash unmounted, looks healthy, and records nothing. The
+    // watch must show that -- and must clear it when the puck self-heals,
+    // because the firmware now retries the mount every 30 s.
+    var m = new Model.State();
+    m.onLine(Protocol.parseKV(
+        "STATS session_jumps=2 session_best_m=1.0 stored_jumps=0 trace_bytes=0 fs=down"));
+    Test.assertEqual(m.storageDown(), true);
+    m.onLine(Protocol.parseKV(
+        "STATS session_jumps=2 session_best_m=1.0 stored_jumps=3 trace_bytes=99"));
+    Test.assertEqual(m.storageDown(), false);
+    return true;
+}
