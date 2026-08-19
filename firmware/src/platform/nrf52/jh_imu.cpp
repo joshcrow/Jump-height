@@ -59,6 +59,8 @@
 
 #include "platform/jh_imu.h"
 
+#include "platform/jh_link.h"  // watchdog_feed for the revive-delay feeds (task #18)
+
 #include <Arduino.h>
 #include <Wire.h>      // bus_diag control: stock Wire1 A/B
 #include <nrf_gpio.h>  // bus_diag rail-enable readback (no rail edge)
@@ -182,7 +184,16 @@ bool revive() {
   nrf_gpio_cfg(rail, NRF_GPIO_PIN_DIR_OUTPUT, NRF_GPIO_PIN_INPUT_CONNECT,
                NRF_GPIO_PIN_NOPULL, NRF_GPIO_PIN_H0H1, NRF_GPIO_PIN_NOSENSE);
   nrf_gpio_pin_clear(rail);
-  delay(600);
+  // WDT feeds bracketing the deliberate delays (task #18 intervention
+  // experiment): revive-over-BLE resets the board while revive-over-USB does
+  // not, and this feed-less stretch is the prime suspect. If these feeds stop
+  // the BLE resets, the cause is proven the same way selftest's was. The
+  // delays themselves are sequencing physics and must not shrink.
+  ::jh_link::watchdog_feed();
+  delay(300);
+  ::jh_link::watchdog_feed();
+  delay(300);
+  ::jh_link::watchdog_feed();
   nrf_gpio_pin_set(rail);
   // 120 ms, not 45. Datasheet Ton is 35 ms, but this rail is fed from a
   // GPIO pad through a 100 nF cap, so the rise is slower and softer than a
@@ -192,6 +203,7 @@ bool revive() {
   // kind of margin. The `i2cdiag` sweep used 120 ms and never missed.
   // A tenth of a second on a bench-recovery command costs nothing.
   delay(120);
+  ::jh_link::watchdog_feed();
   return true;
 }
 
