@@ -42,6 +42,34 @@ do not.**
 
 ## 2026-08-19
 
+### FAST CHARGE WORKS — verified end to end, saga closed
+- **State:** proven-on-hardware (OG, `ef37e568`, 2026-08-19 ~10:30)
+- **Cause side:** `hichg=1` while `chg=1` — the firmware is driving P0.13 for
+  the first time ever. The same readback said `hichg=0` on the pre-fix build
+  minutes earlier, on the same board, charging: a clean A/B on the instrument
+  itself.
+- **Effect side, against the archived 50 mA baseline** (`data/soaks/
+  20260810-charge-and-stability-soak.csv`, same board, same cell):
+
+  | span | 50 mA baseline | with fix | ratio |
+  |---|---|---|---|
+  | 3600 → 3700 mV | 51 min | **32 min** | **0.63** |
+
+  Not the textbook 0.50 — expected, since the board's own ~10 mA draw is
+  subtracted from charge current at both settings (≈40 net vs ≈90 net, ratio
+  0.44 on current, blunted by the CV taper starting inside this span). The
+  direction and magnitude are unambiguous, and four prior measurements of the
+  broken build all sat at ratio ~1.0.
+- **The whole chain, for the record:** shipped 08-16 → measured not working
+  four independent ways → `hichg=` readback built 08-17 → readback said the
+  pin was never driven 08-18 → root cause found the same day (a `#define` in
+  `main.cpp` consumed by `#if` in `jh_power.cpp`, a different translation
+  unit, so the feature compiled to nothing) → fix flashed and proven 08-19.
+- **Practical:** a quarter-to-full top-up drops from ~4 h to ~2 h, and the
+  cell's own 250 mA ceiling means the charger — not the battery — remains the
+  limit (task #20).
+
+
 
 ### DATA SURVIVES A TOTAL BATTERY DEATH — and storage now self-heals
 - **State:** proven-on-hardware (OG, 2026-08-19 ~09:00)
