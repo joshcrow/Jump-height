@@ -42,6 +42,35 @@ do not.**
 
 ## 2026-08-18
 
+### Advertised battery + state: "puck 78%" WITHOUT connecting — PROVEN
+- **State:** proven-on-hardware (spare `55d41d67`, 2026-08-18 ~23:25)
+- **The layer-5 UX win from `ble-dependability.md`**, built and verified: the
+  puck now broadcasts manufacturer data `[FF FF][batt_pct][flags]` in its scan
+  response. A passive scan reads **`JumpHeight-45ED → battery 97 %,
+  charging=false`** with **no connection at all**; the OG beside it on old
+  firmware shows `mfr=NONE` — a perfect same-air control.
+- **Refresh verified:** after a connect/disconnect cycle the payload re-read
+  the battery (97 → 99 %, the expected float on a cell-less board), proving
+  the re-arm path republishes rather than serving a stale boot value.
+- **Design choices worth keeping:** company ID `0xFFFF` is the SIG's
+  reserved-for-development ID (inventing a real one would be squatting); the
+  payload lives in the SCAN RESPONSE because the primary packet is already 24
+  of 31 bytes and a failed advertising start is a dead puck; refresh happens
+  at advertising (re)start rather than on a timer, since live updates would
+  mean stop/clear/restart and could disturb a connecting client.
+- **What it unlocks:** the watch can distinguish *asleep / out of range /
+  flat* instead of one ambiguous "no BLE", and show puck battery before
+  pairing. Watch-side consumption is the remaining half.
+
+### Flash delivery: the UF2 recipe that actually works, and two traps
+- `cp` onto the mounted `XIAO-SENSE` volume fails **permission denied**; `cat >`
+  works but silently failed once behind a `;`-chained `echo`; **`dd` is the
+  reliable writer** (`dd if=fw.uf2 of=/Volumes/XIAO-SENSE/x.uf2 bs=64k`).
+- The software `uf2` command mounts MSC **minutes late or not at all**; the
+  physical double-tap mounts it in ~6 s. Gold path: tap → `dd` → board
+  self-reboots → verify `src=`.
+
+
 ### Endurance, corrected upward: ≥25.7 h idle, not ~15 h
 - Every "~15 h" figure in this project traces to one `batt_pct` extrapolation
   through a region nobody had measured. The death run measured it: **25.7 h
