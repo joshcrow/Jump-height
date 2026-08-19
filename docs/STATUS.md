@@ -42,6 +42,32 @@ do not.**
 
 ## 2026-08-18
 
+### Late night: the flash-roulette RCA, the crash reproduced, the instrument blind again
+- **The evening's dark flashes were DELIVERY, not code.** Unconfounded trial
+  at 21:09: UF2-via-double-tap delivered `dac58553` and it booted immediately
+  — after the same image had gone "dark" through serial-DFU three times. The
+  serial-DFU path wedges under rapid flash cycling and then produces
+  transfer-success-without-activation; every boot-guilt verdict issued
+  through it tonight was confounded. **UF2 via double-tap is the gold
+  delivery path; the drive appearing is the proof the tap was real** (all
+  earlier "taps" were single resets — the button is hard to press).
+- **revive-over-BLE reproduced on the full-fix build:** BLE revive at 21:12 →
+  reset (uptime 98 s → 37 s). The selftest WDT feeds do not cover it;
+  `jh_imu::revive()`'s ~1 s feed-less section remains the prime suspect,
+  unproven. Bench rule stands: revive over USB only. No session path calls it.
+- **The breadcrumb instrument is blind: GPREGRET2 is bootloader-cleared**,
+  exactly like RESETREAS. `crumb=` read absent seconds after a confirmed
+  crash. Third instrument design queued: a jh_persist key (InternalFS
+  survives the bootloader). Same lesson, second register: on this platform,
+  nothing in POWER's retained registers survives to the app.
+- **Secondary observation:** post-crash the app's USB CDC went silent (three
+  probes) while BLE answered perfectly — filed with task #18.
+- **Board states at close:** spare healthy on `dac58553` (full batch:
+  identity + fast-charge fix + airtime + breadcrumbs) — which UPGRADES the
+  OG's endgame target back to the full batch, now silicon-proven. OG at
+  3517 mV, hour 24+, still dying.
+
+
 ### Evening: crash-breadcrumb instrument shipped; spare wedged in the dark bootloader
 - **State:** instrument built and committed (`7e34154`, build `de849fbb`,
   simtest + both watch targets green); diagnosis of the revive-over-BLE reset
