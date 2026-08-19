@@ -266,6 +266,14 @@ note). The rest are recorded in the review artifact, not here.
 
 ---
 
+**CELL IDENTIFIED 2026-08-18:** LP502030 + PCM, 250 mAh typ, 3.0 ± 0.1 V
+over-discharge cutoff, 250 mA max charge, JST-PHR-02 2 mm pigtail. This makes
+the nameplate capacity a *specified* figure rather than an assumption, and it
+retires §7's protection-threshold caveat. The strongest consequence is in
+STATUS.md: 25.7 h of runtime on 250 mAh bounds idle draw at ≤10 mA by
+conservation of charge — no percentage curve involved, and it refutes the
+16.3 mA the gauge produced.
+
 Sources:
 - [Battery University BU-903: How to Measure State of Charge](https://batteryuniversity.com/article/bu-903-how-to-measure-state-of-charge)
 - [Nordic Semiconductor Power Profiler Kit II](https://www.nordicsemi.com/Products/Development-hardware/Power-Profiler-Kit-2)
