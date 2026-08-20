@@ -1069,6 +1069,55 @@ void close_read() {
 }
 
 // ------------------------------------------------------------- housekeeping
+// TRACE-ONLY CLEAR — the storage-lifecycle primitive (docs/garmin-only.md §3,
+// owner go-ahead 2026-08-19 "as long as we're smart about it").
+//
+// Why a separate function rather than reusing clear(): jumps are the USER'S
+// history — the watch reseeds its session from `stored_jumps` on every
+// reconnect, and 2048 records is ~100 sessions. The trace is the thing that
+// actually fills (~5 h) and the thing only we need. Wiping jumps to make
+// room for trace would trade the user's data for ours.
+//
+// Same fed erase path as clear(), for the same reason: a full trace region is
+// 495 sectors at ~40 ms, which without feeds is a guaranteed watchdog reset
+// (reproduced 2026-08-19).
+//
+// The superblock is rewritten LAST and s_fs_ok gates on it, exactly as
+// clear() does — a half-finished erase must never look like success.
+void trace_clear() {
+  if (!s_fs_ok) return;
+  flashWake();
+
+  auto erase_fed = [](uint32_t sector) -> bool {
+    ::jh_link::watchdog_feed();
+    const bool ok = s_flash.eraseSector(sector);
+    ::jh_link::watchdog_feed();
+    return ok;
+  };
+
+  const uint32_t trace_sectors_used =
+      (s_trace_append_off + SECTOR_BYTES - 1) / SECTOR_BYTES;
+  bool all_erased = true;
+  for (uint32_t i = 0; i < trace_sectors_used; ++i) {
+    all_erased &= erase_fed((s_trace_region_start / SECTOR_BYTES) + i);
+  }
+  // The superblock carries the append offsets, so it must be rewritten even
+  // though the jumps region itself is untouched.
+  all_erased = all_erased && erase_fed(0);
+  const bool wrote_sb = all_erased && writeSuperblock();
+
+  s_trace_append_off = 0;
+  s_trace_csv_bytes  = 0;
+  s_trace_csv_header_counted = false;
+  s_trace_full       = false;
+  s_trace_block_open = false;
+  // jumps state deliberately untouched: s_jumps_append_off, s_jumps_count and
+  // s_jumps_best_m all survive.
+
+  s_fs_ok = wrote_sb;
+  flashSleep();
+}
+
 void clear() {
   if (!s_fs_ok) return;
   flashWake();

@@ -183,6 +183,16 @@ void close_read() {
   }
 }
 
+void trace_clear() {
+  // Host store is CSV files; truncating trace.csv is the equivalent, and
+  // jumps.csv is deliberately left alone.
+  FILE* f = std::fopen(tracePath().c_str(), "wb");
+  if (f) std::fclose(f);
+  s_trace_bytes = 0;
+  s_trace_header = false;
+  s_trace_full = false;
+}
+
 void clear() {
   if (s_fs_ok) {
     std::remove(jumpsPath().c_str());

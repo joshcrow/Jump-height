@@ -83,6 +83,11 @@ static const float    G                  = JH_G;
 static const uint32_t SAMPLE_INTERVAL_US = 1000000UL / JH_SAMPLE_HZ;
 static const int      LOG_DECIMATE       = JH_SAMPLE_HZ / JH_LOG_HZ;
 static const uint32_t IDLE_TIMEOUT_MS    = (uint32_t)JH_IDLE_TIMEOUT_S * 1000UL;
+// Session-boundary threshold for the storage-lifecycle auto-clear. Chosen to
+// sit well above any in-session pause (sitting on the board, a beach break)
+// and well below the gap between outings. Only ever consulted when the trace
+// is already full — see the rule in loop().
+static const uint32_t AUTO_CLEAR_IDLE_MS = 3600UL * 1000UL;  // 1 h
 
 jump::Detector detector;
 jump::GyroBias gyro_bias;
@@ -1260,10 +1265,49 @@ void loop() {
 
   // --- motion gate ---
   const uint32_t now_ms = millis();
-  if (fabsf(mag - 1.0f) > JH_MOTION_THRESH_G) {
+  const bool     moved_now = fabsf(mag - 1.0f) > JH_MOTION_THRESH_G;
+  // How long the board was STILL, captured before last_motion_ms is updated —
+  // the auto-clear rule below needs the idle span that just ended, and after
+  // the update it would always read zero.
+  const uint32_t idle_ms = now_ms - last_motion_ms;
+  if (moved_now) {
     last_motion_ms = now_ms;
     motion_seen    = true;
   }
+  // ---- STORAGE LIFECYCLE: reclaim a dead trace at a session boundary ----
+  // The problem (docs/garmin-only.md §3): the trace region is append-only and
+  // holds ~5 h. Once full it records NOTHING, forever, with no symptom the
+  // watch can show — jumps keep flowing and jumps are all the watch sees. A
+  // user who never opens a laptop would silently stop keeping raw data.
+  //
+  // The rule is deliberately narrow, because auto-clearing is auto-DELETING.
+  // All three must hold:
+  //   1. the trace is ALREADY FULL — so it is recording nothing, and clearing
+  //      it cannot make the present worse. This is what makes the whole thing
+  //      safe: we never delete a trace that is still doing its job.
+  //   2. the board has been still for AUTO_CLEAR_IDLE_MS — a session boundary,
+  //      not a pause. An hour is far longer than sitting on the board between
+  //      runs and far shorter than the gap between outings.
+  //   3. motion has just resumed — a new session is actually starting, so the
+  //      space is about to be needed.
+  // And it clears the TRACE ONLY: jumps are the user's history and the watch's
+  // reconnect source (jh_store::trace_clear()).
+  //
+  // The trade it makes, stated plainly: OLD raw data is sacrificed so the
+  // CURRENT session records. Losing the session you are actually riding is
+  // worse than losing one you already had a chance to sync. Sync first (phone
+  // or laptop) if the old trace matters.
+  static uint32_t auto_clears = 0;
+  if (moved_now && motion_seen && idle_ms >= AUTO_CLEAR_IDLE_MS &&
+      jh_store::ok() && jh_store::trace_is_full()) {
+    emitLine("# trace region was FULL and a new session is starting —");
+    emitLine("# clearing the trace to make room. Stored jumps are untouched.");
+    jh_store::trace_clear();
+    ++auto_clears;
+    emitf("# trace cleared (auto #%lu) — recording resumes\n",
+          (unsigned long)auto_clears);
+  }
+
   const bool was_active = active;
   active = motion_seen && (now_ms - last_motion_ms) < IDLE_TIMEOUT_MS;
   if (active && !was_active) emitLine("STATE recording");

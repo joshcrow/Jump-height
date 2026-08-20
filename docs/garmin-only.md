@@ -99,11 +99,39 @@ everything looks healthy, and something quietly stopped.
    own activity file, which syncs to Garmin Connect without us. Costs the
    ability to re-analyse a session later.
 
-**Leaning: (2), with the web app as the manual override.** Auto-clear at
+**DECIDED 2026-08-19 (owner: "a go as long as we're smart about it"), option
+(2), implemented with a deliberately narrow rule — see below.
+Leaning-as-written, kept for the trail:** Auto-clear at
 session start means the common case needs nobody; the phone covers the rest.
 Option (4) — "declare the trace a developer luxury" — is now **rejected**:
 §1b makes the trace the training data for time-on-foil and every metric after
 it.
+
+### 3a. What was actually built (2026-08-20)
+
+`jh_store::trace_clear()` — erases the trace region **only**, leaving every
+stored jump intact, through the same watchdog-fed erase path that `clear()`
+needed. Jumps are the user's history and the watch's reconnect source; wiping
+them to make room for trace would trade the user's data for ours.
+
+The policy in `main.cpp` fires only when **all three** hold:
+
+1. **the trace is already FULL** — so it is recording nothing, and clearing it
+   cannot make the present worse. This is the safety keystone: a trace that is
+   still doing its job is never touched.
+2. **the board has been still for ≥1 h** — a session boundary, not a pause.
+   Far longer than sitting on the board between runs; far shorter than the gap
+   between outings.
+3. **motion has just resumed** — a session is actually starting, so the space
+   is about to be needed.
+
+The trade, stated plainly in the code: old raw data is sacrificed so the
+current session records. **Losing the session you are actually riding beats
+losing one you already had a chance to sync.** Sync first — phone or laptop —
+if an old trace matters.
+
+Deliberately NOT done: clearing on a timer, on boot, or whenever the trace is
+merely getting full. Each of those can delete a trace that is still working.
 
 ## 4. What this reprioritises
 
