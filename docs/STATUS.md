@@ -688,6 +688,73 @@ do not.**
   measurement exists neither entry should be promoted — this note exists so the
   contradiction is visible rather than resolved by guesswork.
 
+## 2026-08-20
+
+### Pre-flight review: six confirmed defects, all in the "safety" code
+- A 12-agent adversarial review of the 48 h firmware batch returned **six
+  high-severity findings, all confirmed against source before fixing**
+  (`556b529`). Every one was in the self-healing storage work written in the
+  previous two days — the code added to make the puck *safer*.
+- **The pattern, which is the real lesson:** each defect made a FAILURE path
+  worse while leaving the success path perfect. A bench test whose mount
+  succeeds, whose erase completes, whose download matches, sees none of them.
+  That is why they survived being "tested" individually.
+  1. `try_mount(nullptr)` → `announce()` unguarded on both failure paths = a
+     branch to address 0. HardFault → reset, **only when storage was actually
+     down**. Would have reset the puck every ~30 s in exactly the scenario the
+     feature exists for.
+  2. The retry wrote `StoreGuard` but never read it, so its own comment claimed
+     a property it did not have. A hang → WDT reset → boot skips → retry
+     ignores the latch → hangs again, every ~33 s, forever.
+  3. `trace_clear()` erased **ascending**; an interrupted erase leaves a valid
+     superblock over a region the boot scan then reads as blank, so new samples
+     AND-merge onto old ones. NOR only clears bits: no error, growing STATS,
+     export silently truncated. Now **descending** — interruption leaves data
+     below, erased space above, and the scan finds the boundary.
+  4. `trace_clear()` erased sector 0 on a **false premise** ("the superblock
+     carries the append offsets" — it does not; they are rebuilt by the boot
+     scan). That bought nothing and created a ~40 ms no-valid-superblock window
+     whose power-loss outcome is **auto-format of the whole chip** — every
+     stored jump destroyed by the one function contracted never to touch them.
+  5. A failed `trace_clear` desynced `jh_store::ok()` from main's `fs_ok`
+     mirror: records nothing, reports healthy, and the `if (!fs_ok)` self-heal
+     gate never opens.
+  6. `web/app.js`'s integrity gate **refused every download** in the only test
+     that exercised it — and that test asserted the save path, so total
+     rejection looked identical to correct operation.
+- **Also:** `web/app.js` held a raw NUL byte, which made the whole file binary
+  to `grep`. Every search of the app silently returned nothing — which is how
+  finding 6 stayed invisible *while being searched for*. Now an escape.
+- 174/174 host tests pass. **Not yet flashed** — the batch goes on after the
+  DC/DC window closes.
+
+### DC/DC: same-window comparison says ~0.72x current, with one open confound
+- Method is the project's own repeatable comparator: **time to traverse a fixed
+  voltage window** (3980 → 3830 mV), not an average mV/h across different parts
+  of a non-linear curve.
+
+  | run | window time | implied |
+  |---|---|---|
+  | night 2 (no DC/DC) | 5.58 h | baseline |
+  | night 3 (no DC/DC) | 5.49 h | baseline |
+  | **DC/DC** | **7.70 h** | **1.39x longer → ~0.72x current** |
+
+- The two baselines agree to **1.6 %**, which is the noise floor this method was
+  claimed to have — so a 39 % separation is far outside it.
+- **Radio contamination ruled out by measurement, not assertion:** BLE duty
+  cycle inside the window is 0.7 % / 0.6 % / 0.5 % respectively. The DC/DC run
+  is the *least* sampled, but 0.2 % of duty cycle cannot buy 39 %.
+- **The death run is NOT a third baseline.** It shows 6.81 h only because the
+  window fell inside `battlog`'s unsampled control gap (<3 samples in window);
+  the figure is interpolated across that gap and should be discarded, not
+  treated as baseline spread.
+- **OPEN CONFOUND, stated plainly:** the baselines are the OG board, the DC/DC
+  run is the spare. This is a cross-board comparison, so it does not isolate
+  DC/DC from per-board idle variation. **To close it:** run the same window on
+  the spare with DC/DC off. Until then the number is "consistent with the
+  predicted ~40 % MCU cut", not proof of it.
+- Projected on this rate: the 4.10 → 3.50 V window goes ~20 h → ~30 h.
+
 ## 2026-08-17
 
 ### 2026-08-17 background session: BLE-selftest reset ROOT-CAUSED AND FIXED; two traps found on the way
