@@ -728,24 +728,35 @@ do not.**
 - 174/174 host tests pass. **Not yet flashed** — the batch goes on after the
   DC/DC window closes.
 
-### The spare (45ED) has an intermittent battery connection — do not trust it
-- Found while identifying which board was which. Pinned reads of
-  `JumpHeight-45ED` within a few minutes: **3742 mV / 23 %**, then
-  **4133 mV / 97 %**, then **no answer at all** (5 consecutive attempts).
-- 4133 mV / 97 % is the exact floating-rail signature this project has already
-  been burned by once (a second board answered a logger mid-death-run and wrote
-  its floating 97 % into the record). A real 250 mAh cell cannot go 3742 → 4133
-  mV unassisted, so that reading is not a measurement of anything.
-- **Reading: the cell is not reliably connected** — loose JST pigtail, a PCM
-  cutting in and out, or a failing contact. It is a hardware fault, not a
-  firmware one, and it is on the board that was going to carry the fix batch.
-- **Consequences:** (1) do not desk-test or take this board near water until
-  the connection is fixed and proven; (2) any battery figure ever logged from
-  45ED unpinned is suspect; (3) `tools/battlog.py --name/--addr` pinning is not
-  optional with two boards on the air — this is the second time board identity
-  has corrupted an analysis.
-- **The OG (E2C4) is healthy** by contrast: 3810-3813 mV / 42 %, stable across
-  repeated reads, 23.8 h continuous uptime.
+### RETRACTED same day: the spare has no battery at all — the readings were floating, and I called it a fault
+- I recorded an "intermittent battery connection" on the spare after pinned
+  reads gave 3742 mV / 23 %, then 4133 mV / 97 %, then no answer. **Wrong.**
+  Owner: *"The spare has no battery. It's on USB. The OG is the only one with
+  soldered pigtails and a battery."*
+- With no cell on the divider the ADC input floats, so **both** numbers were
+  noise — not one real reading and one floating one. A floating input drifting
+  between 3742 and 4133 mV is exactly what it should do; there was never a
+  connection to be intermittent. The board is fine.
+- **This is the THIRD wrong "bad hardware" verdict in this project** (the two
+  earlier ones are in docs/xiao-hardware-truth.md and the session card's "Do
+  not diagnose it at the beach"). Same failure shape every time: an anomalous
+  reading treated as evidence about the board before establishing what the
+  board's configuration actually was. The cheap check I skipped was asking
+  which boards even have cells attached.
+- **What is actually true, and load-bearing for the session:**
+  - **Only the OG (E2C4) has a battery.** It is therefore the only board that
+    can run untethered — every drain figure, every endurance number, and the
+    three-toss desk test all depend on it.
+  - **The spare (45ED) is a USB-only bench board.** Useful for firmware,
+    BLE and storage work; useless for anything involving power. Its
+    `vbat_mv` / `batt_pct` are meaningless and should never enter a log.
+  - The water session needs a battery-backed puck, so it needs the OG, or
+    pigtails soldered to a spare beforehand. That is now a hardware
+    prerequisite, not an assumption.
+- **Tooling consequence, unchanged:** `battlog.py --name/--addr` pinning is
+  mandatory with two boards on the air. A battery-less board answering an
+  unpinned logger is precisely how a floating 97 % got into the record once
+  already.
 
 ### DC/DC: same-window comparison says ~0.72x current, with one open confound
 - Method is the project's own repeatable comparator: **time to traverse a fixed
