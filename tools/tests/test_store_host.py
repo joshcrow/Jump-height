@@ -250,6 +250,58 @@ class TestStoreHost(unittest.TestCase):
 
     # ------------------------------------------------------------- basics
 
+    def test_trace_clear_preserves_jumps(self) -> None:
+        """trace_clear() erases the trace and PRESERVES every stored jump.
+
+        This is the contract the storage-lifecycle auto-clear rests on
+        (main.cpp, 2026-08-20: when the trace region is full at a session
+        boundary, reclaim it so the new session records). The dangerous half
+        is not the erasing — it is whether the user's history survives. Jumps
+        are what the watch reseeds from on every reconnect, and 2048 records
+        is ~100 sessions; wiping them to make room for trace would trade the
+        user's data for ours.
+
+        Uses a genuinely FULL region (TRACE_FILL to the cap), because that is
+        the only state the auto-clear ever acts in — a half-full trace is
+        never touched.
+        """
+        backing = self._backing("trace_clear.bin")
+        r = run_harness(self.harness, [
+            "INIT",
+            "JUMPS_APPEND 1 10.0 0.90 0.90 1.00",
+            "JUMPS_APPEND 2 20.0 1.02 1.02 1.28",
+            "TRACE_FILL 99999 50 0.0 1.0",   # fill to the cap
+            "TRACE_IS_FULL",
+            "JUMPS_SCAN",
+            "TRACE_CLEAR",
+            "TRACE_IS_FULL",
+            "JUMPS_SCAN",
+            "TRACE_BYTES",
+            "OK",
+            # the reclaimed region must actually be usable again, or the
+            # auto-clear would "free" space into a dead store
+            "TRACE_APPEND 1.0,1.001;1.02,1.002",
+            "TRACE_BYTES",
+        ], backing=backing)
+        self.assertEqual(r.returncode, 0)
+
+        full = all_of(r.events, "TRACE_IS_FULL")
+        self.assertEqual(full[0]["full"], "1", "TRACE_FILL should reach the cap")
+        self.assertEqual(full[1]["full"], "0", "trace_clear must clear the full flag")
+
+        scans = all_of(r.events, "JUMPS_SCAN")
+        self.assertEqual(scans[0]["count"], "2")
+        self.assertEqual(scans[1]["count"], "2",
+                         "JUMPS MUST SURVIVE trace_clear — this is the whole contract")
+        self.assertEqual(scans[0]["best_m"], scans[1]["best_m"],
+                         "best height must survive too (the watch reseeds from it)")
+
+        tb = all_of(r.events, "TRACE_BYTES")
+        self.assertEqual(tb[0]["n"], "0", "trace must be empty after trace_clear")
+        self.assertNotEqual(tb[1]["n"], "0", "region must accept new writes again")
+        self.assertEqual(all_of(r.events, "OK")[-1]["ok"], "1",
+                         "storage must remain mounted through a trace_clear")
+
     def test_fresh_chip_format(self) -> None:
         """A brand-new (never-written) chip: init() must format it (the
         SAME announce lines main.cpp's setup() used to emit inline — see

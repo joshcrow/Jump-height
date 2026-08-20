@@ -74,6 +74,7 @@
 //                                            contract).
 //   CLOSE_READ                               jh_store::close_read()
 //   CLEAR                                    jh_store::clear()
+//   TRACE_CLEAR                              jh_store::trace_clear()
 //   FAULT_AFTER n                            arms mock_flash_test::
 //                                            arm_fault_after_bytes(n) —
 //                                            the NEXT write-affecting
@@ -287,6 +288,9 @@ int main() {
     } else if (cmd == "CLEAR") {
       jh_store::clear();
       std::printf("CLEAR ok=1\n");
+    } else if (cmd == "TRACE_CLEAR") {
+      jh_store::trace_clear();
+      std::printf("TRACE_CLEAR ok=1\n");
     } else if (cmd == "FAULT_AFTER") {
       unsigned long n = 0;
       iss >> n;
