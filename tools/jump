@@ -2759,12 +2759,57 @@ If you're certain it's connected anyway: ./tools/jump flash --port <port>""")
         time.sleep(6)
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 text=True)
+        upload_log = []
         for line in proc.stdout:
             print(line, end="")
+            upload_log.append(line)
         proc.wait()
-        if proc.returncode != 0:
-            print("\n❌ upload failed. Board plugged in? Data-capable USB cable? "
-                  "Try --port <port>, and `./tools/jump report` to collect diagnostics.")
+        blob = "".join(upload_log)
+
+        # DO NOT TRUST THE EXIT CODE (2026-08-20, the second time this bit).
+        # PlatformIO prints a green "[SUCCESS]" and exits 0 even when the DFU
+        # transfer threw — observed twice tonight, on two different boards:
+        #
+        #     Failed to upgrade target. Error is: write failed:
+        #     [Errno 6] Device not configured
+        #     ========================= [SUCCESS] Took 11.86 seconds ==========
+        #
+        # returncode was 0 both times, so this function cheerfully printed
+        # "✅ flashed" over a board that still held the OLD firmware. That is
+        # the worst possible outcome: every measurement afterwards describes a
+        # build you did not flash, and nothing anywhere says so.
+        #
+        # The repo has known "pio's uploader LIES — trust only 'Device
+        # programmed'" since 2026-08-12. It was written in a doc and never
+        # enforced in the tool, so it cost the same hour twice. Enforced here
+        # now: the marker is proof of a completed write; its ABSENCE is the
+        # failure, whatever the exit code claims.
+        programmed = "Device programmed" in blob
+        errored = any(m in blob for m in (
+            "Failed to upgrade target", "Device not configured",
+            "serial.serialutil.SerialException", "Traceback (most recent call last)"))
+        if proc.returncode != 0 or errored or not programmed:
+            print("\n❌ upload did NOT land — the board still holds its previous "
+                  "firmware.")
+            if not programmed:
+                print("   No 'Device programmed' line in the uploader output. That "
+                      "string is the ONLY proof of a completed write;")
+                print("   PlatformIO's [SUCCESS] and its exit code are both known to "
+                      "lie about a failed DFU transfer.")
+            for l in upload_log:
+                if any(m in l for m in ("Failed to upgrade", "Device not configured",
+                                        "SerialException", "Error is:")):
+                    print(f"   uploader said: {l.strip()[:140]}")
+                    break
+            print("   Serial DFU is flaky on this host. The reliable path is the UF2 "
+                  "drive:")
+            print("     1. double-tap the board's reset button (a XIAO-SENSE volume "
+                  "mounts in ~6 s)")
+            print("     2. python3 tools/uf2conv.py firmware/.pio/build/"
+                  "xiaoblesense_adafruit/firmware.hex -c -f 0xADA52840 -o /tmp/fw.uf2")
+            print("     3. dd if=/tmp/fw.uf2 of=/Volumes/XIAO-SENSE/fw.uf2 bs=4096")
+            print("   (dd, not cp — cp fails permission-denied and cat can fail "
+                  "silently on that volume.)")
             return 1
     # A fresh flash plays dead for ~20 s while the activation reset settles
     # (measured 2026-08-18) — probing early misdiagnoses a healthy flash.
