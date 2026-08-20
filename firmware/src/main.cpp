@@ -1135,6 +1135,8 @@ void setup() {
   // external-bus first contact.
   jh_persist::init();
   loadCalibration();
+  // Seed the advertised battery before BLE first advertises (loop() refreshes it).
+  jh_link::publish_battery(jh_power::batt_pct(), jh_power::charging());
 
   // Mount storage — BRACKETED by the sticky store guard (2026-08-12: the
   // mule's wedged QSPI chip hung this call before BLE ever started; found
@@ -1225,6 +1227,20 @@ void loop() {
   // Do not auto-retry that; leave it to the human `mount` command, which is
   // what the guard's design always intended. And give up after a few clean
   // failures rather than retrying for the whole session.
+  // Publish the battery snapshot the advertisement uses. Done HERE, on the
+  // loop() task, because the BLE connect callback runs at a higher FreeRTOS
+  // priority and must never touch the SAADC itself (jh_link.cpp explains the
+  // cross-task EasyDMA hazard). Once a minute: the payload is only read when
+  // advertising re-arms, and each read costs a conversion.
+  {
+    static uint32_t last_batt_pub_ms = 0;
+    const uint32_t now_bp = millis();
+    if (last_batt_pub_ms == 0 || now_bp - last_batt_pub_ms >= 60000UL) {
+      last_batt_pub_ms = now_bp ? now_bp : 1;
+      jh_link::publish_battery(jh_power::batt_pct(), jh_power::charging());
+    }
+  }
+
   if ((!fs_ok || !jh_store::ok()) && !store_guard_was_latched &&
       remount_tries < kRemountMaxTries) {
     static uint32_t last_remount_ms = 0;

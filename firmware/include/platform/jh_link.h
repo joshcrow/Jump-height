@@ -90,6 +90,13 @@ bool reboot_to_uf2();
 void watchdog_init();
 void watchdog_feed();
 
+// Publish a battery snapshot for the advertisement payload. MUST be called
+// from the loop() task only. The BLE connect callback runs on Bluefruit's
+// AdaCallback task at TASK_PRIO_NORMAL, which PREEMPTS the loop task at
+// TASK_PRIO_LOW — so the callback must never read the SAADC itself (see
+// refreshAdvPayload in jh_link.cpp for the memory-corruption mechanism).
+void publish_battery(int pct, int chg);
+
 // Bytes the link gave up on after TX_RETRY_MAX attempts. Zero on a healthy
 // session. Non-zero means the live stream lost data — the RECORDED session
 // is unaffected (jh_store writes independently), but a client's view was

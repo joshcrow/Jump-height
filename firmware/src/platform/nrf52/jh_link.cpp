@@ -180,7 +180,7 @@ String s_line;
 void onConnect(uint16_t conn_hdl) {
   (void)conn_hdl;
   if (Bluefruit.Periph.connected() < kMaxPrphConnections) {
-    refreshAdvPayload();             // fresh battery reading on every re-arm
+    refreshAdvPayload();             // republish cached battery on every re-arm
     Bluefruit.Advertising.start(0);  // keep the 2nd slot discoverable — see
                                      // the file comment's advertising section
   }
@@ -425,14 +425,53 @@ const char* local_name() { return s_adv_name; }
 //
 // Refreshed at every advertising (re)start rather than on a timer: updating
 // live means stop/clear/restart, which would disturb a client mid-connect.
-// Every disconnect and re-arm therefore publishes a fresh reading.
+// Every disconnect and re-arm therefore republishes the latest CACHED reading
+// (<=60 s old, published by loop()). Stale by a minute is immaterial here —
+// the cell moves ~30 mV/h, so a percent changes on a ten-minute scale — and
+// the alternative was sampling the ADC from a preempting task. docs/
+// ble-dependability.md layer 5 only requires the percent be visible WITHOUT
+// connecting, which this still satisfies.
+// Battery snapshot published by loop(), consumed by refreshAdvPayload().
+//
+// WHY THIS CACHE EXISTS (pre-flight review, 2026-08-20). refreshAdvPayload()
+// used to call jh_power::batt_pct() directly. It is reached from onConnect(),
+// and Bluefruit defers every peripheral connect callback onto its AdaCallback
+// task (bluefruit.cpp: `ada_callback(NULL, 0, Periph._connect_cb, conn_hdl)`)
+// which runs at TASK_PRIO_NORMAL, while Arduino's loop() runs at
+// TASK_PRIO_LOW. Preemption is on and time-slicing is off, so the callback
+// task interrupts loop() at will.
+//
+// jh_power::vbat_mv() drives the SAADC through raw registers with no lock,
+// and — this is the sharp edge — it points EasyDMA at a STACK LOCAL:
+//   volatile int16_t buf; NRF_SAADC->RESULT.PTR = (uint32_t)&buf;
+// So if the callback preempts loop() between its PTR write and its
+// conversion, the callback retargets RESULT.PTR at its own stack, converts,
+// and returns — killing that frame. loop() then resumes and triggers a
+// conversion that DMAs into a dead stack frame belonging to another task.
+// That is silent memory corruption, not merely a wrong battery reading. The
+// callback also does `NRF_SAADC->ENABLE = 0` on the way out, disabling the
+// converter underneath loop()'s in-flight sequence.
+//
+// main.cpp's own comment states the invariant this broke: "Both run on the
+// loop() task, one at a time." The fix keeps that invariant true by making the
+// ADC strictly loop()-owned; the callback only ever reads two cached bytes.
+// A stale-by-seconds battery percent in an advertisement is worth nothing
+// against a cross-task DMA write.
+static volatile uint8_t s_adv_batt_pct = 0xFF;   // 0xFF = unknown
+static volatile uint8_t s_adv_chg      = 0;
+
+void publish_battery(int pct, int chg) {
+  s_adv_batt_pct = (pct < 0 || pct > 100) ? 0xFF : (uint8_t)pct;
+  s_adv_chg      = (chg == 1) ? 1 : 0;
+}
+
 static void refreshAdvPayload() {
   uint8_t mfr[4];
   mfr[0] = 0xFF;                       // company ID 0xFFFF, little-endian
   mfr[1] = 0xFF;
-  const int pct = jh_power::batt_pct();
-  mfr[2] = (pct < 0) ? 0xFF : (uint8_t)pct;
-  mfr[3] = (uint8_t)(jh_power::charging() == 1 ? 0x01 : 0x00);
+  // Cached, never sampled here — see the comment above publish_battery().
+  mfr[2] = s_adv_batt_pct;
+  mfr[3] = s_adv_chg;
   Bluefruit.ScanResponse.clearData();
   Bluefruit.ScanResponse.addManufacturerData(mfr, sizeof(mfr));
   Bluefruit.ScanResponse.addName();
