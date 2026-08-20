@@ -42,6 +42,29 @@ do not.**
 
 ## 2026-08-19
 
+### PRODUCT DIRECTION: the watch is the only user interface (owner, 2026-08-19)
+- **Decision:** *"in the future the user will only ever interact with the puck
+  via Garmin."* Full analysis: [garmin-only.md](garmin-only.md).
+- **The gap it exposes, and it is a real one:** `PuckLink.mc` sends exactly
+  ONE command — `stats`. The watch is a read-only window. So a Garmin-only
+  user can never `clear`, and the trace region is append-only with ~5 h of
+  capacity. **Their puck silently stops keeping raw samples after a few
+  sessions, with no symptom on the watch**, because jumps keep flowing and
+  jumps are all the watch sees. Same failure shape as this morning's
+  unmounted-flash bug: healthy-looking, quietly stopped.
+- **Leaning:** auto-clear the trace at session start (first motion after a
+  long idle) — which only became safe today, since `clear` no longer
+  watchdog-resets on a full region. Framed honestly: the FIT record is the
+  user's data, the trace is ours, and it should manage itself.
+- **Reprioritised UP:** the glance (now the only pre-session health check),
+  everything the watch displays (the entire diagnostic surface), storage
+  lifecycle, and self-healing behaviour generally — nobody will type `mount`.
+- **Reprioritised DOWN:** the web app. Adding advertised-battery display to it
+  was on tonight's plan and has been **dropped**; it is a bench tool now.
+- **Unchanged:** the water session's tooling (that day has a laptop), and
+  download integrity in `tools/jump`, which protects the analysis data.
+
+
 ### Open-threads sweep: one finding CORRECTED — the spin correction is inert, not live
 - The 2026-08-19 sweep flagged *"gyro spin correction self-arms live, zero
   silicon validation"* as a possible session risk. **Checked against the
