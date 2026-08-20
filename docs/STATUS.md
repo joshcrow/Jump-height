@@ -85,7 +85,16 @@ do not.**
   the `clear` watchdog bug.
 
 
-### SESSION-BLOCKING BUG FOUND AND REPRODUCED: `clear` bricks storage on a full region
+### SESSION-BLOCKING BUG: `clear` on a full region — FOUND, REPRODUCED, FIXED, PROVEN
+> **PROVEN FIXED 2026-08-19 ~15:15** (`src=7fdec1fe`). Same command, same
+> near-full region (12,288,012 bytes) that reset the board three hours
+> earlier: **completed in 8 s, storage cleared, uptime ran straight through
+> 425 → 446 s.** No reset, `fs` healthy. Before the fix the CDC port dropped
+> mid-command and the board returned with `uptime_s=0.001`.
+>
+> Full cycle in one afternoon: found by a sweep (not by use) → reproduced on
+> hardware → root-caused to a missing watchdog feed → fixed → re-proven on the
+> same board in the same state.
 - **State:** reproduced on hardware, fix built (`src` pending flash to the spare)
 - **The bug:** `jh_store::clear()` erases the superblock and then every used
   sector of both regions in a tight loop with **no watchdog feed**. A 4 KB
