@@ -1,11 +1,18 @@
-# The Garmin-only reality — what changes when the watch is the only interface
+# The three surfaces — who uses what, and what each must be able to do
 
-Written 2026-08-19, on the owner's direction: *"in the future the user will
-only ever interact with the puck via Garmin."*
+Written 2026-08-19 on the owner's direction, **corrected the same evening**
+after a first draft wrongly concluded the web app was near-worthless.
 
-This is a product-shape decision, not a preference, and it reprioritises real
-work. It does **not** change the water session — that day involves a laptop
-for analysis regardless. It changes what "finished" means afterwards.
+| surface | user | job |
+|---|---|---|
+| **Garmin watch** | the end user | the product. Glanceable state during a session, jumps into the FIT activity. Read-only by design. |
+| **Web app** (phone) | the owner, in the field | **admin on the go.** The laptop's job when there is no laptop: check the puck, sync, clear, self-test, from a phone at the beach or in the van. |
+| **`tools/jump` on the Mac** | development | the bench. Deep diagnostics, flashing, analysis, experiments. |
+
+The first draft of this file dropped web-app work as low value. That was
+wrong: the web app is not a lesser copy of the CLI, it is the **only admin
+surface that travels with the owner.** Anything a user in the field might
+need to do to a puck has to be possible there.
 
 ---
 
@@ -25,6 +32,28 @@ storage is down. That is a genuinely decent glanceable product.
 What they **cannot** do: clear storage, download anything, run a self-test,
 recover a wedged puck, or update firmware.
 
+## 1b. Where the roadmap is going: the activity gets richer than jumps
+
+The owner's stated direction: the Garmin activity should eventually capture
+**time on foil** and similar riding metrics, not just jumps.
+
+Two consequences worth writing down now:
+
+- **The FIT developer-field path is the product's real output**, not a
+  side-effect. It already carries `jumps`, `best_jump`, `best_airtime` and a
+  per-record `jump_height` stream (verified on a real activity 2026-08-18).
+  Adding time-on-foil means adding fields to a path already proven.
+- **It changes what the water session is for.** Beyond answering "are wing
+  jumps ballistic", that day is the **first and only source of real foiling
+  data** — the training set for every future metric. Time on foil is an IMU
+  classification problem (a foiling ride is smooth; a non-foiling one slaps
+  chop) and it cannot be developed from hand tosses or pocket walks. The
+  50 Hz trace, which §3 option (4) was tempted to dismiss as a developer
+  luxury, is exactly the raw material that work will need.
+
+So: keep the trace, and treat the water day as data collection for a roadmap,
+not just a single yes/no experiment.
+
 ## 2. The gap that actually bites: storage has no lifecycle
 
 The trace region holds roughly **5 hours of recording**. Jumps hold 2048
@@ -35,7 +64,9 @@ Measured, and confirmed benign in the short term (2026-08-18 soak): when the
 trace fills, **jump detection and storage continue at full rate**. The device
 does not break; it stops keeping raw samples.
 
-But with no way to clear from the watch, the timeline is:
+The watch cannot clear. **The web app can** — which is what makes this
+manageable rather than fatal, provided the owner has a phone in the field.
+The timeline if nobody clears:
 
 | after | state |
 |---|---|
@@ -68,8 +99,11 @@ everything looks healthy, and something quietly stopped.
    own activity file, which syncs to Garmin Connect without us. Costs the
    ability to re-analyse a session later.
 
-**Leaning: (2), with (4) as the honest framing.** The user's data is the FIT
-record; the trace is ours, and it should manage itself.
+**Leaning: (2), with the web app as the manual override.** Auto-clear at
+session start means the common case needs nobody; the phone covers the rest.
+Option (4) — "declare the trace a developer luxury" — is now **rejected**:
+§1b makes the trace the training data for time-on-foil and every metric after
+it.
 
 ## 4. What this reprioritises
 
@@ -85,12 +119,16 @@ record; the trace is ours, and it should manage itself.
   30 s auto-remount shipped today is exactly the right instinct; the same
   question should be asked of every other recoverable state.
 
+**Also up — corrected:**
+- **The web app as field admin.** It must cover what the owner needs *without
+  a laptop*: puck battery at a glance (the advertisement payload it does not
+  yet read), sync with the same integrity gate the CLI now has, clear, and
+  self-test. Anything only `tools/jump` can do is unavailable at a beach.
+
 **Down:**
-- **The web app.** Adding the advertised-battery display to it was on
-  tonight's list; it is now near-worthless and has been dropped. The web app
-  remains a bench/debug tool.
-- **CLI ergonomics** for anything user-facing. `tools/jump` is a bench tool,
-  and should be documented as one rather than polished as a product surface.
+- **CLI ergonomics** for anything a field user would need. `tools/jump` stays
+  the development bench and should be documented as one — its job is depth,
+  not portability.
 
 **Unchanged:**
 - The water session's tooling. That day has a laptop.
@@ -107,3 +145,7 @@ self-heal — is already there.
 So the gap between "works" and "shippable to someone who owns only a watch"
 is **one storage-lifecycle decision and the glance proven on a wrist.**
 That is a much shorter list than it would have been a week ago.
+
+And the gap for the OWNER in the field is narrower still: the web app needs
+the advertised battery and the download-integrity gate that landed in the CLI
+today. Neither is hard; both are now known to be needed.
