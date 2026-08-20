@@ -967,6 +967,32 @@ function onSyncDone(lines, err) {
   // Re-syncing an uncleared device (the "Keep" path, or a double sync) returns
   // the identical bytes — recognise it instead of duplicating history.
   const traceCsv = traceRows.join('\n');
+
+  // DOWNLOAD INTEGRITY GATE — the same check tools/jump gained 2026-08-19,
+  // brought to the surface that actually travels with the owner (the phone;
+  // see docs/garmin-only.md). docs/plan.md §3.3 calls "records perfectly,
+  // downloads incompletely" the cruellest possible failure, and this path had
+  // a real silent-drop bug. The device already tells us how many trace bytes
+  // it holds on every STATS (lastTraceBytes), and the firmware flushes before
+  // dumping so the two are meant to match exactly.
+  //
+  // BLE makes this MORE important than on the CLI, not less: a dump over a
+  // link that drops is exactly how a short file happens, and the next thing
+  // this screen offers is "Clear the device".
+  let integrityOk = null;
+  if (Number.isFinite(lastTraceBytes) && lastTraceBytes > 0) {
+    const got = traceCsv.length + (traceCsv.length ? 1 : 0); // trailing newline
+    integrityOk = (got === lastTraceBytes);
+    if (!integrityOk) {
+      showDumpStatus(
+        `Download incomplete — got ${got.toLocaleString()} bytes, the puck holds `
+        + `${lastTraceBytes.toLocaleString()}. Nothing was saved and the puck still `
+        + `has everything. Sync again` + (transportKind === 'BLE'
+            ? ', and stay close to the puck — Bluetooth drops are the usual cause.'
+            : '.'));
+      return;   // refuse to save a short file, and never reach the clear offer
+    }
+  }
   const key = contentKey(jumpsCsv, traceCsv);
   const existing = loadSessions().find((s) => s.key === key);
   if (existing) {
@@ -975,7 +1001,10 @@ function onSyncDone(lines, err) {
     return;
   }
 
-  const session = { when: new Date().toISOString(), key, jumps, jumpsCsv, traceCsv };
+  const session = { when: new Date().toISOString(), key, jumps, jumpsCsv, traceCsv,
+                    // null = the puck did not report trace_bytes (old
+                    // firmware); true = byte count matched exactly.
+                    verified: integrityOk };
   const saved = saveSession(session);
   if (!saved) return; // storeSessions already showed the failure — don't mask it
   renderSessions();

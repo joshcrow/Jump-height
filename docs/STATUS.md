@@ -40,7 +40,27 @@ do not.**
 
 ## CHANGED AFTER THE AUDIT — grouped by date, newest first (2026-08-14 → 2026-08-18)
 
-## 2026-08-19
+## 2026-08-20
+
+
+### Web app gains the download-integrity gate; advertised battery ruled IMPOSSIBLE there
+- **Built:** the web app now compares received trace bytes against the puck's
+  own `trace_bytes` (already tracked from STATS) before saving, and **refuses
+  to save a short file** — so the "Clear the device" offer that follows is
+  never reachable on an unverified download. Same gate `tools/jump` got on
+  08-19, now on the surface that actually travels with the owner.
+  **BLE makes it matter more, not less:** a dropped link mid-dump is exactly
+  how a short file happens, and the phone is the BLE case.
+- **Ruled out, with a citation:** showing puck battery *before connecting* is
+  **not possible in a browser**. `watchAdvertisements()` is not shipped in
+  stable Chrome and advertisement scanning (`requestLEScan()`) is listed as
+  future work on Chrome's own capabilities page; `requestDevice()` can filter
+  on manufacturer data but never exposes it.
+- **The asymmetry worth remembering:** the **watch glance can** show puck
+  battery pre-connect (Garmin's BLE API permits scanning) and the **phone
+  cannot**. This was on the plan as web-app work; it is now closed as
+  infeasible rather than left to be re-attempted.
+
 
 ### Metrics roadmap: a recording audit, and the one thing that must be captured on water day
 - **Direction (owner):** time on foil, carving g-forces, richer riding metrics

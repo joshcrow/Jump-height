@@ -149,9 +149,22 @@ merely getting full. Each of those can delete a trace that is still working.
 
 **Also up — corrected:**
 - **The web app as field admin.** It must cover what the owner needs *without
-  a laptop*: puck battery at a glance (the advertisement payload it does not
-  yet read), sync with the same integrity gate the CLI now has, clear, and
-  self-test. Anything only `tools/jump` can do is unavailable at a beach.
+  a laptop*: sync with the same integrity gate the CLI now has (**done
+  2026-08-20**), clear, and self-test. Anything only `tools/jump` can do is
+  unavailable at a beach.
+
+  **But NOT the advertised battery — that one is impossible in a browser.**
+  Web Bluetooth has no way to read advertisement data without connecting:
+  `watchAdvertisements()` is not shipped in stable Chrome, and advertisement
+  scanning (`requestLEScan()`) is listed as future work on Chrome's own
+  capabilities page. `requestDevice()` can *filter* on manufacturer data
+  (Chrome 92+) but never hands you its contents.
+
+  So there is a real asymmetry worth knowing: **the watch glance can show
+  puck battery before connecting and the phone cannot.** Garmin's BLE API
+  permits scanning; the browser's does not. The web app's battery readout
+  stays a post-connect number, which is fine — connecting from the phone is a
+  deliberate act anyway.
 
 **Down:**
 - **CLI ergonomics** for anything a field user would need. `tools/jump` stays
