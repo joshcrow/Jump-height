@@ -9,12 +9,44 @@ trusted. Read it before any bench session; amend it when it costs you an hour.
 
 ## 1. Board registry (keep current — identity mistakes flash the wrong board)
 
-| Board | USB serial (our fw) | BLE addr (this Mac) | Bootloader BLE | Role |
-|---|---|---|---|---|
-| **"OG"** — original Sense (a.k.a. "the mule") | `7ACE98D972CB56F8` | `185D88EE…` | `EB2503CC…` | **THE product board — owner's call 2026-08-14.** It has the **battery pigtail soldered** and it is the board the drop calibration was measured on. Fully healthy: `accel 1.030-1.032 g / noise 0.0037 g`, `flash PASS 2093056B_free`, `SELFTEST END result=PASS`. Soaked 5/5 selftest + 12/12 revive. Water-test candidate. |
-| **"Board #3"** — 3rd Sense (2026-08-13) | `11641737F0ECA0D6` (bootloader shares it) | `14E6E6F1…` | same SN, PID `0x0045` | **Backup / cleanest sensor.** Verified healthy after the drive-strength fix: `accel 1.021 g / noise 0.0025 g`, `flash PASS`, END=PASS; 5/5 selftest + 5/5 revive with zero transients. No pigtail, no per-unit drop cal. Currently in System OFF — needs a replug to wake. |
-| **"Puck"** — 2nd Sense (2026-08-12, no battery yet) | `2513620E30AE413D` | `B96D14EA…` | (unrecorded) | Sensor read 0.970 g on 08-12. Was written off as dead; **almost certainly fine** — it was never reassessed after the fix. Re-test with the current build before assuming anything. |
-| ~~"Mule"~~ | — | — | — | Retired name: the "mule" and the "OG" are the SAME board (row 1). Calling the product board sacrificial is how it nearly got treated as disposable. |
+**Look here FIRST, before any reasoning about a board's behaviour.** On
+2026-08-20 I diagnosed a "hardware fault" on a board that simply has no
+battery. The fact was already written in two places — this table and
+STATUS.md — and I still missed it, because the identifier the tools print
+(`JumpHeight-XXXX`) had no row here. **A new identifier without a row in this
+table is a rediscovery waiting to happen.**
+
+| Board | Advertised name | BLE addr | USB serial (our fw) | **Battery?** | State (2026-08-20) |
+|---|---|---|---|---|---|
+| **"OG"** — original Sense (a.k.a. "the mule") | **`JumpHeight-E2C4`** | `185D88EE…` (bootloader `EB2503CC…`) | `7ACE98D972CB56F8` | **YES — pigtail SOLDERED. The only board with a cell.** | **THE product board.** Running `src=ef37e568` (older build, still lacks the `clear()` watchdog fix). Healthy: 3810 mV / 42 %, 23.8 h continuous uptime. Drop calibration was measured on this board. Water-test candidate. |
+| **"Board #3"** — 3rd Sense, *usually called "the spare"* | **`JumpHeight-45ED`** | `14E6E6F1…` | `11641737F0ECA0D6` | **NO — no pigtail, USB only.** | Bench board. Running `src=54b2e904`. Healthy sensor (`accel 1.021 g / noise 0.0025 g`). **Its `vbat_mv` / `batt_pct` are a FLOATING divider and mean nothing** — seen reading 3742 mV/23 % and 4133 mV/97 % minutes apart. Never log a battery figure from it. |
+| **"Puck"** — 2nd Sense (2026-08-12) | (unrecorded — read it before use) | `B96D14EA…` | `2513620E30AE413D` | **NO** | Sensor read 0.970 g on 08-12. Written off as dead, **almost certainly fine** — never reassessed after the drive-strength fix. Re-test with the current build before assuming anything. |
+| ~~"Mule"~~ | — | — | — | — | Retired name: the "mule" and the "OG" are the SAME board (row 1). Calling the product board sacrificial is how it nearly got treated as disposable. |
+
+### 1a. The three rules this table exists to enforce
+
+1. **Only the OG can run untethered.** Every drain figure, every endurance
+   number, the DC/DC comparison and the three-toss desk test are meaningful
+   *only* on the OG. A power measurement from any other board is noise.
+2. **Pin every BLE tool to a board.** With two pucks advertising,
+   `blecmd.py` / `battlog.py` answer from whichever replies first — on
+   2026-08-20 two consecutive unpinned `stats` calls returned two different
+   boards. Always `--name JumpHeight-XXXX` (or `--addr`). This has corrupted
+   an analysis twice: once a floating 97 % landed in a death-run log, once a
+   whole DC/DC board attribution.
+3. **A board is identified by name AND `src=`.** `info` prints both. If the
+   build hash is not the one you flashed, you are looking at a different
+   board — or a stale flash.
+
+### 1b. Keeping this table honest
+
+When a change introduces a **new way to identify a board** — a unique
+advertised name, a serial format, a manufacturer-data field — add it to this
+table **in the same commit**. That is the specific failure of 2026-08-18:
+unique per-board names shipped (`429a5ef`) and the registry was not updated,
+so for two days every tool printed an identifier that appeared nowhere in the
+documentation. Two correct documents could not prevent the error because
+neither could be joined to what was on screen.
 
 **Storage note (2026-08-14):** both boards were `format`ed to repair
 storage, so the OG's 61-jump history is **gone for good**. It had been

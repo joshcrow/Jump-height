@@ -6,6 +6,14 @@ and [plan.md](plan.md), not here.
 
 ---
 
+## Which puck are you taking?
+
+**Only the OG (`JumpHeight-E2C4`) has a battery** — it is the only board that
+can run untethered, so it is the only board that can go to the water. The
+spare (`JumpHeight-45ED`) is USB-only and its battery readout is meaningless.
+Confirm with `./tools/jump info` and check the advertised name, not the case.
+Full registry: [bench-playbook.md §1](bench-playbook.md).
+
 ## Before you leave the house
 
 - [ ] `./tools/jump selftest` — every row PASS, **and** it says

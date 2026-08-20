@@ -3,6 +3,29 @@
 Generated 2026-08-14 from an evidence-first audit of the code,
 tests, commits and bench logs — not from other documents.
 
+## READ THIS FIRST — the physical facts, and where they live
+
+This block exists because on 2026-08-20 this file **already contained** the
+fact I got wrong (line ~567, written 08-18), and so did the board registry,
+and I got it wrong anyway. Two correct documents lost to 1,800 lines of
+chronology. Everything below is a *slow-changing physical fact* — the class
+that is expensive to re-derive and cheap to state once.
+
+| Question | Answer | Authority |
+|---|---|---|
+| Which boards exist, and which has a **battery**? | **Only the OG (`JumpHeight-E2C4`) has a cell.** The spare (`JumpHeight-45ED`) is USB-only; its battery readings are floating noise. | [bench-playbook.md §1](bench-playbook.md) |
+| Which board can measure power / run untethered? | **The OG only.** Drain, endurance, DC/DC and the desk test are meaningless elsewhere. | bench-playbook.md §1a |
+| Why did my BLE reading change between calls? | Two boards advertise. **Unpinned tools answer from either.** Always `--name JumpHeight-XXXX`. | bench-playbook.md §1a rule 2 |
+| Is the cell healthy / what is its real capacity? | LP502030, 250 mAh, 3.0 V cutoff — datasheet-anchored, not inferred. | [battery-measurement.md](battery-measurement.md) |
+| Can I trust a "dead board" verdict? | **No.** Three have been wrong. Establish the board's *configuration* first. | [xiao-hardware-truth.md](xiao-hardware-truth.md) |
+
+**The maintenance rule that would have prevented today:** when a change adds a
+new way to *identify* a board (a unique advertised name, a serial format, a
+manufacturer-data field), update the registry **in the same commit**. Unique
+BLE names shipped 08-18 and the registry was last touched 08-14 — so for two
+days every tool printed an identifier that appeared nowhere in the docs. The
+facts were all correct; nothing could join them to what was on screen.
+
 ## Why this file exists
 
 This project repeatedly **rediscovered work it had already finished**. The watch
