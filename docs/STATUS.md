@@ -42,6 +42,36 @@ do not.**
 
 ## 2026-08-19
 
+### Metrics roadmap: a recording audit, and the one thing that must be captured on water day
+- **Direction (owner):** time on foil, carving g-forces, richer riding metrics
+  in the Garmin activity. Full analysis: [future-metrics.md](future-metrics.md).
+- **The governing fact:** the 50 Hz trace stores **`u16` magnitude only** —
+  three accel axes collapsed to a scalar, and the gyro read every sample and
+  discarded (only the per-jump `med_w_dps` survives).
+- **Magnitude-only supports MORE than expected** — no format change needed
+  for: **time on foil** (foiling is smooth, displacement slaps chop), carve
+  *intensity*, landing quality, chop severity, pump cadence, takeoff pop,
+  touch-downs, airtime distribution.
+- **It closes off:** carve *direction*, rotation/spins, board pitch & roll,
+  and separating vertical from lateral g. Those need 3-axis and/or gyro in the
+  trace — a v3 format, costed in the doc (3-axis @ 25 Hz still fits a 2 h
+  session; a magnitude-50 Hz + 3-axis-10 Hz hybrid keeps the detector's input
+  untouched).
+- **Recommendation: do NOT change the trace format before the water.** It
+  touches the encoder, the append-point scan, the decoder AND the detector's
+  own input — exactly what the freeze exists to forbid, for a metric nobody
+  has asked for yet. Decide v3 *after* the session, with real data showing
+  whether the classifier wanted axes.
+- **DONE TONIGHT, because it is free now and impossible later:**
+  `tools/label.py` learned the riding vocabulary `foiling` / `notfoiling` /
+  `riding` / `crash`, and the session card now asks for those spans. **Time on
+  foil is a classification problem and a classifier needs labelled regions** —
+  nobody can reconstruct at what minute the board was flying, afterwards.
+- **Division of labour recorded:** GPS speed/distance/track, heart rate and
+  duration are the WATCH's, natively, and should never be re-derived from the
+  IMU. The puck's unique contribution is board motion.
+
+
 ### PRODUCT DIRECTION: the watch is the only user interface (owner, 2026-08-19)
 - **Decision:** *"in the future the user will only ever interact with the puck
   via Garmin."* Full analysis: [garmin-only.md](garmin-only.md).

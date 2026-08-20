@@ -53,6 +53,12 @@ messages are timestamped and become labels the same way.
 
 - **"Nothing happened here" is as valuable as "3 jumps here."** It is the
   false-positive rate, and there is no other way to get it.
+- **Note when you were ON THE FOIL vs not** — `14:00-14:20 foiling`,
+  `14:20-14:25 notfoiling`. This is the training data for time-on-foil and
+  every riding metric after it (docs/future-metrics.md). It costs a line in
+  your notes during the session and **cannot be recovered afterwards** — no
+  amount of offline cleverness reconstructs what you were doing at 14:07.
+  `tools/label.py` understands `foiling` / `notfoiling` / `riding` / `crash`.
 - Note anything odd: a crash, a dropped board, a swim, a knock on the rocks.
 - Don't try to time individual jumps by hand — you cannot get within the 1 s
   matching window from a phone screen, and video is what supplies per-jump

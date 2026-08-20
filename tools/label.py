@@ -22,8 +22,14 @@ NOTES FORMAT (one per line; blank lines and #comments ignored)
     16:02        jump      off the bottom step
 
   - time      : HH:MM or HH:MM:SS, local; or a HH:MM-HH:MM range
-  - kind      : `jump`, `jump xN`, or `none` (an explicit "nothing here",
-                which is what makes a false-positive rate measurable)
+  - kind      : `jump`, `jump xN`, `none` (an explicit "nothing here", which
+                is what makes a false-positive rate measurable), or a RIDING
+                STATE — `foiling` / `notfoiling` / `riding` / `crash`.
+                The riding states exist for the metrics roadmap
+                (docs/future-metrics.md): time-on-foil is a CLASSIFICATION
+                problem, and a classifier needs labelled regions. They cost
+                nothing to write down during a session and cannot be
+                recovered afterwards from memory.
   - the rest  : free-text notes
 
 Ranges become one row spanning the period; instants become a row at that
@@ -95,7 +101,18 @@ def main() -> int:
             print(f"  ! skipped (before the session started): {raw}", file=sys.stderr)
             continue
 
-        event = "jump" if kind.startswith("jump") else "none"
+        # Riding-state regions ride the same schema: they are not jumps, so
+        # they never score as detections, but they carry their own label so a
+        # future classifier has ground truth. Anything unrecognised still
+        # lands as `none` (the conservative default that only ever measures
+        # false positives).
+        RIDING = ("foiling", "notfoiling", "riding", "crash")
+        if kind.startswith("jump"):
+            event = "jump"
+        elif kind in RIDING:
+            event = kind
+        else:
+            event = "none"
         for _ in range(count if event == "jump" else 1):
             rows.append({
                 "event": event,
@@ -113,8 +130,11 @@ def main() -> int:
                                           "rotation_deg", "landing", "notes"])
         w.writeheader()
         w.writerows(rows)
-    jumps = sum(1 for r in rows if r["event"] == "jump")
-    print(f"wrote {out}  —  {len(rows)} rows ({jumps} jump, {len(rows)-jumps} none)")
+    import collections as _c
+    kinds = _c.Counter(r["event"] for r in rows)
+    jumps = kinds.get("jump", 0)
+    summary = ", ".join(f"{n} {k}" for k, n in sorted(kinds.items()))
+    print(f"wrote {out}  —  {len(rows)} rows ({summary})")
     if jumps:
         print()
         print("  NOTE ON WHAT THESE LABELS CAN AND CANNOT DO")
