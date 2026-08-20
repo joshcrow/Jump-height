@@ -333,6 +333,48 @@ class TestWebApp(unittest.TestCase):
         expect(row).to_contain_text("2 jumps")
         expect(row).to_contain_text("1.23")
 
+    def test_short_download_is_refused_and_not_saved(self):
+        """A dump that arrives SHORT of the device's own trace_bytes must not
+        be saved, and must not lead to the clear offer.
+
+        This is the cruellest failure this app can have: the puck recorded
+        perfectly, the download dropped, and the very next thing the screen
+        offers is to ERASE the puck. BLE is exactly where it happens — a link
+        that drops mid-dump. The gate existed but nothing tested it; the ONE
+        fixture that hit this path was asserting the opposite outcome, so a
+        gate that refused everything looked identical to a gate that worked.
+        """
+        self._open()
+        # Device claims 4096 trace bytes; the dump below delivers a handful.
+        self._feed("STATS session_jumps=0 session_best_m=0 "
+                   "stored_jumps=5 stored_best_m=1.790 trace_bytes=4096")
+        sync_btn = _resilient(self.page, [
+            ("testid", "btn-sync"), ("css", "#btn-sync"),
+            ("role", ("button", "sync"))], "sync button")
+        sync_btn.click()
+        self._feed(
+            "FILE jumps.csv BEGIN",
+            "n,takeoff_s,airtime_raw_s,airtime_s,height_m",
+            "1,10.000,0.615,0.600,0.441",
+            "FILE jumps.csv END",
+            "FILE trace.csv BEGIN",
+            "t,mag",
+            "0.00,1.00",
+            "FILE trace.csv END",
+            "OK dump",
+        )
+        # Nothing saved: no session row appears at all.
+        rows = self.page.locator("[data-testid=session-row], .session, "
+                                 "#sessions-list .card")
+        self.assertEqual(rows.count(), 0,
+                         "a short download must not be saved as a session")
+        # And the user is told why, in bytes, not a vague failure.
+        body = self.page.locator("body").inner_text()
+        self.assertIn("incomplete", body.lower(),
+                      "the refusal must say the download was incomplete")
+        self.assertIn("4,096", body,
+                      "the refusal must name the device's own byte count")
+
     def test_sync_banner_flow_syncs_session_and_offers_clear(self):
         """STATS carrying stored_jumps>0 raises the cross-tab sync banner;
         clicking Sync sends 'dump', and feeding back a framed dump saves a
@@ -350,8 +392,14 @@ class TestWebApp(unittest.TestCase):
 
         # A STATS line with stored_jumps (+ the optional trace_bytes, parsed
         # if present per the parallel STATS change) should raise the banner.
+        # trace_bytes must MATCH the trace content fed below. The download
+        # integrity gate (app.js onSyncDone) compares the two and refuses to
+        # save a short file; this fixture predates it and claimed 2048 bytes
+        # while serving a bare header, so it exercised the REFUSAL path while
+        # asserting the save path. Now it is self-consistent: 36 bytes fed,
+        # 36 bytes declared, gate passes — and the refusal has its own test.
         self._feed("STATS session_jumps=0 session_best_m=0 "
-                   "stored_jumps=5 stored_best_m=1.790 trace_bytes=2048")
+                   "stored_jumps=5 stored_best_m=1.790 trace_bytes=36")
         expect(banner).to_be_visible()
         expect(banner).to_contain_text("5")
 

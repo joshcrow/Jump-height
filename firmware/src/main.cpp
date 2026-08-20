@@ -116,6 +116,16 @@ bool     gyro_present     = false;
 
 static bool sensor_ok = false;
 static bool fs_ok     = false;
+// Auto-remount state (see the rule in loop()). store_guard_was_latched
+// records what setup() found: a latched guard means the previous mount
+// attempt never returned, which is exactly the case that must NOT be retried
+// automatically.
+static bool     store_guard_was_latched = false;
+static uint8_t  remount_tries           = 0;
+static const uint8_t kRemountMaxTries   = 3;
+// A real no-op rather than nullptr: try_mount now null-guards, but passing a
+// function keeps this call site correct regardless of what the seam does.
+static void quietAnnounce(const char*) {}
 static bool ble_ok    = false;  // BLE stack came up; reported by the self-test
 
 // Session stats (since this power-up) + stored stats (across power-ups)
@@ -642,7 +652,11 @@ static void handleCommand(const String& cmd) {
     printFileFramed(jh_store::StoredFile::TRACE, "trace.csv");
     emitLine("OK dump");
   } else if (cmd == "clear") {
-    jh_store::clear();  // internally gated on fs_ok; resets byte count/cap/headers
+    jh_store::clear();
+    if (fs_ok && !jh_store::ok()) {   // same mirror-refresh as trace_clear
+      fs_ok = false;
+      emitLine("# storage DOWN after clear — not recording. `mount` retries, `format` rebuilds.");
+    }  // internally gated on fs_ok; resets byte count/cap/headers
     trace_buf = "";
     stored_jumps = 0; stored_best = 0.0f;
     emitLine("# cleared stored data");
@@ -1131,6 +1145,11 @@ void setup() {
   if (jh_persist::load(jh_persist::Key::StoreGuard, 0.0f) > 0.5f) {
     emitLine("# storage: skipped (previous boot hung in the mount — `mount` retries safely, `format` rebuilds)");
     fs_ok = false;
+    // Remember it for loop(): a latched guard means the LAST attempt never
+    // returned, so the 30 s auto-remount must not retry it — that is how a
+    // wedged chip turns into a reset every ~33 s for the whole session.
+    // The `mount` command stays available as the deliberate human retry.
+    store_guard_was_latched = true;
   } else {
     jh_persist::save(jh_persist::Key::StoreGuard, 1.0f);
     fs_ok = jh_store::init(emitLine);
@@ -1184,21 +1203,50 @@ void loop() {
   // So retry it automatically, slowly (every 30 s) and only while down. The
   // same StoreGuard bracket as boot and the `mount` command, so a hang costs
   // one watchdog reset and re-latches the skip rather than repeating forever.
-  if (!fs_ok) {
+  // Retry bounded and guard-aware. Two defects found by the pre-flight review
+  // (2026-08-20) and fixed here:
+  //
+  //  * the first version passed try_mount(nullptr) for silence. try_mount
+  //    calls announce() on BOTH failure paths with no null check — a jump to
+  //    address 0, i.e. HardFault, i.e. NVIC_SystemReset. It fired only on
+  //    FAILURE, which is the one path this feature exists for: a puck with
+  //    unmountable storage would have reset every 30 s, dropping the watch
+  //    link and the live session each time. Strictly worse than the silent
+  //    no-record symptom it was written to cure. (jh_store now null-guards
+  //    announce as well — belt and braces, since the header never forbade it.)
+  //
+  //  * it wrote StoreGuard around the attempt but never READ it, so its own
+  //    comment claimed a property the code did not have. A try_mount that
+  //    HANGS costs a watchdog reset, boot then skips the mount because the
+  //    guard is latched — and the old retry ignored the latch and hung again,
+  //    ~every 33 s, forever.
+  //
+  // So: if the guard was latched at boot, the last attempt never returned.
+  // Do not auto-retry that; leave it to the human `mount` command, which is
+  // what the guard's design always intended. And give up after a few clean
+  // failures rather than retrying for the whole session.
+  if ((!fs_ok || !jh_store::ok()) && !store_guard_was_latched &&
+      remount_tries < kRemountMaxTries) {
     static uint32_t last_remount_ms = 0;
     const uint32_t now_rm = millis();
     if (now_rm - last_remount_ms > 30000UL) {
       last_remount_ms = now_rm;
+      ++remount_tries;
       jh_persist::save(jh_persist::Key::StoreGuard, 1.0f);
-      fs_ok = jh_store::try_mount(nullptr);   // silent: no chatter every 30 s
+      fs_ok = jh_store::try_mount(quietAnnounce);
       jh_persist::save(jh_persist::Key::StoreGuard, 0.0f);
       if (fs_ok) {
         scanStoredJumps();
+        remount_tries = 0;
         emitf("# storage RECOVERED automatically: %lu jumps, best %.2f m\n",
               (unsigned long)stored_jumps, (double)stored_best);
+      } else if (remount_tries >= kRemountMaxTries) {
+        emitLine("# storage still down after retries — giving up. `mount` to "
+                 "retry by hand, `format` to rebuild (DESTROYS data).");
       }
     }
   }
+
 
   if (jh_link::takeGreetPending()) bleGreet();  // greet a client that just subscribed
   if (!sensor_ok) { delay(10); return; }  // command loop still runs; sampling paused
@@ -1303,6 +1351,13 @@ void loop() {
     emitLine("# trace region was FULL and a new session is starting —");
     emitLine("# clearing the trace to make room. Stored jumps are untouched.");
     jh_store::trace_clear();
+    // Re-read the store's own verdict. main's fs_ok is a MIRROR, and a mirror
+    // that never refreshes is how "records nothing, reports healthy" happens:
+    // every writer gates on this copy, and `stats` prints fs=down from it.
+    if (fs_ok && !jh_store::ok()) {
+      fs_ok = false;
+      emitLine("# storage DOWN after trace clear — not recording. `mount` retries, `format` rebuilds.");
+    }
     ++auto_clears;
     emitf("# trace cleared (auto #%lu) — recording resumes\n",
           (unsigned long)auto_clears);

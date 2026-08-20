@@ -708,7 +708,7 @@ bool init(void (*announce)(const char* line)) {
   if (!mountLadder()) return false;
 
   if (!superblockValid()) {
-    announce("# first boot: formatting storage — takes up to a minute, hang tight...");
+    if (announce) announce("# first boot: formatting storage — takes up to a minute, hang tight...");
     const bool erased = eraseChipFed();
     const bool wrote   = erased && writeSuperblock();
     announce(wrote ? "# storage ready" : "# storage format failed");
@@ -724,7 +724,7 @@ bool init(void (*announce)(const char* line)) {
 
 bool try_mount(void (*announce)(const char* line)) {
   if (!mountLadder()) {
-    announce("# mount: chip not answering");
+    if (announce) announce("# mount: chip not answering");
     return false;
   }
   if (!superblockValid()) {
@@ -733,7 +733,7 @@ bool try_mount(void (*announce)(const char* line)) {
     // returning garbage reads (wedged read mode) over INTACT data —
     // rebuilding here would destroy exactly what this call exists to
     // recover. The caller decides whether `format` is acceptable.
-    announce("# mount: chip answers but superblock is unreadable — NOT formatting");
+    if (announce) announce("# mount: chip answers but superblock is unreadable — NOT formatting");
     s_fs_ok = false;
     flashSleep();
     return false;
@@ -748,7 +748,7 @@ bool ok() { return s_fs_ok; }
 
 bool hard_format(void (*announce)(const char* line)) {
   static SPIFlash_Device_t s_devices2[] = {P25Q16H};
-  announce("# hard format: re-probing flash...");
+  if (announce) announce("# hard format: re-probing flash...");
   s_fs_ok = s_flash.begin(s_devices2, 1);
   if (!s_fs_ok) {
     flashWake();
@@ -762,7 +762,7 @@ bool hard_format(void (*announce)(const char* line)) {
     s_fs_ok = s_flash.begin(s_devices2, 1);
   }
   if (!s_fs_ok) {
-    announce("# hard format: chip not answering — physical power-cycle is the next step");
+    if (announce) announce("# hard format: chip not answering — physical power-cycle is the next step");
     return false;
   }
   s_flash_total_bytes  = s_flash.size();
@@ -771,7 +771,7 @@ bool hard_format(void (*announce)(const char* line)) {
   s_trace_region_bytes = (s_flash_total_bytes > s_trace_region_start)
                              ? s_flash_total_bytes - s_trace_region_start
                              : 0;
-  announce("# hard format: erasing chip (up to a minute)...");
+  if (announce) announce("# hard format: erasing chip (up to a minute)...");
   s_erase_progress = announce;
   const bool erased = eraseChipFed();
   s_erase_progress = nullptr;
@@ -779,13 +779,13 @@ bool hard_format(void (*announce)(const char* line)) {
                   : "# hard format: erase FAILED");
   const bool wrote  = erased && writeSuperblock();
   if (!wrote) {
-    announce("# hard format: erase/superblock FAILED");
+    if (announce) announce("# hard format: erase/superblock FAILED");
     s_fs_ok = false; flashSleep(); return false;
   }
   findJumpsAppendPoint();
   findTraceAppendPoint();
   flashSleep();
-  announce("# hard format: storage ready");
+  if (announce) announce("# hard format: storage ready");
   return true;
 }
 
@@ -1097,24 +1097,76 @@ void trace_clear() {
 
   const uint32_t trace_sectors_used =
       (s_trace_append_off + SECTOR_BYTES - 1) / SECTOR_BYTES;
-  bool all_erased = true;
-  for (uint32_t i = 0; i < trace_sectors_used; ++i) {
-    all_erased &= erase_fed((s_trace_region_start / SECTOR_BYTES) + i);
-  }
-  // The superblock carries the append offsets, so it must be rewritten even
-  // though the jumps region itself is untouched.
-  all_erased = all_erased && erase_fed(0);
-  const bool wrote_sb = all_erased && writeSuperblock();
+  const uint32_t first_sector = s_trace_region_start / SECTOR_BYTES;
 
-  s_trace_append_off = 0;
-  s_trace_csv_bytes  = 0;
-  s_trace_csv_header_counted = false;
-  s_trace_full       = false;
+  // ERASE DESCENDING — top sector down to the region's first. This ordering is
+  // the whole crash-safety story and it is not the obvious one (pre-flight
+  // review, 2026-08-20; the first version erased ascending).
+  //
+  // ~20 s of erasing, on a cell that is by definition old (auto-clear only
+  // fires after the region filled), doing the highest-current flash work the
+  // firmware ever does. Assume it WILL be interrupted and ask what each order
+  // leaves behind:
+  //
+  //   ascending  — low sectors erased, high sectors still hold old blocks, and
+  //                the superblock still says "valid". Next boot scans from
+  //                offset 0, hits 0xFF immediately, concludes the region is
+  //                BLANK and starts appending at 0 — straight on top of the
+  //                un-erased blocks above. NOR programming only clears bits,
+  //                so writeBuffer AND-merges the new data into the old and
+  //                still returns success. No error anywhere: STATS keeps
+  //                reporting the region growing, and the export delivers the
+  //                first stretch then fails CRC and silently skips the rest.
+  //                Silent corruption is the worst outcome this code can have.
+  //
+  //   descending — old blocks survive in [start, boundary), erased flash above
+  //                it. The boot scan walks the survivors, stops at the
+  //                boundary, and appends into genuinely erased space. Some old
+  //                trace is gone, which is exactly what was asked for, and
+  //                nothing is ever written on top of anything.
+  //
+  // Same sectors, same time, same power risk — one order self-heals and the
+  // other corrupts.
+  bool all_erased = true;
+  for (uint32_t i = trace_sectors_used; i > 0; --i) {
+    all_erased &= erase_fed(first_sector + i - 1);
+  }
+
+  // The superblock is deliberately NOT touched. An earlier comment here
+  // claimed "the superblock carries the append offsets, so it must be
+  // rewritten" — that is FALSE, and it was load-bearing for a dangerous line.
+  // struct Superblock is magic + version + reserved + the region map + crc;
+  // there is no offset in it, and superblockValid() only checks
+  // magic/version/crc. Append offsets live nowhere on sector 0 — they are
+  // recovered by findTraceAppendPoint()/findJumpsAppendPoint() at every mount.
+  //
+  // Erasing sector 0 therefore bought nothing while creating the only
+  // catastrophic step in the operation: a ~40 ms window with no valid
+  // superblock, after which a power loss (or a short superblock write) makes
+  // the next boot see an unformatted chip and auto-format ALL of it — every
+  // stored jump destroyed, by the one function whose contract is "jumps are
+  // never touched". A trace-only erase changes nothing sector 0 records, so
+  // the correct action is to leave it alone.
+
   s_trace_block_open = false;
+  if (all_erased) {
+    s_trace_append_off = 0;
+    s_trace_csv_bytes  = 0;
+    s_trace_csv_header_counted = false;
+    s_trace_full       = false;
+  } else {
+    // A sector refused to erase. Do NOT assume offset 0 — that is the same
+    // write-on-top-of-old-data hazard as ascending order. Re-derive the truth
+    // from the chip: the scan finds the real boundary and storage stays up and
+    // honest, which with descending order is always a consistent state.
+    findTraceAppendPoint();
+  }
+  // s_fs_ok is deliberately NOT touched: nothing above can leave the chip in
+  // an uncertain state, so there is no reason to take storage down (and every
+  // reason not to — main.cpp mirrors this flag and would not learn it flipped).
+  //
   // jumps state deliberately untouched: s_jumps_append_off, s_jumps_count and
   // s_jumps_best_m all survive.
-
-  s_fs_ok = wrote_sb;
   flashSleep();
 }
 
