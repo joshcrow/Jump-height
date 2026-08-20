@@ -728,6 +728,25 @@ do not.**
 - 174/174 host tests pass. **Not yet flashed** — the batch goes on after the
   DC/DC window closes.
 
+### The spare (45ED) has an intermittent battery connection — do not trust it
+- Found while identifying which board was which. Pinned reads of
+  `JumpHeight-45ED` within a few minutes: **3742 mV / 23 %**, then
+  **4133 mV / 97 %**, then **no answer at all** (5 consecutive attempts).
+- 4133 mV / 97 % is the exact floating-rail signature this project has already
+  been burned by once (a second board answered a logger mid-death-run and wrote
+  its floating 97 % into the record). A real 250 mAh cell cannot go 3742 → 4133
+  mV unassisted, so that reading is not a measurement of anything.
+- **Reading: the cell is not reliably connected** — loose JST pigtail, a PCM
+  cutting in and out, or a failing contact. It is a hardware fault, not a
+  firmware one, and it is on the board that was going to carry the fix batch.
+- **Consequences:** (1) do not desk-test or take this board near water until
+  the connection is fixed and proven; (2) any battery figure ever logged from
+  45ED unpinned is suspect; (3) `tools/battlog.py --name/--addr` pinning is not
+  optional with two boards on the air — this is the second time board identity
+  has corrupted an analysis.
+- **The OG (E2C4) is healthy** by contrast: 3810-3813 mV / 42 %, stable across
+  repeated reads, 23.8 h continuous uptime.
+
 ### DC/DC: same-window comparison says ~0.72x current, with one open confound
 - Method is the project's own repeatable comparator: **time to traverse a fixed
   voltage window** (3980 → 3830 mV), not an average mV/h across different parts
@@ -748,11 +767,22 @@ do not.**
   window fell inside `battlog`'s unsampled control gap (<3 samples in window);
   the figure is interpolated across that gap and should be discarded, not
   treated as baseline spread.
-- **OPEN CONFOUND, stated plainly:** the baselines are the OG board, the DC/DC
-  run is the spare. This is a cross-board comparison, so it does not isolate
-  DC/DC from per-board idle variation. **To close it:** run the same window on
-  the spare with DC/DC off. Until then the number is "consistent with the
-  predicted ~40 % MCU cut", not proof of it.
+- **CONFOUND RETRACTED — it is the SAME board (owner correction, 2026-08-20).**
+  I first recorded this as OG-baseline vs spare-DC/DC and flagged it as a
+  cross-board comparison. Wrong. Reading the two boards by their pinned unique
+  names settles it: `JumpHeight-E2C4` runs `src=ef37e568` (the older build =
+  **the OG**) with 23.8 h uptime, and the dcdc-ab log's uptime series
+  (74998 → 82232 → 85643 s, strictly monotonic) tracks that board. The
+  spare is `JumpHeight-45ED` / `src=54b2e904` and was not brought up until
+  2026-08-18, *after* both baseline nights. **Baselines and DC/DC run are all
+  the OG**, so the comparison isolates the regulator and the confound I flagged
+  does not exist.
+- **Contamination checked, not assumed:** the dcdc-ab log holds 19 samples,
+  vbat 3822-4029, uptime strictly monotonic, and no floating-rail outlier
+  (nothing near the documented 4133 mV / 97 % signature of a board answering
+  with no cell attached). Single board, clean series.
+- **So the number stands on a same-board comparison:** ~0.72x current, 1.39x
+  the window time, against a 1.6 % baseline agreement.
 - Projected on this rate: the 4.10 → 3.50 V window goes ~20 h → ~30 h.
 
 ## 2026-08-17
