@@ -37,6 +37,41 @@ input="$(cat)"
 cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null)"
 [ -n "$cmd" ] || exit 0
 
+# Testing or editing this guard MENTIONS the patterns it looks for without
+# doing any of them. Must come FIRST, ahead of every check below: it was
+# originally placed among the BLE rules, so the commit-safety check ran before
+# it and the guard cried wolf on its own test harness. A guard that fires while
+# being tested trains you to skim it, which is how a real warning gets missed.
+case "$cmd" in
+  *bench-guard.sh*) exit 0 ;;
+esac
+
+# ---------------------------------------------------------------- commit safety
+# A `git commit -m` whose message contains BACKTICKS is a silent data-loss bug,
+# not a style nit: this shell runs them as command substitution and the words
+# VANISH from the message. It has now happened twice — most recently on
+# 2026-08-20, in the very commit that shipped this guard, where "jump boards"
+# was executed (command not found) and replaced with nothing, leaving ", ,".
+#
+# Knowing the rule did not prevent it, which is the whole argument for putting
+# it here instead of in a document. Fires before the commit exists, so the fix
+# costs one edit rather than an --amend.
+case "$cmd" in
+  *git*commit*-m*\`*)
+    read -r -d '' CMSG <<'CEOF'
+COMMIT SAFETY — this git commit -m message contains BACKTICKS.
+
+zsh runs them as command substitution, so the enclosed words are DELETED from
+the commit message. This has already corrupted two commits — most recently the
+one that shipped this very guard.
+
+Write the message to a file and use  git commit -F <file>  instead.
+Backticks are safe inside a -F file; the shell never sees them.
+CEOF
+    jq -n --arg m "$CMSG" '{hookSpecificOutput:{hookEventName:"PreToolUse",additionalContext:$m}}'
+    exit 0 ;;
+esac
+
 # Does this command talk to a puck over BLE?
 case "$cmd" in
   *blecmd.py*|*battlog.py*|*otadfu.py*|*dualcentral.py*|*hostsoak.py*) ;;
