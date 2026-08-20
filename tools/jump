@@ -2226,6 +2226,152 @@ def _run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, cwd=str(REPO), capture_output=True, text=True, **kw)
 
 
+def cmd_boards(args) -> int:
+    """Scan for every puck on the air and report GROUND TRUTH about each.
+
+    WHY THIS EXISTS (2026-08-20). The board registry lives in a document, and
+    documents are read deliberately — which means they are not read at the
+    moment you are about to be wrong. On 08-20 I diagnosed a hardware fault on
+    a board that has no battery; the fact was correctly written in TWO docs and
+    reached me from neither, because the identifier the tools print
+    (`JumpHeight-XXXX`) had no entry anywhere.
+
+    So this command does not consult documentation at all. It asks the
+    hardware, and it detects the specific condition that fooled me rather than
+    asking anyone to remember it.
+
+    THE FLOATING-BATTERY DETECTOR. A board with no cell still reports a
+    `vbat_mv`, because the ADC reads an unconnected divider — it returns
+    plausible-looking numbers that mean nothing (seen: 3742 mV, then 4133 mV
+    minutes later). One reading cannot be judged. But two can, because a cell
+    that is not charging CANNOT GAIN VOLTAGE:
+
+        chg == 0  and  vbat rising  =>  that is not a battery.
+
+    That is physics, not a heuristic, and it needs no calibration. We sample a
+    few times and apply it, plus a hard bound: this cell (LP502030) cannot
+    exceed 4.2 V, so anything above that with chg=0 is also floating.
+    """
+    import re as _re
+    names = _ble_scan_names(timeout=float(getattr(args, "scan_timeout", 12.0)))
+    if not names:
+        print("no pucks found on the air.")
+        print("  (a board can be present but silent — asleep, in the bootloader,")
+        print("   or already connected to something else)")
+        return 1
+
+    print(f"found {len(names)} board(s) advertising\n")
+    n_float = 0
+    for nm in sorted(names):
+        print(f"── {nm}")
+        samples, info = [], {}
+        for i in range(int(getattr(args, "samples", 3))):
+            kv = _ble_stats_pinned(nm)
+            if not kv:
+                continue
+            info = kv or info
+            try:
+                samples.append((int(kv["vbat_mv"]), int(kv.get("chg", "0"))))
+            except (KeyError, ValueError):
+                pass
+            if i + 1 < int(getattr(args, "samples", 3)):
+                time.sleep(2.0)
+
+        if not samples:
+            print("   no answer (asleep, busy, or connected elsewhere)\n")
+            continue
+
+        src = info.get("src", "?")
+        vb = [v for v, _ in samples]
+        chg_any = any(c == 1 for _, c in samples)
+
+        # THE INVARIANT — corrected 2026-08-20 by running this against the real
+        # boards, which is the only reason it works. The first version tested
+        # only for a RISE while not charging. The battery-less board promptly
+        # read 4139, 4136, 3739 mV in about four seconds: a 400 mV COLLAPSE,
+        # which that rule scored as innocent (max == first sample, nothing
+        # "rose") and 4139 sits under the 4.2 V ceiling too. A detector that
+        # misses the very board it was written for is worse than none, because
+        # it launders a floating reading as "stable".
+        #
+        # The general fact is not about direction, it is about INERTIA: a real
+        # 250 mAh cell under a ~10 mA load moves ~30 mV per HOUR. Over a few
+        # seconds it cannot move meaningfully in EITHER direction. So the test
+        # is the spread across the sample window; 50 mV is far above the ADC's
+        # own noise (a healthy board repeats within ~3 mV) and far below any
+        # floating swing seen (400 mV).
+        spread = max(vb) - min(vb) if len(vb) > 1 else 0
+        rose   = max(vb) - vb[0]   if len(vb) > 1 else 0
+        floating = (spread > 50) or (not chg_any and rose > 20) \
+                   or (not chg_any and max(vb) > 4200)
+
+        print(f"   build      src={src}")
+        print(f"   vbat       {', '.join(str(v) + ' mV' for v in vb)}"
+              f"{'   (charging)' if chg_any else ''}")
+        if floating:
+            n_float += 1
+            if spread > 50:
+                why = (f"swung {spread} mV across {len(vb)} reads seconds apart; "
+                       f"a real cell moves ~30 mV per HOUR")
+            elif rose > 20:
+                why = f"rose {rose} mV while chg=0"
+            else:
+                why = f"{max(vb)} mV exceeds the cell's 4.2 V ceiling with chg=0"
+            print(f"   battery    ⚠️  NO BATTERY / FLOATING — {why}.")
+            print(f"              An unconnected divider reads plausible numbers "
+                  f"that mean nothing.")
+            print(f"              Treat every power figure from this board as noise:")
+            print(f"              no drain, endurance, DC/DC or untethered testing.")
+        elif chg_any:
+            print(f"   battery    present, charging")
+        else:
+            print(f"   battery    present and stable ({info.get('batt_pct','?')}%)"
+                  f" — this board can measure power")
+        print()
+
+    print("pin every BLE tool to one board:  --name <advertised-name>")
+    if n_float:
+        print(f"{n_float} board(s) have no usable battery. Registry: docs/bench-playbook.md §1")
+    return 0
+
+
+def _ble_scan_names(timeout: float = 12.0) -> list:
+    """Advertised names of every puck in range (empty list on any failure)."""
+    code = (
+        "import asyncio,sys\n"
+        "from bleak import BleakScanner\n"
+        "async def m():\n"
+        f"    ds=await BleakScanner.discover(timeout={timeout},return_adv=True)\n"
+        "    out=set()\n"
+        "    for d,a in ds.values():\n"
+        "        n=a.local_name or d.name or ''\n"
+        "        if n.startswith('JumpHeight'): out.add(n)\n"
+        "    print('\\n'.join(sorted(out)))\n"
+        "asyncio.run(m())\n")
+    try:
+        r = subprocess.run([sys.executable, "-c", code],
+                           capture_output=True, text=True, timeout=timeout + 25)
+        return [l.strip() for l in r.stdout.splitlines() if l.strip()]
+    except Exception:
+        return []
+
+
+def _ble_stats_pinned(name: str) -> dict:
+    """One pinned `info` read. Pinned is the whole point — see cmd_boards."""
+    blecmd = REPO / "tools" / "blecmd.py"
+    try:
+        r = subprocess.run(
+            [sys.executable, str(blecmd), "--name", name, "info"],
+            capture_output=True, text=True, timeout=60)
+    except Exception:
+        return {}
+    line = next((l for l in r.stdout.splitlines() if "INFO " in l), None)
+    if not line:
+        return {}
+    import re as _re
+    return dict(_re.findall(r"(\w+)=([-\w.]+)", line.split("INFO ", 1)[1]))
+
+
 def cmd_status(args) -> int:
     """Live capability status, MACHINE-CHECKED where possible.
 
@@ -3050,6 +3196,12 @@ def main() -> int:
         p.set_defaults(fn=fn)
         p.add_argument("--port", help="serial port (default: autodetect)")
         return p
+
+    p = add("boards", cmd_boards,
+            help="scan every puck and report ground truth (flags floating batteries)")
+    p.add_argument("--samples", type=int, default=3,
+                   help="readings per board; >1 enables the rising-voltage test")
+    p.add_argument("--scan-timeout", type=float, default=12.0)
 
     p = add("wizard", cmd_wizard,
             help="guided end-to-end setup: plug in and follow along (resumable)")

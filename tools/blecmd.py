@@ -67,22 +67,59 @@ async def scan(seconds=6.0):
 
 
 async def find(name, seconds=10.0, addr=None):
-    """First advertiser whose name STARTS WITH `name` (case-insensitive), or —
-    when `addr` is given — whose address starts with it. Prefix, not equality:
-    pucks advertise "JumpHeight-XXXX" (unique per board) since 2026-08-18,
-    after two same-named boards impersonated each other on the bench. --addr
-    is the unambiguous pin for multi-puck benches."""
-    dev = await BleakScanner.find_device_by_filter(
-        lambda d, adv: (d.address.lower().startswith(addr.lower()) if addr else
-                        (adv.local_name or d.name or "").lower().startswith(name.lower())),
-        timeout=seconds,
-    )
-    if dev is None:
+    """The advertiser matching `name` (prefix) or `addr` (prefix).
+
+    Prefix, not equality: pucks advertise "JumpHeight-XXXX" (unique per board)
+    since 2026-08-18, after two same-named boards impersonated each other on
+    the bench.
+
+    AMBIGUITY IS ANNOUNCED, NOT SILENTLY RESOLVED (2026-08-20). This used to be
+    a `find_device_by_filter`, which returns whichever board answers FIRST. The
+    default name is the bare prefix "JumpHeight", so on a two-puck bench every
+    unpinned call was a coin flip — and it landed differently on consecutive
+    calls, which is how a floating 97 % got written into a death-run log and
+    how a whole DC/DC result was attributed to the wrong board. The tool knew
+    both boards were there and said nothing.
+
+    So: collect every match. One is unambiguous. Several means the caller did
+    not say which board they meant, and the fix is to TELL THEM, then choose
+    deterministically (lowest name) so a script at least behaves the same way
+    twice. Racy-and-silent is the one behaviour that must not survive.
+    """
+    matches = {}
+    def _seen(d, adv):
+        nm = (adv.local_name or d.name or "")
+        ok = (d.address.lower().startswith(addr.lower()) if addr
+              else nm.lower().startswith(name.lower()))
+        if ok:
+            matches[d.address] = (d, nm, adv.rssi)
+        return False        # never short-circuit: we want the full census
+
+    await BleakScanner.find_device_by_filter(_seen, timeout=seconds)
+
+    if not matches:
         # Raised, not sys.exit()'d: under --watch this is a retryable gap
         # (out of range, momentarily not advertising), not the end of the run.
         raise RuntimeError(f"no '{name}' found — is it awake and in range? "
                            f"(try --scan; a puck in System OFF does not advertise)")
-    return dev
+
+    if len(matches) > 1:
+        listing = sorted((nm or "(unnamed)", d.address, rssi)
+                         for d, nm, rssi in matches.values())
+        print(f"\n⚠️  {len(matches)} boards match '{name}' — this call is AMBIGUOUS:",
+              file=sys.stderr)
+        for nm, adr, rssi in listing:
+            print(f"      {nm:22} {adr}  rssi={rssi}", file=sys.stderr)
+        print(f"    Pin the one you mean:  --name {listing[0][0]}   (or --addr <prefix>)",
+              file=sys.stderr)
+        print(f"    Unpinned reads have corrupted two analyses; power figures "
+              f"from the wrong board are worse than no reading.\n", file=sys.stderr)
+        chosen = min(matches.values(), key=lambda t: (t[1] or "", t[0].address))
+        print(f"    proceeding with {chosen[1]} (lowest name, chosen deterministically)\n",
+              file=sys.stderr)
+        return chosen[0]
+
+    return next(iter(matches.values()))[0]
 
 
 class Link:
