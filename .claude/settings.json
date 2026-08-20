@@ -11,6 +11,17 @@
             "statusMessage": "Checking DECISIONS.md and docs/ for predefined work"
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/bench-guard.sh\"",
+            "timeout": 10,
+            "statusMessage": "Checking board identity before a BLE read"
+          }
+        ]
       }
     ]
   }
