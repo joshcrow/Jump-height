@@ -979,6 +979,53 @@ function onSyncDone(lines, err) {
   // BLE makes this MORE important than on the CLI, not less: a dump over a
   // link that drops is exactly how a short file happens, and the next thing
   // this screen offers is "Clear the device".
+  // THREE CHECKS, not one — brought to parity with tools/jump's
+  // _verify_download() on 2026-08-21. The version shipped 08-20 compared ONLY
+  // trace.csv's byte count and then said "download verified", which reads as
+  // covering the whole download. It did not: jumps.csv — the file the report,
+  // the season best and the CLEAR OFFER are built from — had no check at all.
+  // A short trace costs raw samples. A short jumps.csv costs the rider's
+  // actual results, and the very next thing this screen offers is to erase
+  // the puck.
+  //
+  // (a) The device's own complaint outranks any arithmetic we do. main.cpp
+  //     emits "# WARNING <file> INCOMPLETE — N bytes never reached the host"
+  //     when a transfer drops bytes; no surface has ever looked for it. The
+  //     puck has been reporting the failure out loud into a log nobody read.
+  const fwIncomplete = (lines || []).filter(
+    l => l.includes('INCOMPLETE') && l.trimStart().startsWith('#'));
+  if (fwIncomplete.length) {
+    showDumpStatus(
+      'The puck reported a dropped transfer: ' + fwIncomplete[0].slice(0, 160)
+      + ' — nothing was saved and the puck still has everything. Sync again.');
+    return;
+  }
+
+  // (b) jumps.csv rows vs the device's own stored_jumps (already tracked from
+  //     STATS as lastStored.jumps for the banner — it has been sitting there
+  //     uncompared the whole time). Minus one for the header row.
+  // Compare the PARSED jump count, not a raw row count. Two reasons:
+  //  * jumpsRows has already had its header stripped above (line ~15), so
+  //    subtracting one here double-counted — that off-by-one made this gate
+  //    reject a perfectly good 5-of-5 download in testing.
+  //  * `jumps` is what the report, the season best and the saved session are
+  //    actually built from, so it is the number whose shortfall would hurt.
+  //    A malformed row that fails to parse is a real loss and shows up here.
+  const jumpRowCount = jumps.length;
+  const devJumps = lastStored && Number.isFinite(lastStored.jumps)
+    ? lastStored.jumps : null;
+  if (devJumps !== null && devJumps > 0 && jumpRowCount !== devJumps) {
+    showDumpStatus(
+      `Jumps file is short — got ${jumpRowCount} rows, the puck holds `
+      + `${devJumps}. These are your actual results, not raw samples. Nothing `
+      + `was saved and the puck still has everything. Sync again`
+      + (transportKind === 'BLE'
+          ? ', and stay close to the puck — Bluetooth drops are the usual cause.'
+          : '.'));
+    return;
+  }
+
+  // (c) trace.csv byte count — the original check.
   let integrityOk = null;
   if (Number.isFinite(lastTraceBytes) && lastTraceBytes > 0) {
     const got = traceCsv.length + (traceCsv.length ? 1 : 0); // trailing newline

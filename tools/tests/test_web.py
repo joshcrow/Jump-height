@@ -329,7 +329,8 @@ class TestWebApp(unittest.TestCase):
         row = _resilient(self.page, [
             ("testid", "session-row"), ("css", ".session"),
             ("css", "#sessions-list .card")], "saved-session row")
-        # The two fed jumps, best = 1.226 m -> shown as 1.23.
+        # The two fed jumps, best = 1.226 m -> shown as 1.23. No STATS with
+        # stored_jumps is fed here, so the gate's jumps check is skipped.
         expect(row).to_contain_text("2 jumps")
         expect(row).to_contain_text("1.23")
 
@@ -347,7 +348,7 @@ class TestWebApp(unittest.TestCase):
         self._open()
         # Device claims 4096 trace bytes; the dump below delivers a handful.
         self._feed("STATS session_jumps=0 session_best_m=0 "
-                   "stored_jumps=5 stored_best_m=1.790 trace_bytes=4096")
+                   "stored_jumps=1 stored_best_m=1.790 trace_bytes=4096")
         sync_btn = _resilient(self.page, [
             ("testid", "btn-sync"), ("css", "#btn-sync"),
             ("role", ("button", "sync"))], "sync button")
@@ -374,6 +375,71 @@ class TestWebApp(unittest.TestCase):
                       "the refusal must say the download was incomplete")
         self.assertIn("4,096", body,
                       "the refusal must name the device's own byte count")
+
+    def test_short_jumps_file_is_refused_even_when_trace_is_perfect(self):
+        """The hole the web app carried until 2026-08-21.
+
+        trace.csv arrives complete, so the old single-check gate said
+        "verified" — while jumps.csv, the file the report and the season best
+        and the CLEAR OFFER are built from, came back short. A short trace
+        costs raw samples; a short jumps file costs the rider's results, and
+        the next thing this screen offers is to erase the puck.
+        """
+        self._open()
+        # Device holds 5 jumps; the dump below delivers 1. Trace is exact.
+        self._feed("STATS session_jumps=0 session_best_m=0 "
+                   "stored_jumps=5 stored_best_m=1.790 trace_bytes=36")
+        _resilient(self.page, [("testid", "btn-sync"), ("css", "#btn-sync"),
+                               ("role", ("button", "sync"))], "sync button").click()
+        self._feed(
+            "FILE jumps.csv BEGIN",
+            "n,takeoff_s,airtime_raw_s,airtime_s,height_m",
+            "1,10.000,0.615,0.600,0.441",
+            "FILE jumps.csv END",
+            "FILE trace.csv BEGIN",
+            "t,mag", "0.00,1.00", "0.05,1.01", "0.10,1.03",
+            "FILE trace.csv END",
+            "OK dump",
+        )
+        rows = self.page.locator("[data-testid=session-row], .session, "
+                                 "#sessions-list .card")
+        self.assertEqual(rows.count(), 0,
+                         "a short jumps file must not be saved as a session")
+        body = self.page.locator("body").inner_text().lower()
+        self.assertIn("jumps file is short", body,
+                      "the refusal must name the jumps file, not the trace")
+
+    def test_device_reported_incomplete_transfer_is_believed(self):
+        """The puck says so itself, and no surface ever listened.
+
+        main.cpp emits '# WARNING <file> INCOMPLETE — N bytes never reached
+        the host' when a transfer drops bytes. Until 2026-08-21 neither the
+        CLI nor the web app looked for that line: the device was reporting
+        the failure out loud into a log nobody read. The device's own
+        complaint outranks any byte arithmetic we do.
+        """
+        self._open()
+        self._feed("STATS session_jumps=0 session_best_m=0 "
+                   "stored_jumps=1 stored_best_m=1.790 trace_bytes=36")
+        _resilient(self.page, [("testid", "btn-sync"), ("css", "#btn-sync"),
+                               ("role", ("button", "sync"))], "sync button").click()
+        self._feed(
+            "FILE jumps.csv BEGIN",
+            "n,takeoff_s,airtime_raw_s,airtime_s,height_m",
+            "1,10.000,0.615,0.600,0.441",
+            "FILE jumps.csv END",
+            "FILE trace.csv BEGIN",
+            "t,mag", "0.00,1.00", "0.05,1.01", "0.10,1.03",
+            "FILE trace.csv END",
+            "# WARNING trace.csv INCOMPLETE - 512 bytes never reached the host",
+            "OK dump",
+        )
+        rows = self.page.locator("[data-testid=session-row], .session, "
+                                 "#sessions-list .card")
+        self.assertEqual(rows.count(), 0,
+                         "counts can match and the transfer still be dropped")
+        body = self.page.locator("body").inner_text().lower()
+        self.assertIn("dropped transfer", body)
 
     def test_sync_banner_flow_syncs_session_and_offers_clear(self):
         """STATS carrying stored_jumps>0 raises the cross-tab sync banner;
@@ -417,6 +483,9 @@ class TestWebApp(unittest.TestCase):
             "n,takeoff_s,airtime_raw_s,airtime_s,height_m",
             "1,10.000,0.615,0.600,0.441",
             "2,20.000,1.010,1.000,1.226",
+            "3,30.000,0.700,0.690,0.583",
+            "4,40.000,0.650,0.640,0.502",
+            "5,50.000,0.600,0.590,0.427",
             "FILE jumps.csv END",
             "FILE trace.csv BEGIN",
             "t,mag",
@@ -430,7 +499,7 @@ class TestWebApp(unittest.TestCase):
         row = _resilient(self.page, [
             ("testid", "session-row"), ("css", ".session"),
             ("css", "#sessions-list .card")], "saved-session row")
-        expect(row).to_contain_text("2 jumps")
+        expect(row).to_contain_text("5 jumps")
 
         clear_btn = _resilient(self.page, [
             ("testid", "btn-clear-after-sync"), ("css", ".after-sync .btn-danger"),
@@ -448,7 +517,7 @@ class TestWebApp(unittest.TestCase):
         # jump also gets a same-sized transparent hit-target <rect> layered on
         # top for tap/hover, so counting rect+path together would double-count.
         bars = chart.locator("svg path")
-        self.assertEqual(bars.count(), 2,
+        self.assertEqual(bars.count(), 5,
                           "session-chart should draw exactly one bar per jump")
 
         # ---- all-time chip reflects the freshly-synced session --------------
