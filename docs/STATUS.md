@@ -736,6 +736,41 @@ do not.**
 
 ## 2026-08-21
 
+### Two-central gate: bulk export PASSES on silicon; the JUMP-line half is INCONCLUSIVE by host limitation
+- **`dualcentral.py` PASS on the spare (2026-08-21).** 300 KB staged
+  deliberately (the auto-clear had just emptied the region — running this
+  against an empty trace would have byte-diffed nothing and passed while
+  testing nothing; the execution-plan review caught that trap in advance).
+  - Both centrals received **300,022 bytes, sha256 `9d3d52fb880beb6e`,
+    identical**; 19,839 well-formed rows each; **`tx_drops` 0** before and
+    after; link-count evidence **A=2 / B=1 READY greets = two real links**.
+  - The demanding part: central B polled `stats` **39 times during** A's
+    export. That is the concurrent-load condition that made the original bug
+    visible. **The layer-1 transmit fix is now measured, not just flashed** —
+    closing the standing note that "no bulk export has been run over two
+    concurrent centrals".
+- **`dualjump.py` (new) — INCONCLUSIVE, and its first run was a false alarm
+  worth recording.** The 2026-08-11 corruption was a JUMP-line failure, not
+  an export failure: sparse asynchronous lines into a possibly-idle stack are
+  a different traffic pattern from a continuous stream, and it is the pattern
+  the water day actually runs in. So it deserves its own test.
+  - First run reported **A=0 / B=20 and printed FAIL**. That was the harness:
+    macOS CoreBluetooth multiplexes ONE physical link across central managers
+    in a process, so B's `start_notify` re-routed delivery and starved A.
+    **`dualcentral.py` had already documented this exact hazard and
+    implemented the READY-greet link count against it; the new tool shipped
+    without it and produced a confident wrong answer about the firmware
+    within a minute of existing.**
+  - Fixed: the link count runs BEFORE any verdict, and a single link returns
+    **INCONCLUSIVE (2)**, never FAIL. A test that cannot distinguish "the
+    firmware dropped it" from "my harness cannot make two links" must not
+    render a verdict on the firmware.
+  - **The real run is tonight's Epix + Instinct** — two genuinely separate
+    hosts, which is also exactly the water-day configuration. Nothing on this
+    Mac can settle it.
+- **Standing rule unchanged until that run passes:** no second central while
+  the rider is on the water.
+
 ### AUTO-CLEAR FIRED ON SILICON — the last of the seven fixes is now proven
 - The rehearsal was set up deliberately overnight: trace region filled to
   **genuinely full (14,708,969 bytes)**, three REAL tossed jumps stored as the
