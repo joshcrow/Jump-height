@@ -1323,7 +1323,13 @@ void loop() {
     }
     return;
   }
-  const float t   = (now_us - t0_us) * 1e-6f;
+  // double (B3, glue-and-forget.md §3a): this is elapsed seconds since boot,
+  // an ABSOLUTE value that grows without bound for as long as the device
+  // stays awake — float32 loses sub-ms resolution starting at 18.2 h of
+  // uptime and silently drops ~12% of real jumps by 6 months. See
+  // jump_detector.h's update() for the full failure-mode writeup and the
+  // permanent falsifier (tools/tests/test_timebase_falsifier.py).
+  const double t  = (now_us - t0_us) * 1e-6;
   // Orientation-independent, normalized to this unit's own measured gravity.
   const float mag = sqrtf(ax * ax + ay * ay + az * az) / g_baseline;
 

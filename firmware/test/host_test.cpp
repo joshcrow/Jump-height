@@ -45,7 +45,13 @@ int main() {
     }
     if (bad || vals.size() < 2) continue;  // skip malformed rows
 
-    const float t = (float)vals[0];
+    // t stays double all the way to update() (B3, glue-and-forget.md §3a):
+    // jump_detector.h's t_s is now double specifically so an absolute,
+    // ever-growing uptime never gets crushed through float32 first. Prior to
+    // this fix this line narrowed to float — which mirrored what
+    // firmware/src/main.cpp did before its own fix, so this program truly
+    // mirrors the firmware's post-fix behavior, not a stale pre-fix one.
+    const double t = vals[0];
     float mag;
     if (vals.size() >= 4) {
       const float ax = (float)vals[1], ay = (float)vals[2], az = (float)vals[3];

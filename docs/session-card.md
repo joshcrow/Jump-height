@@ -23,13 +23,28 @@ Full registry: [bench-playbook.md §1](bench-playbook.md).
       `clear`. Never clear anything that exists in only one place.
 - [ ] Battery ~100 %. Budget ~21 h of recording; a session is ~2 h.
 - [ ] Puck mounted **≥24 h ago** (the mount needs a full cure).
+- [ ] **With the puck mounted, check you can still reach the reset
+      button.** Press it once now, before the day, not for the first time
+      at the beach. If the mount or capsule blocks it, fix that now — see
+      the reboot ritual below for why this matters.
 - [ ] Capsule bucket-tested, loaded, and floating.
 - [ ] Camera: **1080p/120**. Not 4K/30. Check it is actually set.
 - [ ] Phone or paper for notes, with the real time visible.
 
 ## Powering on (the ritual, in order)
 
-1. Power on.
+1. **Reboot the puck — even if it already looks on and connected.**
+   There is no single "reboot" command. Use one of these:
+   - **Press the physical reset button on the board.** Always works,
+     needs no laptop, and is the only option once you're away from the
+     bench. (This is why you checked it's reachable, above.)
+   - Or, if it's still on USB at the bench: send it `off` (it powers
+     down cleanly), then unplug and replug the cable to wake it.
+   Do this right before you start today's activity, **every time** —
+   including if it was already sitting there powered on from an earlier
+   test. Why this matters: [glue-and-forget.md §3b](glue-and-forget.md).
+   Skipping it has already put someone else's desk tosses from hours
+   earlier into a real ride's saved data.
 2. **Sync marker: three deliberate flat drops of the board onto something
    soft, ~2 s apart.** Not a finger tap — a tap is 2-5 ms and the stored
    trace is 50 Hz, so it can be absent from the data entirely.

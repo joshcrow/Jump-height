@@ -98,6 +98,7 @@
 
 #pragma once
 
+#include <assert.h>
 #include <math.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -158,19 +159,44 @@ inline uint16_t milli_g_from_g(float mag_g) {
 }
 inline float g_from_milli_g(uint16_t milli_g) { return (float)milli_g / 1000.0f; }
 
-// Millisecond timestamp for a block's t0, from the (float) seconds value
+// Millisecond timestamp for a block's t0, from the (double) seconds value
 // jh_store.cpp's sampling path hands us — the ONE arithmetic path both
 // jh_store.cpp's feedSample() (the real, device-side encode site) and
 // firmware/test/trace_codec_harness.cpp's host harness call (see this
 // file's "Double precision, both directions" note above for why sharing
 // this matters, not just computing it identically in two places).
-// Promoting t_s to double BEFORE the *1000 multiply — rather than
-// multiplying in float32 first, as jh_store.cpp used to — avoids a
-// double-rounding defect (one rounding from the float32 multiply itself, a
-// second from lround()'s own round-to-integer) that measurably diverged
-// from Python's (always-double) math at t=8192.021s and beyond.
-inline uint32_t t0_ms_from_t_s(float t_s) {
-  return (uint32_t)lround((double)t_s * 1000.0);
+//
+// t_s is double, not float (B3, glue-and-forget.md §3a — the second of two
+// unswept narrowing sites the attack found; the first was jh_store.cpp:960's
+// `(float)atof()`, now fixed alongside this one). Multiplying in double
+// avoids a double-rounding defect (one rounding from a float32 multiply
+// itself, a second from the round-to-integer below) that measurably
+// diverged from Python's (always-double) math at t=8192.021s and beyond —
+// but that fix is worthless if the INPUT was already crushed through
+// float32 before it got here, which is exactly what the unswept site did:
+// it made this function's own effective resolution fictional starting at
+// ~2.28h of uptime regardless of how carefully the arithmetic below is
+// done. The parameter must stay double all the way from the caller.
+//
+// FINDING preserved (do not let this regress silently): the predecessor of
+// the line below called lround(), not llround(). lround() returns a plain
+// `long`, which is 32 bits on this project's ARM (Cortex-M4F) target but 64
+// bits on the x86_64/ARM64 host that builds and runs ./tools/jump simtest —
+// so the existing parity harness is STRUCTURALLY BLIND to this failure
+// mode: a signed 32-bit `long` silently overflows (undefined behavior in C)
+// once t_s exceeds INT32_MAX ms = 2,147,483.647 s =~ 24.9 days of uptime,
+// and no host build could ever exercise that, because the host's own `long`
+// never overflows there. llround() returns `long long` (64-bit on every
+// target this project ships to), so the multiply-round itself no longer
+// overflows — but this function's uint32_t return still needs the result to
+// fit, and its historical callers all assumed the narrower, signed int32
+// range lround() used to enforce implicitly. Check that explicitly, on
+// every platform, rather than trust silence from a host suite that cannot
+// see the gap.
+inline uint32_t t0_ms_from_t_s(double t_s) {
+  const long long ms = llround(t_s * 1000.0);
+  assert(ms >= 0 && ms <= 2147483647LL);  // fits int32 — see FINDING above
+  return (uint32_t)ms;
 }
 
 // ---------------------------------------------------------------- Encoder

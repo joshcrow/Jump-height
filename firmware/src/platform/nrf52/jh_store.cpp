@@ -957,7 +957,16 @@ bool feedSample(const char* line, size_t len) {
   if (t_len >= sizeof(t_buf) || m_len >= sizeof(m_buf)) return false;
   memcpy(t_buf, line, t_len); t_buf[t_len] = '\0';
   memcpy(m_buf, comma + 1, m_len); m_buf[m_len] = '\0';
-  const float t_s   = (float)atof(t_buf);
+  // t_s stays double, all the way to t0_ms_from_t_s() below (B3,
+  // glue-and-forget.md §3a — an unswept narrowing site the attack found):
+  // atof() already returns double; this used to re-narrow it to float
+  // before the anchor's ms conversion ever saw it, which made the trace
+  // anchor's own millisecond resolution fictional starting at 2.28 h of
+  // uptime — independent of, and hiding behind, main.cpp's own t_s fix,
+  // since this is a SEPARATE narrowing site on the encode path. mag_g stays
+  // float: magnitudes don't grow unboundedly with uptime the way an
+  // absolute timestamp does, so float32 never loses resolution here.
+  const double t_s  = atof(t_buf);
   const float mag_g = (float)atof(m_buf);
 
   // Reject a non-finite PARSED value outright (review-store.md finding #3):
@@ -971,7 +980,10 @@ bool feedSample(const char* line, size_t len) {
   if (!isfinite(t_s) || !isfinite(mag_g)) return false;
 
   bool crossed = false;
-  const long this_sec = (long)floorf(t_s);
+  const long this_sec = (long)floor(t_s);  // floor(), not floorf(): t_s is
+                                            // double now — floorf(t_s) would
+                                            // silently re-narrow it right
+                                            // back to float32 at the call.
   if (!s_trace_block_open || this_sec != s_trace_block_sec || s_trace_enc.full()) {
     crossed = closeAndWriteBlock() || crossed;
     if (!s_trace_full) {

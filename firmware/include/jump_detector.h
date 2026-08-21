@@ -53,10 +53,16 @@ struct Params {
 };
 
 struct JumpEvent {
-  float takeoff_time_s;  // timestamp of takeoff (start of the free-fall dip)
-  float airtime_raw_s;   // measured, uncorrected
-  float airtime_s;       // after airtime_offset_s calibration
-  float height_m;        // height_scale * g * airtime_s^2 / 8
+  // double: an ABSOLUTE timestamp since boot, which grows without bound for
+  // as long as the device stays awake (see Detector::update()'s comment
+  // below — B3, glue-and-forget.md §3a). The other three fields are short,
+  // bounded DURATIONS/derived values (0.25-3 s airtimes, sub-hundred-metre
+  // heights) that float32's ~7 decimal digits resolve comfortably forever;
+  // only fields that accumulate with uptime need the wider type.
+  double takeoff_time_s;  // timestamp of takeoff (start of the free-fall dip)
+  float  airtime_raw_s;   // measured, uncorrected
+  float  airtime_s;       // after airtime_offset_s calibration
+  float  height_m;        // height_scale * g * airtime_s^2 / 8
 };
 
 enum class State { RIDING, CANDIDATE, AIRBORNE };
@@ -127,15 +133,32 @@ class Detector {
   // sample is spin-corrected first. This is the overload a 6-axis board
   // (the Sense's LSM6DS3) should call on every sample; the accel-only one
   // remains correct for straight airs and is all a 3-axis v1 board can do.
-  bool update(float t_s, float accel_mag_g, float gyro_mag_dps, JumpEvent& out) {
+  //
+  // t_s is double (B3, glue-and-forget.md §3a): it is elapsed seconds SINCE
+  // BOOT, which grows without bound for as long as the device stays awake.
+  // In float32 the representable grid coarsens as t_s grows — it first
+  // exceeds this detector's own 5 ms sample interval at 18.2 h of uptime,
+  // reaches 6-12x that by ~4 days (crossing the instrument's own ~4.6 cm
+  // height-error floor), and by 6 months (1.0 s grid) silently DROPS ~12%
+  // of real jumps outright (airtime quantizes to 0.000 s, and the 80 ms
+  // free-fall confirm window stretches past detection) — with no symptom on
+  // any surface. double keeps sub-ms resolution for ~285,000 years, so this
+  // is not a "someday" fix once Era-2 standby is System-ON-idle (uptime
+  // accumulates across sessions rather than resetting on a cold boot).
+  // Falsifier proving this is real, permanently in the repo: offset every
+  // golden-trace timestamp by +604,800 s (one week) and ./tools/jump simtest
+  // diverges (see tools/tests/test_timebase_falsifier.py) — it must
+  // reconverge whenever this stays double.
+  bool update(double t_s, float accel_mag_g, float gyro_mag_dps, JumpEvent& out) {
     return update(t_s,
                   correct_for_spin(accel_mag_g, gyro_mag_dps, p_.spin_lever_m, p_.g),
                   out);
   }
 
-  // Feed one sample: t_s = timestamp in seconds, accel_mag_g = |acceleration| in g.
+  // Feed one sample: t_s = timestamp in seconds (double — see the gyro-aware
+  // overload above for why), accel_mag_g = |acceleration| in g.
   // Returns true exactly on the sample that completes a valid jump, filling `out`.
-  bool update(float t_s, float accel_mag_g, JumpEvent& out) {
+  bool update(double t_s, float accel_mag_g, JumpEvent& out) {
     last_reject_ = Reject::NONE;
     switch (state_) {
       case State::RIDING:
@@ -214,9 +237,9 @@ class Detector {
 
  private:
   Params p_;
-  State state_        = State::RIDING;
-  float takeoff_time_ = 0.0f;
-  float last_low_time_ = 0.0f;  // last sample that still read as free-fall
+  State state_         = State::RIDING;
+  double takeoff_time_ = 0.0;
+  double last_low_time_ = 0.0;  // last sample that still read as free-fall
   Reject last_reject_         = Reject::NONE;
   float  last_reject_airtime_ = 0.0f;
 };
