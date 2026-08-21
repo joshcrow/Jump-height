@@ -736,6 +736,35 @@ do not.**
 
 ## 2026-08-21
 
+### AUTO-CLEAR FIRED ON SILICON — the last of the seven fixes is now proven
+- The rehearsal was set up deliberately overnight: trace region filled to
+  **genuinely full (14,708,969 bytes)**, three REAL tossed jumps stored as the
+  stakes, then left idle past the 1 h threshold. Owner shook it this morning.
+- **Result, read off the chip:**
+
+  | check | before | after | verdict |
+  |---|---|---|---|
+  | trace_bytes | 14,708,969 (full) | 20,139 (fresh recording) | **cleared** |
+  | stored_jumps | 3 | 3 | **preserved** |
+  | stored_best_m | 0.266 | 0.266 | **preserved** |
+  | uptime_s | — | 39,059 (10.85 h, monotonic) | **no reset** |
+  | `fs=down` | absent | absent | **storage up** |
+
+- The three records were **read back individually** and are byte-identical to
+  last night's tosses (airtimes 0.380/0.411/0.466 s, heights
+  0.177/0.208/0.266 m, flight fields intact) — the count surviving is not the
+  same as the DATA surviving, and this checks the second one.
+- What this specifically proves, on real silicon, for the first time:
+  **descending erase** of a genuinely full region; the **sector-0 erase that
+  was removed** (no auto-format on the next mount); **jumps untouched by a
+  trace-only clear**; and the **three-condition policy** firing exactly once,
+  on the right event, with no watchdog reset across ~20 s of erasing.
+- **All seven of the 2026-08-20 defects are now validated on hardware.** The
+  six from the pre-flight review were closed by the flash + desk test + the
+  42-cycle soak; this one — the only one no script can trigger, because its
+  policy requires an hour of stillness followed by motion — needed a human
+  and a shake.
+
 ### Overnight results: 42-cycle silicon storage soak PASSES; OG stable 9.5 h; power verdict UNDETERMINED (and I nearly called it twice, wrongly)
 - **Storage soak, third board, 42 cycles, 7.5 h unattended (`tools/storagesoak.py`, new):**
   **42/42 fills reached genuinely-full**, and `clear` on a full region ran
