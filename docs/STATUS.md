@@ -713,6 +713,27 @@ do not.**
 
 ## 2026-08-20
 
+### OPEN: one unexplained reset on the spare after the 14 MB fill (reas=0)
+- Sequence: `fillstore 999999` completed clean (`region_full=1`, 14,708,969
+  CSV-equivalent bytes, WDT fed throughout), board idle on USB — then a reboot
+  roughly 4-6 min later. `uptime_s=56` at the next read; `reas=` absent, i.e.
+  **RESETREAS read 0**, the one value with no signature (POR and brownout both
+  leave it clear; WDT/soft/pin resets would have flagged).
+- Storage came through perfectly: the boot scan walked the genuinely FULL
+  region and reported the exact fill byte count — which is plan.md §3.4's
+  session-risk scenario passing live on tonight's build, worth having on
+  record.
+- Not chased at midnight, by design. The overnight idle IS the experiment:
+  tomorrow's first read takes `uptime_s` before anything else. Hours ≈ no
+  recurrence; minutes ≈ a repeating reset and a real hunt. The auto-clear
+  rehearsal survives a reboot either way (first motion after ≥1 h of post-boot
+  stillness still satisfies the gate — verified in main.cpp before deciding to
+  sleep on it).
+- Glue-and-forget relevance: unexplained resets are exactly the class the
+  six-month vision cannot tolerate; if it recurs, RESETREAS=0 on steady USB
+  points at supply integrity (the spare has no battery to buffer QSPI current
+  spikes), which a battery-backed board would mask.
+
 ### Pre-flight review: six confirmed defects, all in the "safety" code
 - A 12-agent adversarial review of the 48 h firmware batch returned **six
   high-severity findings, all confirmed against source before fixing**
