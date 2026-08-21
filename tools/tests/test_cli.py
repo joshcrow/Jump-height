@@ -47,6 +47,118 @@ def _load_jump_module():
     return mod
 
 
+class TestDownloadVerification(unittest.TestCase):
+    """A download is only 'verified' if BOTH files arrived and the device did
+    not complain.
+
+    Pins an audit finding (2026-08-20): the gate compared only trace.csv's byte
+    count, then printed a bare 'download verified' that read as covering the
+    whole download. jumps.csv — the file the report, the season best and the
+    clear prompt are built from — had no check at all, and the firmware's own
+    '# WARNING ... INCOMPLETE' line was ignored by every surface. The prompt
+    immediately after this gate offers to ERASE the device.
+    """
+
+    def setUp(self):
+        self.v = _load_jump_module()._verify_download
+
+    def test_both_files_complete_is_verified(self):
+        ok, out = self.v([], 12, 12, 2048, 2048)
+        self.assertTrue(ok)
+        self.assertTrue(any("jumps verified" in l for l in out))
+        self.assertTrue(any("trace verified" in l for l in out))
+
+    def test_short_jumps_file_fails_even_when_trace_is_perfect(self):
+        """The exact hole: trace matches, results file is truncated."""
+        ok, out = self.v([], 9, 12, 2048, 2048)
+        self.assertFalse(ok, "a short jumps.csv must fail the whole download")
+        self.assertTrue(any("JUMPS FILE SHORT" in l for l in out))
+        self.assertTrue(any("Do NOT clear" in l for l in out))
+
+    def test_firmware_incomplete_warning_fails_even_if_counts_match(self):
+        """The device's own complaint outranks our arithmetic."""
+        warn = ["# WARNING trace.csv INCOMPLETE — 512 bytes never reached the host"]
+        ok, out = self.v(warn, 12, 12, 2048, 2048)
+        self.assertFalse(ok, "the device said bytes were dropped; believe it")
+        self.assertTrue(any("DROPPED TRANSFER" in l for l in out))
+
+    def test_short_trace_still_fails(self):
+        ok, out = self.v([], 12, 12, 1024, 2048)
+        self.assertFalse(ok)
+        self.assertTrue(any("TRACE INCOMPLETE" in l for l in out))
+
+    def test_old_firmware_reporting_neither_is_unknown_not_pass(self):
+        ok, out = self.v([], 12, None, 2048, None)
+        self.assertIsNone(ok, "unknown must not be reported as verified")
+        self.assertTrue(any("not verified" in l for l in out))
+
+
+class TestUploadVerification(unittest.TestCase):
+    """A flash must never be reported as landed on the strength of an exit code.
+
+    This pins a bug that shipped TWICE in one evening (2026-08-20):
+
+      1. `./tools/jump flash` trusted PlatformIO's return code. PlatformIO
+         prints a green [SUCCESS] and exits 0 even when the DFU write threw, so
+         the tool announced "flashed" over a board still holding its old
+         firmware, and the board's subsequent silence looked like a hardware
+         fault.
+      2. The fix for (1) was added ONLY inside the `if returncode != 0:` retry
+         branch. Since the failure is DEFINED by returncode == 0, the guard sat
+         where the failure could never arrive — the common path still fell
+         through to "flashed". A guard placed out of reach is worse than none,
+         because it reads like the problem is handled.
+
+    The blob below is the real transcript observed on two different boards.
+    """
+
+    def setUp(self):
+        self.landed = _load_jump_module()._upload_landed
+
+    # The literal output that fooled the tool, exit code and all.
+    LYING = ("Upgrading target on /dev/cu.usbmodem1101 with DFU package firmware.zip\n"
+             "Failed to upgrade target. Error is: write failed: "
+             "[Errno 6] Device not configured\n"
+             "serial.serialutil.SerialException: write failed: "
+             "[Errno 6] Device not configured\n"
+             "========================= [SUCCESS] Took 11.86 seconds ============\n")
+    GENUINE = ("Upgrading target with DFU package firmware.zip\n"
+               "Device programmed.\n"
+               "========================= [SUCCESS] Took 18.20 seconds ===========\n")
+
+    def test_lying_uploader_with_zero_exit_is_not_a_success(self):
+        ok, why = self.landed(self.LYING, 0)
+        self.assertFalse(ok, "a failed DFU write that exits 0 must NOT count as landed")
+        self.assertTrue(why, "a rejection must say why")
+
+    def test_genuine_programmed_marker_is_a_success(self):
+        ok, _ = self.landed(self.GENUINE, 0)
+        self.assertTrue(ok, "'Device programmed' with a clean exit must count as landed")
+
+    def test_missing_marker_is_failure_even_with_clean_output(self):
+        ok, _ = self.landed("Building...\nLinking...\n", 0)
+        self.assertFalse(ok, "absence of the marker IS the failure signal")
+
+    def test_marker_present_but_nonzero_exit_is_failure(self):
+        ok, _ = self.landed(self.GENUINE, 1)
+        self.assertFalse(ok, "a nonzero exit still fails even with the marker")
+
+    def test_first_attempt_is_verified_not_just_the_retry(self):
+        """The regression that made the original fix useless.
+
+        Reads the source: the first upload must capture its output and run it
+        through the same verdict, rather than branching only on returncode.
+        """
+        src = Path(JUMP).read_text(encoding="utf-8")
+        head = src[src.index("def cmd_flash"):]
+        first = head[:head.index("upload missed")]
+        self.assertIn("first_log", first,
+                      "the FIRST upload attempt must capture its output")
+        self.assertIn("_upload_landed", first,
+                      "the FIRST upload attempt must be checked by the shared verdict, "
+                      "not by its exit code alone")
+
+
 class TestSelftest(unittest.TestCase):
     def test_selftest_pass(self):
         r = run_cli(["selftest", "--fake", "--fast"])

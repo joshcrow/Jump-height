@@ -269,6 +269,73 @@ def parse_kv(line: str) -> dict:
     return out
 
 
+def _verify_download(received_lines, n_jump_rows, dev_jump_count,
+                     got_trace_bytes, dev_trace_bytes) -> tuple:
+    """Is this download COMPLETE? Returns (ok_or_None, [lines to print]).
+
+    Pure, so the failure paths can actually be tested — extracted 2026-08-20
+    after an audit found the previous gate checked only trace.csv's byte count
+    while printing a bare "download verified" that read as covering everything.
+    jumps.csv had no verification at all, and jumps.csv is what the report, the
+    season best and the clear prompt are built from. A short trace costs raw
+    samples; a short jumps.csv costs the user's actual results — and the very
+    next prompt offers to ERASE the device.
+
+    Three independent checks. ok is None only when the device is too old to
+    report either figure; any single failure makes the whole download unsafe.
+    """
+    out, ok = [], None
+
+    # (a) The device's own in-band complaint outranks any arithmetic we do.
+    # main.cpp emits "# WARNING <file> INCOMPLETE — N bytes never reached the
+    # host" when a transfer drops bytes. Nothing ever looked for it: the puck
+    # was reporting the failure out loud into a log nobody read.
+    fw = [l.strip() for l in (received_lines or [])
+          if "INCOMPLETE" in l and l.lstrip().startswith("#")]
+    if fw:
+        ok = False
+        out.append("  ❌ THE DEVICE REPORTED A DROPPED TRANSFER:")
+        out.extend(f"     {l[:150]}" for l in fw[:3])
+        out.append("     Do NOT clear the device. Re-run `./tools/jump sync`.")
+
+    # (b) jumps.csv rows vs the device's own stored_jumps.
+    if dev_jump_count is not None:
+        if n_jump_rows == dev_jump_count:
+            out.append(f"  ✅ jumps verified: {n_jump_rows} rows = the device's own "
+                       f"stored_jumps")
+            if ok is None:
+                ok = True
+        else:
+            ok = False
+            out.append(f"  ❌ JUMPS FILE SHORT — parsed {n_jump_rows} rows, device "
+                       f"holds {dev_jump_count}")
+            out.append("     These are the actual results, not raw samples. Do NOT "
+                       "clear the device.")
+    else:
+        out.append("  ℹ️  jumps not verified: device reported no stored_jumps "
+                   "(old firmware)")
+
+    # (c) trace.csv byte count (the original check).
+    if dev_trace_bytes is not None:
+        trace_ok = (got_trace_bytes == dev_trace_bytes)
+        if trace_ok:
+            out.append(f"  ✅ trace verified: {got_trace_bytes:,} bytes = the "
+                       f"device's own trace_bytes")
+            if ok is None:
+                ok = True
+        else:
+            ok = False
+            delta = got_trace_bytes - dev_trace_bytes
+            out.append(f"  ❌ TRACE INCOMPLETE — got {got_trace_bytes:,} bytes, "
+                       f"device says {dev_trace_bytes:,} ({delta:+,})")
+            out.append("     The session file is SHORT. Do NOT clear the device.")
+            out.append("     Re-run `./tools/jump sync` — the data is still on the puck.")
+    else:
+        out.append("  ℹ️  trace not verified: device reported no trace_bytes "
+                   "(old firmware) — treat this session file as unconfirmed")
+    return ok, out
+
+
 def _last_tagged(lines: list[str], prefix: str) -> dict:
     """parse_kv() of the LAST line starting with `prefix` (PARAMS/CAL/INFO
     lines only ever repeat with updated values), or {} if none appear."""
@@ -1321,29 +1388,24 @@ def cmd_sync(args) -> int:
         #
         # The device already reports `trace_bytes` on STATS, and main.cpp
         # flushes before dumping so the two are meant to match exactly.
+        # Completeness is decided by _verify_download() — pure and tested, so
+        # its FAILURE paths are exercised (the previous inline version could
+        # not be, and shipped a gate that only checked one of two files).
         integrity_ok = None
-        dev_trace_bytes = None
+        dev_trace_bytes = dev_jump_count = None
         try:
             st = _last_tagged(dev.command("stats", timeout=10), "STATS ")
             if st.get("trace_bytes") is not None:
                 dev_trace_bytes = int(st["trace_bytes"])
+            if st.get("stored_jumps") is not None:
+                dev_jump_count = int(st["stored_jumps"])
         except Exception:
             pass
-        if dev_trace_bytes is not None:
-            got = len(trace_csv) + 1          # +1 for the trailing newline
-            integrity_ok = (got == dev_trace_bytes)
-            if integrity_ok:
-                print(f"  ✅ download verified: {got:,} bytes = the device's own "
-                      f"trace_bytes")
-            else:
-                delta = got - dev_trace_bytes
-                print(f"  ❌ DOWNLOAD INCOMPLETE — got {got:,} bytes, device says "
-                      f"{dev_trace_bytes:,} ({delta:+,})")
-                print( "     The session file is SHORT. Do NOT clear the device.")
-                print( "     Re-run `./tools/jump sync` — the data is still on the puck.")
-        else:
-            print("  ℹ️  download not verified: device reported no trace_bytes "
-                  "(old firmware) — treat this session file as unconfirmed")
+        integrity_ok, _verdict_lines = _verify_download(
+            lines, max(0, len(files.get("jumps.csv", [])) - 1), dev_jump_count,
+            len(trace_csv) + 1, dev_trace_bytes)
+        for _l in _verdict_lines:
+            print(_l)
 
         # Device's own jump list
         dev_jumps: list[dict] = []
@@ -2698,6 +2760,43 @@ def cmd_gen(args) -> int:
     return 0
 
 
+def _upload_landed(blob: str, returncode: int) -> tuple:
+    """Did a pio upload ACTUALLY write the firmware? Returns (ok, reason).
+
+    THE ONLY TRUSTWORTHY SIGNAL IS THE MARKER. PlatformIO prints a green
+    "[SUCCESS]" and exits 0 even when the DFU transfer threw:
+
+        Failed to upgrade target. Error is: write failed:
+        [Errno 6] Device not configured
+        ========================= [SUCCESS] Took 11.86 seconds ==========
+
+    So `returncode == 0` proves nothing, and the ABSENCE of "Device programmed"
+    is the failure.
+
+    THIS FUNCTION EXISTS BECAUSE THE FIRST FIX WAS ITSELF THE BUG (2026-08-20).
+    The marker check was added a few hours earlier — but only inside the
+    `if proc.returncode != 0:` retry branch. The failure it guards against is
+    DEFINED by returncode == 0, so it could never reach the code that checked
+    for it: the common path fell straight through to "✅ flashed". A guard
+    placed where the failure cannot arrive is worse than no guard, because it
+    reads like the problem is handled. Hoisted here so the first attempt and
+    the retry are physically incapable of diverging.
+    """
+    if "Device programmed" not in blob:
+        return False, ("no 'Device programmed' line in the uploader output — "
+                       "that string is the ONLY proof of a completed write, and "
+                       "PlatformIO's [SUCCESS] and exit code both lie about a "
+                       "failed DFU transfer")
+    for marker in ("Failed to upgrade target", "Device not configured",
+                   "serial.serialutil.SerialException",
+                   "Traceback (most recent call last)"):
+        if marker in blob:
+            return False, f"uploader reported an error: {marker}"
+    if returncode != 0:
+        return False, f"uploader exited {returncode}"
+    return True, ""
+
+
 def cmd_flash(args) -> int:
     # Find the board BEFORE building: PlatformIO's own auto-detect happily
     # grabs macOS's phantom /dev/cu.Bluetooth-Incoming-Port and then spends
@@ -2740,10 +2839,17 @@ If you're certain it's connected anyway: ./tools/jump flash --port <port>""")
     # session log too (a plain subprocess would bypass the log tee).
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True)
+    first_log = []
     for line in proc.stdout:
         print(line, end="")
+        first_log.append(line)
     proc.wait()
-    if proc.returncode != 0:
+    # Verify attempt #1 by the marker, NOT by the exit code — see
+    # _upload_landed(). A silent-success upload must route into the retry, and
+    # before this it fell straight through to "flashed".
+    landed, why = _upload_landed("".join(first_log), proc.returncode)
+    if not landed:
+        print(f"\n⚠️  first upload did not land — {why}")
         # nRF52 uploads sometimes miss the 1200-baud touch from app state.
         # The firmware's own `uf2` command drops the board into its bootloader
         # deliberately; one retry from there is the reliable path (bench
@@ -2784,18 +2890,11 @@ If you're certain it's connected anyway: ./tools/jump flash --port <port>""")
         # enforced in the tool, so it cost the same hour twice. Enforced here
         # now: the marker is proof of a completed write; its ABSENCE is the
         # failure, whatever the exit code claims.
-        programmed = "Device programmed" in blob
-        errored = any(m in blob for m in (
-            "Failed to upgrade target", "Device not configured",
-            "serial.serialutil.SerialException", "Traceback (most recent call last)"))
-        if proc.returncode != 0 or errored or not programmed:
+        landed, why = _upload_landed(blob, proc.returncode)
+        if not landed:
             print("\n❌ upload did NOT land — the board still holds its previous "
                   "firmware.")
-            if not programmed:
-                print("   No 'Device programmed' line in the uploader output. That "
-                      "string is the ONLY proof of a completed write;")
-                print("   PlatformIO's [SUCCESS] and its exit code are both known to "
-                      "lie about a failed DFU transfer.")
+            print(f"   {why}")
             for l in upload_log:
                 if any(m in l for m in ("Failed to upgrade", "Device not configured",
                                         "SerialException", "Error is:")):
