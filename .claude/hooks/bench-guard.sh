@@ -78,6 +78,20 @@ case "$cmd" in
   *) exit 0 ;;
 esac
 
+# MENTION vs INVOCATION (false positive fixed 2026-08-20): a heredoc that
+# WRITES recovery instructions naming otadfu.py fired this guard. An inline
+# `python3 - <<...` script is editing files or computing, not dialing a puck —
+# and if such a script ever does run a BLE tool unpinned, blecmd.py's own
+# runtime ambiguity warning still catches it (the layers exist so no single
+# check has to be perfect). Requiring an actual invocation shape keeps the
+# guard's warnings rare enough to be read.
+case "$cmd" in
+  *"<<"*) exit 0 ;;
+esac
+if ! printf '%s' "$cmd" | grep -qE '(^|[;&|(]\s*|python3?\s+|\./)?(tools/)?(blecmd|battlog|otadfu|dualcentral|hostsoak)\.py\s+[^=]'; then
+  exit 0
+fi
+
 # Already pinned to one board, or merely scanning/listing? Then it is correct
 # by construction and deserves no interruption.
 case "$cmd" in
@@ -87,14 +101,6 @@ esac
 # `jump boards` is the tool that ANSWERS this question — never nag it.
 case "$cmd" in
   *jump\ boards*) exit 0 ;;
-esac
-
-# Testing or editing the guard itself MENTIONS the tool names without running
-# them. Caught on the first live fire, 2026-08-20: a guard that cries wolf
-# while being tested trains you to skim it, which is how a real warning gets
-# missed later.
-case "$cmd" in
-  *bench-guard.sh*) exit 0 ;;
 esac
 
 read -r -d '' MSG <<'EOF'

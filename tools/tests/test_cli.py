@@ -143,20 +143,33 @@ class TestUploadVerification(unittest.TestCase):
         ok, _ = self.landed(self.GENUINE, 1)
         self.assertFalse(ok, "a nonzero exit still fails even with the marker")
 
-    def test_first_attempt_is_verified_not_just_the_retry(self):
-        """The regression that made the original fix useless.
+    def test_the_upload_attempt_is_verified_and_never_blindly_repeated(self):
+        """Two regressions pinned at once.
 
-        Reads the source: the first upload must capture its output and run it
-        through the same verdict, rather than branching only on returncode.
+        (1) The original bug: the upload's output must be captured and judged
+            by the shared verdict — an exit-code check alone is how a lying
+            uploader got "flashed" printed over stale firmware.
+        (2) The soak finding (n=9, 2026-08-20): blind re-uploads are what
+            stale macOS's CDC — two rapid flashes work, then every serial
+            attempt fails until a replug. So cmd_flash must contain exactly
+            ONE upload invocation; on failure it stops and prescribes
+            recovery instead of dialing again.
         """
         src = Path(JUMP).read_text(encoding="utf-8")
-        head = src[src.index("def cmd_flash"):]
-        first = head[:head.index("upload missed")]
-        self.assertIn("first_log", first,
-                      "the FIRST upload attempt must capture its output")
-        self.assertIn("_upload_landed", first,
-                      "the FIRST upload attempt must be checked by the shared verdict, "
-                      "not by its exit code alone")
+        body = src[src.index("def cmd_flash"):]
+        body = body[:body.index("\ndef ", 10)]   # cmd_flash only
+        self.assertIn("first_log", body,
+                      "the upload attempt must capture its output")
+        self.assertIn("_upload_landed", body,
+                      "the upload must be judged by the shared verdict, "
+                      "not its exit code")
+        self.assertEqual(body.count("subprocess.Popen"), 1,
+                         "exactly ONE upload attempt — blind repeats stale "
+                         "the host CDC and made attempt N+1 LESS likely to "
+                         "work (measured 2026-08-20)")
+        self.assertIn("REPLUG", body,
+                      "the failure text must name the recovery that actually "
+                      "works (replug clears the stale CDC; software cannot)")
 
 
 class TestSelftest(unittest.TestCase):

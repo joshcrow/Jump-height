@@ -2833,6 +2833,56 @@ If you're certain it's connected anyway: ./tools/jump flash --port <port>""")
         return 1
     cmd = pio + ["run", "-d", str(REPO / "firmware"), "-t", "upload",
                  "--upload-port", port]
+
+    # ------------------------------------------------------------------
+    # THE FLASH SEQUENCE, redesigned 2026-08-20 from a measured soak
+    # (n=9 flashes in one evening) instead of hope:
+    #
+    #   * pio's own 1200-baud touch from APP state went 0/9 tonight.
+    #   * A SERIAL upload against a bootloader entered via the firmware's
+    #     `uf2` command went 2/2 — until macOS's CDC went stale.
+    #   * After 2-3 rapid flashes, the CDC goes stale HOST-side: the port
+    #     node exists, nothing answers, and no software recovers it. Only a
+    #     REPLUG (or the physical double-tap -> UF2 drive, which is mass
+    #     storage and bypasses the broken CDC data path) works.
+    #   * The old retry wrote `uf2` to the app — but when the first attempt
+    #     had already stranded the board in its bootloader, there was no app
+    #     listening, so the retry was a no-op followed by a doomed upload.
+    #
+    # Sequence that follows from those facts:
+    #   1. Probe: does the APP answer on this port?
+    #   2. If yes — enter the bootloader via `uf2` OURSELVES, immediately,
+    #      then upload once against the fresh bootloader. pio's flaky touch
+    #      never runs (its cmd gets a port already in DFU; the touch is a
+    #      no-op there).
+    #   3. If no — the board is already in a bootloader or the CDC is stale;
+    #      upload once as-is.
+    #   4. ONE attempt, verified by the marker. On failure: STOP and say
+    #      exactly what state the board is in and which recovery works.
+    #      Blind repeats are what STALE the CDC — retrying makes the next
+    #      attempt LESS likely to work, not more.
+    # ------------------------------------------------------------------
+    app_answers = False
+    try:
+        import serial as _ser
+        sp = _ser.Serial(port, 115200, timeout=2)
+        time.sleep(0.5)
+        sp.reset_input_buffer()
+        sp.write(b"info\n"); sp.flush(); time.sleep(1.5)
+        app_answers = b"INFO " in sp.read(sp.in_waiting or 1)
+        if app_answers:
+            print("App answered — entering the bootloader deliberately (`uf2`) "
+                  "for a fresh, known-good DFU target...")
+            sp.write(b"uf2\n"); sp.flush(); time.sleep(2)
+        sp.close()
+    except Exception:
+        pass
+    if app_answers:
+        time.sleep(6)   # bootloader re-enumeration
+    else:
+        print("No app on the port — assuming it is already a bootloader "
+              "(or a stale CDC; we will know from the upload).")
+
     print("Building + uploading firmware (first build downloads the toolchain — "
           "takes a few minutes once)...")
     # Stream pio's output line by line through our stdout so it lands in the
@@ -2844,72 +2894,39 @@ If you're certain it's connected anyway: ./tools/jump flash --port <port>""")
         print(line, end="")
         first_log.append(line)
     proc.wait()
-    # Verify attempt #1 by the marker, NOT by the exit code — see
-    # _upload_landed(). A silent-success upload must route into the retry, and
-    # before this it fell straight through to "flashed".
     landed, why = _upload_landed("".join(first_log), proc.returncode)
     if not landed:
-        print(f"\n⚠️  first upload did not land — {why}")
-        # nRF52 uploads sometimes miss the 1200-baud touch from app state.
-        # The firmware's own `uf2` command drops the board into its bootloader
-        # deliberately; one retry from there is the reliable path (bench
-        # experience 2026-08-17/18).
-        print("\nupload missed — dropping the board into its bootloader and retrying...")
-        try:
-            import serial as _ser
-            sp = _ser.Serial(port, 115200, timeout=2)
-            time.sleep(2.5)
-            sp.write(b"uf2\n"); sp.flush(); time.sleep(2); sp.close()
-        except Exception:
-            pass
-        time.sleep(6)
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                text=True)
-        upload_log = []
-        for line in proc.stdout:
-            print(line, end="")
-            upload_log.append(line)
-        proc.wait()
-        blob = "".join(upload_log)
+        print(f"\n⚠️  upload did not land — {why}")
+        print("NOT retrying blindly: repeated attempts are what stale the "
+              "host's CDC and make the next try worse (measured: 2 rapid "
+              "flashes OK, then every serial attempt fails until a replug).")
+        for l in first_log:
+            if any(m in l for m in ("Failed to upgrade", "Device not configured",
+                                    "SerialException", "Error is:",
+                                    "No data received")):
+                print(f"   uploader said: {l.strip()[:140]}")
+                break
+        # Say what state the board is in — the difference decides the fix.
+        print()
+        if app_answers:
+            print("   Board state: it WAS running the app; it is now most likely "
+                  "sitting in its bootloader.")
+        else:
+            print("   Board state: no app answered before the attempt — either a "
+                  "bootloader, or macOS's CDC has gone stale (port exists, "
+                  "nobody answers).")
+        print("""   Recovery, in order of reliability (all proven on this bench):
+     1. REPLUG the board's USB cable. This clears the stale CDC — nothing
+        software-side can. Then re-run ./tools/jump flash.
+     2. Double-tap RESET -> a XIAO-SENSE drive mounts (~6 s) -> then:
+          python3 tools/uf2conv.py firmware/.pio/build/xiaoblesense_adafruit/firmware.hex -c -f 0xADA52840 -o /tmp/fw.uf2
+          dd if=/tmp/fw.uf2 of=/Volumes/XIAO-SENSE/fw.uf2 bs=4096
+        (dd, not cp: cp fails permission-denied, cat can fail silently.)
+        This path is mass storage — it bypasses the broken CDC entirely.
+     3. Over the air, no USB at all:  python3 tools/otadfu.py  (needs the app
+        running and BLE in range; proven 2/2 back-to-back 2026-08-12.)""")
+        return 1
 
-        # DO NOT TRUST THE EXIT CODE (2026-08-20, the second time this bit).
-        # PlatformIO prints a green "[SUCCESS]" and exits 0 even when the DFU
-        # transfer threw — observed twice tonight, on two different boards:
-        #
-        #     Failed to upgrade target. Error is: write failed:
-        #     [Errno 6] Device not configured
-        #     ========================= [SUCCESS] Took 11.86 seconds ==========
-        #
-        # returncode was 0 both times, so this function cheerfully printed
-        # "✅ flashed" over a board that still held the OLD firmware. That is
-        # the worst possible outcome: every measurement afterwards describes a
-        # build you did not flash, and nothing anywhere says so.
-        #
-        # The repo has known "pio's uploader LIES — trust only 'Device
-        # programmed'" since 2026-08-12. It was written in a doc and never
-        # enforced in the tool, so it cost the same hour twice. Enforced here
-        # now: the marker is proof of a completed write; its ABSENCE is the
-        # failure, whatever the exit code claims.
-        landed, why = _upload_landed(blob, proc.returncode)
-        if not landed:
-            print("\n❌ upload did NOT land — the board still holds its previous "
-                  "firmware.")
-            print(f"   {why}")
-            for l in upload_log:
-                if any(m in l for m in ("Failed to upgrade", "Device not configured",
-                                        "SerialException", "Error is:")):
-                    print(f"   uploader said: {l.strip()[:140]}")
-                    break
-            print("   Serial DFU is flaky on this host. The reliable path is the UF2 "
-                  "drive:")
-            print("     1. double-tap the board's reset button (a XIAO-SENSE volume "
-                  "mounts in ~6 s)")
-            print("     2. python3 tools/uf2conv.py firmware/.pio/build/"
-                  "xiaoblesense_adafruit/firmware.hex -c -f 0xADA52840 -o /tmp/fw.uf2")
-            print("     3. dd if=/tmp/fw.uf2 of=/Volumes/XIAO-SENSE/fw.uf2 bs=4096")
-            print("   (dd, not cp — cp fails permission-denied and cat can fail "
-                  "silently on that volume.)")
-            return 1
     # A fresh flash plays dead for ~20 s while the activation reset settles
     # (measured 2026-08-18) — probing early misdiagnoses a healthy flash.
     print("\n✅ flashed. Letting the activation reset settle, then self-testing...")

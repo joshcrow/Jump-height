@@ -67,6 +67,38 @@ after first flash is expected, not a swap.
 - Two boards advertising `JumpHeight` ⇒ **always** `OTADFU_ADDR=` pin.
 - After any flash, re-enumerate ports by serial number, never assume.
 
+## 1c. Flashing doctrine — measured, 2026-08-20 (n=9 in one evening)
+
+The soak that produced these numbers: nine `jump flash` cycles against the
+spare in quick succession, each scored on where it succeeded.
+
+| fact | evidence |
+|---|---|
+| pio's 1200-baud touch from app state: **0/9** | every first-touch attempt failed tonight |
+| serial upload against a bootloader entered via the firmware's `uf2` command: **2/2** | until the CDC staled |
+| **~2 rapid flashes, then macOS's CDC goes stale** — port node exists, nothing answers, NO software recovers it | cycles 3-7 all failed identically; direct nrfutil timed out too |
+| replug clears the stale CDC | proven repeatedly |
+| UF2 drive (double-tap → `dd`): **2/2**, immune to the stale CDC | it is mass storage — a different USB path entirely |
+| OTA (`otadfu.py`): proven 2/2 back-to-back (2026-08-12) | needs the app running + BLE |
+
+What `jump flash` now does, because of those numbers:
+
+1. **Probe first** — if the app answers, enter the bootloader via `uf2`
+   deliberately and upload against a FRESH DFU target (the 0/9 touch never
+   runs). If nothing answers, upload once as-is.
+2. **One attempt, judged by the `Device programmed` marker** — never the exit
+   code (PlatformIO exits 0 over failed writes) and never a bare
+   "[SUCCESS]".
+3. **On failure: stop.** Blind repeats are what stale the CDC — attempt N+1 is
+   LESS likely to work, not more. The tool reports the board's state and the
+   three recovery paths in reliability order: replug, double-tap → `dd`, OTA.
+4. `selftest`'s `src=` identity check then proves the RIGHT build runs — a
+   landed write of the wrong image is still caught.
+
+The standing discipline is unchanged and now has a measured justification:
+**batch changes into ONE flash.** The serial path has a budget of ~2 quick
+flashes per replug; spend it once, deliberately.
+
 ## 2. The instrument doctrine (what the wrong RCA taught)
 
 1. **A diagnostic that can false-negative is worse than none.** Three probe
