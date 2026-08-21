@@ -316,3 +316,34 @@ The agent caught this and reported it; I had not noticed. Worth saying
 plainly, because the cost is invisible until someone tries to read the
 history six months from now — which is exactly the horizon this project is
 building for.
+
+## 1e. Screenshots return BLACK when the Mac is locked — check before diagnosing
+
+`screencapture` on a locked Mac with the display asleep exits **0** and writes
+a **valid PNG that is 100 % black** (measured 2026-08-21: 5,621,280 of
+5,621,280 pixels, all channels zero). No error, no warning.
+
+I read that as "Screen Recording permission is missing" and said so. The owner
+knew better — he was driving this session by remote control with the machine
+locked. One API call settles it:
+
+```python
+import Quartz
+d = Quartz.CGSessionCopyCurrentDictionary()
+print(d.get("CGSSessionScreenIsLocked"))                  # True == locked
+print(Quartz.CGDisplayIsAsleep(Quartz.CGMainDisplayID())) # True == no framebuffer
+```
+
+**Rule: before any capture, assert the screen is unlocked and awake, and
+refuse with that reason rather than producing a black image.** Same rule as
+everywhere else in this repo — a tool that cannot do its job must say so
+instead of returning something that looks like output.
+
+Note the failure ordering that made this expensive: the capture "worked"
+(exit 0, valid PNG, plausible file size), so the natural next step was to
+debug crop geometry — which produced more black images and more plausible
+explanations. The artifact was never inspected until several steps in.
+**Inspect the artifact first; the exit code proves nothing.**
+
+Practical consequence: simulator screenshots ARE available, just not while the
+machine is locked. Capture them when someone is physically at the Mac.
