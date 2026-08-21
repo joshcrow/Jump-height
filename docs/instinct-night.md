@@ -102,6 +102,25 @@ seen by a human on this device.
 - Vibrate: **US3 has never fired once on any watch** — does it?
 - Storage-down row (`NO REC`) if reachable
 
+### 4b. Prove the monotonic-reseed fix (~5 min) — cheap, and it is currently UNPROVEN
+
+The fix that stops a rebooted puck zeroing the saved activity is written,
+simulator-tested and mutation-proven, but it has **never run on a watch**.
+Installed is not proven. This exercises it in five minutes:
+
+1. Start an activity. Get the count to a non-zero number (3 fakejumps).
+2. **Reboot the puck mid-activity** — `off` then replug USB, or the reset
+   button. Its RAM counters go to zero; its next STATS says
+   `session_jumps=0`.
+3. **The watch count must NOT drop to 0.** Before this fix it would, and the
+   FIT would have archived a real ride as "0 jumps, best 0.00".
+4. Then fire another fakejump and confirm the count still ADVANCES — the
+   guard refuses decreases only; a watch joining mid-session must still adopt
+   higher totals (US6).
+
+If the count drops to zero, the fix is not working on hardware and the FIT
+from step 6 is untrustworthy — say so rather than carrying on.
+
 ### 5. THE TWO-CENTRAL TEST (~15 min) — the highest-value item tonight
 
 Epix **and** Instinct both subscribed to the OG, then 20 `fakejump`s.
