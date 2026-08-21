@@ -282,10 +282,32 @@ module Model {
             // Reconnect/late-join reseed only (US6). session_* fields only —
             // stored_* describes the device's flash archive, not this live
             // session, and is deliberately ignored (spec §5.2).
+            // MONOTONIC WITHIN AN ACTIVITY (2026-08-21). These used to be
+            // assigned unconditionally, which let the count go BACKWARDS —
+            // and 0 is a value the puck really sends:
+            //
+            //   * a puck that brownouts and restarts mid-session (a flat cell
+            //     under a hard landing) comes back with session_jumps=0,
+            //     because those counters are RAM statics;
+            //   * a reconnect that lands on a DIFFERENT, idle puck — the walk
+            //     back up the beach with the activity still running, board
+            //     leaned next to another one — reads that puck's zeros.
+            //
+            // JumpFieldView writes the SESSION FIT fields every compute()
+            // tick, so a zero reaches the SAVED ACTIVITY within a second: a
+            // ride with real jumps archived as "0 jumps, best 0.00". Silent,
+            // permanent, and precisely the trust failure the whole project
+            // exists to avoid.
+            //
+            // Within one activity the live count can only grow, so refusing a
+            // decrease costs nothing real. Across activities the field is
+            // reconstructed anyway. This is the same guard best-airtime has
+            // had since 2026-08-18, eight lines below — the correct pattern
+            // was already here, applied to one field out of three.
             var n = _toNumber(kv.get("session_jumps"));
             var b = _toFloat(kv.get("session_best_m"));
-            if (n != null) { _jumpCount = n; }
-            if (b != null) { _sessionBestM = b; }
+            if (n != null && n > _jumpCount) { _jumpCount = n; }
+            if (b != null && b > _sessionBestM) { _sessionBestM = b; }
             // Best-airtime reseed (adder key, firmware >= 2026-08-18). Found by
             // parsing the M2 activity FIT: best_jump reconciled to the stored
             // best while best_airtime stayed at the live-seen max, because

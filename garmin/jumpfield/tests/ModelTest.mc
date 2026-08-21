@@ -331,3 +331,60 @@ function testStats_storageDownIsSurfacedAndClears(logger) {
     Test.assertEqual(m.storageDown(), false);
     return true;
 }
+
+(:test)
+function testStats_rebootedPuckCannotZeroTheLiveCount(logger) as Boolean {
+    // THE SCENARIO (adversary lens, 2026-08-21): forty minutes into a session
+    // a hard landing browns out a puck on a low cell. It restarts; its session
+    // counters are RAM statics, so the next STATS carries session_jumps=0.
+    // JumpFieldView writes SESSION FIT fields every compute() tick, so an
+    // unconditional reseed puts "0 jumps, best 0.00" into the SAVED activity
+    // for a ride that had real jumps. Silent and permanent.
+    var m = new Model.State();
+    m.onLine(Protocol.parseKV(
+        "JUMP n=7 airtime_raw_s=1.021 airtime_s=1.036 height_m=1.316 " +
+        "height_ft=4.3 best_m=1.316"));
+    Test.assert(m.jumpCount() == 7);
+
+    // The rebooted puck's first STATS.
+    m.onLine(Protocol.parseKV(
+        "STATS session_jumps=0 session_best_m=0.000 session_best_airtime_s=0.000 " +
+        "stored_jumps=41 stored_best_m=1.316 trace_bytes=0 vbat_mv=3402 " +
+        "batt_pct=4 chg=0"));
+
+    Test.assert(m.jumpCount() == 7);          // not 0
+    Test.assert(m.sessionBestM() > 1.3);      // not 0.0
+    return true;
+}
+
+(:test)
+function testStats_wrongIdlePuckCannotZeroTheLiveCount(logger) as Boolean {
+    // Same guard, different door: the walk back up the beach with the activity
+    // still running. The link drops on the last few metres, the scan re-runs,
+    // and a DIFFERENT board leaning against the truck is now the nearest
+    // advertiser. It is idle, so its counters are zero.
+    var m = new Model.State();
+    m.onLine(Protocol.parseKV(
+        "JUMP n=12 airtime_raw_s=0.900 airtime_s=0.926 height_m=1.050 " +
+        "height_ft=3.4 best_m=1.050"));
+    m.onLine(Protocol.parseKV(
+        "STATS session_jumps=0 session_best_m=0.000 stored_jumps=0 " +
+        "stored_best_m=0.000 trace_bytes=0"));
+    Test.assert(m.jumpCount() == 12);
+    Test.assert(m.sessionBestM() > 1.0);
+    return true;
+}
+
+(:test)
+function testStats_stillReseedsUPWARDafterAColdStart(logger) as Boolean {
+    // The guard must not break US6, the reason reseed exists: a watch that
+    // joins mid-session (or restarts) must still adopt the puck's HIGHER
+    // totals. Only decreases are refused.
+    var m = new Model.State();
+    m.onLine(Protocol.parseKV(
+        "STATS session_jumps=9 session_best_m=1.400 stored_jumps=9 " +
+        "stored_best_m=1.400 trace_bytes=1000"));
+    Test.assert(m.jumpCount() == 9);
+    Test.assert(m.sessionBestM() > 1.39);
+    return true;
+}
