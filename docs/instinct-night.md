@@ -58,6 +58,27 @@ finding about the product, not about him.
 
 ### 3. Layout on the real screen (~10 min)
 
+**LOOK FOR THIS SPECIFICALLY — found in the simulator 2026-08-21:**
+![simulator, full tier](images/instinct-sim-full-tier.png)
+
+The header renders as `JumpHei…  0 jumps` and the count appears to run
+UNDER the Instinct's circular sub-display window (upper right). Confirmed not
+to be stale compositing — the simulator was killed and relaunched and it
+renders identically.
+
+Why the code does not already handle it: `JumpFieldView` asks for
+obscurity-aware width (`:188`) and honours `OBSCURE_TOP` / `OBSCURE_BOTTOM`,
+and `Layout.safeHalfWidth` applies chord math for ROUND screens. The
+Instinct's sub-display is **neither** — it is a hole in the mid-right of an
+otherwise usable rectangle, and no CIQ flag describes it.
+
+**What to determine on the real watch, because the simulator cannot settle
+it:** is that region actually unreadable on the device, or does the simulator
+merely draw the bezel art over a screen the watch itself renders fully?
+Photograph the header at each tier. If the text really is obscured, the fix is
+a right-edge inset on the header row only, on this device — small and local.
+
+
 Open the activity, look at every layout tier. **Photograph each.** The 176×176
 MIP is monochrome; tier layouts were pinned by unit tests but have never been
 seen by a human on this device.
