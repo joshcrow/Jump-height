@@ -734,6 +734,28 @@ do not.**
   points at supply integrity (the spare has no battery to buffer QSPI current
   spikes), which a battery-backed board would mask.
 
+### DECIDED: the brother rides the water day — the Instinct is the product's only screen
+- Owner, 2026-08-20 evening: *"My brother's watch is P0. He's going to wear
+  it. I'm not going to be on the wing foil testing."*
+- Consequence: every watch-side proof to date (FIT dev fields, reconnect,
+  corruption gate, vibrate, tiers) is **epix2-only evidence** — the Epix is
+  now the dev bench, the Instinct is the product. The Instinct has never been
+  sideloaded.
+- **First Instinct fact measured tonight:** static code+data = **12,417 B of
+  the 32,768 B** datafield budget (`monkeyc --build-stats`, instinct3solar45mm).
+  The "124 KB build vs 32 KB limit" fear was PRG *file* size, not runtime
+  memory. Runtime peak still needs one simulator session; the plausible-OOM
+  threat is largely retired.
+- Also learned: the jumpfield does NOT compile at `-l 3` (PuckLink.mc type
+  errors under strict checking) — it builds clean at the documented level.
+  Not a regression; puckglance is the only `-l 3` target. Worth tightening
+  someday, not before the water.
+- The water-day rules this creates: rider brief for the brother (start the
+  activity, dropouts cosmetic, never discard), his watch's units decide the
+  FIT, and **no second central while he is on the water** unless
+  dualcentral.py verification has passed — shore phone + riding watch is
+  exactly the 2026-08-11 corruption config, and a `dump` blocks recording.
+
 ### Pre-flight review: six confirmed defects, all in the "safety" code
 - A 12-agent adversarial review of the 48 h firmware batch returned **six
   high-severity findings, all confirmed against source before fixing**

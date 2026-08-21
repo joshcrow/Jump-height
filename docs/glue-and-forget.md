@@ -56,11 +56,33 @@ was that the first draft forced none of these)
    meter (~$100–150), or accept that Era 2 item 3's deliverable is an upper
    bound, and say so.
 
-4. **Is your brother's Instinct in scope for the water day?** If yes, two
-   items become mandatory first: the 32 KB peak-memory check (compiles ≠
-   fits) and the two-central verification (`dualcentral.py` — the
-   two-watches-one-puck config is *exactly* the one that corrupted on
-   2026-08-11). If no, both defer cleanly to Era 2.
+4. **DECIDED (owner, 2026-08-20): the brother's Instinct is P0 — he is the
+   rider on the water day; the owner is not on the wing.** This reshapes the
+   watch work:
+   - The Instinct stops being the port target and becomes **the product's
+     only screen on the water**. Everything "proven on the Epix" is proven
+     on the wrong watch: FIT dev fields, reconnect behavior, corruption
+     gate, vibrate, layout tiers — all epix2-only evidence today. The
+     Instinct has never even been sideloaded.
+   - **Static memory is now measured and comfortable**: 12,417 B code+data
+     against the 32,768 B datafield limit (monkeyc --build-stats, tonight).
+     The "124 KB vs 32 KB" fear was PRG file size, which is not runtime
+     memory. Runtime peak still needs one simulator session, but the
+     plausible-OOM threat is largely retired.
+   - The MIP screen is monochrome and 176×176: tier layouts were designed
+     against it but never eyeballed even in the simulator.
+   - **A rider brief becomes part of the deliverable.** The user is now
+     someone who didn't build the system: he must start the activity
+     (windsurf profile, field on a data screen — a one-time setup on HIS
+     watch), know that dropouts are cosmetic, and never stop/discard the
+     recording mid-session. One card, ten lines.
+   - Units: HIS watch settings decide ft/m on screen and in the FIT.
+   - **Two-central discipline on the day**: the owner on shore with a
+     phone/laptop connecting to the puck while the brother rides is
+     exactly the 2026-08-11 corruption config, and a phone `dump`
+     mid-session blocks recording. Rule: no second central while the rider
+     is on the water, unless `dualcentral.py` verification has passed
+     first.
 
 5. **The false-positive budget.** Default proposed so inaction still yields
    a verdict: **<1 phantom jump per riding hour**, adopted at the freeze
@@ -345,7 +367,7 @@ maintenance schedule.
 | Field on screen 2, fakejump, flip back | compute()-runs-off-screen (the design's core bet) | 10 min |
 | Start activity, fakejump ×3, end, start new activity | **onTimerReset fires on real hardware** (the watch-side fix depends on it; simulator-vs-silicon has bitten twice) | 10 min |
 | `dualcentral.py` + 20 fakejumps, 2 centrals | the corruption fix, before any two-watch outing | 1 evening |
-| Simulator memory view, instinct target | 32 KB fit | 1 hour |
+| Simulator memory view, instinct target | runtime peak vs 32 KB (static now measured: 12.4 KB) | 1 hour |
 | Write >32 B of dev fields in one message, inspect the FIT | the provisional FIT budget (§4 P3.7) | 30 min |
 | Pause activity, fakejump ×3, resume, save, parse FIT | auto-pause record semantics | 15 min |
 | Two 3 h wear days, field on/off | watch battery cost | passive |
