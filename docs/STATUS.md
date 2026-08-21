@@ -800,6 +800,39 @@ do not.**
 - **Standing rule unchanged until that run passes:** no second central while
   the rider is on the water.
 
+### The OG's measured calibration is GONE — silently replaced by the compiled default
+- Found 2026-08-21 while looking for unconsidered failure cases. The OG now
+  reports `CAL airtime_offset_s=0.0257 height_scale=1.000 **source=defaults**`.
+  STATUS:1609 records it as `source=device` on 2026-08-11, from the project's
+  only real calibration (10 drops from 123.19 cm, median error -25.7 ms).
+- **Why nobody noticed, and why that is the point:** the measured value was
+  also written into `config/params.json`, so the compiled default is the SAME
+  number. The reading is numerically identical today; only the word `defaults`
+  betrays that the per-device mechanism is no longer in play. A silent
+  fallback that happens to agree is the hardest kind to catch.
+- **Probable cause:** the total battery death of 2026-08-19. `jh_persist` is
+  internal LittleFS, and a brownout at the PCM cutoff is exactly the event
+  that can lose it. That makes this a glue-and-forget finding, not a bench
+  curiosity: **a flat battery erases the board's own calibration**, and the
+  vision's whole premise is a puck that occasionally goes flat.
+- **Nothing surfaces it.** `jh_persist::load()` already takes a `from_store`
+  out-parameter for precisely this, and `main.cpp` never passes it (grep:
+  zero uses). The selftest does not check it either. So the only signal is one
+  word in a diagnostic string nobody reads.
+- **Consequences that compound:**
+  1. Any future edit to `config/params.json` would silently move the OG's
+     calibration, because it is now taking the default path.
+  2. Three boards share ONE board's calibration constant. Per-unit
+     calibration exists precisely because units differ; the other two have
+     never been measured.
+  3. The water day would be calibrated by a number whose provenance is now
+     "compiled in", not "measured on this board".
+- **Cheapest fixes, in order:** (a) selftest row that FAILS when calibration
+  came from defaults rather than the device — one `from_store` read;
+  (b) re-run the drop ritual on the OG before the water day and confirm it
+  reads back `source=device`; (c) per-board calibration for the quiver, which
+  the identity work (docs/puck-identity.md) makes addressable.
+
 ### AUTO-CLEAR FIRED ON SILICON — the last of the seven fixes is now proven
 - The rehearsal was set up deliberately overnight: trace region filled to
   **genuinely full (14,708,969 bytes)**, three REAL tossed jumps stored as the
