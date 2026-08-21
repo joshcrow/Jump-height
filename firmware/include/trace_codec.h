@@ -193,9 +193,40 @@ inline float g_from_milli_g(uint16_t milli_g) { return (float)milli_g / 1000.0f;
 // range lround() used to enforce implicitly. Check that explicitly, on
 // every platform, rather than trust silence from a host suite that cannot
 // see the gap.
+// NEVER ABORT ON A GLUED PUCK (2026-08-21). The first version of this fix
+// asserted the result fits INT32 and left assert() live in the device build
+// (no -DNDEBUG anywhere in the PlatformIO toolchain). On hardware, a failing
+// assert() calls abort() — so a puck that simply ran long enough would KILL
+// ITSELF at 24.9 days of uptime. That trades a silent wrong timestamp for a
+// dead board, which is strictly worse for a device whose entire product
+// premise is being glued on and forgotten for six months. It would also have
+// presented as "the puck is dead", the exact failure class this project has
+// misdiagnosed four times.
+//
+// Two things were wrong with that bound:
+//   * The STORED field is a little-endian **u32** (see the block layout at
+//     the top of this file), so the real capacity is 49.7 days, not 24.9.
+//     The int32 limit was inherited from lround()'s signed return type — an
+//     implementation detail of the OLD bug, not a format constraint.
+//   * 0xFFFFFFFF is reserved: erased QSPI reads as all-0xFF and
+//     decode_one_block() uses that as its erased-block guard. So the usable
+//     ceiling is 0xFFFFFFFE.
+//
+// Behaviour now: saturate at the guard-1 value and keep running. A saturated
+// anchor makes late blocks share a timestamp — visibly wrong in analysis,
+// recoverable, and honest — where an abort loses the whole session and the
+// board with it. The assert survives for HOST builds only, so the test suite
+// still fails loudly on a regression while the device stays alive.
+//
+// The real fix remains a per-session timebase reset (docs/glue-and-forget.md
+// §3a), which keeps t_s in the hours and makes this ceiling unreachable.
 inline uint32_t t0_ms_from_t_s(double t_s) {
   const long long ms = llround(t_s * 1000.0);
-  assert(ms >= 0 && ms <= 2147483647LL);  // fits int32 — see FINDING above
+#if !defined(ARDUINO)
+  assert(ms >= 0 && ms <= 4294967294LL);  // host/test only — see above
+#endif
+  if (ms < 0) { return 0u; }
+  if (ms > 4294967294LL) { return 4294967294u; }  // 0xFFFFFFFE, below the guard
   return (uint32_t)ms;
 }
 
