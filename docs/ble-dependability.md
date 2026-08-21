@@ -117,6 +117,62 @@ A rider's body between a board-mounted puck and a wrist watch is a wet
   `puckName` property to a full unique name ("JumpHeight-45ED") — a
   settings-UX story, not a firmware gap.
 
+### Layer 4b — TWO RIDERS, TWO PUCKS (owner's question, 2026-08-21)
+
+The natural next step once the brother rides: both of us out, each with a
+puck, each tracking to our own watch. **This does not work today, and the
+reason is not the naming — it is the match order.**
+
+`PuckLink._matchesPuck()` (garmin/jumpfield/source/PuckLink.mc:283-300)
+checks the service UUID FIRST and returns `true` on a match, before the name
+is ever considered:
+
+```monkeyc
+if (u.equals(_svcUuid)) { return true; }        // matches ANY puck
+...
+return name != null && name.find(_puckName) == 0;   // unreachable when UUID visible
+```
+
+Every puck advertises the same Nordic UART service, so **the `puckName`
+setting is inert whenever the UUID appears in the scan result.** Among
+matches, `onScanResults` (:177-191) takes the strongest RSSI.
+
+**The concrete failure, and it is silent:**
+1. Both riders rig on the beach, watches scanning, both pucks a metre apart —
+   RSSI is a coin flip.
+2. Rider A's watch can select rider B's puck. Both watches can select the
+   SAME puck (each puck accepts `kMaxPrphConnections = 2`, jh_link.cpp:170),
+   leaving the other puck unconnected and unnoticed.
+3. They ride apart. The link persists — BLE does not re-evaluate — so a watch
+   keeps tracking the *other* board all session.
+4. The FIT archives another rider's jumps, under this rider's name, with **no
+   symptom anywhere**. Both displays look perfectly healthy.
+
+RSSI selection is the right instinct (on the water each rider IS nearest their
+own board) but the choice is made at rigging, when they are together, and it
+is never revisited.
+
+**Fixes, cheapest first:**
+1. **Show WHICH puck on the glass** — the last four of the advertised name in
+   the field header. Catches every variant of this, costs one row, needs no
+   settings channel, and helps the single-puck case too (four "dead board"
+   verdicts in this project began as identity confusion).
+2. **Fix the match order**: when `puckName` is more specific than the bare
+   default prefix, name must win over the UUID. Small, local, testable.
+3. **Distribution is the real blocker.** Sideloads receive no settings —
+   `properties.xml` defaults are what run — so both watches ship with the same
+   `"JumpHeight"` default and cannot be pinned without either the Connect IQ
+   store's settings UI or a per-rider build with the name compiled in. This is
+   another dependency on the store submission, alongside the ones in
+   glue-and-forget.md §4 Pillar 3.
+4. **Consider `kMaxPrphConnections = 1` for the shipped rider config** — a
+   puck that accepts one watch cannot be double-booked. It would trade away
+   the shore-admin-while-riding case, which is currently forbidden anyway
+   until the two-central JUMP-line test passes.
+
+**Until fixed:** two riders with two pucks is not a supported configuration.
+One puck, one watch, and the shore-admin rule from the two-central gate.
+
 ### Layer 5 — the user must be able to tell states apart
 Today the watch shows one "no BLE" appearance whether the puck is
 asleep, out of range, flat, or on the kitchen table. That is the same
