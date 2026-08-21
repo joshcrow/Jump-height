@@ -734,6 +734,46 @@ do not.**
   points at supply integrity (the spare has no battery to buffer QSPI current
   spikes), which a battery-backed board would mask.
 
+## 2026-08-21
+
+### Overnight results: 42-cycle silicon storage soak PASSES; OG stable 9.5 h; power verdict UNDETERMINED (and I nearly called it twice, wrongly)
+- **Storage soak, third board, 42 cycles, 7.5 h unattended (`tools/storagesoak.py`, new):**
+  **42/42 fills reached genuinely-full**, and `clear` on a full region ran
+  **8.4 s every single time** (min = max = mean — no drift, no outlier).
+  **Zero resets, zero `fs=down`, zero failed steps.** This is the layer
+  hostsoak states it cannot reach ("only silicon can close that") and the
+  layer that produced seven defects on 08-20, each verified exactly once.
+  Seven-verified-once is now seven-survived-42-cycles.
+  - The soak's own smoke run caught a defect in **the harness, not the
+    firmware**: it asserted `fakejump` grows `stored_jumps`, but main.cpp
+    says fakejump "deliberately does NOT touch stored history". 8/8 cycles
+    reported a firmware failure that was mine. Assertion moved to
+    `session_jumps`; the reason is in the code.
+  - NOT covered, stated so the green is not over-read: no reboots (no soft
+    reset command) so the boot-scan-against-full-region is not re-exercised;
+    and auto-clear cannot be script-triggered (needs 1 h stillness + motion).
+- **OG overnight on `src=15b2d468`: 9.54 h, uptime strictly monotonic, NO
+  RESETS.** With the third board's 7.5 h also reset-free, the 08-20 `reas=0`
+  reset has not recurred on either board — downgraded from "open question"
+  to "one-off, still unexplained".
+- **The power regression verdict is UNDETERMINED, and the road there is the
+  finding.** First comparison (3880→3700 mV) said the new build drained
+  **1.46x faster** than the death run — alarming. Checking sample density
+  showed **neither run has a real sample near 3880**; both figures were
+  interpolated across unsampled gaps, the same artifact that invalidated the
+  death run as a DC/DC baseline on 08-20. Recomputed over a window both runs
+  genuinely bracket (3760→3706): new build **2.02 h**, death run **0.68 h** —
+  the conclusion *inverts* to 3x better. Neither is real: the death run was
+  in terminal collapse in that region, and the clean baselines (night 2/3)
+  do not reach these voltages at all.
+  - **Honest state: no valid comparator exists for the new build's drain.**
+    Getting one requires a run from a fuller charge covering the baselines'
+    own 3980→3830 window. That is a charge cycle plus a night, not analysis.
+  - Twice in ten minutes the same data supported opposite confident answers
+    depending on an unstated assumption about sampling. The window method is
+    only as good as its coverage, and coverage must be checked before the
+    comparison, not after it looks surprising.
+
 ### DECIDED: the brother rides the water day — the Instinct is the product's only screen
 - Owner, 2026-08-20 evening: *"My brother's watch is P0. He's going to wear
   it. I'm not going to be on the wing foil testing."*
