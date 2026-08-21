@@ -736,6 +736,35 @@ do not.**
 
 ## 2026-08-21
 
+### Instinct simulator dress rehearsal: 48/48 on the product watch, and NO per-line memory leak
+- Purpose: the brother arrives with ~90 minutes and the Instinct has never
+  been sideloaded. Anything found in the simulator is a problem he does not
+  spend his evening on.
+- **The full suite now RUNS on `instinct3solar45mm`, not just compiles: 48/48
+  PASS** (46 existing + 2 new memory probes), including every layout,
+  corruption-gate, reassembly and parse test.
+- **New `tests/MemoryProbeTest.mc`** answers the runtime-memory question the
+  repo had open ("the simulator memory view has never been run") — headlessly,
+  via `System.getSystemStats()`, so it is repeatable and CI-able instead of a
+  GUI eyeball.
+  - **Result that matters: NO PER-LINE LEAK.** Over ~1,200 lines of realistic
+    mixed traffic (JUMP, STATS, chatter, malformed lines that exercise the
+    corruption gate), total growth **248 B**; split into two 300-line blocks,
+    growth was **0 B and 0 B**. This codebase allocates per line received, so
+    a 3-hour ride was a genuine question — it is now answered.
+  - **What the probe CANNOT answer, and why the first version lied about it:**
+    it initially asserted peak < 75 % of the 32,768 B budget and "failed",
+    reporting **40,072 B used before allocating anything**. That is not our
+    app overflowing — the unit-test PRG does not run in the data-field memory
+    context, so `getSystemStats()` is the wrong yardstick (corroboration: the
+    field's entire static footprint is 12,417 B). Assertion moved to the
+    DELTA, which is valid regardless of what the baseline includes.
+  - **Still open, one GUI look:** absolute data-field headroom on the Instinct
+    needs the simulator's memory view or the real watch.
+- Cumulative Instinct evidence: static 12,417 B / 32,768 B, 48/48 sim tests,
+  no leak. The plausible-OOM threat is now largely retired on measurement
+  rather than assumption.
+
 ### Two-central gate: bulk export PASSES on silicon; the JUMP-line half is INCONCLUSIVE by host limitation
 - **`dualcentral.py` PASS on the spare (2026-08-21).** 300 KB staged
   deliberately (the auto-clear had just emptied the region — running this
