@@ -109,6 +109,37 @@ class PuckLink extends Ble.BleDelegate {
         _rxUuid = Ble.stringToUuid(NUS_RX);
     }
 
+    // WHICH puck are we actually talking to? (2026-08-21)
+    //
+    // The view used to display the puckName SETTING — the string we SEARCH
+    // for ("JumpHeight"), which is identical on every watch and every board.
+    // So the header showed a constant, ellipsized on the Instinct to
+    // "JumpHei.", occupying the most valuable row on the screen to say
+    // nothing. Meanwhile identity confusion has produced four wrong "dead
+    // board" verdicts in this project, and a two-rider quiver makes
+    // connecting to the wrong puck silently ruinous
+    // (docs/puck-identity.md).
+    //
+    // Pucks advertise "JumpHeight-XXXX" where XXXX is derived from the chip's
+    // own FICR DEVICEADDR — immutable, unique, and matching the label on the
+    // board's case. Those four characters are the whole identity; the prefix
+    // is noise. Returns "" when not connected, so the caller can fall back.
+    function connectedId() as String {
+        if (_device == null) { return ""; }
+        var n = null;
+        try {
+            n = _device.getName();
+        } catch (e) {
+            return "";
+        }
+        if (n == null) { return ""; }
+        var dash = n.find("-");
+        if (dash != null && dash + 1 < n.length()) {
+            return n.substring(dash + 1, n.length());
+        }
+        return n;
+    }
+
     function state() as Number {
         return _state;
     }

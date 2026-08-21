@@ -22,6 +22,9 @@ This page is execution only.
       re-derived tonight under time pressure
 - [x] OpenMTP installed as the GUI fallback
 - [x] Rider brief written
+- [x] Header shows the CONNECTED puck's id (owner chose to ship it tonight;
+      the collision evidence below is unaffected, since that is the
+      right-justified count which this change does not touch)
 - [x] OG charging (it is the puck for tonight — battery, so the desk test
       can be untethered)
 
@@ -58,7 +61,16 @@ finding about the product, not about him.
 
 ### 3. Layout on the real screen (~10 min)
 
-**LOOK FOR THIS SPECIFICALLY — found in the simulator 2026-08-21:**
+**HEADER NOW SHOWS THE PUCK ID (owner chose option B, 2026-08-21).** The
+build being sideloaded displays the four characters of the puck it is actually
+CONNECTED to — expect **`E2C4`** with the OG, matching the label that should
+go on that board's case. Before this it showed the search string
+("JumpHeight", ellipsized to "JumpHei."), which is identical on every watch
+and every board. **First chance to see this work at all** — it needs a live
+connection the simulator cannot provide, so if it shows `JumpHeight` while
+connected, connectedId() is not returning a name and that is a finding.
+
+**AND LOOK FOR THIS — found in the simulator 2026-08-21:**
 ![simulator, full tier](images/instinct-sim-full-tier.png)
 
 The header renders as `JumpHei…  0 jumps` and the count appears to run

@@ -211,7 +211,24 @@ class JumpFieldView extends WatchUi.DataField {
         }
         var nameX = hLeft + dotR * 2 + gap;
         var minGap = w / 16;
-        var headerFont = _fitPair(dc, _puckName, countText,
+        // WHAT GOES IN THE NAME SLOT (changed 2026-08-21).
+        //
+        // It used to be _puckName — the string we SEARCH for. That is
+        // "JumpHeight" on every watch and every board, so the header spent
+        // its most valuable row saying nothing, and on the Instinct's 176 px
+        // screen it ellipsized to "JumpHei." — the half that is identical
+        // everywhere, hiding the half that identifies the board.
+        //
+        // Now: the four characters of the puck we are actually CONNECTED to
+        // (docs/puck-identity.md §3d). They match the label on the board's
+        // case, they are immutable (FICR-derived), and four characters fit
+        // where fifteen never could. Falls back to the search name when not
+        // connected, because "JumpHeight" is at least honest about what we
+        // are looking for.
+        var idText = _puckLink != null ? _puckLink.connectedId() : "";
+        if (idText.equals("")) { idText = _puckName; }
+
+        var headerFont = _fitPair(dc, idText, countText,
             hRight - nameX - minGap, _fontLadder(_secondaryFont(h)));
         var countW = dc.getTextDimensions(countText, headerFont)[0];
         var nameMax = hRight - countW - minGap - nameX;
@@ -219,7 +236,7 @@ class JumpFieldView extends WatchUi.DataField {
         _drawDot(dc, hLeft + dotR, headerY, dotR, uiState, fg, bg);
         dc.setColor(fg, bg);
         _drawVC(dc, nameX, headerY, headerFont,
-            _ellipsize(dc, _puckName, headerFont, nameMax),
+            _ellipsize(dc, idText, headerFont, nameMax),
             Graphics.TEXT_JUSTIFY_LEFT, fg);
         _drawVC(dc, hRight, headerY, headerFont, countText,
             Graphics.TEXT_JUSTIFY_RIGHT, fg);
