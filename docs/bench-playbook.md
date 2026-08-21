@@ -284,3 +284,35 @@ Open:
 3. Mule battery-unclip experiment still worth one clean run (if it wasn't
    truly unclipped): `mount` verdict on the 61-jump history stands or
    falls there.
+
+## 1d. Committing while agents are working (lesson, 2026-08-21)
+
+**Never `git add -A` while a background agent is editing the tree.**
+
+On 2026-08-21 three agents worked in parallel while I committed my own
+foreground work. Every `git add -A` swept up whatever the agents had
+half-written at that instant. The result:
+
+- `e89beca` — message says "Instinct night prep: the MTP sender…" and it
+  also contains the **entire float→double timebase fix** (jump_detector.h,
+  trace_codec.h, main.cpp, jh_store.cpp, host_test.cpp) plus the rider brief
+  and the store draft.
+- `6ea9ec1` — message says "Two riders, two pucks…" and it also contains the
+  **timebase regression test** (tools/tests/test_timebase_falsifier.py).
+
+The code is correct and the tree is green — but the *history* now lies about
+which change is which, and the timebase fix (an Era-2 blocker with its own
+verification story) has no commit of its own to point at. That is the same
+class of failure as prose drifting from reality: the artifact says one thing
+and the truth is another.
+
+**The rule:** while agents are running, stage explicit paths —
+`git add docs/foo.md tools/bar.py` — never `-A`, never `.`. Check
+`git status --short` before every commit and confirm every listed file is
+one *you* touched. If an unexpected file appears, it belongs to an agent:
+leave it, and let that work land in its own commit with its own message.
+
+The agent caught this and reported it; I had not noticed. Worth saying
+plainly, because the cost is invisible until someone tries to read the
+history six months from now — which is exactly the horizon this project is
+building for.
