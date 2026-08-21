@@ -2315,6 +2315,19 @@ def cmd_boards(args) -> int:
     exceed 4.2 V, so anything above that with chg=0 is also floating.
     """
     import re as _re
+    # MINIMUM THREE SAMPLES, enforced (2026-08-20). Run at --samples 2 the
+    # detector got every board backwards: both battery-less boards read
+    # "stable" (a floating divider can plateau for a few seconds) and the
+    # real cell read "floating" (BLE connect current sags it ~50 mV, which
+    # recovers). At 4 samples the separation is unmistakable — 387/393 mV of
+    # wander versus 3 mV. The physics was right; the sample count was not.
+    # A detector that needs enough samples must REFUSE to run with too few,
+    # rather than emit a confident wrong answer.
+    if int(getattr(args, "samples", 4)) < 3:
+        print("--samples must be at least 3: with two reads a floating rail "
+              "can look stable and a real cell can look floating (both "
+              "happened on 2026-08-20).")
+        return 2
     names = _ble_scan_names(timeout=float(getattr(args, "scan_timeout", 12.0)))
     if not names:
         print("no pucks found on the air.")
@@ -3360,8 +3373,12 @@ def main() -> int:
 
     p = add("boards", cmd_boards,
             help="scan every puck and report ground truth (flags floating batteries)")
-    p.add_argument("--samples", type=int, default=3,
-                   help="readings per board; >1 enables the rising-voltage test")
+    p.add_argument("--samples", type=int, default=4,
+                   help="readings per board (min 3). Two is NOT enough: a "
+                        "floating rail can sit on a plateau across two reads "
+                        "while a real cell sags under BLE load — that "
+                        "combination misidentified all three boards on "
+                        "2026-08-20.")
     p.add_argument("--scan-timeout", type=float, default=12.0)
 
     p = add("wizard", cmd_wizard,
