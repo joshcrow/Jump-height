@@ -117,6 +117,29 @@ A rider's body between a board-mounted puck and a wrist watch is a wet
   `puckName` property to a full unique name ("JumpHeight-45ED") — a
   settings-UX story, not a firmware gap.
 
+### Layer 3 — MEASURED 2026-08-22: the puck's half of reconnect is dependable
+
+The open question "what does the link actually do across a ride's dozens of
+disconnects" is now half-answered, with data (`tools/reconnectsoak.py`,
+STATUS 2026-08-22):
+
+- **2,068 connect/disconnect cycles, 2,068 clean.** Zero failures at any
+  step (scan / connect / greet / command / disconnect), zero resets. 8 h
+  against `JumpHeight-8673`, pinned by full name with three pucks on the air.
+- **Full recovery — advertisement seen → greeted and live — median 1.90 s,
+  p95 1.99 s, max 2.60 s.** The distribution is tight: worst case sits 0.7 s
+  above the median across two thousand trials. Per-step medians: scan 0.12 s,
+  connect 1.50 s (the dominant, irreducible BLE-establishment cost), greet
+  0.16 s, stats 0.10 s.
+
+**What this means for the layers above:** the puck re-advertises promptly and
+greets correctly every single time — it is never the bottleneck. Any reconnect
+slowness or wedge a rider ever experiences is the WATCH's scan/backoff/state
+machine (PuckLink's 5→15 s backoff, the missing state deadlines, the DEAD
+one-way door), which is exactly R2's watch-hardening scope. The watch half
+should be measured against this same rhythm once the deadlines land; the
+puck-side baseline to beat is ~2 s.
+
 ### Layer 4b — TWO RIDERS, TWO PUCKS (owner's question, 2026-08-21)
 
 The natural next step once the brother rides: both of us out, each with a

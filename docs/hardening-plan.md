@@ -176,7 +176,7 @@ Sized: S = hours, M = a day, L = multi-day. Each carries its proof.
 ### 2.3 BLE / link (task #15 absorbed here)
 | item | size | proof |
 |---|---|---|
-| PuckLink deadlines + DEAD retry | S | pull the puck's power mid-pair; field recovers within 90 s |
+| PuckLink deadlines + DEAD retry | S | pull the puck's power mid-pair; field recovers within 90 s. **Puck-side baseline now measured (2026-08-22): 2,068/2,068 cycles, full recovery median 1.9 s / p95 2.0 s — the puck is never the bottleneck, so any watch-side recovery slower than ~5 s is the watch's own state machine and unambiguously attributable.** |
 | Duration-aware staleness | S | 20-min silent puck shows "no data — 20 min" |
 | Two-central JUMP delivery (tonight) then **retire second central in rider build** (R3) | S | dualjump equivalent on two real hosts |
 
