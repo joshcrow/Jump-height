@@ -736,6 +736,24 @@ do not.**
 
 ## 2026-08-22
 
+### OG post-demo: 18 jumps synced, new best 1.54 m, and the provenance warning fired on the real product board
+- Owner ran demo tosses with his Epix connected, to show the rider. Result on
+  the puck: **18 stored jumps, best 1.536 m (5.0 ft)** — higher than anything
+  previously recorded, desk or otherwise. All synced; **jumps verified 18 = 18
+  and trace verified 1,480,095 bytes** by the three-check gate.
+- **The calibration provenance warning fired on the OG**, in its first real
+  use: *"calibration is COMPILED DEFAULTS, not this board's own
+  measurement."* Built this morning, and it is now flagging a genuine defect
+  on the actual water-day puck via the old-firmware `source=` path (the OG has
+  not yet received the per-key build). Working as designed, on the board that
+  matters.
+- **Store package built:** `garmin/jumpfield/bin/JumpField.iq`, 77,564 bytes,
+  4/4 device variants clean, ready to upload. Runbook for the human half:
+  [store-submission-runbook.md](store-submission-runbook.md).
+- OG deliberately **not flashed**: the hardening plan schedules its single R1
+  flash after the spare's 48 h soak completes (~37 h remaining), and the
+  store review now runs in parallel, so nothing is gained by rushing it.
+
 ### BLOCKER: the Instinct 3 (fw 15.18) DELETES a sideloaded .prg on reboot — the product watch cannot be loaded the documented way
 - Sequence, all verified: `mtp_send` pushed `JumpField-instinct.prg` to
   `Garmin/Apps` (folder 16777221, storage 0x00020001); **read back and
