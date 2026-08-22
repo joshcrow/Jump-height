@@ -736,6 +736,38 @@ do not.**
 
 ## 2026-08-22
 
+### BLOCKER: the Instinct 3 (fw 15.18) DELETES a sideloaded .prg on reboot — the product watch cannot be loaded the documented way
+- Sequence, all verified: `mtp_send` pushed `JumpField-instinct.prg` to
+  `Garmin/Apps` (folder 16777221, storage 0x00020001); **read back and
+  confirmed** — file id 16777727, 17,996 bytes exact, correct parent. Watch
+  unplugged, rebooted. On reconnect: **the file is gone.** Not moved —
+  `Garmin/Apps/Restore` is empty. `Garmin/Apps` now contains only `OUT.BIN`.
+- **No Connect IQ apps exist in that folder at all**, yet the watch's own
+  `CIQ_LOG.BAK` shows it ran one (`OpenWind`) on 2025-11-02 — **under
+  firmware 10.36**. It is now on **15.18**.
+- Reading: loose `.prg` files in `GARMIN/Apps` are no longer how this device
+  stores CIQ apps. The repo's MTP procedure (garmin/README §5) was proven on
+  the **Epix** on 2026-08-10 and does not transfer to the Instinct 3 at this
+  firmware. The build itself is not implicated: manifest declares
+  `instinct3solar45mm`, device reports `Instinct 3 - 45mm, Solar`
+  (006-B4585-00), minSdk 3.1.0 vs the device's CIQ 6.0.2, 54/54 sim tests on
+  that exact target.
+- **This makes the Connect IQ store submission load-bearing, not optional.**
+  It was already flagged as the structural answer to distribution
+  (glue-and-forget.md §4 Pillar 3, item 7) on the strength of firmware-update
+  fragility; it is now **the only known way to get the app onto the product
+  watch at all.** `docs/store-submission.md` (drafted 2026-08-21) moves from
+  "nice to have" to the critical path, and Garmin's stated review time is
+  72 h.
+- **Found 2 weeks before the water day rather than 2 days before it**, which
+  is the entire argument for doing the Instinct bring-up early. The one
+  irreplaceable resource on the day is the rider; discovering this then would
+  have cost the session.
+- NOT yet ruled out (cheap, needs the watch): whether the app appears BEFORE
+  a reboot (i.e. boot-time cleanup vs write-time rejection); whether Garmin
+  Express or the Connect IQ mobile app can install a developer build; whether
+  an unlisted/beta store listing is the intended developer path.
+
 ### INSTINCT SIDELOAD DONE — first time the field has ever been on the product watch
 - **Device identified from its own `GarminDevice.xml`, not assumed:**
   `Instinct 3 - 45mm, Solar`, part `006-B4585-00`, **firmware 15.18**, unit id
