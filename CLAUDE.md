@@ -63,6 +63,7 @@ Authority: [`docs/bench-playbook.md` §1](docs/bench-playbook.md).
 | What the water session must produce | `docs/session-card.md` |
 | What we could measure later, and what we'd close off | `docs/future-metrics.md` |
 | Numbered, binding decisions | `DECISIONS.md` |
+| Audit findings & work orders (F-01…F-21), what was refuted | `docs/audit-2026-08-22.md` |
 
 `docs/STATUS.md` wins over any other document. If they disagree, the other one
 is stale — fix it.
