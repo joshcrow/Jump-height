@@ -47,6 +47,41 @@ def _load_jump_module():
     return mod
 
 
+class TestCalProvenance(unittest.TestCase):
+    """The OG's measured calibration was silently replaced by compiled
+    defaults (probably the 08-19 battery death) and the device REPORTED it —
+    into a diagnostic nobody read. These pin the host-side verdict that makes
+    that report impossible to miss, including the per-key case the old OR'd
+    `source=` field structurally hid."""
+
+    def setUp(self):
+        self.v = _load_jump_module()._cal_provenance_verdict
+
+    def test_all_device_is_ok(self):
+        lvl, _ = self.v({"off_src": "device", "scale_src": "device",
+                         "vbat_src": "device"})
+        self.assertEqual(lvl, "ok")
+
+    def test_single_key_fallback_warns_and_names_the_key(self):
+        """The case the old OR hid: one key lost, others survive."""
+        lvl, msg = self.v({"off_src": "defaults", "scale_src": "device",
+                           "vbat_src": "device"})
+        self.assertEqual(lvl, "warn")
+        self.assertIn("off", msg)
+        self.assertNotIn("scale,", msg)
+
+    def test_old_firmware_or_field_still_judged(self):
+        lvl, _ = self.v({"source": "defaults"})
+        self.assertEqual(lvl, "warn")
+        lvl2, _ = self.v({"source": "device"})
+        self.assertEqual(lvl2, "ok")
+
+    def test_no_cal_line_is_unknown_not_ok(self):
+        """Absence of evidence must not read as a pass."""
+        lvl, _ = self.v({})
+        self.assertEqual(lvl, "unknown")
+
+
 class TestDownloadVerification(unittest.TestCase):
     """A download is only 'verified' if BOTH files arrived and the device did
     not complain.

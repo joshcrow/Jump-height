@@ -566,6 +566,47 @@ def _print_config_diffs(kind: str, diffs: list[str]) -> None:
         print(f"       {d}")
 
 
+def _cal_provenance_verdict(cal_kv: dict) -> tuple:
+    """Judge calibration provenance from a parsed CAL line.
+
+    Returns (level, message) where level is "ok" | "warn" | "unknown".
+
+    WHY THE POLICY LIVES HERE AND NOT ON THE DEVICE (2026-08-21). The OG's
+    measured drop calibration was silently replaced by compiled defaults —
+    probably by the 08-19 battery death — and the device DID report it
+    (`source=defaults` on the CAL line) into a diagnostic nobody read. The
+    fix is not a device-side selftest FAIL: bench boards have never been
+    drop-calibrated, so "defaults" is their honest normal, and `jump flash`
+    gates on all-rows-PASS — a hard device FAIL would break every bench
+    flash. A wiped device also cannot distinguish "never calibrated" from
+    "lost calibration"; only the registry knows which boards are SUPPOSED to
+    carry a measured calibration. So the device reports per key
+    (off_src/scale_src/vbat_src — the old single `source=` was an OR that
+    hid one key falling back while others survived), and this function turns
+    that report into a verdict the human cannot miss.
+    """
+    off = cal_kv.get("off_src")
+    if off is None:
+        # Old firmware: only the OR'd `source=` exists. Degrade honestly.
+        src = cal_kv.get("source")
+        if src is None:
+            return ("unknown", "device reported no CAL provenance (old firmware)")
+        if src == "device":
+            return ("ok", "calibration from device memory (per-key detail "
+                          "needs newer firmware)")
+        return ("warn", "calibration is COMPILED DEFAULTS, not this board's "
+                        "own measurement")
+    bad = [k.replace("_src", "") for k in ("off_src", "scale_src", "vbat_src")
+           if cal_kv.get(k) == "defaults"]
+    if not bad:
+        return ("ok", "all calibration keys from device memory")
+    return ("warn", f"calibration key(s) fell back to compiled defaults: "
+                    f"{', '.join(bad)} — if this board was ever drop-"
+                    f"calibrated, that measurement is GONE (a battery death "
+                    f"can erase it). Re-run the drop ritual before trusting "
+                    f"heights.")
+
+
 def check_device_params(dev: Device) -> bool:
     """Compare the flashed firmware's params against local config/params.json."""
     try:
@@ -578,6 +619,11 @@ def check_device_params(dev: Device) -> bool:
     local = load_params(CONFIG_PATH)
     device_kv = {k: v for k, v in _last_tagged(lines, "PARAMS ").items() if k != "_tag"}
     cal_kv = {k: v for k, v in _last_tagged(lines, "CAL ").items() if k != "_tag"}
+    lvl, msg = _cal_provenance_verdict(cal_kv)
+    if lvl == "warn":
+        print(f"  ⚠️  CALIBRATION PROVENANCE: {msg}")
+    elif lvl == "unknown":
+        print(f"  ℹ️  {msg}")
     info_kv = {k: v for k, v in _last_tagged(lines, "INFO ").items() if k != "_tag"}
     if not device_kv:
         print("  (device didn't report its params — old firmware? run ./tools/jump flash)")

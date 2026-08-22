@@ -19,6 +19,10 @@ Full registry: [bench-playbook.md §1](bench-playbook.md).
 - [ ] `./tools/jump selftest` — every row PASS, **and** it says
       `✅ device is running THIS source tree`. If it names two different
       hashes, you are about to measure a build you did not intend to.
+- [ ] **No `⚠️ CALIBRATION PROVENANCE` warning.** If it appears, this board's
+      measured drop calibration has been replaced by compiled defaults (a
+      battery death can do this silently — it happened to the OG on
+      2026-08-19). Re-run the drop ritual before trusting a single height.
 - [ ] `./tools/jump sync` the previous session, **copy it twice**, then
       `clear`. Never clear anything that exists in only one place.
 - [ ] Battery ~100 %. Budget ~21 h of recording; a session is ~2 h.

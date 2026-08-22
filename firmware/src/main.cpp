@@ -262,6 +262,16 @@ static void bleGreet() {
 // Compiled params.json values stay the defaults; persisted values override
 // them when present.
 static bool cal_from_nvs = false;
+// Per-key provenance (2026-08-21). The OR above hides a single key falling
+// back to its compiled default while the others survive — which is exactly
+// how the OG's lost AirtimeOffsetS could have hidden had VbatScale survived.
+// The device REPORTS per key; the pass/fail POLICY lives host-side, because
+// only the host knows whether this board is SUPPOSED to be calibrated (the
+// registry does; a wiped device cannot distinguish "never calibrated" from
+// "lost calibration" — any marker dies with the same storage).
+static bool cal_src_off   = false;
+static bool cal_src_scale = false;
+static bool cal_src_vbat  = false;
 
 static float cal_vbat_scale = 1.0f;
 
@@ -277,6 +287,7 @@ static void loadCalibration() {
   cal_vbat_scale = jh_persist::load(jh_persist::Key::VbatScale, 1.0f, &c);
 
   cal_from_nvs = a || b || c;
+  cal_src_off = a; cal_src_scale = b; cal_src_vbat = c;
   detector.set_calibration(off, scale);
   jh_power::set_vbat_scale(cal_vbat_scale);
   if (cal_from_nvs) {
@@ -932,13 +943,21 @@ static void handleCommand(const String& cmd) {
     // the adder-key rule: a board with nominal divider resistors emits the
     // exact line every existing client already parses.
     if (cal_vbat_scale != 1.0f) {
-      emitf("CAL airtime_offset_s=%.4f height_scale=%.3f source=%s vbat_scale=%.4f\n",
+      emitf("CAL airtime_offset_s=%.4f height_scale=%.3f source=%s vbat_scale=%.4f"
+            " off_src=%s scale_src=%s vbat_src=%s\n",
             detector.params().airtime_offset_s, detector.params().height_scale,
-            cal_from_nvs ? "device" : "defaults", cal_vbat_scale);
+            cal_from_nvs ? "device" : "defaults", cal_vbat_scale,
+            cal_src_off ? "device" : "defaults",
+            cal_src_scale ? "device" : "defaults",
+            cal_src_vbat ? "device" : "defaults");
     } else {
-      emitf("CAL airtime_offset_s=%.4f height_scale=%.3f source=%s\n",
+      emitf("CAL airtime_offset_s=%.4f height_scale=%.3f source=%s"
+            " off_src=%s scale_src=%s vbat_src=%s\n",
             detector.params().airtime_offset_s, detector.params().height_scale,
-            cal_from_nvs ? "device" : "defaults");
+            cal_from_nvs ? "device" : "defaults",
+            cal_src_off ? "device" : "defaults",
+            cal_src_scale ? "device" : "defaults",
+            cal_src_vbat ? "device" : "defaults");
     }
     emitLine("OK info");
     s_serial_must_not_drop = false;   // back to drop-is-fine for chatter
