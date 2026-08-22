@@ -91,6 +91,16 @@ to check first" below before anything else.
 
 ### 5. Sideload to the real watch (spec §11.1)
 
+> **⚠️ DOES NOT WORK ON THE INSTINCT 3 (firmware 15.18+), which is the
+> product watch.** Proven twice on 2026-08-22: a `.prg` copied into
+> `GARMIN/Apps` is verified present, then purged on the next USB disconnect —
+> no reboot needed. That firmware keeps Connect IQ apps in an internal
+> registry (`Garmin/Apps/OUT.BIN`, which grows when a store app installs),
+> not as loose `.prg` files, so a copied file is unreferenced and swept.
+> A store install on the same watch works. **The Connect IQ store is the only
+> install path to the Instinct 3** — see docs/store-submission.md. The
+> procedure below remains valid for the Epix Gen 2 (proven 2026-08-10).
+
 **Headless path — this is the one that works (proven 2026-08-10, Epix
 Gen 2).** No GUI, no drag-and-drop:
 

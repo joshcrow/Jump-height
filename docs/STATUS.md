@@ -774,11 +774,21 @@ do not.**
 - The rider's watch also shows **no Connect IQ category anywhere** in its
   menus — consistent, since Garmin hides that category when zero CIQ fields
   are installed.
-- **Remaining unknown, and it is the one that matters:** does the STORE path
-  work on this watch? Cheap test with his phone — install any free Connect IQ
-  data field from the store and see whether the category appears. If yes, our
-  submission is the answer. If no, something larger is wrong with the watch's
-  CIQ setup and three days of review would be wasted.
+- **ROOT CAUSE FOUND, and the store path is PROVEN on this watch.** The rider
+  installed a free store data field ("Climb") from his phone. Result:
+  - It does **not** appear as a `.prg` either — there is **no `.PRG` anywhere
+    on the device**.
+  - `OUT.BIN` **grew by 48 bytes** (7,316 → 7,364) at that moment.
+  - So `OUT.BIN` is the app REGISTRY, and this firmware stores Connect IQ
+    apps **internally in its own format**, not as loose files in
+    `Garmin/Apps`. A `.prg` copied there is unreferenced by the registry and
+    swept on the next disconnect. Every observation is explained with nothing
+    left over.
+  - **The store install worked**, so the channel is available on this exact
+    watch and firmware — which is what makes a submission worth starting.
+- **Verdict: file-copy sideloading is architecturally impossible on this
+  firmware**, not merely blocked. The Connect IQ store is the only install
+  path to the product watch, and it is confirmed working.
 
 ### INSTINCT SIDELOAD DONE — first time the field has ever been on the product watch
 - **Device identified from its own `GarminDevice.xml`, not assumed:**
