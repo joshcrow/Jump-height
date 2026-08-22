@@ -763,10 +763,22 @@ do not.**
   is the entire argument for doing the Instinct bring-up early. The one
   irreplaceable resource on the day is the rider; discovering this then would
   have cost the session.
-- NOT yet ruled out (cheap, needs the watch): whether the app appears BEFORE
-  a reboot (i.e. boot-time cleanup vs write-time rejection); whether Garmin
-  Express or the Connect IQ mobile app can install a developer build; whether
-  an unlisted/beta store listing is the intended developer path.
+- **CONFIRMED CONCLUSIVELY, second trial, no reboot involved:** re-pushed
+  (id 16777729, verified on the watch), then merely **unplugged and
+  replugged** — gone again. `Garmin/Apps` holds only `OUT.BIN`, whose own id
+  and size CHANGED between the two inspections (16777293/— → 16777294/7,316 B),
+  so the watch demonstrably runs an app-management pass on USB disconnect and
+  our file does not survive it.
+- So it is **not** boot-time cleanup, and "just never reboot it" is not a
+  workaround. **This firmware rejects sideloaded `.prg` files, full stop.**
+- The rider's watch also shows **no Connect IQ category anywhere** in its
+  menus — consistent, since Garmin hides that category when zero CIQ fields
+  are installed.
+- **Remaining unknown, and it is the one that matters:** does the STORE path
+  work on this watch? Cheap test with his phone — install any free Connect IQ
+  data field from the store and see whether the category appears. If yes, our
+  submission is the answer. If no, something larger is wrong with the watch's
+  CIQ setup and three days of review would be wasted.
 
 ### INSTINCT SIDELOAD DONE — first time the field has ever been on the product watch
 - **Device identified from its own `GarminDevice.xml`, not assumed:**
