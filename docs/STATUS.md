@@ -800,6 +800,23 @@ do not.**
 - **Standing rule unchanged until that run passes:** no second central while
   the rider is on the water.
 
+### R1 candidate on silicon: spare flashed src=71cab7c8, provenance chain proven end-to-end, 48 h soak clock running
+- One replug, one flash, `Device programmed`, selftest 6/6 (accel 0.996 g,
+  noise 0.0012 g). The one-flash-per-replug budget is now **5/5 consistent**.
+- The R1 candidate = seven storage/BLE fixes + timebase rework (double sweep,
+  llround, saturation-not-abort) + per-key calibration provenance. **This is
+  the exact lineage the OG's pre-water flash will carry**, per the hardening
+  plan's explicit schedule.
+- **Provenance proven end-to-end on real silicon**: the device emits
+  `off_src=defaults scale_src=defaults vbat_src=defaults` (honest — this
+  board was never drop-calibrated), the CLI prints the unmissable
+  `⚠️ CALIBRATION PROVENANCE` naming all three keys, and the selftest still
+  PASSES — the design's whole point: bench flows unbroken, humans informed.
+  On the OG before the water day, the session card blocks on this warning.
+- **R1's 48 h soak starts now** on this build. Clean through Saturday →
+  the single OG flash → owner re-runs the drop ritual → `off_src=device`
+  read back → R1 gate can close (pending the date decision).
+
 ### The OG's measured calibration is GONE — silently replaced by the compiled default
 - Found 2026-08-21 while looking for unconsidered failure cases. The OG now
   reports `CAL airtime_offset_s=0.0257 height_scale=1.000 **source=defaults**`.
