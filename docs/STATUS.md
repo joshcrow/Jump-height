@@ -734,6 +734,33 @@ do not.**
   points at supply integrity (the spare has no battery to buffer QSPI current
   spikes), which a battery-backed board would mask.
 
+## 2026-08-22
+
+### Overnight: 2,068/2,068 reconnect cycles, zero failures — the puck's link layer is proven dependable
+- `tools/reconnectsoak.py` against the third board (JumpHeight-8673), 8 h,
+  pinned by full name with three pucks on the air: **2,068 cycles, 2,068 ok,
+  zero failures at any step, zero resets.** Every cycle = scan → connect →
+  READY greet verified → stats round-trip → clean disconnect.
+- **The number that matters for the ride: full recovery (advertisement seen →
+  greeted and live) is median 1.90 s, p95 1.99 s, max 2.60 s.** A watch
+  coming back into range should have live data again in ~2 seconds, every
+  time. The distribution is tight — max is only 0.7 s above median across two
+  thousand trials — which is what dependable looks like.
+- Per-step: scan median 0.12 s; connect 1.50 s (the dominant cost, BLE
+  connection establishment itself); greet 0.16 s; stats 0.10 s.
+- This closes the PUCK half of task #15's dependability question with data.
+  The WATCH half (PuckLink's reconnect behavior under the same rhythm)
+  remains, and is R2's watch-hardening item — but the puck is now known to
+  never be the bottleneck: it re-advertises promptly and greets correctly
+  every single time.
+- ~2,000 reconnects ≈ years of ride-day disconnect events, compressed into
+  one night, with failures counted rather than assumed.
+
+### Spare R1 soak: 10.5 h clean of 48
+- Uptime monotonic (no resets), storage up, trace recording. The 08-20
+  `reas=0` reset has now not recurred across three boards and ~30 cumulative
+  soak-hours — remains one-off, still unexplained, downgraded further.
+
 ## 2026-08-21
 
 ### Instinct simulator dress rehearsal: 48/48 on the product watch, and NO per-line memory leak
