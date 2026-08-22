@@ -736,6 +736,29 @@ do not.**
 
 ## 2026-08-22
 
+### INSTINCT SIDELOAD DONE — first time the field has ever been on the product watch
+- **Device identified from its own `GarminDevice.xml`, not assumed:**
+  `Instinct 3 - 45mm, Solar`, part `006-B4585-00`, **firmware 15.18**, unit id
+  3505032989. Matches the `instinct3solar45mm` build target exactly.
+- **`tools/mtp_send` worked first try** — the ~30 lines of C the README had
+  described since 08-10 and nobody had written. Enumerated `Garmin/Apps` =
+  folder **16777221**, storage **0x00020001**, pushed 17,996 bytes, and the
+  push was **verified by reading the file back** (`mtp-files`: id 16777727,
+  size 17,996 exact, parent 16777221) rather than trusting the return code.
+- The storage id turned out to match the Epix's `0x00020001` after all — so
+  the assumption would have held. Reading it off the device cost nothing and
+  was still the right call: four wrong verdicts in this project began with an
+  identifier assumed rather than read.
+- **Firmware version recorded deliberately.** The Fenix-7/Epix family has a
+  documented history of CIQ apps breaking on watch firmware updates; 15.18 is
+  the baseline that makes a future "it stopped working" attributable.
+- On the watch now: the R1 watch build — puck-id header + monotonic STATS
+  reseed, 54/54 on this device target. **Installed, not proven**: the id must
+  read `E2C4` while connected, and the reseed needs the runbook's §4b staged
+  reboot.
+
+## 2026-08-22
+
 ### Overnight: 2,068/2,068 reconnect cycles, zero failures — the puck's link layer is proven dependable
 - `tools/reconnectsoak.py` against the third board (JumpHeight-8673), 8 h,
   pinned by full name with three pucks on the air: **2,068 cycles, 2,068 ok,
