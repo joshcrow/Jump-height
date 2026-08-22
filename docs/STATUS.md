@@ -815,10 +815,16 @@ do not.**
   that can lose it. That makes this a glue-and-forget finding, not a bench
   curiosity: **a flat battery erases the board's own calibration**, and the
   vision's whole premise is a puck that occasionally goes flat.
-- **Nothing surfaces it.** `jh_persist::load()` already takes a `from_store`
-  out-parameter for precisely this, and `main.cpp` never passes it (grep:
-  zero uses). The selftest does not check it either. So the only signal is one
-  word in a diagnostic string nobody reads.
+- **CORRECTED same day (adversarial review of the hardening plan):** my claim
+  that `from_store` is "never read — grep: zero uses" was WRONG. main.cpp's
+  `loadCalibration()` reads all three flags (as locals `a`/`b`/`c`, which is
+  why a grep for the token found nothing), ORs them into `cal_from_nvs`, and
+  the `info` command prints `source=device|defaults` from it. The mechanism
+  fired correctly when the OG lost its calibration — **the signal existed and
+  nobody was looking at it.** The REAL gaps are narrower: (a) it is a manual
+  diagnostic, not an automated selftest FAIL; (b) the OR means one key
+  falling back while the others survive still reports "device" — per-key
+  granularity is missing. Both are what the planned selftest row must fix.
 - **Consequences that compound:**
   1. Any future edit to `config/params.json` would silently move the OG's
      calibration, because it is now taking the default path.

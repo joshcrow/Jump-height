@@ -36,11 +36,12 @@ The genuinely new code is about a day.
    ride**, not "occasionally". And the person who can open the sealed case is
    not the person who has the board. This is a five-minute conversation that
    removes a session-ruining failure; no code will do it for you.
-2. **Selftest row: fail when calibration came from defaults.** One
-   `from_store` read (`jh_persist::load` already returns it; nothing in the
-   tree passes it). This would have caught, the day it happened, that the
-   OG's measured calibration was silently replaced by the compiled default
-   after the battery death. Catches the whole "provenance" cluster.
+2. **Selftest row: fail when calibration came from defaults.** *(Corrected
+   2026-08-21: the mechanism partially exists — `loadCalibration()` reads the
+   flags and `info` prints `source=`; the OG's loss WAS surfaced there and
+   nobody was looking.)* The row must (a) be an automated FAIL, not a manual
+   diagnostic, and (b) check **per key with AND semantics** — today's OR
+   reports "device" if any one key survived, hiding single-key fallbacks.
 3. **Rider-brief + session-card additions.** The brief currently tells the
    rider to ignore *every* anomaly uniformly, which is right for a 10-second
    dropout and wrong for a 20-minute one. Add: what a long dropout means,
