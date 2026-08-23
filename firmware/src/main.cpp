@@ -703,8 +703,28 @@ static void handleCommand(const String& cmd) {
     emitLine("# census touched live sensor pins — running audited revive");
     const bool census_revived = jh_imu::revive();
     jh_link::watchdog_feed();
-    emitf("# revive %s\n", census_revived ? "ok" : "FAILED — sensor left down; reboot or `revive`");
-    emitLine("OK pincensus");
+    if (!census_revived) {
+      emitLine("# revive FAILED — sensor left down; reboot or `revive`");
+      emitLine("OK pincensus");
+    } else {
+      // F-09 (audit 2026-08-22): revive() alone is NOT recovery.
+      //
+      // It opens with bus_release() (s_bus.end(), begun_=false), cycles the
+      // rail, and returns true unconditionally — it never calls begin() on
+      // the bus or the IMU. So this handler used to print "revive ok" while
+      // leaving every subsequent read returning BUSERR, with sensor_ok still
+      // true: a diagnostic that silently destroys the instrument and then
+      // reports success. The `revive` COMMAND does not have this bug because
+      // it follows revive() with runSelfTest(), which re-probes and re-begins
+      // the bus. Do the same here, and report what it actually found rather
+      // than a hardcoded "ok".
+      emitLine("# rail cycled — re-running selftest to actually restore the bus");
+      const bool ok = runSelfTest();
+      jh_link::watchdog_feed();
+      emitf("# revive %s\n", ok ? "ok — sensor answering"
+                                 : "INCOMPLETE — selftest still failing, sensor is down");
+      emitLine("OK pincensus");
+    }
 #if defined(NRF52840_XXAA)
   } else if (cmd.startsWith("fillstore")) {
     // BENCH ONLY — fill the trace region fast, to test the ONE storage path
@@ -1324,8 +1344,18 @@ void loop() {
     // 200 Hz the real work (one I2C burst, the detector, an occasional flash
     // block) is a few hundred microseconds out of 5 ms, so the CPU spent
     // ~90% of its life re-reading a clock at 64 MHz. That is the dominant
-    // term in the MEASURED 11.6 mA — against a plan that had assumed ~4 mA
+    // term in the device's idle draw — against a plan that had assumed ~4 mA
     // from an idle that did not exist.
+    //
+    // F-21 (audit 2026-08-22): this comment used to cite "the MEASURED
+    // 11.6 mA". That figure is RETRACTED (docs/battery-measurement.md:11,
+    // STATUS:497) — it came from a batt_pct extrapolation through a region
+    // nobody had measured. The honest baseline is the conservation bound
+    // **<=9.7 mA** (250 mAh datasheet capacity / 25.7 h measured runtime).
+    // Rule 2 exists because retracted numbers come back: this audit's own
+    // first pass repeated 11.6 mA after reading it HERE, which is the proof
+    // of harm. If you need a current figure, take it from
+    // docs/battery-measurement.md, never from a comment.
     //
     // delay() here is vTaskDelay: it yields to the idle task, which sleeps
     // the core until the next ~0.98 ms tick. The 1200 us guard band means we
@@ -1377,7 +1407,13 @@ void loop() {
     // Skipping the sample is right for a transient I2C hiccup; staying quiet
     // about a dead IMU is not. One warning, once, so a live client sees it
     // without the line repeating at the sample rate.
-    if (++accel_fail_count == 200 && !sensor_warned) {  // ~1 s at 200 Hz
+    // F-09 sibling sweep: this was `== 200`, a strict-equality one-shot. Any
+    // earlier transient that walked the counter past 200 consumed the warning
+    // forever — the sensor could then die permanently and never say so. `>=`
+    // with the existing latch is the same one-shot behaviour without the
+    // pre-consumption hole (CLAUDE.md rule 3: a skipped warning is not a
+    // passing one).
+    if (++accel_fail_count >= 200 && !sensor_warned) {  // ~1 s at 200 Hz
       sensor_warned = true;
       emitLine("# WARNING accelerometer not answering — this session is "
                "recording nothing. Check wiring, then `selftest`.");
