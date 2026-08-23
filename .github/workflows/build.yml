@@ -52,7 +52,14 @@ jobs:
 
       - name: Install test dependencies
         run: |
-          pip install pytest pyserial playwright platformio
+          # bleak (2026-08-23): tools/tests/test_bench_pinning.py imports
+          # otadfu.py to test its board-pinning POLICY, and otadfu exits at
+          # import without bleak. Installed rather than skipped: importing
+          # bleak needs no radio, and per the policy note below an
+          # infrastructure skip is a failure — skipping here would leave F-14's
+          # refuse-on-ambiguity rule, the one guarding against flashing the
+          # wrong board, unverified in CI while the suite stayed green.
+          pip install pytest pyserial playwright platformio bleak
           python -m playwright install --with-deps chromium
 
       # F-03 (audit 2026-08-22). PlatformIO belongs in THIS job, not only in
