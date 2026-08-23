@@ -932,6 +932,10 @@ static void handleCommand(const String& cmd) {
       emitf("# reas=0x%08lX\n", (unsigned long)jh_power::reset_reason());
     if (jh_power::fast_charge_state() >= 0)
       emitf("# hichg=%d chg=%d\n", jh_power::fast_charge_state(), jh_power::charging());
+    // dcdc= is an adder key (absent where the concept does not apply, e.g.
+    // the host build). F-05: without this, a reverted DCDCEN was invisible.
+    if (jh_power::dcdc_enabled() >= 0)
+      emitf("# dcdc=%d\n", jh_power::dcdc_enabled());
     if (jh_link::local_name()[0])
       emitf("# name=%s\n", jh_link::local_name());  // WHICH puck — quiver world
     if (jh_power::breadcrumb_last() != 0)
@@ -1152,6 +1156,19 @@ void setup() {
   // Persist first — it's INTERNAL flash (no external bus, nothing to wedge)
   // and both crash guards live in it, so it must be readable before any
   // external-bus first contact.
+  // F-05 (audit 2026-08-22): enable the internal DC/DC at every boot.
+  //
+  // Measured 1.39x endurance on this project's own same-board A/B
+  // (STATUS 2026-08-20). It used to be reachable only from the `dcdc` console
+  // command, so every boot ran on the LDO — and because DCDCEN is volatile,
+  // any watchdog reset silently reverted a hand-typed enable with nothing on
+  // the wire to reveal it. STATUS:527's gate ("earns a place in boot only
+  // after the A/B") was satisfied on 2026-08-20; this is that place.
+  //
+  // After jh_power::init() so the SoftDevice-state check inside the seam has
+  // run once already, and before anything power-hungry starts.
+  jh_power::enable_dcdc();
+
   jh_persist::init();
   loadCalibration();
   // Seed the advertised battery before BLE first advertises (loop() refreshes it).
