@@ -42,6 +42,11 @@ namespace {
 const char* kJumpsName = "jumps.csv";
 const char* kTraceName = "trace.csv";
 const char* kJumpsHeader = "n,takeoff_s,airtime_raw_s,airtime_s,height_m,med_a_g,med_w_dps,med_acorr_g,n_air\n";
+// Field index of height_m in kJumpsHeader, 0-based. Named because
+// jumps_scan() reads it positionally, and a reader that finds this column by
+// counting from the END breaks silently every time a column is appended
+// (F-20, audit 2026-08-22 — it already did, when four were).
+const size_t kHeightField = 4;
 const char* kTraceHeader = "t,mag\n";
 
 bool s_fs_ok = false;
@@ -138,9 +143,28 @@ void jumps_scan(uint32_t& count, float& best_m) {
     std::string s(line);
     while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) s.pop_back();
     if (s.empty()) continue;
-    const size_t c = s.find_last_of(',');
-    if (c == std::string::npos) continue;
-    const float h = std::strtof(s.c_str() + c + 1, nullptr);
+    // height_m is field 4 (0-based). This used to take find_last_of(',') and
+    // parse the TAIL, which WAS height_m — back when the schema had five
+    // columns. It has had nine since med_a_g/med_w_dps/med_acorr_g/n_air were
+    // appended, so the host store has been reporting n_air — an integer count
+    // of in-air samples — as a height in metres. The nRF52 path reads a binary
+    // struct field and was never affected, which is why this survived: the
+    // divergence is invisible unless a test compares the two, and per F-03 CI
+    // was not compiling env:host at all.
+    float h = 0.0f;
+    size_t start = 0, field = 0;
+    bool have_height = false;
+    for (size_t i = 0; i <= s.size(); ++i) {
+      if (i != s.size() && s[i] != ',') continue;
+      if (field == kHeightField) {
+        h = std::strtof(s.substr(start, i - start).c_str(), nullptr);
+        have_height = true;
+        break;
+      }
+      ++field;
+      start = i + 1;
+    }
+    if (!have_height) continue;  // short/malformed row: not a jump record
     count++;
     if (h > best_m) best_m = h;
   }

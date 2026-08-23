@@ -10,7 +10,8 @@
 //     live.
 //   * Motion gate: only detects/logs while the board is actually moving.
 //   * Logs to on-device storage (the jh_store seam):
-//       jumps.csv — one line per jump (n,takeoff_s,airtime_raw_s,airtime_s,height_m)
+//       jumps.csv — one line per jump (n,takeoff_s,airtime_raw_s,airtime_s,
+//                    height_m,med_a_g,med_w_dps,med_acorr_g,n_air)
 //       trace.csv — JH_LOG_HZ "t,mag" trace while moving, for offline re-tuning
 //   * Power-on self-test with plain-English fix hints; a wiring failure does
 //     NOT brick the session — fix the wires and type `selftest` to recover.

@@ -348,7 +348,18 @@ class TestJumpDetectionAndStorage(HostDevTestCase):
             self.assertLessEqual(
                 abs(airtime_raw - freefall_s), 0.1,
                 f"airtime_raw_s={airtime_raw} not within 0.1s of scripted {freefall_s}")
-            self.assertGreater(float(kv["height_m"]), 0.0)
+            # F-20: `> 0.0` was too loose to catch the host store parsing the
+            # WRONG COLUMN, because n_air (an in-air sample count, ~114 here) is
+            # also positive. Pin the height to the physics instead: for a
+            # ballistic flight h = g*t^2/8, so a 0.676 s airtime is ~0.56 m.
+            # 0.56 vs 114 is the discriminator the old assert threw away.
+            height = float(kv["height_m"])
+            airtime = float(kv["airtime_s"])
+            expected_h = 9.80665 * airtime * airtime / 8.0
+            self.assertLessEqual(
+                abs(height - expected_h), 0.01,
+                f"height_m={height} does not match g*t^2/8={expected_h:.3f} "
+                f"for airtime_s={airtime}")
 
             lines = dev.command("jumps")
             self.assertTrue(any(ln.startswith("FILE jumps.csv BEGIN") for ln in lines))
@@ -356,10 +367,72 @@ class TestJumpDetectionAndStorage(HostDevTestCase):
             data_rows = [ln for ln in lines if "," in ln and not ln.startswith(("n,", "#", "FILE"))]
             self.assertEqual(len(data_rows), 1, f"expected exactly one stored jump row, got {lines}")
             cells = data_rows[0].split(",")
+            self.assertEqual(len(cells), 9,
+                             "jumps.csv is a NINE-column schema; a reader that "
+                             "counts back from the end breaks when a column is "
+                             "appended (F-20): " + data_rows[0])
             self.assertEqual(cells[0], "1")  # n
             self.assertLessEqual(abs(float(cells[2]) - freefall_s), 0.1)  # airtime_raw_s
+            self.assertLessEqual(abs(float(cells[4]) - height), 0.001,
+                                 "field 4 must be height_m: " + data_rows[0])
+
         finally:
             dev.close()
+
+    def test_stored_best_survives_restart_as_a_height_not_a_sample_count(self) -> None:
+        """F-20: the host jumps_scan() took find_last_of(',') and parsed the
+        TAIL as height_m — true only while the schema had five columns. It has
+        had nine since the flight medians were appended, so "best" on the host
+        was n_air, an in-air SAMPLE COUNT (~114 here), reported in metres.
+
+        This needs a process RESTART to see. main.cpp keeps stored_best in RAM
+        and updates it from the live JumpEvent; jumps_scan() only runs at boot
+        (and on mount/clear), so an in-process `stats` reads the RAM copy and
+        the parser is never exercised. An earlier version of this test asserted
+        in-process and passed against the known-broken parser.
+        """
+        freefall_s = 0.65
+        script = write_script(self.tmp_path / "script.txt",
+                              f"rest 2.0\njump {freefall_s}\nrest 2.0\n")
+        host_dir = self.tmp_path / "hostdir"
+
+        dev = HostDevice(self.host_binary, host_dir, script)
+        try:
+            self.assertTrue(dev.drain_boot())
+            jump_line = dev.wait_for("JUMP", timeout=10.0)
+            self.assertIsNotNone(jump_line, "no JUMP line from the scripted toss")
+            height = float(parse_kv(jump_line)["height_m"])
+            rows = [ln for ln in dev.command("jumps")
+                    if "," in ln and not ln.startswith(("n,", "#", "FILE"))]
+            self.assertEqual(len(rows), 1, rows)
+            n_air = float(rows[0].split(",")[8])
+        finally:
+            dev.close()
+
+        # The discriminator: these two must be far apart or the test proves
+        # nothing about WHICH column was read.
+        self.assertGreater(n_air, 10.0,
+                           f"n_air={n_air} too close to height={height} for this "
+                           f"test to distinguish the columns: {rows[0]}")
+
+        # Fresh process, same store directory: boot re-derives stored_best by
+        # PARSING the file, which is the code path under test.
+        dev2 = HostDevice(self.host_binary, host_dir, script)
+        try:
+            self.assertTrue(dev2.drain_boot())
+            stats_line = next((ln for ln in dev2.command("stats")
+                               if ln.startswith("STATS ")), None)
+            self.assertIsNotNone(stats_line)
+            kv = parse_kv(stats_line)
+            self.assertEqual(int(kv["stored_jumps"]), 1, stats_line)
+            best = float(kv["stored_best_m"])
+            self.assertLessEqual(
+                abs(best - height), 0.001,
+                f"stored_best_m={best} after restart should be the jump height "
+                f"{height}, not n_air={n_air} — the host store is parsing the "
+                f"wrong column (F-20)")
+        finally:
+            dev2.close()
 
 
 class TestPtyBridge(HostDevTestCase):

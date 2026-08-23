@@ -8,7 +8,12 @@
 // fs_ok gate; this seam only owns the actual file I/O.
 //
 // Units/format: jumps.csv rows are
-// "n,takeoff_s,airtime_raw_s,airtime_s,height_m\n"; trace.csv rows are
+// "n,takeoff_s,airtime_raw_s,airtime_s,height_m,med_a_g,med_w_dps,
+// med_acorr_g,n_air\n" — NINE columns since the flight medians were added;
+// this comment claimed five until F-20 (audit 2026-08-22), and a host-side
+// reader that trusted it parsed n_air as the jump height. New columns are
+// APPENDED, never inserted, so field indices are stable; read by index, never
+// by counting back from the end. trace.csv rows are
 // "t,mag\n" — both exactly the wire format the FILE-framed dump already
 // sends, so a client never has to know the on-device format changed
 // (docs/sense.md §3.2 plans an eventual binary trace with this same CSV
