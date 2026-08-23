@@ -135,6 +135,10 @@ class HostDevice:
             [str(binp)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             cwd=str(REPO), env=env)
         self._buf = b""
+        # Everything the device has said, in order. wait_for() drops
+        # non-matching lines on the floor, which makes narration lines
+        # BETWEEN two tagged lines unassertable without this.
+        self.seen: list[str] = []
 
     def write_line(self, s: str) -> None:
         assert self.proc.stdin is not None
@@ -150,7 +154,9 @@ class HostDevice:
             if nl >= 0:
                 line = self._buf[:nl]
                 self._buf = self._buf[nl + 1:]
-                return line.decode(errors="replace")
+                text = line.decode(errors="replace")
+                self.seen.append(text)
+                return text
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return None
@@ -499,3 +505,61 @@ class TestOffCommand(HostDevTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestStorageRefusalIsVisible(HostDevTestCase):
+    """F-10: jumps_append() refusals were bare returns and main.cpp incremented
+    stored_jumps regardless.
+
+    Driven through a read-only store directory, which is the one refusal path
+    the host platform can actually produce (its init() cannot fail, and it has
+    no region cap — the REGION_FULL path is device-only and is covered against
+    the real nrf52 store in tools/tests/test_store_host.py).
+    """
+
+    def test_write_failure_is_reported_once_and_not_counted(self) -> None:
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            self.skipTest("root ignores directory permissions, so no write can fail")
+
+        host_dir = self.tmp_path / "readonly_store"
+        host_dir.mkdir()
+        os.chmod(host_dir, 0o500)   # readable + traversable, NOT writable
+
+        script = write_script(self.tmp_path / "script.txt",
+                              "rest 2.0\njump 0.65\nrest 2.0\njump 0.65\nrest 2.0\n")
+        dev = HostDevice(self.host_binary, host_dir, script)
+        try:
+            boot = dev.drain_boot()
+            self.assertTrue(boot and boot[-1].strip() == "READY")
+
+            first = dev.wait_for("JUMP", timeout=10.0)
+            self.assertIsNotNone(first, "the detector must still report the jump")
+            second = dev.wait_for("JUMP", timeout=10.0)
+            self.assertIsNotNone(second, "second scripted toss never detected")
+
+            stats = dev.command("stats")
+            stats_line = next((ln for ln in stats if ln.startswith("STATS ")), None)
+            self.assertIsNotNone(stats_line, f"no STATS line: {stats}")
+            kv = parse_kv(stats_line)
+
+            # The jumps happened, so the SESSION count must advance — the puck
+            # is not allowed to under-report the ride just because its flash is
+            # unwritable.
+            self.assertEqual(int(kv["session_jumps"]), 2, stats_line)
+
+            # But nothing reached storage, so the STORED count must not move.
+            # This is the actual F-10 defect: it used to read 2.
+            self.assertEqual(int(kv["stored_jumps"]), 0,
+                             "stored_jumps counted records the store refused: " + stats_line)
+
+            # And the rider is told once, not once per jump — two jumps
+            # both refused must not produce two identical warnings.
+            transcript = "\n".join(dev.seen)
+            n_warnings = transcript.count("# jump NOT saved")
+            self.assertEqual(n_warnings, 1,
+                             f"expected exactly one refusal warning, got {n_warnings}:\n{transcript}")
+            self.assertIn("flash write failed", transcript,
+                          "the warning must name the actual reason")
+        finally:
+            dev.close()
+            os.chmod(host_dir, 0o700)   # before tearDown's rmtree

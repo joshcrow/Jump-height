@@ -100,12 +100,16 @@ uint32_t free_bytes() {
   return 0;
 }
 
-void jumps_append(uint32_t n, float takeoff_s, float airtime_raw_s, float airtime_s,
-                   float height_m, uint16_t med_a_mg, uint16_t med_w_dps,
-                   uint16_t med_acorr_mg, uint16_t n_air) {
-  if (!s_fs_ok) return;
+AppendResult jumps_append(uint32_t n, float takeoff_s, float airtime_raw_s,
+                          float airtime_s, float height_m, uint16_t med_a_mg,
+                          uint16_t med_w_dps, uint16_t med_acorr_mg,
+                          uint16_t n_air) {
+  if (!s_fs_ok) return AppendResult::FS_DOWN;
   FILE* f = std::fopen(jumpsPath().c_str(), "a");
-  if (!f) return;
+  // No REGION_FULL here: the host store is a plain file with no cap. That is
+  // a real divergence from the device and it is why F-19's region-full test
+  // must run against the nrf52 store in firmware/test/store_host/, not here.
+  if (!f) return AppendResult::WRITE_FAILED;
   if (!s_jumps_header) {
     std::fputs(kJumpsHeader, f);
     s_jumps_header = true;
@@ -115,6 +119,7 @@ void jumps_append(uint32_t n, float takeoff_s, float airtime_raw_s, float airtim
                med_a_mg / 1000.0, (unsigned)med_w_dps, med_acorr_mg / 1000.0,
                (unsigned)n_air);
   std::fclose(f);
+  return AppendResult::OK;
 }
 
 void jumps_scan(uint32_t& count, float& best_m) {

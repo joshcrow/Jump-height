@@ -1363,3 +1363,68 @@ class TraceClearEraseFailure(unittest.TestCase):
         # losing the rider's results over a raw-sample problem is the wrong trade.
         self.assertIn("JUMPS_SCAN count=1", out,
                       "jumps must still record after a trace-only erase failure")
+
+
+class JumpsAppendReportsStatus(unittest.TestCase):
+    """F-10: jumps_append() was `void` with three bare-return refusal paths.
+
+    Nothing lied to the rider — jumps_scan() re-derives the count from flash —
+    but "refused" and "stored" were indistinguishable to every caller, so
+    main.cpp incremented stored_jumps either way and no test could assert on
+    the difference. Same interface habit as F-07 (void trace_clear()) and F-09
+    (a self-test that printed a verdict it never read).
+    """
+
+    def test_status_distinguishes_refused_from_stored(self):
+        tmp = Path(tempfile.mkdtemp())
+        binary = _build_harness(tmp)
+        r = run_harness(binary, [
+            # Deliberately BEFORE init: the store is unmounted, so this append
+            # must be refused — and must say so.
+            "JUMPS_APPEND 1 1.000 0.300 0.280 0.550",
+            "INIT",
+            "JUMPS_APPEND 1 1.000 0.300 0.280 0.550",
+            "JUMPS_SCAN",
+        ], backing=tmp / "flash.bin")
+        self.assertEqual(r.returncode, 0)
+        statuses = re.findall(r"JUMPS_APPEND status=(\w+)", r.raw_stdout)
+        self.assertEqual(statuses, ["FS_DOWN", "OK"],
+                         "an unmounted store must report FS_DOWN, not silence")
+        # Exactly one record reached flash — the refused one left nothing.
+        self.assertIn("JUMPS_SCAN count=1", r.raw_stdout)
+
+    def test_fill_counts_only_what_the_store_kept(self):
+        """The harness had the same defect it exists to detect: `++appended`
+        ran unconditionally, so a fill the store refused still reported the
+        full count.
+
+        Driven with the store UNMOUNTED, so every append is refused. A fill
+        that succeeds cannot test this — it would pass with the counter back
+        in its broken position, which is how the bug survived in the first
+        place.
+        """
+        tmp = Path(tempfile.mkdtemp())
+        binary = _build_harness(tmp)
+        pat = (r"JUMPS_FILL appended=(\d+) count=(\d+) best_m=[\d.]+ "
+               r"refused_at=(-?\d+) status=(\w+)")
+
+        # No INIT: the store is down, so nothing can be stored.
+        refused = run_harness(binary, ["JUMPS_FILL 10", "JUMPS_SCAN"],
+                              backing=tmp / "down.bin")
+        m = re.search(pat, refused.raw_stdout)
+        self.assertIsNotNone(m, "JUMPS_FILL must report refusals: " + refused.raw_stdout)
+        self.assertEqual(int(m.group(1)), 0,
+                         "appended must count only records the store KEPT")
+        self.assertEqual(int(m.group(3)), 0, "should stop at the first append")
+        self.assertEqual(m.group(4), "FS_DOWN")
+
+        # Control: the same fill on a mounted store stores all ten, so the
+        # assertions above are about refusal handling, not a broken fill.
+        ok = run_harness(binary, ["INIT", "JUMPS_FILL 10", "JUMPS_SCAN"],
+                         backing=tmp / "up.bin")
+        m2 = re.search(pat, ok.raw_stdout)
+        self.assertIsNotNone(m2, ok.raw_stdout)
+        self.assertEqual(int(m2.group(1)), 10)
+        self.assertEqual(int(m2.group(2)), 10, "scan must agree with the fill")
+        self.assertEqual(int(m2.group(3)), -1)
+        self.assertEqual(m2.group(4), "OK")

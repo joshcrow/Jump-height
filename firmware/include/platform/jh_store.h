@@ -75,12 +75,28 @@ bool hard_format(void (*announce)(const char* line));
 uint32_t free_bytes();
 
 // ---- jumps.csv ----
-// Append one row (writes the CSV header first time only). No-op if storage
-// isn't mounted.
-void jumps_append(uint32_t n, float takeoff_s, float airtime_raw_s,
-                  float airtime_s, float height_m,
-                  uint16_t med_a_mg = 0, uint16_t med_w_dps = 0,
-                  uint16_t med_acorr_mg = 0, uint16_t n_air = 0);
+// Why this reports a status (F-10, audit 2026-08-22): jumps_append() was
+// `void` with THREE bare-return refusal paths, and main.cpp incremented
+// stored_jumps unconditionally afterwards. Nothing lied to the rider —
+// jumps_scan() re-derives the count from flash — but the seam made
+// "refused" and "stored" indistinguishable to every caller, which is the
+// same shape as F-07 (a void trace_clear() whose failure had nowhere to go)
+// and F-09 (a self-test that printed a verdict it never checked). Three
+// bugs, one interface habit. A caller that cannot ask cannot report.
+enum class AppendResult : unsigned char {
+  OK = 0,
+  FS_DOWN,       // storage not mounted — nothing was written
+  REGION_FULL,   // jumps region has no room for another record
+  WRITE_FAILED,  // short/failed write; the append offset was skipped forward
+                 // past the torn bytes (never resumed on top of them)
+};
+
+// Append one row (writes the CSV header first time only). Returns OK only if
+// the record is actually on flash; see AppendResult for the refusals.
+AppendResult jumps_append(uint32_t n, float takeoff_s, float airtime_raw_s,
+                          float airtime_s, float height_m,
+                          uint16_t med_a_mg = 0, uint16_t med_w_dps = 0,
+                          uint16_t med_acorr_mg = 0, uint16_t n_air = 0);
 // Parse the stored file: row count and the max value of its last column
 // (height_m). Both 0 if storage is down or the file is empty/missing.
 void jumps_scan(uint32_t& count, float& best_m);

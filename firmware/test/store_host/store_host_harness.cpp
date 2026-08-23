@@ -40,13 +40,19 @@
 //   OK                                      jh_store::ok()
 //   FREE_BYTES                              jh_store::free_bytes()
 //   CHIP_SIZE                                mock_flash_test::chip_size()
-//   JUMPS_APPEND n takeoff raw air height    jh_store::jumps_append(...)
+//   JUMPS_APPEND n takeoff raw air height    jh_store::jumps_append(...);
+//                                            prints status=OK|FS_DOWN|
+//                                            REGION_FULL|WRITE_FAILED (F-10)
 //   JUMPS_SCAN                               jh_store::jumps_scan(...)
 //   JUMPS_FILL count                         count synthetic appends in one
 //                                            fast in-process loop (no
 //                                            per-sample stdio) — for
-//                                            marathon-scale scenarios.
-//                                            Reports appended/count/best_m.
+//                                            marathon-scale scenarios. Stops
+//                                            at the first refusal and reports
+//                                            appended/count/best_m plus
+//                                            refused_at/status (F-10/F-19):
+//                                            `appended` counts only records
+//                                            the store actually kept.
 //   TRACE_APPEND t0,mag0;t1,mag1;...         one jh_store::trace_append()
 //                                            call over the ';'-joined
 //                                            samples (';' -> '\n', trailing
@@ -139,6 +145,18 @@
 #include "mock_flash.h"
 #include "platform/jh_store.h"
 
+// F-10: name the append status so tests can assert on the REASON, not just on
+// a count that happens to stop growing.
+static const char* appendResultName(jh_store::AppendResult r) {
+  switch (r) {
+    case jh_store::AppendResult::OK:           return "OK";
+    case jh_store::AppendResult::FS_DOWN:      return "FS_DOWN";
+    case jh_store::AppendResult::REGION_FULL:  return "REGION_FULL";
+    case jh_store::AppendResult::WRITE_FAILED: return "WRITE_FAILED";
+  }
+  return "UNKNOWN";
+}
+
 namespace {
 
 void announce(const char* line) {
@@ -180,15 +198,28 @@ void cmdJumpsFill(std::istringstream& iss) {
   long count = 0;
   iss >> count;
   long appended = 0;
+  const char* stopped_because = "";
+  long refused_at = -1;
   for (long i = 0; i < count; ++i) {
     const float height = 0.5f + 0.001f * (float)(i % 500);
-    jh_store::jumps_append((uint32_t)i, (float)i * 0.01f, 0.30f, 0.28f, height);
+    const jh_store::AppendResult ar = jh_store::jumps_append(
+        (uint32_t)i, (float)i * 0.01f, 0.30f, 0.28f, height);
+    // `++appended` used to run unconditionally here — the harness had the
+    // very defect F-10 describes in main.cpp, so a fill that the store
+    // refused still reported the full count and no test could see it.
+    if (ar != jh_store::AppendResult::OK) {
+      stopped_because = appendResultName(ar);
+      refused_at = i;
+      break;
+    }
     ++appended;
   }
   uint32_t c = 0;
   float best = 0.0f;
   jh_store::jumps_scan(c, best);
-  std::printf("JUMPS_FILL appended=%ld count=%u best_m=%.6f\n", appended, c, (double)best);
+  std::printf("JUMPS_FILL appended=%ld count=%u best_m=%.6f refused_at=%ld status=%s\n",
+              appended, c, (double)best, refused_at,
+              refused_at < 0 ? "OK" : stopped_because);
 }
 
 void cmdTraceFill(std::istringstream& iss) {
@@ -254,8 +285,9 @@ int main() {
       unsigned long n = 0;
       double takeoff = 0, araw = 0, air = 0, height = 0;
       iss >> n >> takeoff >> araw >> air >> height;
-      jh_store::jumps_append((uint32_t)n, (float)takeoff, (float)araw, (float)air, (float)height);
-      std::printf("JUMPS_APPEND done=1\n");
+      const jh_store::AppendResult ar = jh_store::jumps_append(
+          (uint32_t)n, (float)takeoff, (float)araw, (float)air, (float)height);
+      std::printf("JUMPS_APPEND status=%s\n", appendResultName(ar));
     } else if (cmd == "JUMPS_SCAN") {
       uint32_t count = 0;
       float best = 0.0f;

@@ -805,12 +805,13 @@ uint32_t free_bytes() {
 }
 
 // --------------------------------------------------------------- jumps.csv
-void jumps_append(uint32_t n, float takeoff_s, float airtime_raw_s,
-                  float airtime_s, float height_m,
-                  uint16_t med_a_mg, uint16_t med_w_dps,
-                  uint16_t med_acorr_mg, uint16_t n_air) {
-  if (!s_fs_ok) return;
-  if (s_jumps_append_off + JUMP_RECORD_BYTES > JUMPS_REGION_BYTES) return;  // region full
+AppendResult jumps_append(uint32_t n, float takeoff_s, float airtime_raw_s,
+                          float airtime_s, float height_m,
+                          uint16_t med_a_mg, uint16_t med_w_dps,
+                          uint16_t med_acorr_mg, uint16_t n_air) {
+  if (!s_fs_ok) return AppendResult::FS_DOWN;
+  if (s_jumps_append_off + JUMP_RECORD_BYTES > JUMPS_REGION_BYTES)
+    return AppendResult::REGION_FULL;
 
   flashWake();
   JumpRecord rec;
@@ -854,12 +855,13 @@ void jumps_append(uint32_t n, float takeoff_s, float airtime_raw_s,
     // pair already agrees with no reboot required.
     s_jumps_append_off =
         skipPastTornWrite(s_jumps_append_off, JUMP_RECORD_BYTES, JUMPS_REGION_BYTES);
-    return;
+    return AppendResult::WRITE_FAILED;
   }
 
   s_jumps_append_off += JUMP_RECORD_BYTES;
   s_jumps_count++;
   if (height_m > s_jumps_best_m) s_jumps_best_m = height_m;
+  return AppendResult::OK;
 }
 
 void jumps_scan(uint32_t& count, float& best_m) {

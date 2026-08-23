@@ -79,10 +79,20 @@ void init();
 float load(Key k, float def, bool* from_store = nullptr);
 
 // Persist one calibration value, mirroring `set <key> <value>`.
-void save(Key k, float value);
+// Returns true only if the value is durably stored.
+//
+// This was `void` with a "fire-and-forget ... no failure path to report"
+// contract until F-10's sibling sweep (audit 2026-08-22). That was defensible
+// while the only keys were calibration numbers a human had just typed and
+// could retype. It stopped being defensible when the guard bits moved in:
+// ProbeGuard, StoreGuard and TraceGuard are SAFETY flags whose whole job is
+// to survive a reset, and a silent failure to store one re-arms exactly the
+// crash or corruption the guard exists to prevent. writeRecord() had three
+// swallowed failure paths (open, short write, rename).
+bool save(Key k, float value);
 
 // Revert one value to its compiled default: removes it from persisted
 // storage, so the next load() falls back to the default again.
-void clear(Key k);
+bool clear(Key k);
 
 }  // namespace jh_persist

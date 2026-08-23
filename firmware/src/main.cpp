@@ -357,12 +357,45 @@ static uint16_t medianOf(const uint16_t* src, uint16_t n) {
   return tmp[n / 2];
 }
 
-static void logJump(const jump::JumpEvent& ev, uint16_t med_a_mg,
+// One line per storage outage, not one per jump: a rider mid-session with a
+// full region would otherwise get the same sentence after every single jump,
+// which is how a real warning becomes noise the eye skips. Cleared by
+// scanStoredJumps(), so a `mount`/`format`/`clear` re-arms it.
+static bool store_refusal_reported = false;
+
+// Returns true only if the record actually reached flash (F-10). The caller
+// counts on that: stored_jumps used to increment whether or not the store
+// kept anything.
+static bool logJump(const jump::JumpEvent& ev, uint16_t med_a_mg,
                     uint16_t med_w_dps, uint16_t med_acorr_mg, uint16_t n_air) {
-  if (!fs_ok) return;
-  jh_store::jumps_append(stored_jumps, ev.takeoff_time_s, ev.airtime_raw_s,
-                          ev.airtime_s, ev.height_m,
-                          med_a_mg, med_w_dps, med_acorr_mg, n_air);
+  if (!fs_ok) return false;
+  // stored_jumps + 1 because the increment now happens only on success, and
+  // the record's `n` field should still be its 1-based index in the file.
+  const jh_store::AppendResult r =
+      jh_store::jumps_append(stored_jumps + 1, ev.takeoff_time_s,
+                             ev.airtime_raw_s, ev.airtime_s, ev.height_m,
+                             med_a_mg, med_w_dps, med_acorr_mg, n_air);
+  if (r == jh_store::AppendResult::OK) return true;
+  if (!store_refusal_reported) {
+    store_refusal_reported = true;
+    switch (r) {
+      case jh_store::AppendResult::REGION_FULL:
+        emitLine("# jump NOT saved: storage region full. The ride still counts "
+                 "on your watch; `dump` then `clear` to make room.");
+        break;
+      case jh_store::AppendResult::WRITE_FAILED:
+        emitLine("# jump NOT saved: flash write failed. Watch totals are "
+                 "unaffected; `dump` what is there before `format`.");
+        break;
+      case jh_store::AppendResult::FS_DOWN:
+        emitLine("# jump NOT saved: storage down. `mount` retries, `format` "
+                 "rebuilds (DESTROYS data).");
+        break;
+      case jh_store::AppendResult::OK:
+        break;  // unreachable; kept so a new enum value fails the build here
+    }
+  }
+  return false;
 }
 
 static void printFileFramed(jh_store::StoredFile which, const char* name) {
@@ -402,6 +435,10 @@ static void printFileFramed(jh_store::StoredFile which, const char* name) {
 static void scanStoredJumps() {
   stored_jumps = 0;
   stored_best  = 0.0f;
+  // Re-arm the storage-refusal warning: every caller of this function has
+  // just mounted, formatted or cleared, so the next refusal is NEW news and
+  // the rider should hear it (F-10).
+  store_refusal_reported = false;
   if (!fs_ok) return;
   jh_store::jumps_scan(stored_jumps, stored_best);
 }
@@ -1495,7 +1532,11 @@ void loop() {
     if (jh_store::trace_wedged()) {
       // Persist BEFORE reporting: if the next thing to happen is the reset
       // that a sick flash chip tends to cause, the flag must already be down.
-      jh_persist::save(jh_persist::Key::TraceGuard, 1.0f);
+      // And check it — an unstored guard bit is a guard that is not there,
+      // and the rider should know the protection did not take (F-10 sweep).
+      if (!jh_persist::save(jh_persist::Key::TraceGuard, 1.0f))
+        emitLine("# WARNING: could not persist the trace-wedge flag — a reboot "
+                 "will re-enable raw recording into a bad region. Run `format`.");
       emitLine("ERR trace_clear — erase failed; raw trace recording is OFF "
                "until a full `format`. Jumps still record.");
     }
@@ -1604,9 +1645,9 @@ void loop() {
   }
   if (jumped) {
     session_jumps++;
-    stored_jumps++;
     if (ev.height_m > session_best) session_best = ev.height_m;
-    if (ev.height_m > stored_best)  stored_best  = ev.height_m;
+    // stored_jumps/stored_best move only if the store actually kept it —
+    // updated after logJump() below (F-10).
     emitf("JUMP n=%lu airtime_raw_s=%.3f airtime_s=%.3f height_m=%.3f height_ft=%.1f best_m=%.3f\n",
           (unsigned long)session_jumps, ev.airtime_raw_s, ev.airtime_s,
           ev.height_m, ev.height_m * 3.28084f, session_best);
@@ -1621,7 +1662,10 @@ void loop() {
     const float    corr_g = (w_rad * w_rad * r_m) / 9.80665f;   // omega^2*r
     float          acorr  = med_a / 1000.0f - corr_g;
     if (acorr < 0.0f) acorr = 0.0f;
-    logJump(ev, med_a, med_w, (uint16_t)(acorr * 1000.0f + 0.5f), s_air_n);
+    if (logJump(ev, med_a, med_w, (uint16_t)(acorr * 1000.0f + 0.5f), s_air_n)) {
+      stored_jumps++;
+      if (ev.height_m > stored_best) stored_best = ev.height_m;
+    }
     emitf("# flight n=%lu med_a=%.3fg med_w=%udps med_acorr=%.3fg n_air=%u\n",
           (unsigned long)session_jumps, med_a / 1000.0, (unsigned)med_w,
           (double)acorr, (unsigned)s_air_n);
