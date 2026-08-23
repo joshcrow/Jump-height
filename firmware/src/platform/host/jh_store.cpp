@@ -183,6 +183,9 @@ void close_read() {
   }
 }
 
+bool trace_wedged() { return false; }  // host store has no sector erase to fail
+void set_trace_wedged(bool) {}
+
 void trace_clear() {
   // Host store is CSV files; truncating trace.csv is the equivalent, and
   // jumps.csv is deliberately left alone.

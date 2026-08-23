@@ -217,6 +217,7 @@ float load(Key k, float def, bool* from_store) {
       case Key::VbatScale:      has = rec.has_vbat;   val = rec.vbat;   break;
       case Key::ProbeGuard:     has = 1;  val = (rec.guard & 0x01) ? 1.0f : 0.0f; break;
       case Key::StoreGuard:     has = 1;  val = (rec.guard & 0x02) ? 1.0f : 0.0f; break;
+      case Key::TraceGuard:     has = 1;  val = (rec.guard & 0x04) ? 1.0f : 0.0f; break;
     }
   }
   if (from_store) *from_store = has;
@@ -238,6 +239,8 @@ void save(Key k, float value) {
       rec.guard = (value > 0.5f) ? (rec.guard | 0x01) : (rec.guard & ~0x01); break;
     case Key::StoreGuard:
       rec.guard = (value > 0.5f) ? (rec.guard | 0x02) : (rec.guard & ~0x02); break;
+    case Key::TraceGuard:
+      rec.guard = (value > 0.5f) ? (rec.guard | 0x04) : (rec.guard & ~0x04); break;
   }
   writeRecord(rec);
 }
@@ -251,6 +254,7 @@ void clear(Key k) {
     case Key::VbatScale:      rec.has_vbat   = 0; break;
     case Key::ProbeGuard:     rec.guard &= ~0x01; break;
     case Key::StoreGuard:     rec.guard &= ~0x02; break;
+    case Key::TraceGuard:     rec.guard &= ~0x04; break;
   }
   writeRecord(rec);
 }

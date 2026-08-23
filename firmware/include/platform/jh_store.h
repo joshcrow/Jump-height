@@ -117,4 +117,18 @@ void clear();
 // and docs/garmin-only.md §3. No-op when storage is not mounted.
 void trace_clear();
 
+// F-07 (audit 2026-08-22): true when a trace_clear() erase FAILED and the
+// region's layout became unknowable by scanning. trace_append() refuses while
+// this is set, because a stale island may sit above the derived append point
+// and NOR programming would AND-merge into it and report success. Query it
+// rather than assuming trace_clear() worked — it used to report ok
+// unconditionally, which is how the corruption stayed invisible.
+bool trace_wedged();
+
+// Restore the wedged flag from persistent storage at boot, or clear it after
+// an operation that re-erased the region. jh_store does NOT reach into
+// jh_persist itself — main.cpp owns that bracket, exactly as it already does
+// for Key::StoreGuard around mount.
+void set_trace_wedged(bool wedged);
+
 }  // namespace jh_store

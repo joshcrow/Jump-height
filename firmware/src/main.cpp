@@ -664,6 +664,10 @@ static void handleCommand(const String& cmd) {
     emitLine("OK dump");
   } else if (cmd == "clear") {
     jh_store::clear();
+    if (jh_store::ok()) {   // a fully-succeeded clear re-erased the trace region
+      jh_store::set_trace_wedged(false);
+      jh_persist::save(jh_persist::Key::TraceGuard, 0.0f);
+    }
     if (fs_ok && !jh_store::ok()) {   // same mirror-refresh as trace_clear
       fs_ok = false;
       emitLine("# storage DOWN after clear — not recording. `mount` retries, `format` rebuilds.");
@@ -1058,6 +1062,11 @@ static void handleCommand(const String& cmd) {
     jh_persist::save(jh_persist::Key::StoreGuard, 0.0f);
     if (fmt_ok) {
       fs_ok = true;
+      // The whole chip was just erased, so the trace region's geometry is
+      // known-good again. This is the recovery the wedge message promises;
+      // without it that message would be a dead end.
+      jh_store::set_trace_wedged(false);
+      jh_persist::save(jh_persist::Key::TraceGuard, 0.0f);
       scanStoredJumps();
       emitLine("OK format");
     } else {
@@ -1212,6 +1221,17 @@ void setup() {
     jh_persist::save(jh_persist::Key::StoreGuard, 1.0f);
     fs_ok = jh_store::init(emitLine);
     jh_persist::save(jh_persist::Key::StoreGuard, 0.0f);
+  }
+
+  // F-07: re-arm the trace wedge across the reboot. jh_store's flag is RAM,
+  // and the mount above just re-derived an append point by scanning — the
+  // same scan that cannot see a stale island. Without this, one watchdog
+  // reset (which a failing flash chip makes likely, not hypothetical) would
+  // silently re-enable the exact append the wedge exists to prevent.
+  if (jh_persist::load(jh_persist::Key::TraceGuard, 0.0f) > 0.5f) {
+    jh_store::set_trace_wedged(true);
+    emitLine("# trace: WEDGED from a previous failed erase — raw sample "
+             "recording is OFF until `format`. Jumps still record.");
   }
 
   // Bring BLE up before the self-test so the `ble` row reflects the real result.
@@ -1470,6 +1490,15 @@ void loop() {
     emitLine("# trace region was FULL and a new session is starting —");
     emitLine("# clearing the trace to make room. Stored jumps are untouched.");
     jh_store::trace_clear();
+    // F-07: a failed erase leaves the region unappendable. Say so — silence
+    // here is how a puck records nothing while looking healthy.
+    if (jh_store::trace_wedged()) {
+      // Persist BEFORE reporting: if the next thing to happen is the reset
+      // that a sick flash chip tends to cause, the flag must already be down.
+      jh_persist::save(jh_persist::Key::TraceGuard, 1.0f);
+      emitLine("ERR trace_clear — erase failed; raw trace recording is OFF "
+               "until a full `format`. Jumps still record.");
+    }
     // Re-read the store's own verdict. main's fs_ok is a MIRROR, and a mirror
     // that never refreshes is how "records nothing, reports healthy" happens:
     // every writer gates on this copy, and `stats` prints fs=down from it.

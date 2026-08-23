@@ -64,6 +64,7 @@ from __future__ import annotations
 
 import dataclasses
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -1302,3 +1303,63 @@ class TestStoreHost(unittest.TestCase):
                          backing=backing)
         rows2 = [ln for ln in r2.read_alls[0].splitlines() if ln and ln != "t,mag"]
         self.assertEqual(rows2, rows)
+
+
+class TraceClearEraseFailure(unittest.TestCase):
+    """F-07: a failed erase inside trace_clear() must never leave the region
+    appendable.
+
+    REPRODUCED BEFORE THE FIX, in this harness: with FAIL_NEXT_ERASE armed,
+    trace_clear() reported ok=1, TRACE_BYTES dropped to 0, and an append
+    succeeded — into a region still holding 280 KB of old samples. NOR
+    programming only clears bits, so that append AND-merges into stale blocks
+    and still returns success: silent corruption.
+
+    The cause was the erase loop accumulating `all_erased &= ...` without
+    breaking. Descending order makes a POWER CUT safe (everything above the
+    cut erased, everything below intact, boundary findable). A FAILED SECTOR
+    is different: continuing past it erases below it too, leaving a stale
+    ISLAND with erased space on both sides — and findTraceAppendPoint() scans
+    upward and stops at the first erased byte, so it sets an append point
+    BELOW the island and cannot see it.
+    """
+
+    def test_failed_erase_refuses_further_trace_appends(self):
+        tmp = Path(tempfile.mkdtemp())
+        binary = _build_harness(tmp)
+        r = run_harness(binary, [
+            "INIT",
+            "TRACE_FILL 400 50 100.0 1.000",
+            "TRACE_BYTES",
+            "FAIL_NEXT_ERASE",
+            "TRACE_CLEAR",
+            "TRACE_BYTES",
+            "TRACE_APPEND 900.000,2.500",
+            "TRACE_BYTES",
+            "JUMPS_APPEND 1 1.000 0.300 0.280 0.550",
+            "JUMPS_SCAN",
+        ], backing=tmp / "flash.bin")
+        self.assertEqual(r.returncode, 0,
+                         "an erase failure must not kill the process")
+        out = r.raw_stdout
+
+        # The clear must NOT claim success.
+        self.assertIn("TRACE_CLEAR ok=0 wedged=1", out,
+                      "a failed erase must be reported, not hidden behind ok=1")
+
+        # Byte counts around the failed clear and the refused append.
+        counts = [int(m) for m in re.findall(r"TRACE_BYTES n=(\d+)", out)]
+        self.assertGreaterEqual(len(counts), 3)
+        before, after_clear, after_append = counts[0], counts[1], counts[2]
+        self.assertGreater(before, 100000, "fixture should store real data")
+        self.assertGreater(after_clear, 0,
+                           "the region still holds old data — reporting 0 would "
+                           "be the pre-fix lie that made appending look safe")
+        self.assertEqual(after_append, after_clear,
+                         "append must be REFUSED after a failed erase; any "
+                         "growth here is a write into stale blocks")
+
+        # Scoped: the jumps region is separate and must stay usable, because
+        # losing the rider's results over a raw-sample problem is the wrong trade.
+        self.assertIn("JUMPS_SCAN count=1", out,
+                      "jumps must still record after a trace-only erase failure")

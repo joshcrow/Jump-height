@@ -290,7 +290,9 @@ int main() {
       std::printf("CLEAR ok=1\n");
     } else if (cmd == "TRACE_CLEAR") {
       jh_store::trace_clear();
-      std::printf("TRACE_CLEAR ok=1\n");
+      std::printf("TRACE_CLEAR ok=%d wedged=%d\n",
+            jh_store::trace_wedged() ? 0 : 1,
+            jh_store::trace_wedged() ? 1 : 0);
     } else if (cmd == "FAULT_AFTER") {
       unsigned long n = 0;
       iss >> n;

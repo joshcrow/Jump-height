@@ -183,6 +183,13 @@ float    s_jumps_best_m     = 0.0f;
 
 uint32_t s_trace_append_off  = 0;  // bytes, relative to trace region start
 uint32_t s_trace_csv_bytes   = 0;  // see trace_bytes() contract, top comment
+// F-07 (audit 2026-08-22): set when trace_clear() hits an erase failure. The
+// region's layout is then UNKNOWABLE by scanning — a stale island may sit
+// above wherever findTraceAppendPoint() stops — so appends must refuse rather
+// than AND-merge into old blocks and silently corrupt. Scoped to the trace:
+// the jumps region is separate and untouched, and taking the rider's actual
+// results down over a raw-sample problem would be the wrong trade.
+bool     s_trace_wedged      = false;
 bool     s_trace_csv_header_counted = false;
 bool     s_trace_full        = false;
 
@@ -1000,6 +1007,8 @@ bool feedSample(const char* line, size_t len) {
 
 bool trace_append(const char* data, size_t len) {
   if (!s_fs_ok || len == 0) return false;
+  if (s_trace_wedged) return false;  // F-07: layout unknowable after a failed
+                                     // erase — never append into it
   if (s_trace_full) return false;  // main.cpp already gates on trace_is_full()
                                    // before calling us; this is belt+suspenders.
 
@@ -1096,6 +1105,9 @@ void close_read() {
 //
 // The superblock is rewritten LAST and s_fs_ok gates on it, exactly as
 // clear() does — a half-finished erase must never look like success.
+bool trace_wedged() { return s_trace_wedged; }
+void set_trace_wedged(bool w) { s_trace_wedged = w; }
+
 void trace_clear() {
   if (!s_fs_ok) return;
   flashWake();
@@ -1139,9 +1151,27 @@ void trace_clear() {
   //
   // Same sectors, same time, same power risk — one order self-heals and the
   // other corrupts.
+  // F-07 (audit 2026-08-22): STOP on the first failure. This loop used to
+  // accumulate `all_erased &= ...` and keep going, which is the one thing it
+  // must not do.
+  //
+  // Descending order makes a POWER CUT safe: everything above the cut is
+  // erased, everything below is intact, and the boot scan finds the boundary.
+  // A FAILED SECTOR is a different animal. Continuing past it erases the
+  // sectors below it too, leaving a stale ISLAND with erased space on both
+  // sides — and findTraceAppendPoint() scans upward from offset 0, stops at
+  // the first erased byte, and sets an append point BELOW the island. It
+  // structurally cannot see what is above it. Appending then walks into
+  // stale blocks, and NOR programming only clears bits, so the write
+  // AND-merges and reports success. Silent corruption, exactly the class the
+  // 40-line comment below this function exists to prevent.
+  //
+  // Reproduced in the repo's own harness before fixing (FAIL_NEXT_ERASE):
+  // clear reported ok=1, TRACE_BYTES went to 0, and an append succeeded into
+  // a region still holding 280 KB of old samples.
   bool all_erased = true;
   for (uint32_t i = trace_sectors_used; i > 0; --i) {
-    all_erased &= erase_fed(first_sector + i - 1);
+    if (!erase_fed(first_sector + i - 1)) { all_erased = false; break; }
   }
 
   // The superblock is deliberately NOT touched. An earlier comment here
@@ -1167,11 +1197,19 @@ void trace_clear() {
     s_trace_csv_header_counted = false;
     s_trace_full       = false;
   } else {
-    // A sector refused to erase. Do NOT assume offset 0 — that is the same
-    // write-on-top-of-old-data hazard as ascending order. Re-derive the truth
-    // from the chip: the scan finds the real boundary and storage stays up and
-    // honest, which with descending order is always a consistent state.
-    findTraceAppendPoint();
+    // A sector refused to erase, so the region's layout is now UNKNOWABLE by
+    // scanning: there may be a stale island above wherever the scan stops.
+    // Re-deriving an append point here (what this code used to do) produced
+    // exactly the corruption described above — the scan cannot see past the
+    // first erased byte.
+    //
+    // Refuse further trace appends instead. Scoped to the trace: jumps are a
+    // separate region, untouched by this operation, and taking them down too
+    // would lose the rider's actual results over a raw-sample problem
+    // (clear() takes the whole store down because it erases the whole store;
+    // this one must not).
+    s_trace_wedged = true;
+    findTraceAppendPoint();   // best-effort state for reporting only
   }
   // s_fs_ok is deliberately NOT touched: nothing above can leave the chip in
   // an uncertain state, so there is no reason to take storage down (and every
