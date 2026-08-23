@@ -1339,7 +1339,32 @@ void loop() {
     // 2.5 mm at a 1 s flight — negligible against 0.8-1.6 m jumps.
     // Falsifier on record: if post-change sample deltas run >2 ms off
     // cadence, or desk-test airtimes shift systematically, revert.
-    if (next_us - now_us > 1200) delay(1);
+    // F-06 (audit 2026-08-22): the guard was 1200 us, which meant that below
+    // 1200 us remaining we RETURNED WITHOUT DELAYING — loop() spun at 64 MHz
+    // for the "final tight approach". Measured ~24% of wall-clock.
+    //
+    // That approach bought nothing. This core's micros() is TICK-DERIVED at
+    // 976.5625 us steps (DWT cycle counting is off), so a spin between ticks
+    // cannot observe time passing at all: it re-reads the same value until
+    // the tick rolls, then exits. It burned current to wait for the very
+    // event delay(1) waits for, only without sleeping.
+    //
+    // WHY NOT THE OTHER FIX. The audit's preferred option was to enable the
+    // DWT cycle counter so micros() becomes precise and the band could shrink
+    // honestly. This repo already prohibits that, for a reason recorded in
+    // twim_bounded.h:57 — enabling DWT shrinks micros()'s wrap period to
+    // ~67 s and BREAKS jh_clock's wrap arithmetic, which every timestamp in
+    // the system depends on. That fix would trade a power bug for a
+    // correctness bug across the whole measurement. DWT stays off.
+    //
+    // So: one tick (977 us) is the smallest honest guard on this clock.
+    // Below it there is nothing to approach — the next tick IS the resolution.
+    // Jitter cost is unchanged from the analysis above (at most ~1 ms on an
+    // individual sample; long-run rate stays exact because next_us advances
+    // by INTERVAL regardless), and the falsifier on record is unchanged:
+    // if post-change sample deltas run >2 ms off cadence, or desk-test
+    // airtimes shift systematically, REVERT rather than rationalise.
+    if (next_us - now_us > 977) delay(1);
     return;
   }
   next_us += SAMPLE_INTERVAL_US;
