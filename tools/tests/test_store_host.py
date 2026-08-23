@@ -1428,3 +1428,62 @@ class JumpsAppendReportsStatus(unittest.TestCase):
         self.assertEqual(int(m2.group(2)), 10, "scan must agree with the fill")
         self.assertEqual(int(m2.group(3)), -1)
         self.assertEqual(m2.group(4), "OK")
+
+
+class JumpsRegionFull(unittest.TestCase):
+    """F-19(b): JUMPS_FILL exists in the harness precisely to exercise the
+    jumps-region-full drop path, and no test ever invoked it.
+
+    The region is 64 KB of 32-byte records = exactly 2048 jumps. That is not a
+    theoretical limit: it is roughly two seasons of riding at 10-15 jumps a
+    session, on a puck the owner intends to glue to a board and forget, so the
+    behaviour at the boundary is a real product question and not a curiosity.
+
+    What must hold at the boundary: the store refuses cleanly, says WHY, keeps
+    every record it already has, and does not corrupt the count. Losing the
+    2049th jump is acceptable; losing the first 2048 is not.
+    """
+
+    REGION_RECORDS = 2048   # JUMPS_REGION_BYTES 65536 / JUMP_RECORD_BYTES 32
+
+    def test_region_fills_then_refuses_without_losing_stored_jumps(self):
+        tmp = Path(tempfile.mkdtemp())
+        binary = _build_harness(tmp)
+        r = run_harness(binary, [
+            "INIT",
+            f"JUMPS_FILL {self.REGION_RECORDS + 52}",   # deliberately overrun
+            "JUMPS_SCAN",
+            "JUMPS_APPEND 9999 1.000 0.300 0.280 9.990",  # one more, by hand
+            "JUMPS_SCAN",
+            "FREE_BYTES",
+        ], backing=tmp / "flash.bin")
+        self.assertEqual(r.returncode, 0, "a full region must not crash the store")
+        out = r.raw_stdout
+
+        m = re.search(r"JUMPS_FILL appended=(\d+) count=(\d+) best_m=([\d.]+) "
+                      r"refused_at=(-?\d+) status=(\w+)", out)
+        self.assertIsNotNone(m, out)
+        appended, count, refused_at, status = (int(m.group(1)), int(m.group(2)),
+                                               int(m.group(4)), m.group(5))
+
+        self.assertEqual(appended, self.REGION_RECORDS,
+                         "the region should hold exactly 2048 records")
+        self.assertEqual(refused_at, self.REGION_RECORDS,
+                         "the refusal must happen at the boundary, not before it")
+        self.assertEqual(status, "REGION_FULL",
+                         "a full region must be reported as FULL, not as a "
+                         "generic write failure -- the two need different advice "
+                         "(`clear` vs `format`)")
+        self.assertEqual(count, self.REGION_RECORDS,
+                         "scan must agree with what was actually stored")
+
+        # A hand-driven append past the boundary gets the same answer, and the
+        # 2048 stored jumps are still there afterwards. Before F-10 this path
+        # was a bare `return` that no caller could distinguish from success.
+        self.assertIn("JUMPS_APPEND status=REGION_FULL", out)
+        scans = re.findall(r"JUMPS_SCAN count=(\d+) best_m=([\d.]+)", out)
+        self.assertEqual(len(scans), 2)
+        self.assertEqual(scans[0], scans[1],
+                         "a refused append must not change the stored count or "
+                         "best -- corrupting history to reject a new record "
+                         "would be far worse than dropping it")

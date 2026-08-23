@@ -401,6 +401,30 @@ class TestKnownFinding_ExtremeChopPlusHandlingJitter(unittest.TestCase):
             "positive across 40 seeds (it did during calibration -- if this now "
             "reads 0, the finding may no longer reproduce; re-verify before "
             "treating that as good news, and update this comment either way)")
+
+        # F-19 (audit 2026-08-22): the lower bound alone made this test green at
+        # 40/40 false positives -- a detector that fired on every seed would have
+        # read as "the known finding still reproduces". A characterization test
+        # needs a ceiling or it only proves the corner is not PERFECT.
+        #
+        # Baseline: 4/40 (10%), measured 2026-08-23 on seeds 22, 23, 29, 31 --
+        # the same 4/40 the class comment has recorded since calibration, so the
+        # rate has been stable across every detector change since.
+        #
+        # The bound is 8, double the baseline, not 4. This is a deterministic
+        # seeded test, so an exact-match assert would be tighter -- but it would
+        # also fail on any legitimate params.json tuning that moves one seed,
+        # and a gate that cries wolf on ordinary tuning gets loosened rather
+        # than investigated. 8 tolerates drift while still catching a real
+        # regression in chop robustness.
+        self.assertLessEqual(
+            n_false_positive_seeds, 8,
+            f"chop false-positive rate rose to {n_false_positive_seeds}/40; the "
+            f"measured baseline is 4/40 and this test allows up to 8/40. This is "
+            f"a REGRESSION in detector robustness to steep chop, not a flaky "
+            f"test -- the seeds are fixed. Find what changed before touching "
+            f"this number, and if the new rate is genuinely acceptable, say why "
+            f"in DECISIONS.md and move the baseline, not just the ceiling.")
         print(f"\n  [KNOWN FINDING] extreme chop(H={self.EXTREME_H},T={self.EXTREME_T}) "
               f"+ handling_chatter(amp={self.CHATTER_AMP}): {n_false_positive_seeds}/"
               f"{self.N_SEEDS} seeds produced a false-positive jump. Detail: {detail}")
