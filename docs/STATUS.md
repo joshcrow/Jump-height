@@ -736,6 +736,32 @@ do not.**
 
 ## 2026-08-22
 
+### OG IS ON THE R1 BUILD (src=71cab7c8) — one replug, one flash, everything survived
+- Owner unplugged the spare (ending its soak at ~11 h of the planned 48) and
+  asked to flash the OG directly. Trade stated once and accepted: the R1 build
+  goes on the product board with **11 h of silicon soak rather than 48**.
+  Judged acceptable because (a) its components are separately soaked — the
+  seven storage/BLE fixes ran 42 cycles and a desk test, the timebase rework
+  is host-verified and mutation-tested, the provenance row was verified on
+  silicon; (b) **the water day still has no date**, so bench time remains;
+  (c) the drop-calibration ritual the OG now needs has its own lead time, so
+  getting the build on early is worth more than the extra soak hours.
+- First attempt failed on the flash budget (the port's session was spent by
+  the earlier sync) — refused honestly, nothing half-written. After a replug:
+  **`Device programmed`, selftest 6/6** (accel 1.039 g, noise 0.0015 g),
+  `src=71cab7c8`. That is **6/6 on the one-flash-per-replug rule**.
+- **Everything survived the flash:** `stored_jumps=18`, `best 1.536 m`,
+  `trace_bytes=1,480,095` — byte-identical to the pre-flash sync.
+- **Per-key provenance is now live on the product board:**
+  `off_src=defaults scale_src=defaults vbat_src=defaults`. All three keys are
+  honestly reported as lost, and the CLI warning names all three. It will read
+  `device` for each once the owner re-runs the drop ritual — which is now the
+  last open R1 item on the puck side.
+- **R1 status:** the water-day firmware is on the water-day board. Remaining
+  R1 gates are the drop re-calibration (owner), the store approval (the only
+  path to the rider's watch), and the Instinct-night items that the sideload
+  blocker deferred.
+
 ### OG post-demo: 18 jumps synced, new best 1.54 m, and the provenance warning fired on the real product board
 - Owner ran demo tosses with his Epix connected, to show the rider. Result on
   the puck: **18 stored jumps, best 1.536 m (5.0 ft)** — higher than anything
