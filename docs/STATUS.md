@@ -18,6 +18,8 @@ that is expensive to re-derive and cheap to state once.
 | Why did my BLE reading change between calls? | Two boards advertise. **Unpinned tools answer from either.** Always `--name JumpHeight-XXXX`. | bench-playbook.md §1a rule 2 |
 | Is the cell healthy / what is its real capacity? | LP502030, 250 mAh, 3.0 V cutoff — datasheet-anchored, not inferred. | [battery-measurement.md](battery-measurement.md) |
 | Can I trust a "dead board" verdict? | **No.** Three have been wrong. Establish the board's *configuration* first. | [xiao-hardware-truth.md](xiao-hardware-truth.md) |
+| What firmware is on the OG right now? | **`src=e83f6395`** (flashed 2026-08-23, self-test PASS, `dcdc=1`). Confirm with `stats` before trusting it — `src=` is the only authority, never a commit date. | 2026-08-23 entry below |
+| Are the OG's heights trustworthy today? | **No.** `CAL source=defaults` — the drop calibration is gone. **Re-run the drop ritual first.** | 2026-08-23 entry below |
 
 **The maintenance rule that would have prevented today:** when a change adds a
 new way to *identify* a board (a unique advertised name, a serial format, a
@@ -71,10 +73,33 @@ per-ticket evidence: [audit-2026-08-22.md](audit-2026-08-22.md).
 **Gates now:** simtest passes with TWO parity checks (accel and gyro); watch
 60/60 in the simulator on `instinct3solar45mm`.
 
-**Firmware is UNFLASHED.** The OG still runs Phase 1–2's `src=9b35f734`; this
-tree has all of Phase 3 plus F-18's constant change. There is **no second flash
-batch** — Phase 3 planned one on the assumption that F-08 would change the
-trace block header, and it did not need to.
+**FLASHED AND DESK-VERIFIED ON THE OG — `src=e83f6395`, matching this tree
+exactly.** One replug, one flash, `Device programmed.` confirmed; self-test
+PASS; the 18 stored jumps and 1.55 MB of trace survived the flash. There was
+**no second flash batch** — Phase 3 planned one on the assumption that F-08
+would change the trace block header, and it did not need to, so everything
+through F-18 went in the single Phase 1–2 batch.
+
+Two tickets have silicon evidence, not just host evidence:
+
+- **F-05** — `# dcdc=1` on the stats line. DC/DC is enabled at boot. DCDCEN is
+  volatile, so this must re-assert on every boot; the stats field is what makes
+  a reverted one visible.
+- **F-08** — `# tracecheck fast=1553599 slow=1553599 agree` over 1.55 MB of
+  real stored trace. The arithmetic counter and the snprintf recompute agree to
+  the byte on an M4F with softfloat — the platform where the two could most
+  plausibly have diverged.
+
+**Still unproven on silicon:** F-07's reboot-restore of the trace wedge, which
+needs a genuinely failing flash sector to exercise.
+
+**Pre-existing, NOT caused by this flash:** `CAL source=defaults` — `off`,
+`scale` and `vbat` all fall back to compiled defaults, so the OG's drop
+calibration is gone (recorded before this session; the provenance warning fired
+as designed). **Re-run the drop ritual before trusting heights.**
+
+Per-ticket flash detail: [audit-2026-08-22.md](audit-2026-08-22.md) §"FLASHED
+AND DESK-VERIFIED ON THE OG".
 
 The defects that would have cost the water session, in order of what they
 would have destroyed:
