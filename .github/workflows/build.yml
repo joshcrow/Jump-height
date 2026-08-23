@@ -42,8 +42,30 @@ jobs:
 
       - name: Install test dependencies
         run: |
-          pip install pytest pyserial playwright
+          pip install pytest pyserial playwright platformio
           python -m playwright install --with-deps chromium
+
+      # F-03 (audit 2026-08-22). PlatformIO belongs in THIS job, not only in
+      # the firmware job. tools/tests/test_hostdev.py drives the real firmware
+      # core natively via env:host and SKIPS itself when `pio` is missing — so
+      # without this install an entire seam went unexercised while CI stayed
+      # green. That is F-02's shape one layer up: a gate reporting success for
+      # work it never did.
+      #
+      # Policy (CLAUDE.md rule 3): INFRASTRUCTURE skips are failures —
+      # something we control is missing. HARDWARE skips stay skips, because no
+      # runner has a puck attached.
+
+      - name: Cache PlatformIO (test job)
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-test-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini') }}
+
+      - name: Verify env:host actually compiles (F-03 acceptance)
+        # If this cannot build, the host-seam tests below would silently skip.
+        # Failing here makes that impossible to miss.
+        run: pio run -e host
 
       - name: Run test suite
         run: python -m pytest tools/tests -q
@@ -66,10 +88,20 @@ jobs:
           path: ~/.platformio
           key: pio-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini') }}
 
-      - name: Check generated params header is fresh
-        # config/params.json is the source of truth; a stale committed
-        # params.gen.h would silently ship wrong detector thresholds.
-        run: python3 tools/gen_params.py --check
+      - name: Check generated headers are fresh (params AND build identity)
+        # F-04 (audit 2026-08-22). Both --checks must run HERE, in the job that
+        # actually compiles and publishes the .uf2 — previously only the params
+        # check did, while the build-identity check ran via simtest in the
+        # separate test job. The publisher therefore never proved that the
+        # identity stamp baked into the artifact matched the sources it
+        # compiled, which is exactly the "is the board running THIS tree?"
+        # question the stamp exists to answer.
+        #
+        # config/params.json is the source of truth for thresholds; a stale
+        # params.gen.h would silently ship wrong detector behaviour.
+        run: |
+          python3 tools/gen_params.py --check
+          python3 tools/gen_build.py --check
 
       - name: Build firmware (Sense / nRF52)
         # The only firmware target: the firebeetle32 (ESP32 v1) env this step
