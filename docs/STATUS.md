@@ -2113,4 +2113,57 @@ The worst offenders carry a SUPERSEDED banner pointing here.
 | `docs/hardware.md:77-79` | "Accelerometer range: set ±8 g (or ±16 g). ...±8 g keeps free-fall resolution good while capturing landings." | The Sense ships ±16 g by deliberate decision (DECISIONS #25, lsm6ds3_min.h CTRL1_XL=0x54). README:240 sends readers here for "full BOM, wiring, power budget", and the whole page is ESP32-era |
 | `DECISIONS.md:69-70 (#32, #33)` | #32: the off-path back-feed was "proven 'both directions' on silicon... the very day before the mule's sensor stopped ACKing". #33: "The Puck, a fresh | #37 (:74), five rows later, establishes that no board was ever damaged and drive strength explains every symptom including the intermittency. #32/#33 carry no superseded marker, so read alon |
 | `firmware/src/main.cpp:424 (shipped `help` text)` | "# commands: help / stats / jumps / trace / dump / clear / selftest / revive / i2cdiag / info / off / dfu / uf2 / fakejump / mount / format" | Omits `pincensus`, which exists at main.cpp:512 and which DECISIONS #38, xiao-hardware-truth.md:91 and bench-playbook.md:129 all designate as THE first diagnostic to run before any hardware  |
+## 2026-08-22 (audit work)
+
+### Audit Phases 1–2 landed and flashed: 9 tickets, DC/DC on at boot for the first time
+- Working `docs/audit-2026-08-22.md` (F-01…F-21). **Phase 1** (build/test
+  gates) and **Phase 2** (firmware/power) complete; the OG carries the batch
+  as `src=9b35f734`.
+- **F-01** — the platform builder hard-codes `-Ofast`, which implies
+  `-ffinite-math-only`, which DELETED both `isfinite()` guards from the
+  shipped image. Proven on the project's own ARM toolchain: `-Ofast` compiles
+  the guard to `movs r0,#7; bx lr`; `-O2` emits a real `vabs/vcmp` against
+  0x7f7fffff. The host tests asserting those guards compile without `-Ofast`
+  — they were passing on a different binary than the one that ships. Now
+  `build_unflags = -Ofast`, `build_flags = -O2 -fno-fast-math`, verified
+  present in the shipped `.elf`.
+  - **Ledger divergence worth noting:** the ticket predicted a 42 KB size
+    *drop* from `-Os`. Chose `-O2` for numeric safety instead, which is
+    ~6 KB *larger*. The OTA-size argument does not survive that choice.
+- **F-02** — simtest ran **137 of 191** tests: `unittest discover` cannot see
+  module-level pytest-style files, and those 54 are the only guards on the
+  spin/lever/gyro logic. The local pre-flash gate — the one a human trusts
+  immediately before flashing — was blind to them while CI was not. Now
+  pytest, with **count parity asserted** rather than a hardcoded number.
+- **F-03/F-04** — CI's test job never installed PlatformIO, so every
+  `env:host` test skipped silently; and the job that publishes the `.uf2`
+  never checked the build-identity stamp it was baking in. Both fixed;
+  verified `gen_build.py --check` exits 1 on a mutated stamp.
+- **F-05 — DC/DC IS NOW ON AT BOOT.** The largest measured lever in the repo
+  (1.39× endurance, our own same-board A/B) was reachable only from a console
+  command, and DCDCEN is volatile so any watchdog reset silently reverted it
+  with nothing on the wire to say so. **Acceptance passed on silicon:
+  `dcdc=1` after a cold boot AND after a second independent reset.** The
+  register is read back rather than remembered, and `info` now carries a
+  `dcdc=` adder key — the defect was as much "invisible" as "off".
+- **F-06** — the pacer busy-spun below a 1200 µs guard against a clock whose
+  resolution is 976.6 µs, so the "final tight approach" observed nothing;
+  ~24% of wall-clock. Guard is now one tick. **The audit's preferred fix
+  (enable DWT) was REJECTED** — `twim_bounded.h:57` records that DWT shrinks
+  micros()'s wrap to ~67 s and breaks jh_clock's arithmetic, i.e. it would
+  trade a power bug for a correctness bug across every timestamp.
+- **F-09 — `pincensus` printed "revive ok" over a dead bus.** `revive()`
+  releases the bus and returns true unconditionally without re-beginning it;
+  the `revive` COMMAND works only because it follows with `runSelfTest()`.
+  Applied that chain and made it report the real verdict. **Proven on
+  silicon: after `pincensus`, an independent selftest reads accel 1.042 g.**
+  Sibling: the one-shot sensor warning gated on `== 200` could be
+  pre-consumed by a transient — now `>=`.
+- **F-21** — the retracted 11.6 mA figure lived on in a code comment, and
+  this audit's own first pass repeated it *from there*. Reworded to the
+  ≤9.7 mA conservation bound; sweep found no other live occurrences.
+- **Still owed for Phase 2:** F-06's falsifier needs desk tosses (sample
+  deltas within 2 ms of cadence, no systematic airtime shift) and F-05 wants
+  a discharge night to confirm the endurance move. Both need the owner.
+
 
