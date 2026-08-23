@@ -75,7 +75,15 @@ jobs:
       - name: Verify env:host actually compiles (F-03 acceptance)
         # If this cannot build, the host-seam tests below would silently skip.
         # Failing here makes that impossible to miss.
-        run: pio run -e host
+        #
+        # -d firmware, because platformio.ini lives there and this step runs
+        # from the repo root. It said `pio run -e host` from the day F-03
+        # added it and had never once executed: CI ran only on pushes to main,
+        # and this branch had not been merged. The step written to prove a gate
+        # runs was itself a gate that did not run — which is exactly the defect
+        # class F-03 and F-04 exist for. Found the moment the pull_request
+        # trigger was added, on its first PR run.
+        run: pio run -d firmware -e host
 
       - name: Run test suite
         run: python -m pytest tools/tests -q
