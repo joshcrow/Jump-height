@@ -20,5 +20,12 @@
     "trace_max_bytes": 2000000,
     "i2c_sda": 21,
     "i2c_scl": 22
+  },
+  "shared": {
+    "_comment": "Constants that exist in MORE THAN ONE LANGUAGE and must not drift (audit F-18, 2026-08-22). Generated into firmware/include/params.gen.h and garmin/jumpfield/source/Params.gen.mc. Detector thresholds are deliberately NOT here: the watch's MAX_HEIGHT_M/MAX_AIRTIME_S are impossibility bounds for its corruption gate, not the detector's tuned thresholds, and generating one from the other would couple two things that are supposed to differ.",
+    "m_to_ft": 3.28084,
+    "ble_service_uuid": "6e400001-b5a3-f393-e0a9-e50e24dcca9e",
+    "ble_rx_uuid": "6e400002-b5a3-f393-e0a9-e50e24dcca9e",
+    "ble_tx_uuid": "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
   }
 }

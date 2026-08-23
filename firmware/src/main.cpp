@@ -1140,7 +1140,7 @@ static void handleCommand(const String& cmd) {
     if (h_m > session_best) session_best = h_m;
     if (at > session_best_airtime) session_best_airtime = at;
     emitf("JUMP n=%lu airtime_raw_s=%.3f airtime_s=%.3f height_m=%.3f height_ft=%.1f best_m=%.3f\n",
-          (unsigned long)session_jumps, at, at, h_m, h_m * 3.28084f, session_best);
+          (unsigned long)session_jumps, at, at, h_m, h_m * JH_M_TO_FT, session_best);
     emitLine("OK fakejump");
   } else if (cmd == "gyro") {
     // BENCH DIAGNOSTIC, SENSE_FIRST_BOOT item 26 step 1: has the gyro ever
@@ -1666,7 +1666,7 @@ void loop() {
     // updated after logJump() below (F-10).
     emitf("JUMP n=%lu airtime_raw_s=%.3f airtime_s=%.3f height_m=%.3f height_ft=%.1f best_m=%.3f\n",
           (unsigned long)session_jumps, ev.airtime_raw_s, ev.airtime_s,
-          ev.height_m, ev.height_m * 3.28084f, session_best);
+          ev.height_m, ev.height_m * JH_M_TO_FT, session_best);
     // Medians over the flight just ended. The corrected value subtracts the
     // rotation term the detector itself uses, so it is directly comparable to
     // the sim's predicted 0-0.07 g band; the raw one is kept because it is

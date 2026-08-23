@@ -2677,7 +2677,7 @@ def cmd_simtest(args) -> int:
 
     # 2. Generated params header is in sync with config/params.json
     r = _run([sys.executable, "tools/gen_params.py", "--check"])
-    results.append(("params.gen.h in sync with config/params.json", r.returncode == 0,
+    results.append(("generated params in sync with config/params.json", r.returncode == 0,
                     "" if r.returncode == 0 else "run ./tools/jump gen"))
 
     # 2b. Build identity is in sync with the sources it claims to identify.
@@ -2942,8 +2942,12 @@ def cmd_gen(args) -> int:
     import gen_params
     import gen_build
 
-    gen_params.HEADER_PATH.write_text(
-        gen_params.render_header(gen_params.load_config(CONFIG_PATH)))
+    # BOTH outputs (F-18). Writing only the header here while --check verified
+    # two files would make `jump gen` unable to fix what the gate reports.
+    _cfg = gen_params.load_config(CONFIG_PATH)
+    gen_params.HEADER_PATH.write_text(gen_params.render_header(_cfg))
+    gen_params.MONKEYC_PATH.parent.mkdir(parents=True, exist_ok=True)
+    gen_params.MONKEYC_PATH.write_text(gen_params.render_monkeyc(_cfg))
     print(f"wrote {gen_params.HEADER_PATH}")
 
     # Build identity LAST: it hashes the firmware sources, and params.gen.h is

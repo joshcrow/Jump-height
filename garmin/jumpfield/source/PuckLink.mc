@@ -44,9 +44,12 @@ class PuckLink extends Ble.BleDelegate {
     // web/app.js's NUS_SERVICE/NUS_RX/NUS_TX; the Sense sibling,
     // firmware/src/platform/nrf52/jh_link.cpp, implements the same NUS
     // surface via Bluefruit's BLEUart).
-    const NUS_SERVICE = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
-    const NUS_RX = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";   // watch writes commands
-    const NUS_TX = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";   // puck notifies output
+    // Generated from config/params.json (audit F-18) — these three UUIDs were
+    // hand-copied into six files across three languages, and a typo in any one
+    // of them is a link that silently never connects.
+    const NUS_SERVICE = Params.BLE_SERVICE_UUID;
+    const NUS_RX = Params.BLE_RX_UUID;   // watch writes commands
+    const NUS_TX = Params.BLE_TX_UUID;   // puck notifies output
 
     // The one command this field ever sends (spec §13: no calibration/
     // commands from the watch) — a compile-time byte literal sidesteps
