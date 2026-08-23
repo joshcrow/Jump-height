@@ -12,8 +12,21 @@ artifact exists. What follows needs a human logged in.
 
 ## The artifact
 
-**`garmin/jumpfield/bin/JumpField.iq`** — 77,564 bytes, built 2026-08-22,
+**`garmin/jumpfield/bin/JumpField.iq`** — 79,145 bytes, rebuilt **2026-08-23**,
 4 of 4 device variants compiled clean.
+
+> **Rebuilt 2026-08-23, and this matters.** The previous package was built
+> 2026-08-22, BEFORE the audit's two watch fixes landed:
+> **F-11** (the JUMP path could drive session count/best DOWN into the saved
+> FIT — a 12-jump ride archived as "1 jump, best 0.20 m" after a puck brownout)
+> and **F-12** (one dropped BLE callback parked the link permanently, no
+> reconnect, no error). Submitting the older `.iq` would have shipped the app
+> to the rider without either fix.
+>
+> **Rule: rebuild the package immediately before submitting, and after any
+> change under `garmin/jumpfield/source/`.** A store listing is the slowest
+> thing to correct in this project — review takes days, and the rider cannot
+> get the app any other way.
 
 Rebuild it any time with:
 ```bash
