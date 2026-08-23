@@ -2370,10 +2370,15 @@ def cmd_boards(args) -> int:
     # wander versus 3 mV. The physics was right; the sample count was not.
     # A detector that needs enough samples must REFUSE to run with too few,
     # rather than emit a confident wrong answer.
-    if int(getattr(args, "samples", 4)) < 3:
-        print("--samples must be at least 3: with two reads a floating rail "
-              "can look stable and a real cell can look floating (both "
-              "happened on 2026-08-20).")
+    # One variable, read once. This was getattr(args,"samples",4) here and
+    # getattr(args,"samples",3) twice in the loop below — two different
+    # defaults for one setting (F-15).
+    MIN_SAMPLES = 3
+    n_samples = int(getattr(args, "samples", 4))
+    if n_samples < MIN_SAMPLES:
+        print(f"--samples must be at least {MIN_SAMPLES}: with two reads a "
+              f"floating rail can look stable and a real cell can look "
+              f"floating (both happened on 2026-08-20).")
         return 2
     names = _ble_scan_names(timeout=float(getattr(args, "scan_timeout", 12.0)))
     if not names:
@@ -2387,20 +2392,48 @@ def cmd_boards(args) -> int:
     for nm in sorted(names):
         print(f"── {nm}")
         samples, info = [], {}
-        for i in range(int(getattr(args, "samples", 3))):
+        failures = []
+        for i in range(n_samples):
             kv = _ble_stats_pinned(nm)
             if not kv:
-                continue
-            info = kv or info
-            try:
-                samples.append((int(kv["vbat_mv"]), int(kv.get("chg", "0"))))
-            except (KeyError, ValueError):
-                pass
-            if i + 1 < int(getattr(args, "samples", 3)):
+                # F-15: this used to `continue` — no counter, and skipping the
+                # sleep as well, so four attempts could collapse into one fast
+                # burst and a single surviving read still reached the verdict.
+                failures.append(f"read {i + 1}: no reply")
+            else:
+                info = kv or info
+                try:
+                    samples.append((int(kv["vbat_mv"]), int(kv.get("chg", "0"))))
+                except (KeyError, ValueError) as e:
+                    failures.append(f"read {i + 1}: unparseable vbat_mv "
+                                    f"({type(e).__name__})")
+            # Sleep on EVERY path including failures: the whole method depends
+            # on the reads being seconds apart. A retry burst measures the ADC's
+            # noise floor, not the rail's inertia.
+            if i + 1 < n_samples:
                 time.sleep(2.0)
+
+        for f in failures:
+            print(f"   ! {f}")
 
         if not samples:
             print("   no answer (asleep, busy, or connected elsewhere)\n")
+            continue
+
+        # A SKIP IS NOT A PASS. The three-sample minimum is enforced on the
+        # REQUEST above; this enforces it on what actually arrived. Reproduced
+        # 2026-08-20 by stubbing 3 failures of 4 against JumpHeight-45ED, a
+        # board with no battery at all: the single surviving read produced
+        # "battery present and stable (97%) — this board can measure power."
+        # One sample has no spread, and no spread reads as a perfectly steady
+        # cell.
+        if len(samples) < MIN_SAMPLES:
+            print(f"   vbat       {', '.join(str(v) + ' mV' for v, _ in samples)}")
+            print(f"   INCONCLUSIVE — only {len(samples)}/{n_samples} reads "
+                  f"succeeded, and this test needs {MIN_SAMPLES} to tell a real "
+                  f"cell from a floating divider.")
+            print(f"   Not a verdict about the hardware: retry with the board "
+                  f"awake and nothing else connected to it.\n")
             continue
 
         src = info.get("src", "?")

@@ -250,3 +250,116 @@ class OtaDfuPinning(unittest.TestCase):
             self.assertEqual(seen["policy"], "choose")
             self.assertIsNone(seen["addr"],
                               "an address pin must not be applied to AdaDFU")
+
+
+def _load_jump():
+    """tools/jump has no .py extension, so it needs an explicit loader.
+
+    Compiled from the SOURCE TEXT rather than via SourceFileLoader.exec_module,
+    which consults __pycache__. That bit during mutation testing: "MIN_SAMPLES
+    = 3" and "MIN_SAMPLES = 1" are the same number of bytes, so after restoring
+    the file the cached bytecode of the MUTANT was still valid by size, and the
+    restored code kept failing its own test. A stale .pyc makes a mutation run
+    report whatever it likes.
+    """
+    import types
+    path = REPO / "tools" / "jump"
+    src = path.read_text()
+    mod = types.ModuleType("jump_under_test")
+    mod.__file__ = str(path)
+    sys.modules["jump_under_test"] = mod
+    exec(compile(src, str(path), "exec"), mod.__dict__)
+    return mod
+
+
+class BoardsVerdictNeedsRealSamples(unittest.TestCase):
+    """F-15: `jump boards` enforced its three-sample minimum on the REQUEST and
+    not on what actually arrived.
+
+    Failed reads were dropped with a bare `continue` - no counter - so one
+    successful read out of four still reached the verdict, which then ran
+    stability maths on a single sample. Reproduced by stubbing 3 failures of 4
+    against JumpHeight-45ED, a board with no battery at all: "battery present
+    and stable (97%) - this board can measure power."
+
+    One sample has no spread, and no spread reads as a perfectly steady cell.
+    """
+
+    def setUp(self):
+        self.jump = _load_jump()
+
+    class _Args:
+        samples = 4
+        scan_timeout = 1.0
+
+    def _run_boards(self, replies):
+        """Drive cmd_boards with a scripted sequence of stats replies."""
+        import io
+        import contextlib
+        seq = list(replies)
+
+        def fake_stats(name):
+            return seq.pop(0) if seq else {}
+
+        self.sleeps = []
+        buf = io.StringIO()
+        with mock.patch.object(self.jump, "_ble_scan_names",
+                               lambda **k: ["JumpHeight-45ED"]), \
+             mock.patch.object(self.jump, "_ble_stats_pinned", fake_stats), \
+             mock.patch.object(self.jump.time, "sleep", self.sleeps.append), \
+             contextlib.redirect_stdout(buf):
+            self.jump.cmd_boards(self._Args())
+        return buf.getvalue()
+
+    def test_one_good_read_of_four_is_inconclusive_not_a_verdict(self):
+        out = self._run_boards([
+            {"vbat_mv": "4139", "chg": "0", "batt_pct": "97", "src": "abc"},
+            {}, {}, {},
+        ])
+        self.assertIn("INCONCLUSIVE", out, out)
+        self.assertIn("1/4", out, "say how many reads actually landed")
+        # The exact wrong answer this ticket exists to prevent.
+        self.assertNotIn("can measure power", out)
+        self.assertNotIn("stable", out.lower().replace("unstable", ""))
+        # And the failures must be visible, not silently absorbed.
+        self.assertIn("no reply", out, out)
+
+    def test_three_good_reads_still_reach_a_verdict(self):
+        """The guard must not be so broad it refuses legitimate runs - a
+        floating board that answers every time still has to be caught."""
+        out = self._run_boards([
+            {"vbat_mv": "4139", "chg": "0", "batt_pct": "97", "src": "abc"},
+            {"vbat_mv": "4136", "chg": "0", "batt_pct": "97", "src": "abc"},
+            {"vbat_mv": "3739", "chg": "0", "batt_pct": "60", "src": "abc"},
+            {"vbat_mv": "3900", "chg": "0", "batt_pct": "70", "src": "abc"},
+        ])
+        self.assertNotIn("INCONCLUSIVE", out, out)
+        # 400 mV of swing in seconds is the floating-divider signature.
+        self.assertIn("400 mV", out, out)
+
+    def test_a_real_cell_reads_stable(self):
+        out = self._run_boards([
+            {"vbat_mv": "3810", "chg": "0", "batt_pct": "42", "src": "abc"},
+            {"vbat_mv": "3812", "chg": "0", "batt_pct": "42", "src": "abc"},
+            {"vbat_mv": "3809", "chg": "0", "batt_pct": "42", "src": "abc"},
+            {"vbat_mv": "3811", "chg": "0", "batt_pct": "42", "src": "abc"},
+        ])
+        self.assertNotIn("INCONCLUSIVE", out, out)
+        self.assertIn("3810", out)
+
+    def test_failed_reads_still_wait_between_attempts(self):
+        """The method measures INERTIA - a real cell cannot move much in a few
+        seconds - so the reads have to be seconds apart. The failure path used
+        to `continue` past the sleep, turning four attempts into one fast burst
+        that measures the ADC's noise floor instead.
+
+        Not covered by the assertions above: they stub time.sleep, so a mutant
+        that drops the sleep on failures passes them unnoticed. Found by
+        mutation-testing this file.
+        """
+        self._run_boards([{"vbat_mv": "4139", "chg": "0", "src": "abc"}, {}, {}, {}])
+        # 4 attempts => 3 gaps, regardless of how many of them failed.
+        self.assertEqual(len(self.sleeps), 3,
+                         f"expected a wait after each of the first 3 attempts, "
+                         f"got {self.sleeps}")
+        self.assertTrue(all(s >= 2.0 for s in self.sleeps), self.sleeps)
