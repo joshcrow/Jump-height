@@ -38,9 +38,26 @@ def run_detector(times: List[float], accel_mag: List[float], params: Params) -> 
 
 
 def load_csv(path: str) -> Tuple[List[float], List[float]]:
-    """Load a capture and return (times, accel_magnitude_g)."""
+    """Load a capture and return (times, accel_magnitude_g).
+
+    Kept at two return values so existing callers are unaffected; use
+    load_csv_gyro() when the gyro column matters.
+    """
+    times, mag, _ = load_csv_gyro(path)
+    return times, mag
+
+
+def load_csv_gyro(path: str):
+    """Load a capture and return (times, accel_magnitude_g, gyro_dps_or_None).
+
+    The gyro column exists for the parity harness (F-16, audit 2026-08-22).
+    Until it did, both sides of the C++/Python parity check only ever ran the
+    accel-only update(), so every gyro-path divergence was invisible BY
+    CONSTRUCTION - and F-16 was exactly such a divergence.
+    """
     times: List[float] = []
     mag: List[float] = []
+    gyro: List[float] = []
     with open(path, newline="") as f:
         reader = csv.reader(f)
         header = next(reader, None)
@@ -56,6 +73,7 @@ def load_csv(path: str) -> Tuple[List[float], List[float]]:
 
         it = idx("t_s", "t", "time")
         imag = idx("mag", "accel_mag", "a")
+        igyro = idx("gyro_dps", "gyro", "w_dps")
         ix, iy, iz = idx("ax", "accel_x"), idx("ay", "accel_y"), idx("az", "accel_z")
         if it is None or (imag is None and None in (ix, iy, iz)):
             raise SystemExit(
@@ -72,13 +90,21 @@ def load_csv(path: str) -> Tuple[List[float], List[float]]:
                 else:
                     ax, ay, az = float(row[ix]), float(row[iy]), float(row[iz])
                     m = math.sqrt(ax * ax + ay * ay + az * az)
+                w = float(row[igyro]) if igyro is not None else None
             except (ValueError, IndexError):
                 continue  # skip comment/blank/malformed lines
             times.append(t)
             mag.append(m)
+            if w is not None:
+                gyro.append(w)
     if not times:
         raise SystemExit(f"{path}: no data rows parsed")
-    return times, mag
+    if gyro and len(gyro) != len(times):
+        # Partial gyro coverage would silently misalign samples against
+        # timestamps, which is worse than having no gyro column at all.
+        raise SystemExit(f"{path}: gyro column present on only {len(gyro)} of "
+                         f"{len(times)} rows")
+    return times, mag, (gyro if gyro else None)
 
 
 def m_to_ft(m: float) -> float:

@@ -104,15 +104,41 @@ class Detector:
             a_corr = sqrt(max(0, |a|^2 - (omega^2 * r / g)^2))
 
         Quadrature, not plain subtraction: the centripetal vector is
-        perpendicular to the specific force it contaminates. The max(0,...)
-        clamp is two-sided — an OVER-estimated r erases the landing spike
-        itself (g4's landing-erasure probe), an under-estimate only leaves a
-        residual, so err SHORT when calibrating. r = 0 is the identity.
+        perpendicular to the specific force it contaminates.
+
+        The max(0,...) clamp is load-bearing and two-sided: an OVER-estimated r
+        drives the argument negative on the landing spike itself and the
+        detector never sees touchdown (g4's landing-erasure probe).
+
+        CORRECTION (F-16, audit 2026-08-22): this docstring used to end "so err
+        SHORT when calibrating". That is the direction jump_detector.h:96
+        retracted on 2026-08-10 as MEASURED WRONG, and it survived here.
+        Under-estimating is not safe either — it leaves a free-fall residual of
+        rot_g*sqrt(1-k^2), and the sqrt amplifies small errors badly (k=0.99
+        leaves 14% of rot_g; at r=0.5 m and 600 dps that is 0.79 g against a
+        0.35 g gate). A deliberate 5% short-shave broke 5 of 8 lever x spin
+        cases; removing it fixed all 8. There is no safe side: aim UNBIASED.
+
+        r = 0 is the identity.
         """
         if spin_lever_m <= 0.0:
             return accel_mag_g
         w_rad_s = gyro_mag_dps * 0.017453292519943295  # pi/180
         rot_g = (w_rad_s * w_rad_s * spin_lever_m) / g
+        # ANTI-LIVELOCK GUARD — ported verbatim from jump_detector.h:127
+        # (F-16). If the centripetal term exceeds anything a +-16 g
+        # accelerometer can even read, this sample cannot be corrected, and
+        # subtracting it MANUFACTURES free-fall. A railed gyro with the lever
+        # armed used to pin the detector in a CANDIDATE->AIRBORNE->reject
+        # livelock, erase real landing spikes, and fabricate jumps once the
+        # lever collapsed. Pass the raw magnitude through instead:
+        # wrong-but-bounded beats confidently zero.
+        #
+        # Its absence here meant the SIM disagreed with the firmware on exactly
+        # the inputs that caused a real firmware bug — and the parity harness
+        # could not see it, because it only ever exercised the accel-only path.
+        if rot_g > 16.0:
+            return accel_mag_g
         sq = accel_mag_g * accel_mag_g - rot_g * rot_g
         return math.sqrt(sq) if sq > 0.0 else 0.0
 

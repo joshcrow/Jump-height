@@ -2713,6 +2713,42 @@ def cmd_simtest(args) -> int:
                     abs(x - y) <= 0.002 for ra, rb in zip(a, b) for x, y in zip(ra, rb)))
                 results.append(("C++ and Python detectors agree exactly", parity,
                                 f"C++ {len(a)} jumps vs Python {len(b)}"))
+
+                # GYRO-PATH PARITY (F-16, audit 2026-08-22). The check above
+                # only ever exercises the accel-only update(), on both sides —
+                # so every gyro-path divergence was invisible BY CONSTRUCTION.
+                # F-16 was exactly such a divergence: the Python mirror was
+                # missing jump_detector.h's rot_g > 16 g anti-livelock guard,
+                # and no amount of running simtest could have shown it.
+                #
+                # data/spin_railed_gyro.csv contains a real jump followed by a
+                # railed-gyro segment while still riding at 1 g. Without the
+                # guard, quadrature subtraction turns that 1 g into 0 g —
+                # manufactured free-fall — and the run reports a SECOND,
+                # fabricated 0.84 m jump. With it, both sides report the one
+                # real jump. The lever is a calibration, not a sample, so both
+                # harnesses read it from JH_SPIN_LEVER_M.
+                gyro_csv = REPO / "data" / "spin_railed_gyro.csv"
+                if gyro_csv.exists():
+                    genv = dict(os.environ, JH_SPIN_LEVER_M="0.5")
+                    with open(gyro_csv) as f:
+                        gc = subprocess.run([binp], stdin=f, capture_output=True,
+                                            text=True, env=genv)
+                    gp = subprocess.run([sys.executable, "sim/golden.py", str(gyro_csv)],
+                                        capture_output=True, text=True, cwd=REPO,
+                                        env=genv)
+                    ga, gb = nums(gc.stdout), nums(gp.stdout)
+                    gparity = (len(ga) == len(gb) and len(ga) == 1 and all(
+                        abs(x - y) <= 0.002
+                        for ra, rb in zip(ga, gb) for x, y in zip(ra, rb)))
+                    detail = f"C++ {len(ga)} jumps vs Python {len(gb)} (expect 1)"
+                    if len(ga) > 1 or len(gb) > 1:
+                        detail += " — a spurious jump here means the rot_g>16 " \
+                                  "guard is missing on that side"
+                    results.append(("C++/Python agree on the GYRO path", gparity, detail))
+                else:
+                    results.append(("C++/Python agree on the GYRO path", False,
+                                    "data/spin_railed_gyro.csv is missing"))
     else:
         results.append(("C++ parity check", True, "skipped: no g++ on this machine"))
 
