@@ -74,7 +74,7 @@ esac
 
 # Does this command talk to a puck over BLE?
 case "$cmd" in
-  *blecmd.py*|*battlog.py*|*otadfu.py*|*dualcentral.py*|*hostsoak.py*) ;;
+  *blecmd.py*|*battlog.py*|*otadfu.py*|*dualcentral.py*|*hostsoak.py*|*dualjump.py*) ;;
   *) exit 0 ;;
 esac
 
@@ -88,14 +88,19 @@ esac
 case "$cmd" in
   *"<<"*) exit 0 ;;
 esac
-if ! printf '%s' "$cmd" | grep -qE '(^|[;&|(]\s*|python3?\s+|\./)?(tools/)?(blecmd|battlog|otadfu|dualcentral|hostsoak)\.py\s+[^=]'; then
+if ! printf '%s' "$cmd" | grep -qE '(^|[;&|(]\s*|python3?\s+|\./)?(tools/)?(blecmd|battlog|otadfu|dualcentral|hostsoak|dualjump)\.py\s+[^=]'; then
   exit 0
 fi
 
 # Already pinned to one board, or merely scanning/listing? Then it is correct
 # by construction and deserves no interruption.
+#
+# --help/-h added 2026-08-23 (audit F-14): reading a tool's own usage contacts
+# no radio, and this guard fired on `otadfu.py --help` while that very ticket
+# was adding the --name flag the guard asks for. A guard that cries wolf on
+# reading the manual is one people learn to scroll past.
 case "$cmd" in
-  *--name\ JumpHeight-*|*--addr\ *|*--scan*) exit 0 ;;
+  *--name\ JumpHeight-*|*--addr\ *|*--scan*|*--help*|*\ -h) exit 0 ;;
 esac
 
 # `jump boards` is the tool that ANSWERS this question — never nag it.

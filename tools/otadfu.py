@@ -47,6 +47,10 @@ import json
 import os
 import struct
 import sys
+
+sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent))
+import blepin  # noqa: E402  (path insert must come first)
+
 import time
 import zipfile
 
@@ -117,27 +121,42 @@ def load_package(path):
         raise SystemExit("package has neither application nor softdevice_bootloader")
 
 
-async def find(name, seconds=10.0):
-    """Find by advertised name — optionally pinned to one device address.
+# Which board this run is allowed to touch. Set by main() from --name/--addr
+# (OTADFU_ADDR stays honoured for compatibility with existing bench notes).
+PIN = {"name": "JumpHeight", "addr": None}
 
-    OTADFU_ADDR (env, address prefix) restricts JumpHeight matches to that
-    CoreBluetooth address. Two pucks advertising the same name is now the
-    normal bench state, and on 2026-08-12 an unpinned trigger flashed the
-    WRONG board (and the post-flash "app is back" check was fooled by the
-    same collision). AdaDFU is never pinned — one board in the bootloader
-    at a time is a bench invariant.
+# The address we actually triggered into DFU, so the post-flash check confirms
+# THAT board came back rather than "a JumpHeight is on the air".
+FLASHED_ADDR = {"addr": None}
+
+
+async def find(name, seconds=10.0):
+    """Find by advertised name, refusing to guess between boards.
+
+    F-14 (audit 2026-08-22): this was a bare `find_device_by_filter`, which
+    returns whichever board answers FIRST — no census, no warning. On
+    2026-08-12 an unpinned trigger flashed the WRONG BOARD, and the post-flash
+    "the app is back" check was fooled by the same collision, so the run
+    reported success.
+
+    This tool WRITES FIRMWARE. Unlike a read, there is no "just run it again":
+    a wrong flash can cost a board. So ambiguity REFUSES here, where blecmd
+    warns and proceeds.
+
+    AdaDFU is deliberately not pinned — one board in the bootloader at a time
+    is a bench invariant, and a board in DFU has no JumpHeight name to pin to.
     """
-    want = os.environ.get("OTADFU_ADDR", "").upper()
-    def match(d, adv):
-        # PREFIX match since 2026-08-18: pucks advertise "JumpHeight-XXXX"
-        # (unique per board). Prefix keeps old bare-named firmware findable
-        # and makes the suffixed names selectable by full name.
-        if not (adv.local_name or d.name or "").lower().startswith(name.lower()):
-            return False
-        if want and name.lower().startswith("jumpheight"):
-            return d.address.upper().startswith(want)
-        return True
-    return await BleakScanner.find_device_by_filter(match, timeout=seconds)
+    addr = PIN["addr"] or (os.environ.get("OTADFU_ADDR", "") or None)
+    is_app = name.lower().startswith("jumpheight")
+    matches = await blepin.census(BleakScanner.find_device_by_filter, name,
+                                  addr=addr if is_app else None, seconds=seconds)
+    if not matches:
+        return None            # callers poll and retry; not an error here
+    try:
+        return blepin.resolve(matches, name, tool="otadfu",
+                              on_ambiguous="refuse" if is_app else "choose")
+    except blepin.AmbiguousBoards as e:
+        sys.exit(str(e))
 
 
 async def trigger_app_dfu():
@@ -153,9 +172,13 @@ async def trigger_app_dfu():
     """
     import glob
     for attempt in range(3):
-        dev = await find("JumpHeight", 15.0)
+        dev = await find(PIN["name"], 15.0)
         if dev is None:
             return False
+        # F-14: pin the post-flash confirmation to the board we are actually
+        # about to reboot. "A JumpHeight is on the air" is what fooled the
+        # 2026-08-12 run into reporting success after flashing the wrong board.
+        FLASHED_ADDR["addr"] = dev.address
         got = asyncio.Event()
         buf = bytearray()
         def on_rx(_, data):
@@ -260,7 +283,7 @@ async def dfu(zip_path):
             # A plain reset with a VALID app boots the APP, not the
             # bootloader — that's a healthy outcome, not a failure. Re-enter
             # DFU through the verified trigger and carry on.
-            if await find("JumpHeight", 4.0):
+            if await find(PIN["name"], 4.0):
                 print("reset booted the (valid) app — re-entering DFU via trigger")
                 if not await trigger_app_dfu():
                     continue
@@ -417,22 +440,53 @@ async def dfu(zip_path):
             if await find("AdaDFU", 5.0):
                 print("new bootloader is up in DFU mode (app was invalidated — flash it next) ✅")
                 return
-            if await find("JumpHeight", 3.0):
+            if await find(PIN["name"], 3.0):
                 print("app survived the bootloader swap ✅")
                 return
         print("WARNING: nothing on the air yet — the MBR copy can take a moment; rescan before worrying")
         return
     for _ in range(8):
-        dev = await find("JumpHeight", 5.0)
+        dev = await find(PIN["name"], 5.0)
         if dev:
-            print("JumpHeight is back on the air ✅  OTA DFU complete")
+            want = FLASHED_ADDR["addr"]
+            if want and dev.address != want:
+                # The board we flashed is not the one answering. Say so instead
+                # of printing a tick: this exact confusion is how a wrong-board
+                # flash was recorded as a success.
+                print(f"WARNING: {dev.address} answered, but the board sent to "
+                      f"DFU was {want}. NOT confirming this flash — rescan and "
+                      f"check both boards before trusting either.")
+                return
+            print(f"{PIN['name']} is back on the air ✅  OTA DFU complete"
+                  + (f"  ({dev.address})" if dev.address else ""))
             return
-    print("WARNING: JumpHeight not seen yet — give it a few seconds and rescan "
-          "(python3 tools/blecmd.py --scan)")
+    print(f"WARNING: {PIN['name']} not seen yet — give it a few seconds and "
+          f"rescan (python3 tools/blecmd.py --scan)")
+
+
+def main() -> None:
+    import argparse
+    ap = argparse.ArgumentParser(
+        description="Flash a firmware package to a puck over the air (BLE DFU).")
+    ap.add_argument("zip", nargs="?", default=DEFAULT_ZIP,
+                    help="DFU package (default: the last pio build)")
+    # F-14: there was no way to say WHICH board to flash except an env var.
+    ap.add_argument("--name", default="JumpHeight",
+                    help="advertised name to flash, e.g. JumpHeight-E2C4. "
+                         "Give the FULL name on a multi-puck bench — this "
+                         "writes firmware, and it refuses to guess.")
+    ap.add_argument("--addr", default=None,
+                    help="address prefix (strongest pin; survives a rename)")
+    args = ap.parse_args()
+
+    PIN["name"] = args.name
+    PIN["addr"] = args.addr
+
+    if not os.path.exists(args.zip):
+        sys.exit(f"no package at {args.zip} — run "
+                 f"`pio run -d firmware -e xiaoblesense_adafruit` first")
+    asyncio.run(dfu(args.zip))
 
 
 if __name__ == "__main__":
-    zp = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_ZIP
-    if not os.path.exists(zp):
-        sys.exit(f"no package at {zp} — run `pio run -d firmware -e xiaoblesense_adafruit` first")
-    asyncio.run(dfu(zp))
+    main()

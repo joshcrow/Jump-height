@@ -108,3 +108,145 @@ class BattlogPinning(unittest.TestCase):
         mod = _load("battlog_fields", REPO / "tools/battlog.py")
         self.assertIn("board_name", mod.FIELDS)
         self.assertIn("board_addr", mod.FIELDS)
+
+
+class SharedCensus(unittest.TestCase):
+    """F-14: the census logic lives in one place now (tools/blepin.py) instead
+    of being re-derived per tool. These test the pure decision, which is the
+    part that has been wrong three times."""
+
+    def setUp(self):
+        self.blepin = _load("blepin_under_test", REPO / "tools/blepin.py")
+
+    def _dev(self, addr, name, rssi=-50):
+        class D:
+            pass
+        d = D()
+        d.address = addr
+        d.name = name
+        return (d, name, rssi)
+
+    def test_single_match_is_returned_quietly(self):
+        import io
+        m = {"AA": self._dev("AA", "JumpHeight-E2C4")}
+        buf = io.StringIO()
+        dev = self.blepin.resolve(m, "JumpHeight", tool="t", stream=buf)
+        self.assertEqual(dev.address, "AA")
+        self.assertEqual(buf.getvalue(), "",
+                         "an unambiguous call must not nag")
+
+    def test_no_match_raises_rather_than_exits(self):
+        # Raised, not sys.exit()'d, so a --watch loop can treat a momentary
+        # gap as retryable instead of ending the run.
+        with self.assertRaises(self.blepin.NoBoardFound):
+            self.blepin.resolve({}, "JumpHeight", tool="t")
+
+    def test_ambiguity_is_always_announced(self):
+        import io
+        m = {"AA": self._dev("AA", "JumpHeight-E2C4"),
+             "BB": self._dev("BB", "JumpHeight-45ED")}
+        buf = io.StringIO()
+        self.blepin.resolve(m, "JumpHeight", tool="t", on_ambiguous="choose",
+                            stream=buf)
+        out = buf.getvalue()
+        self.assertIn("AMBIGUOUS", out)
+        self.assertIn("JumpHeight-E2C4", out)
+        self.assertIn("JumpHeight-45ED", out)
+
+    def test_choose_is_deterministic(self):
+        import io
+        m = {"AA": self._dev("AA", "JumpHeight-E2C4"),
+             "BB": self._dev("BB", "JumpHeight-45ED")}
+        first = self.blepin.resolve(m, "JumpHeight", tool="t",
+                                    on_ambiguous="choose", stream=io.StringIO())
+        second = self.blepin.resolve(dict(reversed(list(m.items()))), "JumpHeight",
+                                     tool="t", on_ambiguous="choose",
+                                     stream=io.StringIO())
+        self.assertEqual(first.address, second.address,
+                         "a script must behave the same way twice even when "
+                         "the scan order differs")
+        self.assertEqual(first.address, "BB", "lowest name wins (45ED < E2C4)")
+
+    def test_refuse_stops_a_write_operation(self):
+        import io
+        m = {"AA": self._dev("AA", "JumpHeight-E2C4"),
+             "BB": self._dev("BB", "JumpHeight-45ED")}
+        with self.assertRaises(self.blepin.AmbiguousBoards):
+            self.blepin.resolve(m, "JumpHeight", tool="otadfu",
+                                on_ambiguous="refuse", stream=io.StringIO())
+
+    def test_census_never_short_circuits(self):
+        """The whole defect in one assertion: find_device_by_filter stops at
+        the first True, so the filter must always return False and the caller
+        must collect."""
+        import asyncio
+
+        class D:
+            def __init__(self, addr, name):
+                self.address, self.name = addr, name
+
+        class Adv:
+            def __init__(self, nm):
+                self.local_name, self.rssi = nm, -40
+
+        seen_all = []
+
+        async def fake_find(filt, timeout=None):
+            for addr, nm in (("AA", "JumpHeight-E2C4"), ("BB", "JumpHeight-45ED")):
+                seen_all.append(filt(D(addr, nm), Adv(nm)))
+            return None
+
+        m = asyncio.run(self.blepin.census(fake_find, "JumpHeight"))
+        self.assertEqual(len(m), 2, "census must see BOTH boards")
+        self.assertTrue(all(v is False for v in seen_all),
+                        "the filter must never return True — that is what "
+                        "makes bleak stop scanning at the first responder")
+
+
+class OtaDfuPinning(unittest.TestCase):
+    """F-14: otadfu had no --name at all; pinning was an env var, and the
+    match was a bare first-responder prefix. On 2026-08-12 that flashed the
+    WRONG BOARD and the post-flash check was fooled by the same collision."""
+
+    def test_has_a_name_flag_and_says_why_it_matters(self):
+        r = subprocess.run([sys.executable, str(REPO / "tools/otadfu.py"), "--help"],
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("--name", r.stdout)
+        self.assertIn("--addr", r.stdout)
+
+    def test_refuses_ambiguity_because_it_writes_firmware(self):
+        """The policy itself, not a docstring: a JumpHeight lookup must ask for
+        'refuse'. Everything else here is recoverable by retrying; a wrong
+        flash is not."""
+        import asyncio
+        mod = _load("otadfu_under_test", REPO / "tools/otadfu.py")
+        self.assertIn("PIN", dir(mod))
+        self.assertIn("FLASHED_ADDR", dir(mod),
+                      "the post-flash check must be able to compare against "
+                      "the board actually sent to DFU")
+
+        seen = {}
+
+        async def fake_census(_find, name, addr=None, seconds=0.0):
+            seen["addr"] = addr
+            return {"AA": ("dev", name, -40)}
+
+        def fake_resolve(matches, name, *, tool, on_ambiguous="choose", stream=None):
+            seen["policy"] = on_ambiguous
+            return "chosen"
+
+        with mock.patch.object(mod.blepin, "census", fake_census), \
+             mock.patch.object(mod.blepin, "resolve", fake_resolve):
+            mod.PIN["name"], mod.PIN["addr"] = "JumpHeight-E2C4", None
+            asyncio.run(mod.find("JumpHeight-E2C4", 1.0))
+            self.assertEqual(seen["policy"], "refuse",
+                             "flashing must never guess between boards")
+
+            # A board sitting in the bootloader has no JumpHeight name to pin
+            # to, and one board in DFU at a time is a bench invariant - so
+            # AdaDFU stays on the lenient policy deliberately.
+            asyncio.run(mod.find("AdaDFU", 1.0))
+            self.assertEqual(seen["policy"], "choose")
+            self.assertIsNone(seen["addr"],
+                              "an address pin must not be applied to AdaDFU")

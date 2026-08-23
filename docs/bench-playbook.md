@@ -38,6 +38,35 @@ table is a rediscovery waiting to happen.**
    build hash is not the one you flashed, you are looking at a different
    board — or a stale flash.
 
+**How pinning works now (2026-08-23, audit F-13/F-14).** The census lives in
+one place, `tools/blepin.py`, and the tools share it instead of each growing
+their own near-copy:
+
+| tool | pin flags | on two matches |
+|---|---|---|
+| `blecmd.py` | `--name` / `--addr` | warns, then picks the lowest name |
+| `dualjump.py` | `--name` / `--addr` | warns, then picks the lowest name |
+| `battlog.py` | `--name` / `--addr` | **refuses to start unpinned at all** |
+| `otadfu.py` | `--name` / `--addr` (**new**) | **refuses — it writes firmware** |
+
+Reads warn and continue because a read can simply be retaken. Writes refuse,
+because they cannot: on 2026-08-12 an unpinned trigger flashed the WRONG BOARD
+and the post-flash "the app is back" check was fooled by the same collision, so
+the run reported success. `otadfu.py` now also confirms that the board which
+came back is the one it sent to DFU, by address.
+
+So the flashing command is:
+
+```bash
+python3 tools/otadfu.py --name JumpHeight-E2C4 <package.zip>
+```
+
+`OTADFU_ADDR` still works, for older bench notes.
+
+`battlog.py` additionally writes `board_name,board_addr` into every CSV row —
+a flag at launch time is not in the file, and an interleaved overnight log is
+otherwise indistinguishable afterwards from a clean one.
+
 ### 1b. Keeping this table honest
 
 When a change introduces a **new way to identify a board** — a unique

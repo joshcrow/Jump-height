@@ -49,6 +49,10 @@ import argparse
 import asyncio
 import re
 import sys
+
+sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent))
+import blepin  # noqa: E402  (path insert must come first)
+
 import time
 from pathlib import Path
 
@@ -99,11 +103,20 @@ async def run(args) -> int:
     import serial
 
     print(f"scanning for {args.name} ...")
-    dev = await BleakScanner.find_device_by_filter(
-        lambda d, adv: (adv.local_name or d.name or "").startswith(args.name),
-        timeout=args.scan_timeout)
-    if dev is None:
-        print(f"no '{args.name}' found — awake and in range?")
+    # Census, not first-responder (audit F-13 sibling sweep): this was a bare
+    # find_device_by_filter, so on a two-puck bench it returned whichever board
+    # answered first and said nothing about the other. Same defect shape as
+    # F-14's, so it uses the same shared helper rather than a private near-copy.
+    matches = await blepin.census(BleakScanner.find_device_by_filter, args.name,
+                                  addr=getattr(args, "addr", None),
+                                  seconds=args.scan_timeout)
+    try:
+        # "choose": this reads jumps, and a read can simply be retaken — but it
+        # is never silent about the ambiguity.
+        dev = blepin.resolve(matches, args.name, tool="dualjump",
+                             on_ambiguous="choose")
+    except blepin.NoBoardFound as e:
+        print(str(e))
         return 1
     print(f"found {dev.address}")
 
@@ -204,6 +217,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--name", default="JumpHeight-", help="advertised-name prefix (PIN IT)")
+    ap.add_argument("--addr", default=None,
+                    help="address prefix (strongest pin; survives a rename)")
     ap.add_argument("--port", required=True, help="serial port, to fire the jumps")
     ap.add_argument("--jumps", type=int, default=20)
     ap.add_argument("--spacing", type=float, default=1.5, help="seconds between jumps")
