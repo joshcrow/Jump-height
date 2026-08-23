@@ -88,8 +88,17 @@ class LeverArm:
     def commit(self) -> bool:
         """Close out a flight; fold its median into the running estimate.
 
-        Call whenever the detector leaves AIRBORNE, jump or no jump — a
-        rejected flight still carries perfectly good rotation data.
+        Call ONLY when the flight ended in a VALIDATED JUMP. Every other exit
+        from AIRBORNE must call discard() instead.
+
+        This docstring used to say "call whenever the detector leaves AIRBORNE,
+        jump or no jump — a rejected flight still carries perfectly good
+        rotation data." That rule was the root of a confirmed calibration-
+        corruption path and main.cpp retired it: phantom flights (max-airtime
+        rejects manufactured by a railed gyro) are ALL rejects, and committing
+        them walked a converged lever arm off by ~50x in minutes. The retired
+        text survived here, and tools/tests/test_lever_arm.py was still
+        implementing it (F-17, audit 2026-08-22).
         """
         if len(self._r) < 8:
             self._dps.clear()
@@ -107,6 +116,21 @@ class LeverArm:
                        if self._has else shaved)
         self._has = True
         return True
+
+    def discard(self) -> None:
+        """Throw away this flight's observations without folding them in.
+
+        Mirrors lever_arm.h's discard(). Every AIRBORNE exit that is not a
+        validated jump ends here — and so does a jump when self-arm is
+        compiled out, which is main.cpp's current state.
+
+        Dropping the samples matters beyond just not committing them: up to 64
+        stale observations left pending would otherwise merge into the NEXT
+        flight's median and walk the estimate to a blend no real flight
+        produced (the 2026-08-12 gyro-crash-hunt finding).
+        """
+        self._dps.clear()
+        self._r.clear()
 
     def value(self) -> float:
         """Best estimate in metres, or 0.0 if none yet — the value that makes

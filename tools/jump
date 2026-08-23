@@ -2796,7 +2796,14 @@ def cmd_simtest(args) -> int:
                 return int(mm.group(1)) if mm else 0
             passed, failed = _n("passed"), _n("failed")
             errors, skipped = _n("error"), _n("skipped")
-            accounted = passed + failed + errors + skipped
+            # xfailed/xpassed are outcomes too, and leaving them out made this
+            # gate report a COLLECTION GAP the moment the first xfail was added
+            # (F-17's r=0.2 case). The gate was right to fire — the count did
+            # not add up — but the cause was this list being short, not a test
+            # going invisible. Any pytest outcome that is not counted here
+            # looks identical to a test that vanished.
+            xfailed, xpassed = _n("xfailed"), _n("xpassed")
+            accounted = passed + failed + errors + skipped + xfailed + xpassed
 
             c = _run([sys.executable, "-m", "pytest", "tools/tests", "-q",
                       "--collect-only"])
