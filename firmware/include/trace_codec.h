@@ -361,6 +361,69 @@ inline size_t decode(const uint8_t* data, size_t len, uint32_t log_hz,
   return off;
 }
 
+// ---------------------------------------------------------- CSV line length
+//
+// How many bytes emit_csv_sample() above would produce for this sample —
+// computed, not formatted. It lives HERE, next to that function, because the
+// two must agree exactly and separating them is how they would drift.
+//
+// F-08 (audit 2026-08-22): jh_store's mount-time byte counter used to call
+// snprintf for every stored sample. A full 14.46 MB chip holds ~938,500 of
+// them, and the formatting alone measured 161 ms of a 221 ms mount (g++ -O2,
+// the repo's own harness) — seconds, plausibly, on the M4F with softfloat
+// "%f", every boot, for a counter that only feeds a display.
+//
+// "%.3f" always emits exactly three decimals and a point, so the only variable
+// parts are the sign and the number of integer digits AFTER rounding:
+//   len = (sign ? 1 : 0) + integer_digits + 1 + 3
+//
+// The only case that changes the DIGIT COUNT is a carry out of the fraction
+// (9.9995 -> "10.000"), so that is the one thing this has to get exactly right.
+//
+// It is deliberately NOT done as llround(fabs(v) * 1000.0). That was the first
+// implementation and the sweep test caught it: for v = 9.9995 the nearest
+// double is 9.99949999999999938, which printf correctly renders "9.999" — but
+// multiplying by 1000.0 rounds the product up to exactly 9999.5, and llround
+// takes halves away from zero, yielding 10000 and one digit too many. Twelve
+// values across the sweep failed that way, every one of them on an x.xxx5
+// edge.
+//
+// Comparing the fractional part directly avoids the multiply, and the
+// comparison is exact: modf() is exact, and 0.9995 is not representable in
+// binary, so no double lies between the true 0.9995 and the literal below —
+// `frac >= 0.9995` therefore splits exactly where printf's own round-to-
+// nearest does, with no tie to break.
+inline uint32_t fixed3_len(double v) {
+  if (!isfinite(v) || fabs(v) >= 1e15) {
+    char buf[64];
+    const int n = snprintf(buf, sizeof(buf), "%.3f", v);
+    return n > 0 ? (uint32_t)n : 0;
+  }
+  // signbit, not v < 0: printf writes "-0.000" for a small negative that
+  // rounds to zero, and dropping that byte would desync the counter.
+  const uint32_t sign = signbit(v) ? 1u : 0u;
+  double whole = 0.0;
+  const double frac = modf(fabs(v), &whole);
+  uint64_t int_part = (uint64_t)whole;
+  if (frac >= 0.9995) ++int_part;   // the carry printf would perform
+  uint32_t digits = 1;
+  while (int_part >= 10u) { int_part /= 10u; ++digits; }
+  return sign + digits + 1u /* '.' */ + 3u /* decimals */;
+}
+
+// Length of one whole "%.3f,%.3f\n" row.
+inline uint32_t csv_line_len(double t_s, float mag_g) {
+  return fixed3_len(t_s) + 1u /* ',' */ + fixed3_len((double)mag_g) + 1u /* '\n' */;
+}
+
+// The same length by actually formatting — the ground truth csv_line_len() is
+// checked against, by the sweep test and by the device's `tracecheck`.
+inline uint32_t csv_line_len_formatted(double t_s, float mag_g) {
+  char buf[64];
+  const int n = snprintf(buf, sizeof(buf), "%.3f,%.3f\n", t_s, (double)mag_g);
+  return n > 0 ? (uint32_t)n : 0;
+}
+
 namespace detail {
 struct CsvAdapter {
   void (*on_line)(void* ctx, const char* line, size_t n);

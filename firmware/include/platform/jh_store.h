@@ -114,6 +114,13 @@ void jumps_scan(uint32_t& count, float& best_m);
 bool trace_append(const char* data, size_t len);
 // Bytes a trace dump will stream (equals stored bytes on platforms that store CSV).
 uint32_t trace_bytes();
+// Recompute trace_bytes() the slow, pre-F-08 way — snprintf-formatting every
+// stored sample — by re-walking the region. This is the cross-check for the
+// arithmetic length used at mount: if the two ever disagree, THIS one is
+// right. Costs a full region read (hundreds of ms on a full chip), so it is a
+// deliberate diagnostic (`tracecheck`), never something a boot or a rider
+// action triggers.
+uint32_t trace_bytes_recomputed();
 bool trace_is_full();
 
 // ---- framed raw read-back (jumps/trace/dump commands) ----

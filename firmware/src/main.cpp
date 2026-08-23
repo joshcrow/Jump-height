@@ -610,7 +610,7 @@ static bool runSelfTest() {
 
 // ---------------- Commands ----------------
 static void printHelp() {
-  emitLine("# commands: help | stats | jumps | trace | dump | clear | selftest | revive | i2cdiag | dcdc | info | off | dfu | uf2 | fakejump | mount | format");
+  emitLine("# commands: help | stats | jumps | trace | tracecheck | dump | clear | selftest | revive | i2cdiag | dcdc | info | off | dfu | uf2 | fakejump | mount | format");
   emitLine("#           set <airtime_offset_s|height_scale|vbat_scale> <value|default>");
   emitLine("#           vbatscan  (bench: battery ADC vs acquisition time)");
   emitLine("#           gyro      (bench: raw + bias-corrected rate, 2 s)");
@@ -695,6 +695,21 @@ static void handleCommand(const String& cmd) {
     flushTrace();
     printFileFramed(jh_store::StoredFile::TRACE, "trace.csv");
     emitLine("OK trace");
+  } else if (cmd == "tracecheck") {
+    // F-08's cross-check. The mount-time byte counter computes each sample's
+    // CSV length arithmetically instead of snprintf-ing it; this re-walks the
+    // whole region measuring the old, slow way and compares. Deliberately a
+    // command and not a boot step: it costs a full region read (~200 ms on a
+    // full chip in the harness, longer here), which is the exact cost F-08
+    // removed from every boot.
+    flushTrace();
+    const uint32_t fast = jh_store::trace_bytes();
+    const uint32_t slow = jh_store::trace_bytes_recomputed();
+    emitf("# tracecheck fast=%lu slow=%lu %s\n", (unsigned long)fast,
+          (unsigned long)slow,
+          fast == slow ? "agree"
+                       : "DISAGREE — the slow number is the correct one");
+    emitLine(fast == slow ? "OK tracecheck" : "ERR tracecheck mismatch");
   } else if (cmd == "dump") {
     flushTrace();
     printFileFramed(jh_store::StoredFile::JUMPS, "jumps.csv");

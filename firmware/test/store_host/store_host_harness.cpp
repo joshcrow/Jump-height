@@ -69,6 +69,10 @@
 //                                            trace_is_full() — for
 //                                            marathon-scale scenarios.
 //   TRACE_BYTES                              jh_store::trace_bytes()
+//   TRACE_RECHECK                            fast counter vs the slow
+//                                            snprintf recompute (F-08)
+//   TRACE_RECHECK                            fast counter vs the slow
+//                                            snprintf recompute (F-08)
 //   TRACE_IS_FULL                            jh_store::trace_is_full()
 //   OPEN_READ JUMPS|TRACE                    jh_store::open_read(...)
 //   READ_ALL                                 drains read_chunk() to EOF,
@@ -303,6 +307,11 @@ int main() {
       std::printf("TRACE_APPEND crossed=%d\n", crossed ? 1 : 0);
     } else if (cmd == "TRACE_FILL") {
       cmdTraceFill(iss);
+    } else if (cmd == "TRACE_RECHECK") {
+      const uint32_t fast = jh_store::trace_bytes();
+      const uint32_t slow = jh_store::trace_bytes_recomputed();
+      std::printf("TRACE_RECHECK fast=%lu slow=%lu agree=%d\n",
+                  (unsigned long)fast, (unsigned long)slow, fast == slow ? 1 : 0);
     } else if (cmd == "TRACE_BYTES") {
       std::printf("TRACE_BYTES n=%u\n", jh_store::trace_bytes());
     } else if (cmd == "TRACE_IS_FULL") {

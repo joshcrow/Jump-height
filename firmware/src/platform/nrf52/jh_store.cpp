@@ -220,10 +220,14 @@ void flashSleep() {
 }
 
 // ------------------------------------------------------- record/CSV helpers
+// F-08: both live in trace_codec.h now, next to emit_csv_sample() — the
+// function whose output length they predict. Keeping the predictor beside the
+// formatter is what stops the two drifting apart.
 uint32_t csvLineLen(double t_s, float mag_g) {
-  char buf[32];
-  int n = snprintf(buf, sizeof(buf), "%.3f,%.3f\n", t_s, (double)mag_g);
-  return n > 0 ? (uint32_t)n : 0;
+  return trace_codec::csv_line_len(t_s, mag_g);
+}
+uint32_t csvLineLenFormatted(double t_s, float mag_g) {
+  return trace_codec::csv_line_len_formatted(t_s, mag_g);
 }
 
 // True if `rec` (already read from flash) is a whole, uncorrupted, not-erased
@@ -366,9 +370,15 @@ void findJumpsAppendPoint() {
 // count (s_trace_csv_bytes) by decoding every recovered block's samples,
 // since across a reboot we no longer have the original incoming text —
 // only the compact binary form — to measure directly.
+struct CsvCount {
+  uint32_t total;
+  bool     formatted;   // true = the slow snprintf path, for cross-checking
+};
+
 void csvByteCounter(void* ctx, double t_s, float mag_g) {
-  uint32_t* total = (uint32_t*)ctx;
-  *total += csvLineLen(t_s, mag_g);
+  CsvCount* c = (CsvCount*)ctx;
+  c->total += c->formatted ? csvLineLenFormatted(t_s, mag_g)
+                           : csvLineLen(t_s, mag_g);
 }
 
 // Largest a single trace block can ever legitimately be (header + the max
@@ -409,9 +419,14 @@ bool traceScanHitDamage(uint32_t* off, const uint8_t* buf, size_t len) {
 // blocks) so a reboot only has to replay the tail since the last
 // checkpoint — deliberately not built here, to keep the on-disk format for
 // this first compile-clean pass as simple as possible.
-void findTraceAppendPoint() {
+// The region walk, factored out of findTraceAppendPoint() so the slow
+// cross-check (traceCsvBytesRecomputed(), the `tracecheck` command) runs the
+// IDENTICAL traversal — including torn-write recovery — and can only differ in
+// how it measures each sample. A second, simpler walk written for the check
+// would be checking itself, not the real scan.
+uint32_t walkTraceRegion(bool formatted, uint32_t* csv_bytes_out) {
   uint32_t off = 0;
-  uint32_t csv_total = 0;
+  CsvCount csv_total = {0, formatted};
   uint8_t block_buf[trace_codec::HEADER_BYTES];
   while (off + trace_codec::HEADER_BYTES <= s_trace_region_bytes) {
     // WATCHDOG FEED (review 2026-08-14). This scan walks the region block
@@ -452,8 +467,23 @@ void findTraceAppendPoint() {
     }
     off = align4(off + r.bytes_consumed);  // writer advances identically
   }
+  if (csv_bytes_out) *csv_bytes_out = off > 0 ? csv_total.total + 6 /* "t,mag\n" header */ : 0;
+  return off;
+}
+
+// Recompute the CSV byte total the pre-F-08 way (snprintf per sample), for the
+// `tracecheck` command. Read-only: touches no module state.
+uint32_t traceCsvBytesRecomputed() {
+  uint32_t bytes = 0;
+  walkTraceRegion(/*formatted=*/true, &bytes);
+  return bytes;
+}
+
+void findTraceAppendPoint() {
+  uint32_t csv_bytes = 0;
+  const uint32_t off = walkTraceRegion(/*formatted=*/false, &csv_bytes);
   s_trace_append_off = off;
-  s_trace_csv_bytes  = off > 0 ? csv_total + 6 /* "t,mag\n" header */ : 0;
+  s_trace_csv_bytes  = csv_bytes;
   s_trace_csv_header_counted = off > 0;
   // Full means "no further block can ever fit" — not merely "not one more
   // byte remains." A block that arrives when less than kMaxTraceBlockBytes
@@ -1036,6 +1066,14 @@ bool trace_append(const char* data, size_t len) {
 }
 
 uint32_t trace_bytes()   { return s_trace_csv_bytes; }
+
+uint32_t trace_bytes_recomputed() {
+  if (!s_fs_ok) return 0;
+  flashWake();
+  const uint32_t n = traceCsvBytesRecomputed();
+  flashSleep();
+  return n;
+}
 bool     trace_is_full() { return s_trace_full; }
 
 // ---------------------------------------------------- framed raw read-back

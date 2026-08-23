@@ -190,6 +190,11 @@ bool trace_append(const char* data, size_t len) {
   return false;
 }
 
+uint32_t trace_bytes_recomputed() {
+  // The host store writes real CSV text, so there is no binary re-decode to
+  // cross-check against — the file itself IS the ground truth.
+  return trace_bytes();
+}
 uint32_t trace_bytes() { return s_trace_bytes; }
 bool trace_is_full() { return s_trace_full; }
 

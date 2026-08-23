@@ -1487,3 +1487,91 @@ class JumpsRegionFull(unittest.TestCase):
                          "a refused append must not change the stored count or "
                          "best -- corrupting history to reject a new record "
                          "would be far worse than dropping it")
+
+
+class TraceCsvByteCounterParity(unittest.TestCase):
+    """F-08: the mount-time CSV byte counter no longer snprintf-formats every
+    stored sample; it computes each line's length arithmetically.
+
+    Measured in this harness (g++ -O2), full 14.46 MB chip / ~938,500 samples:
+        before   221 ms mount
+        after     73 ms mount
+        floor     60 ms  (same walk with the counter replaced by a no-op)
+    So the formatting was 161 ms of it. The floor is the region walk itself -
+    every block must be read and CRC-checked to find the append point and to
+    recover from torn writes - which is why persisting the counter in block
+    headers (the fix the ticket proposed) would not have beaten it either, and
+    why no block-format change was needed. See F-23 for the remaining floor.
+
+    This test is the parity proof: the fast path and the original snprintf path
+    must agree exactly, over stores fuzzed across the magnitudes that change a
+    formatted line's LENGTH - the sign, and each decimal digit boundary.
+    """
+
+    def _recheck(self, binary, tmp, name, cmds):
+        """Write in one process, compare in a SECOND one.
+
+        Both numbers have to come from flash or this compares nothing: the live
+        counter includes samples still sitting in the open, unwritten block,
+        while the recompute walks what is actually stored. Comparing in-process
+        showed fast=30 slow=0 on a fresh store - a difference in flush state,
+        not in arithmetic. (That gap is real but separate; see F-22, where it
+        becomes permanent once the region fills and the trailing block is
+        dropped rather than merely delayed.)
+        """
+        w = run_harness(binary, ["INIT"] + cmds, backing=tmp / name)
+        self.assertEqual(w.returncode, 0, w.raw_stdout)
+        r = run_harness(binary, ["INIT", "TRACE_BYTES", "TRACE_RECHECK"],
+                        backing=tmp / name)
+        self.assertEqual(r.returncode, 0, r.raw_stdout)
+        m = re.search(r"TRACE_RECHECK fast=(\d+) slow=(\d+) agree=(\d)", r.raw_stdout)
+        self.assertIsNotNone(m, r.raw_stdout)
+        return int(m.group(1)), int(m.group(2)), m.group(3) == "1"
+
+    def test_fast_and_snprintf_counters_agree_across_magnitudes(self):
+        tmp = Path(tempfile.mkdtemp())
+        binary = _build_harness(tmp)
+
+        # Each case crosses a digit-count boundary in "%.3f" for the timestamp,
+        # the magnitude, or both. A counter that got the integer-digit count
+        # wrong would drift by one byte per sample and show up immediately.
+        # TRACE_FILL, not TRACE_APPEND: a block holds up to 255 samples and is
+        # only written when it closes, so a two-sample append leaves NOTHING on
+        # flash and the comparison is 0 == 0 - green, and meaningless. 8 s at
+        # 50 Hz is 400 samples, which closes at least one block. (Both cases
+        # that caught this were passing "agree", which is exactly how a vacuous
+        # test hides.)
+        #
+        # TRACE_FILL ramps t from start_t and mag from mag0 to mag0+0.049, so
+        # each case sits on a different integer-digit count, and mag_carry
+        # crosses two boundaries mid-fill (t 99.96 -> 100.x, mag 9.96 -> 10.x)
+        # - the case where a wrong rounding rule adds or drops a byte.
+        cases = [
+            ("t_sub_one",  ["TRACE_FILL 8 50 0.0 0.001"]),
+            ("t_one",      ["TRACE_FILL 8 50 1.0 1.000"]),
+            ("t_two",      ["TRACE_FILL 8 50 10.0 9.900"]),
+            ("t_three",    ["TRACE_FILL 8 50 100.0 1.250"]),
+            ("t_four",     ["TRACE_FILL 8 50 1000.0 15.500"]),
+            ("t_five",     ["TRACE_FILL 8 50 12345.0 9.500"]),
+            ("mag_carry",  ["TRACE_FILL 8 50 99.960 9.960"]),
+            ("long_fill",  ["TRACE_FILL 900 50 0.0 1.000"]),
+            ("big_t_fill", ["TRACE_FILL 900 50 12345.0 9.500"]),
+        ]
+        for name, cmds in cases:
+            with self.subTest(case=name):
+                fast, slow, agree = self._recheck(binary, tmp, name + ".bin", cmds)
+                self.assertTrue(agree,
+                                f"{name}: arithmetic counter {fast} != snprintf "
+                                f"counter {slow} (delta {fast - slow})")
+                self.assertGreater(slow, 0, f"{name} stored nothing to compare")
+
+    def test_parity_holds_on_a_remounted_store(self):
+        """The counter that matters is the one rebuilt at MOUNT - that is the
+        code path F-08 changed. Fill, drop the process, remount, then compare."""
+        tmp = Path(tempfile.mkdtemp())
+        binary = _build_harness(tmp)
+        back = tmp / "remount.bin"
+        fast, slow, agree = self._recheck(
+            binary, tmp, "remount.bin", ["TRACE_FILL 2000 50 100.0 1.000"])
+        self.assertTrue(agree, f"after remount: {fast} != {slow}")
+        self.assertGreater(slow, 100000, "fixture should hold real data")
