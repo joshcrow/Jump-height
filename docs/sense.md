@@ -133,7 +133,17 @@ is the cable path. Revisit only if we ever swap bootloaders.)*
 - **No connector on the board**: the JST pigtail gets soldered to the
   underside BAT pads. **JST battery polarity is NOT standardized —
   meter the battery leads before plugging** (red→+, black→−); a
-  reversed cell kills the charger IC.
+  reversed cell kills the charger IC. Step-by-step (iron temperature,
+  tinning, the bridge check, strain relief):
+  **[solder.md §2](solder.md)**.
+- **The pigtail part, specifically** *(learned the hard way, 2026-08)*:
+  the cell ships with the **socket** half, so the pigtail must be the
+  **pin** half — Adafruit **3814** ("Male Header", *"plugs in nicely
+  with our Li-Poly batteries"*), NOT Adafruit **261** ("Female
+  Connector", mates with *chargers*), which is a twin of the cell's own
+  connector and will not mate with it. Buy by what the vendor says it
+  mates *with*: the gender word is inconsistent between vendors on this
+  exact part ([solder.md §1.05](solder.md)).
 - **Charge current is a choice**: default 50 mA ≈ 11 h for the 500 mAh
   cell. Firmware drives P0.13 low → 100 mA ≈ 5–6 h. Plan on overnight
   charging; the red P0.17 LED shows charge-in-progress.
@@ -325,13 +335,16 @@ duty cycle) and replace this table with numbers.
   protocol + self-test running; **binary trace v2 storage with CSV on
   the wire**; desk test + autopsy through the wizard, untethered; parity
   replay on a Sense-recorded trace; drop calibration on the Sense build.
-- **S2 — power + battery**: solder the pigtail (meter polarity first!);
+- **S2 — power + battery**: solder the pigtail ([solder.md §2](solder.md) —
+  meter polarity first!);
   100 mA charge select; VBAT telemetry + low-voltage System OFF;
   sleep/wake on the IMU interrupt; QSPI deep power-down; LED language;
   measure everything and update §5.
 - **S3 — update path**: BLEDfu + nRF Connect OTA proven from the
   iPhone; UF2 recovery drill written into BUILD.md; CI publishes `.uf2`.
-- **S4 — the puck**: housing (Hammond 1551W-class), mount, antenna
+- **S4 — the puck**: housing ([housing.md](housing.md) — sizing math, the
+  float rule, and the finding that the smallest 1551W does NOT fit the
+  500 mAh cell), mount, antenna
   range check, bucket test — then the same water gauntlet v1 passed.
 - **S5 — the metrics ladder** (§4) once real water traces exist to tune
   against.

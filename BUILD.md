@@ -38,7 +38,8 @@ boards ×4 (headers unsoldered — see the soldering section), phone with
 | **Silica gel packet** (free in any shipment box) | Goes inside the case — hot beach → cold water means condensation fog on the electronics otherwise. |
 | **Jumper wires** (female-female) + a little solder | The MPU-6050 usually ships with its 4 header pins unsoldered. |
 | **Rubbing alcohol** | Surface prep for the adhesive mount. |
-| Multimeter *(optional, ~$10)* | To confirm battery polarity. |
+| Multimeter *(~$10)* | **Required.** To confirm battery polarity: the Sense's JST pigtail is soldered by hand and JST polarity is not standardized ([`docs/solder.md`](docs/solder.md) §1). (It was optional on the retired FireBeetle, which is why older notes hedge.) |
+| Soldering iron, solder, flux | Headers on the GY-521s; the pigtail on the Sense. Procedure: [`docs/solder.md`](docs/solder.md). |
 | Qi **wireless receiver, USB-C plug** *(optional, ~$10)* | Thin coil + captive USB-C tail ("wireless charging receiver USB C"; Nillkin or similar). Plugs into the board, coil taped to the capsule floor → charge the sealed capsule on a phone pad. Cheap receivers can be plug-orientation picky: no red LED, flip the plug. |
 | Flat Qi **charging pad** *(optional, ~$12)* | Any reputable flat pad (not a stand), 5–10 W. A sealed puck parked on the pad also never self-drains — the wireless version of "leave it on USB". Works only if the capsule wall is thin (~few mm): that's the experiment. |
 
@@ -122,6 +123,11 @@ device if connected, and the recent logs — paste it to Claude and it has
 everything needed to troubleshoot remotely.
 
 ## The one manual skill: solder + wire (Day 1, before the wizard's flash step)
+
+> Iron technique, flux, temperatures, the multimeter checks, and the rework
+> table live in **[`docs/solder.md`](docs/solder.md)** — read it before the
+> first joint, and *especially* before soldering the JST pigtail onto the
+> Sense's bare BAT pads, where a bridge shorts a lithium cell.
 
 Your sensors are Ximimark **GY-521** MPU-6050 boards: they arrive with the
 8-pin header strip loose, so solder the header to the board first (8 joints,

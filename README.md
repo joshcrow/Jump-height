@@ -309,11 +309,23 @@ Jump-height/
 │   ├── jump             ← the one-command interface (wizard/flash/selftest/desktest/
 │   │                      drop/sync/validate/replay/eval/web/report)
 │   ├── blecmd.py        ← talk to the puck over BLE from the laptop (no phone)
+│   ├── blepin.py        ← shared board census: pin one board, never "whichever answered"
 │   ├── chargelog.py     ← battery logging over serial → CSV
+│   ├── gen_params.py    ← bakes config/params.json into the firmware + watch headers
 │   └── fake_device.py   ← simulated device: rehearse and test with no hardware
 ├── web/                 ← browser app: live BLE stats, session sync, charts
 ├── .github/workflows/   ← CI: full test suite + firmware build; publishes the
 │                          Sense .uf2 to Pages
+├── docs/
+│   ├── algorithm.md          ← the physics + detection state machine, in detail
+│   ├── bench-playbook.md     ← board registry, instrument doctrine, bench rules
+│   ├── garmin-datafield.md   ← the Garmin watch data-field spec
+│   ├── hardware.md           ← bill of materials, wiring, power, waterproofing
+│   ├── housing.md            ← v2 puck enclosure sizing: the float rule, why the cell sets the size
+│   ├── research.md           ← literature/market synthesis backing the design choices
+│   ├── roadmap.md            ← phased build plan (bench → firmware → water → app → v2)
+│   ├── solder.md             ← iron + multimeter runbook (headers; the Sense's battery pigtail)
+│   └── sense.md              ← v2 (XIAO nRF52840 Sense) port spec + gap analysis
 ├── firmware/
 │   ├── include/jump_detector.h          ← portable detection state machine
 │   ├── src/platform/{nrf52,host}/       ← per-board glue (host = tests, no board)
