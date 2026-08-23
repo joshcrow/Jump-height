@@ -63,6 +63,53 @@ do not.**
 
 ## CHANGED AFTER THE AUDIT — grouped by date, newest first (2026-08-14 → 2026-08-18)
 
+## 2026-08-23 — the 2026-08-22 adversarial audit is CLOSED: F-01…F-21 all landed
+
+Worked as five phases on `claude/lines-of-code-count-gs4p7w`. Ledger with
+per-ticket evidence: [audit-2026-08-22.md](audit-2026-08-22.md).
+
+**Gates now:** simtest passes with TWO parity checks (accel and gyro); watch
+60/60 in the simulator on `instinct3solar45mm`.
+
+**Firmware is UNFLASHED.** The OG still runs Phase 1–2's `src=9b35f734`; this
+tree has all of Phase 3 plus F-18's constant change. There is **no second flash
+batch** — Phase 3 planned one on the assumption that F-08 would change the
+trace block header, and it did not need to.
+
+The defects that would have cost the water session, in order of what they
+would have destroyed:
+
+- **F-11** — the JUMP path drove session count/best DOWN into the FIT. A puck
+  brownout mid-session reseeds its RAM counters, and the next real jump emits a
+  well-formed `JUMP n=1 … best_m=0.20` after a 12-jump session. The corruption
+  gate cannot reject that line. A real ride would have been archived as
+  "1 jump, best 0.20 m".
+- **F-12** — one dropped BLE callback parked the link permanently: no scan, no
+  reconnect, no error, a field that just stops for the rest of the ride.
+- **F-07** — `trace_clear()` appended into a region it had failed to erase.
+  NOR AND-merges, so the write "succeeded". Silent corruption.
+- **F-14** — `otadfu` flashed whichever board answered first, and the
+  post-flash check was fooled by the same collision, so it reported success.
+- **F-01** (Phase 1) — `-Ofast` had been deleting the `isfinite()` guards from
+  the shipped image.
+
+**Three findings filed rather than absorbed:** F-22, F-23, F-24. None blocks
+the water session.
+
+**What did NOT survive contact with measurement.** The audit is a document, not
+an oracle, and two of its own claims were wrong: F-08's proposed fix would not
+have met its own acceptance (the region walk is the floor, not the counting),
+and F-18's "constants triplicated" was wrong in its particulars — the watch's
+bounds are *deliberately* different from the detector's.
+
+**Method note, and the one worth keeping.** Nine of my own tests were vacuous,
+misleading or hung, and every one of them passed first. A fixture that never
+reaches the code under test; a stub that swallows the thing being tested; a
+test with no timeout, so the mutant hangs instead of failing; a monkeypatch
+leaking through a shared module; and a stale `.pyc` that makes a mutation run
+report whatever it likes. **A test that has never failed has not been tested.**
+
+
 ## 2026-08-20
 
 
