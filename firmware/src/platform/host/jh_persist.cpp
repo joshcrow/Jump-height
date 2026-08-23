@@ -48,14 +48,16 @@ std::map<std::string, std::string> readAll() {
   return kv;
 }
 
-void writeAll(const std::map<std::string, std::string>& kv) {
+bool writeAll(const std::map<std::string, std::string>& kv) {
   jh_host::ensure_dir();
   FILE* f = std::fopen(filePath().c_str(), "w");
-  if (!f) return;
+  if (!f) return false;
   for (const auto& entry : kv) {
     std::fprintf(f, "%s=%s\n", entry.first.c_str(), entry.second.c_str());
   }
-  std::fclose(f);
+  // fclose flushes, so this is where a full disk or a read-only mount
+  // actually surfaces — checking only fopen would miss it.
+  return std::fclose(f) == 0;
 }
 
 }  // namespace
@@ -72,6 +74,7 @@ const char* keyName(Key k) {
     case Key::VbatScale:      return "vbat";
     case Key::ProbeGuard:     return "probe_guard";
     case Key::StoreGuard:     return "store_guard";
+    case Key::TraceGuard:     return "trace_guard";
   }
   return "offset";
 }
@@ -85,18 +88,18 @@ float load(Key k, float def, bool* from_store) {
   return have ? std::strtof(it->second.c_str(), nullptr) : def;
 }
 
-void save(Key k, float value) {
+bool save(Key k, float value) {
   auto kv = readAll();
   char buf[32];
   std::snprintf(buf, sizeof(buf), "%.6f", (double)value);
   kv[keyName(k)] = buf;
-  writeAll(kv);
+  return writeAll(kv);
 }
 
-void clear(Key k) {
+bool clear(Key k) {
   auto kv = readAll();
   kv.erase(keyName(k));
-  writeAll(kv);
+  return writeAll(kv);
 }
 
 }  // namespace jh_persist

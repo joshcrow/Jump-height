@@ -63,6 +63,53 @@ do not.**
 
 ## CHANGED AFTER THE AUDIT — grouped by date, newest first (2026-08-14 → 2026-08-18)
 
+## 2026-08-23 — the 2026-08-22 adversarial audit is CLOSED: F-01…F-21 all landed
+
+Worked as five phases on `claude/lines-of-code-count-gs4p7w`. Ledger with
+per-ticket evidence: [audit-2026-08-22.md](audit-2026-08-22.md).
+
+**Gates now:** simtest passes with TWO parity checks (accel and gyro); watch
+60/60 in the simulator on `instinct3solar45mm`.
+
+**Firmware is UNFLASHED.** The OG still runs Phase 1–2's `src=9b35f734`; this
+tree has all of Phase 3 plus F-18's constant change. There is **no second flash
+batch** — Phase 3 planned one on the assumption that F-08 would change the
+trace block header, and it did not need to.
+
+The defects that would have cost the water session, in order of what they
+would have destroyed:
+
+- **F-11** — the JUMP path drove session count/best DOWN into the FIT. A puck
+  brownout mid-session reseeds its RAM counters, and the next real jump emits a
+  well-formed `JUMP n=1 … best_m=0.20` after a 12-jump session. The corruption
+  gate cannot reject that line. A real ride would have been archived as
+  "1 jump, best 0.20 m".
+- **F-12** — one dropped BLE callback parked the link permanently: no scan, no
+  reconnect, no error, a field that just stops for the rest of the ride.
+- **F-07** — `trace_clear()` appended into a region it had failed to erase.
+  NOR AND-merges, so the write "succeeded". Silent corruption.
+- **F-14** — `otadfu` flashed whichever board answered first, and the
+  post-flash check was fooled by the same collision, so it reported success.
+- **F-01** (Phase 1) — `-Ofast` had been deleting the `isfinite()` guards from
+  the shipped image.
+
+**Three findings filed rather than absorbed:** F-22, F-23, F-24. None blocks
+the water session.
+
+**What did NOT survive contact with measurement.** The audit is a document, not
+an oracle, and two of its own claims were wrong: F-08's proposed fix would not
+have met its own acceptance (the region walk is the floor, not the counting),
+and F-18's "constants triplicated" was wrong in its particulars — the watch's
+bounds are *deliberately* different from the detector's.
+
+**Method note, and the one worth keeping.** Nine of my own tests were vacuous,
+misleading or hung, and every one of them passed first. A fixture that never
+reaches the code under test; a stub that swallows the thing being tested; a
+test with no timeout, so the mutant hangs instead of failing; a monkeypatch
+leaking through a shared module; and a stale `.pyc` that makes a mutation run
+report whatever it likes. **A test that has never failed has not been tested.**
+
+
 ## 2026-08-20
 
 
@@ -2261,4 +2308,57 @@ The worst offenders carry a SUPERSEDED banner pointing here.
 | `docs/hardware.md:77-79` | "Accelerometer range: set ±8 g (or ±16 g). ...±8 g keeps free-fall resolution good while capturing landings." | The Sense ships ±16 g by deliberate decision (DECISIONS #25, lsm6ds3_min.h CTRL1_XL=0x54). README:240 sends readers here for "full BOM, wiring, power budget", and the whole page is ESP32-era |
 | `DECISIONS.md:69-70 (#32, #33)` | #32: the off-path back-feed was "proven 'both directions' on silicon... the very day before the mule's sensor stopped ACKing". #33: "The Puck, a fresh | #37 (:74), five rows later, establishes that no board was ever damaged and drive strength explains every symptom including the intermittency. #32/#33 carry no superseded marker, so read alon |
 | `firmware/src/main.cpp:424 (shipped `help` text)` | "# commands: help / stats / jumps / trace / dump / clear / selftest / revive / i2cdiag / info / off / dfu / uf2 / fakejump / mount / format" | Omits `pincensus`, which exists at main.cpp:512 and which DECISIONS #38, xiao-hardware-truth.md:91 and bench-playbook.md:129 all designate as THE first diagnostic to run before any hardware  |
+## 2026-08-22 (audit work)
+
+### Audit Phases 1–2 landed and flashed: 9 tickets, DC/DC on at boot for the first time
+- Working `docs/audit-2026-08-22.md` (F-01…F-21). **Phase 1** (build/test
+  gates) and **Phase 2** (firmware/power) complete; the OG carries the batch
+  as `src=9b35f734`.
+- **F-01** — the platform builder hard-codes `-Ofast`, which implies
+  `-ffinite-math-only`, which DELETED both `isfinite()` guards from the
+  shipped image. Proven on the project's own ARM toolchain: `-Ofast` compiles
+  the guard to `movs r0,#7; bx lr`; `-O2` emits a real `vabs/vcmp` against
+  0x7f7fffff. The host tests asserting those guards compile without `-Ofast`
+  — they were passing on a different binary than the one that ships. Now
+  `build_unflags = -Ofast`, `build_flags = -O2 -fno-fast-math`, verified
+  present in the shipped `.elf`.
+  - **Ledger divergence worth noting:** the ticket predicted a 42 KB size
+    *drop* from `-Os`. Chose `-O2` for numeric safety instead, which is
+    ~6 KB *larger*. The OTA-size argument does not survive that choice.
+- **F-02** — simtest ran **137 of 191** tests: `unittest discover` cannot see
+  module-level pytest-style files, and those 54 are the only guards on the
+  spin/lever/gyro logic. The local pre-flash gate — the one a human trusts
+  immediately before flashing — was blind to them while CI was not. Now
+  pytest, with **count parity asserted** rather than a hardcoded number.
+- **F-03/F-04** — CI's test job never installed PlatformIO, so every
+  `env:host` test skipped silently; and the job that publishes the `.uf2`
+  never checked the build-identity stamp it was baking in. Both fixed;
+  verified `gen_build.py --check` exits 1 on a mutated stamp.
+- **F-05 — DC/DC IS NOW ON AT BOOT.** The largest measured lever in the repo
+  (1.39× endurance, our own same-board A/B) was reachable only from a console
+  command, and DCDCEN is volatile so any watchdog reset silently reverted it
+  with nothing on the wire to say so. **Acceptance passed on silicon:
+  `dcdc=1` after a cold boot AND after a second independent reset.** The
+  register is read back rather than remembered, and `info` now carries a
+  `dcdc=` adder key — the defect was as much "invisible" as "off".
+- **F-06** — the pacer busy-spun below a 1200 µs guard against a clock whose
+  resolution is 976.6 µs, so the "final tight approach" observed nothing;
+  ~24% of wall-clock. Guard is now one tick. **The audit's preferred fix
+  (enable DWT) was REJECTED** — `twim_bounded.h:57` records that DWT shrinks
+  micros()'s wrap to ~67 s and breaks jh_clock's arithmetic, i.e. it would
+  trade a power bug for a correctness bug across every timestamp.
+- **F-09 — `pincensus` printed "revive ok" over a dead bus.** `revive()`
+  releases the bus and returns true unconditionally without re-beginning it;
+  the `revive` COMMAND works only because it follows with `runSelfTest()`.
+  Applied that chain and made it report the real verdict. **Proven on
+  silicon: after `pincensus`, an independent selftest reads accel 1.042 g.**
+  Sibling: the one-shot sensor warning gated on `== 200` could be
+  pre-consumed by a transient — now `>=`.
+- **F-21** — the retracted 11.6 mA figure lived on in a code comment, and
+  this audit's own first pass repeated it *from there*. Reworded to the
+  ≤9.7 mA conservation bound; sweep found no other live occurrences.
+- **Still owed for Phase 2:** F-06's falsifier needs desk tosses (sample
+  deltas within 2 ms of cadence, no systematic airtime shift) and F-05 wants
+  a discharge night to confirm the endurance move. Both need the owner.
+
 

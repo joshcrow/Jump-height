@@ -22,9 +22,11 @@ module UnitsFmt {
     const UNIT_FT = 1;
     const UNIT_M = 2;
 
-    const M_TO_FT = 3.28084;  // same constant as web/app.js — one conversion,
-                              // everywhere, so numbers never disagree across
-                              // clients by a rounding-constant mismatch.
+    // Generated from config/params.json (audit F-18). This used to be a
+    // hand-written 3.28084 whose comment said "same constant as web/app.js" —
+    // a duplicate acknowledged in a comment instead of removed. It was written
+    // out by hand in nine places across five languages.
+    const M_TO_FT = Params.M_TO_FT;
 
     // Resolve the effective display unit for this compute() tick. Cheap
     // enough (one Properties read, one DeviceSettings read) to call fresh

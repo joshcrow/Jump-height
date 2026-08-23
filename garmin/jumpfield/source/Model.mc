@@ -209,6 +209,10 @@ module Model {
             if (kv.get("trace_bytes") != null) { return true; }
             // 3. Physically impossible.
             if (h < 0.0 || h > Model.MAX_HEIGHT_M) { return true; }
+            // best_m gets the same bound as height (F-11). Rule 4 below only
+            // requires best >= this jump, so without this a line reporting
+            // height 0.5 and best 9000 passed every check.
+            if (b < 0.0 || b > Model.MAX_HEIGHT_M) { return true; }
             if (a < 0.0 || a > Model.MAX_AIRTIME_S) { return true; }
             if (n < 0) { return true; }
             // 4. The wire invariant: session_best is updated before the line
@@ -235,8 +239,26 @@ module Model {
                 _lastAirtimeS = a;
                 if (a > _bestAirtimeS) { _bestAirtimeS = a; }
             }
-            if (b != null) { _sessionBestM = b; }
-            if (n != null) { _jumpCount = n; }
+            // MONOTONIC, same as the STATS path below (F-11, audit
+            // 2026-08-22). The 2026-08-21 guard was applied to STATS and to
+            // best-airtime and NOT here, so the JUMP path could still drive
+            // both fields DOWN — and this is the path that runs at ~1 Hz into
+            // FitOut.updateSession(), i.e. into the permanent record.
+            //
+            // The firmware's session counters are RAM statics (main.cpp), so a
+            // brownout mid-session reseeds them and the very next real jump
+            // emits a perfectly well-formed "JUMP n=1 ... best_m=0.20" after a
+            // 12-jump session. _jumpIsCorrupt() cannot reject that line —
+            // every field is individually plausible and the wire invariant
+            // holds. Only the comparison against what we already know catches
+            // it, and only here.
+            //
+            // Within one activity the live count can only grow, so refusing a
+            // decrease costs nothing real; across activities the field is
+            // reconstructed anyway. A watch joining mid-session must still
+            // adopt HIGHER totals, which is why this is > and not "ignore".
+            if (b != null && b > _sessionBestM) { _sessionBestM = b; }
+            if (n != null && n > _jumpCount) { _jumpCount = n; }
             var now = System.getTimer();
             _lastUpdateMs = now;
             _flashUntilMs = now + Model.FLASH_MS;  // fully qualified even though

@@ -64,6 +64,7 @@ from __future__ import annotations
 
 import dataclasses
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -1302,3 +1303,275 @@ class TestStoreHost(unittest.TestCase):
                          backing=backing)
         rows2 = [ln for ln in r2.read_alls[0].splitlines() if ln and ln != "t,mag"]
         self.assertEqual(rows2, rows)
+
+
+class TraceClearEraseFailure(unittest.TestCase):
+    """F-07: a failed erase inside trace_clear() must never leave the region
+    appendable.
+
+    REPRODUCED BEFORE THE FIX, in this harness: with FAIL_NEXT_ERASE armed,
+    trace_clear() reported ok=1, TRACE_BYTES dropped to 0, and an append
+    succeeded — into a region still holding 280 KB of old samples. NOR
+    programming only clears bits, so that append AND-merges into stale blocks
+    and still returns success: silent corruption.
+
+    The cause was the erase loop accumulating `all_erased &= ...` without
+    breaking. Descending order makes a POWER CUT safe (everything above the
+    cut erased, everything below intact, boundary findable). A FAILED SECTOR
+    is different: continuing past it erases below it too, leaving a stale
+    ISLAND with erased space on both sides — and findTraceAppendPoint() scans
+    upward and stops at the first erased byte, so it sets an append point
+    BELOW the island and cannot see it.
+    """
+
+    def test_failed_erase_refuses_further_trace_appends(self):
+        tmp = Path(tempfile.mkdtemp())
+        binary = _build_harness(tmp)
+        r = run_harness(binary, [
+            "INIT",
+            "TRACE_FILL 400 50 100.0 1.000",
+            "TRACE_BYTES",
+            "FAIL_NEXT_ERASE",
+            "TRACE_CLEAR",
+            "TRACE_BYTES",
+            "TRACE_APPEND 900.000,2.500",
+            "TRACE_BYTES",
+            "JUMPS_APPEND 1 1.000 0.300 0.280 0.550",
+            "JUMPS_SCAN",
+        ], backing=tmp / "flash.bin")
+        self.assertEqual(r.returncode, 0,
+                         "an erase failure must not kill the process")
+        out = r.raw_stdout
+
+        # The clear must NOT claim success.
+        self.assertIn("TRACE_CLEAR ok=0 wedged=1", out,
+                      "a failed erase must be reported, not hidden behind ok=1")
+
+        # Byte counts around the failed clear and the refused append.
+        counts = [int(m) for m in re.findall(r"TRACE_BYTES n=(\d+)", out)]
+        self.assertGreaterEqual(len(counts), 3)
+        before, after_clear, after_append = counts[0], counts[1], counts[2]
+        self.assertGreater(before, 100000, "fixture should store real data")
+        self.assertGreater(after_clear, 0,
+                           "the region still holds old data — reporting 0 would "
+                           "be the pre-fix lie that made appending look safe")
+        self.assertEqual(after_append, after_clear,
+                         "append must be REFUSED after a failed erase; any "
+                         "growth here is a write into stale blocks")
+
+        # Scoped: the jumps region is separate and must stay usable, because
+        # losing the rider's results over a raw-sample problem is the wrong trade.
+        self.assertIn("JUMPS_SCAN count=1", out,
+                      "jumps must still record after a trace-only erase failure")
+
+
+class JumpsAppendReportsStatus(unittest.TestCase):
+    """F-10: jumps_append() was `void` with three bare-return refusal paths.
+
+    Nothing lied to the rider — jumps_scan() re-derives the count from flash —
+    but "refused" and "stored" were indistinguishable to every caller, so
+    main.cpp incremented stored_jumps either way and no test could assert on
+    the difference. Same interface habit as F-07 (void trace_clear()) and F-09
+    (a self-test that printed a verdict it never read).
+    """
+
+    def test_status_distinguishes_refused_from_stored(self):
+        tmp = Path(tempfile.mkdtemp())
+        binary = _build_harness(tmp)
+        r = run_harness(binary, [
+            # Deliberately BEFORE init: the store is unmounted, so this append
+            # must be refused — and must say so.
+            "JUMPS_APPEND 1 1.000 0.300 0.280 0.550",
+            "INIT",
+            "JUMPS_APPEND 1 1.000 0.300 0.280 0.550",
+            "JUMPS_SCAN",
+        ], backing=tmp / "flash.bin")
+        self.assertEqual(r.returncode, 0)
+        statuses = re.findall(r"JUMPS_APPEND status=(\w+)", r.raw_stdout)
+        self.assertEqual(statuses, ["FS_DOWN", "OK"],
+                         "an unmounted store must report FS_DOWN, not silence")
+        # Exactly one record reached flash — the refused one left nothing.
+        self.assertIn("JUMPS_SCAN count=1", r.raw_stdout)
+
+    def test_fill_counts_only_what_the_store_kept(self):
+        """The harness had the same defect it exists to detect: `++appended`
+        ran unconditionally, so a fill the store refused still reported the
+        full count.
+
+        Driven with the store UNMOUNTED, so every append is refused. A fill
+        that succeeds cannot test this — it would pass with the counter back
+        in its broken position, which is how the bug survived in the first
+        place.
+        """
+        tmp = Path(tempfile.mkdtemp())
+        binary = _build_harness(tmp)
+        pat = (r"JUMPS_FILL appended=(\d+) count=(\d+) best_m=[\d.]+ "
+               r"refused_at=(-?\d+) status=(\w+)")
+
+        # No INIT: the store is down, so nothing can be stored.
+        refused = run_harness(binary, ["JUMPS_FILL 10", "JUMPS_SCAN"],
+                              backing=tmp / "down.bin")
+        m = re.search(pat, refused.raw_stdout)
+        self.assertIsNotNone(m, "JUMPS_FILL must report refusals: " + refused.raw_stdout)
+        self.assertEqual(int(m.group(1)), 0,
+                         "appended must count only records the store KEPT")
+        self.assertEqual(int(m.group(3)), 0, "should stop at the first append")
+        self.assertEqual(m.group(4), "FS_DOWN")
+
+        # Control: the same fill on a mounted store stores all ten, so the
+        # assertions above are about refusal handling, not a broken fill.
+        ok = run_harness(binary, ["INIT", "JUMPS_FILL 10", "JUMPS_SCAN"],
+                         backing=tmp / "up.bin")
+        m2 = re.search(pat, ok.raw_stdout)
+        self.assertIsNotNone(m2, ok.raw_stdout)
+        self.assertEqual(int(m2.group(1)), 10)
+        self.assertEqual(int(m2.group(2)), 10, "scan must agree with the fill")
+        self.assertEqual(int(m2.group(3)), -1)
+        self.assertEqual(m2.group(4), "OK")
+
+
+class JumpsRegionFull(unittest.TestCase):
+    """F-19(b): JUMPS_FILL exists in the harness precisely to exercise the
+    jumps-region-full drop path, and no test ever invoked it.
+
+    The region is 64 KB of 32-byte records = exactly 2048 jumps. That is not a
+    theoretical limit: it is roughly two seasons of riding at 10-15 jumps a
+    session, on a puck the owner intends to glue to a board and forget, so the
+    behaviour at the boundary is a real product question and not a curiosity.
+
+    What must hold at the boundary: the store refuses cleanly, says WHY, keeps
+    every record it already has, and does not corrupt the count. Losing the
+    2049th jump is acceptable; losing the first 2048 is not.
+    """
+
+    REGION_RECORDS = 2048   # JUMPS_REGION_BYTES 65536 / JUMP_RECORD_BYTES 32
+
+    def test_region_fills_then_refuses_without_losing_stored_jumps(self):
+        tmp = Path(tempfile.mkdtemp())
+        binary = _build_harness(tmp)
+        r = run_harness(binary, [
+            "INIT",
+            f"JUMPS_FILL {self.REGION_RECORDS + 52}",   # deliberately overrun
+            "JUMPS_SCAN",
+            "JUMPS_APPEND 9999 1.000 0.300 0.280 9.990",  # one more, by hand
+            "JUMPS_SCAN",
+            "FREE_BYTES",
+        ], backing=tmp / "flash.bin")
+        self.assertEqual(r.returncode, 0, "a full region must not crash the store")
+        out = r.raw_stdout
+
+        m = re.search(r"JUMPS_FILL appended=(\d+) count=(\d+) best_m=([\d.]+) "
+                      r"refused_at=(-?\d+) status=(\w+)", out)
+        self.assertIsNotNone(m, out)
+        appended, count, refused_at, status = (int(m.group(1)), int(m.group(2)),
+                                               int(m.group(4)), m.group(5))
+
+        self.assertEqual(appended, self.REGION_RECORDS,
+                         "the region should hold exactly 2048 records")
+        self.assertEqual(refused_at, self.REGION_RECORDS,
+                         "the refusal must happen at the boundary, not before it")
+        self.assertEqual(status, "REGION_FULL",
+                         "a full region must be reported as FULL, not as a "
+                         "generic write failure -- the two need different advice "
+                         "(`clear` vs `format`)")
+        self.assertEqual(count, self.REGION_RECORDS,
+                         "scan must agree with what was actually stored")
+
+        # A hand-driven append past the boundary gets the same answer, and the
+        # 2048 stored jumps are still there afterwards. Before F-10 this path
+        # was a bare `return` that no caller could distinguish from success.
+        self.assertIn("JUMPS_APPEND status=REGION_FULL", out)
+        scans = re.findall(r"JUMPS_SCAN count=(\d+) best_m=([\d.]+)", out)
+        self.assertEqual(len(scans), 2)
+        self.assertEqual(scans[0], scans[1],
+                         "a refused append must not change the stored count or "
+                         "best -- corrupting history to reject a new record "
+                         "would be far worse than dropping it")
+
+
+class TraceCsvByteCounterParity(unittest.TestCase):
+    """F-08: the mount-time CSV byte counter no longer snprintf-formats every
+    stored sample; it computes each line's length arithmetically.
+
+    Measured in this harness (g++ -O2), full 14.46 MB chip / ~938,500 samples:
+        before   221 ms mount
+        after     73 ms mount
+        floor     60 ms  (same walk with the counter replaced by a no-op)
+    So the formatting was 161 ms of it. The floor is the region walk itself -
+    every block must be read and CRC-checked to find the append point and to
+    recover from torn writes - which is why persisting the counter in block
+    headers (the fix the ticket proposed) would not have beaten it either, and
+    why no block-format change was needed. See F-23 for the remaining floor.
+
+    This test is the parity proof: the fast path and the original snprintf path
+    must agree exactly, over stores fuzzed across the magnitudes that change a
+    formatted line's LENGTH - the sign, and each decimal digit boundary.
+    """
+
+    def _recheck(self, binary, tmp, name, cmds):
+        """Write in one process, compare in a SECOND one.
+
+        Both numbers have to come from flash or this compares nothing: the live
+        counter includes samples still sitting in the open, unwritten block,
+        while the recompute walks what is actually stored. Comparing in-process
+        showed fast=30 slow=0 on a fresh store - a difference in flush state,
+        not in arithmetic. (That gap is real but separate; see F-22, where it
+        becomes permanent once the region fills and the trailing block is
+        dropped rather than merely delayed.)
+        """
+        w = run_harness(binary, ["INIT"] + cmds, backing=tmp / name)
+        self.assertEqual(w.returncode, 0, w.raw_stdout)
+        r = run_harness(binary, ["INIT", "TRACE_BYTES", "TRACE_RECHECK"],
+                        backing=tmp / name)
+        self.assertEqual(r.returncode, 0, r.raw_stdout)
+        m = re.search(r"TRACE_RECHECK fast=(\d+) slow=(\d+) agree=(\d)", r.raw_stdout)
+        self.assertIsNotNone(m, r.raw_stdout)
+        return int(m.group(1)), int(m.group(2)), m.group(3) == "1"
+
+    def test_fast_and_snprintf_counters_agree_across_magnitudes(self):
+        tmp = Path(tempfile.mkdtemp())
+        binary = _build_harness(tmp)
+
+        # Each case crosses a digit-count boundary in "%.3f" for the timestamp,
+        # the magnitude, or both. A counter that got the integer-digit count
+        # wrong would drift by one byte per sample and show up immediately.
+        # TRACE_FILL, not TRACE_APPEND: a block holds up to 255 samples and is
+        # only written when it closes, so a two-sample append leaves NOTHING on
+        # flash and the comparison is 0 == 0 - green, and meaningless. 8 s at
+        # 50 Hz is 400 samples, which closes at least one block. (Both cases
+        # that caught this were passing "agree", which is exactly how a vacuous
+        # test hides.)
+        #
+        # TRACE_FILL ramps t from start_t and mag from mag0 to mag0+0.049, so
+        # each case sits on a different integer-digit count, and mag_carry
+        # crosses two boundaries mid-fill (t 99.96 -> 100.x, mag 9.96 -> 10.x)
+        # - the case where a wrong rounding rule adds or drops a byte.
+        cases = [
+            ("t_sub_one",  ["TRACE_FILL 8 50 0.0 0.001"]),
+            ("t_one",      ["TRACE_FILL 8 50 1.0 1.000"]),
+            ("t_two",      ["TRACE_FILL 8 50 10.0 9.900"]),
+            ("t_three",    ["TRACE_FILL 8 50 100.0 1.250"]),
+            ("t_four",     ["TRACE_FILL 8 50 1000.0 15.500"]),
+            ("t_five",     ["TRACE_FILL 8 50 12345.0 9.500"]),
+            ("mag_carry",  ["TRACE_FILL 8 50 99.960 9.960"]),
+            ("long_fill",  ["TRACE_FILL 900 50 0.0 1.000"]),
+            ("big_t_fill", ["TRACE_FILL 900 50 12345.0 9.500"]),
+        ]
+        for name, cmds in cases:
+            with self.subTest(case=name):
+                fast, slow, agree = self._recheck(binary, tmp, name + ".bin", cmds)
+                self.assertTrue(agree,
+                                f"{name}: arithmetic counter {fast} != snprintf "
+                                f"counter {slow} (delta {fast - slow})")
+                self.assertGreater(slow, 0, f"{name} stored nothing to compare")
+
+    def test_parity_holds_on_a_remounted_store(self):
+        """The counter that matters is the one rebuilt at MOUNT - that is the
+        code path F-08 changed. Fill, drop the process, remount, then compare."""
+        tmp = Path(tempfile.mkdtemp())
+        binary = _build_harness(tmp)
+        back = tmp / "remount.bin"
+        fast, slow, agree = self._recheck(
+            binary, tmp, "remount.bin", ["TRACE_FILL 2000 50 100.0 1.000"])
+        self.assertTrue(agree, f"after remount: {fast} != {slow}")
+        self.assertGreater(slow, 100000, "fixture should hold real data")

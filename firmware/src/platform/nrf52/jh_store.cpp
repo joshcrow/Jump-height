@@ -183,6 +183,13 @@ float    s_jumps_best_m     = 0.0f;
 
 uint32_t s_trace_append_off  = 0;  // bytes, relative to trace region start
 uint32_t s_trace_csv_bytes   = 0;  // see trace_bytes() contract, top comment
+// F-07 (audit 2026-08-22): set when trace_clear() hits an erase failure. The
+// region's layout is then UNKNOWABLE by scanning — a stale island may sit
+// above wherever findTraceAppendPoint() stops — so appends must refuse rather
+// than AND-merge into old blocks and silently corrupt. Scoped to the trace:
+// the jumps region is separate and untouched, and taking the rider's actual
+// results down over a raw-sample problem would be the wrong trade.
+bool     s_trace_wedged      = false;
 bool     s_trace_csv_header_counted = false;
 bool     s_trace_full        = false;
 
@@ -213,10 +220,14 @@ void flashSleep() {
 }
 
 // ------------------------------------------------------- record/CSV helpers
+// F-08: both live in trace_codec.h now, next to emit_csv_sample() — the
+// function whose output length they predict. Keeping the predictor beside the
+// formatter is what stops the two drifting apart.
 uint32_t csvLineLen(double t_s, float mag_g) {
-  char buf[32];
-  int n = snprintf(buf, sizeof(buf), "%.3f,%.3f\n", t_s, (double)mag_g);
-  return n > 0 ? (uint32_t)n : 0;
+  return trace_codec::csv_line_len(t_s, mag_g);
+}
+uint32_t csvLineLenFormatted(double t_s, float mag_g) {
+  return trace_codec::csv_line_len_formatted(t_s, mag_g);
 }
 
 // True if `rec` (already read from flash) is a whole, uncorrupted, not-erased
@@ -359,9 +370,15 @@ void findJumpsAppendPoint() {
 // count (s_trace_csv_bytes) by decoding every recovered block's samples,
 // since across a reboot we no longer have the original incoming text —
 // only the compact binary form — to measure directly.
+struct CsvCount {
+  uint32_t total;
+  bool     formatted;   // true = the slow snprintf path, for cross-checking
+};
+
 void csvByteCounter(void* ctx, double t_s, float mag_g) {
-  uint32_t* total = (uint32_t*)ctx;
-  *total += csvLineLen(t_s, mag_g);
+  CsvCount* c = (CsvCount*)ctx;
+  c->total += c->formatted ? csvLineLenFormatted(t_s, mag_g)
+                           : csvLineLen(t_s, mag_g);
 }
 
 // Largest a single trace block can ever legitimately be (header + the max
@@ -402,9 +419,14 @@ bool traceScanHitDamage(uint32_t* off, const uint8_t* buf, size_t len) {
 // blocks) so a reboot only has to replay the tail since the last
 // checkpoint — deliberately not built here, to keep the on-disk format for
 // this first compile-clean pass as simple as possible.
-void findTraceAppendPoint() {
+// The region walk, factored out of findTraceAppendPoint() so the slow
+// cross-check (traceCsvBytesRecomputed(), the `tracecheck` command) runs the
+// IDENTICAL traversal — including torn-write recovery — and can only differ in
+// how it measures each sample. A second, simpler walk written for the check
+// would be checking itself, not the real scan.
+uint32_t walkTraceRegion(bool formatted, uint32_t* csv_bytes_out) {
   uint32_t off = 0;
-  uint32_t csv_total = 0;
+  CsvCount csv_total = {0, formatted};
   uint8_t block_buf[trace_codec::HEADER_BYTES];
   while (off + trace_codec::HEADER_BYTES <= s_trace_region_bytes) {
     // WATCHDOG FEED (review 2026-08-14). This scan walks the region block
@@ -445,8 +467,23 @@ void findTraceAppendPoint() {
     }
     off = align4(off + r.bytes_consumed);  // writer advances identically
   }
+  if (csv_bytes_out) *csv_bytes_out = off > 0 ? csv_total.total + 6 /* "t,mag\n" header */ : 0;
+  return off;
+}
+
+// Recompute the CSV byte total the pre-F-08 way (snprintf per sample), for the
+// `tracecheck` command. Read-only: touches no module state.
+uint32_t traceCsvBytesRecomputed() {
+  uint32_t bytes = 0;
+  walkTraceRegion(/*formatted=*/true, &bytes);
+  return bytes;
+}
+
+void findTraceAppendPoint() {
+  uint32_t csv_bytes = 0;
+  const uint32_t off = walkTraceRegion(/*formatted=*/false, &csv_bytes);
   s_trace_append_off = off;
-  s_trace_csv_bytes  = off > 0 ? csv_total + 6 /* "t,mag\n" header */ : 0;
+  s_trace_csv_bytes  = csv_bytes;
   s_trace_csv_header_counted = off > 0;
   // Full means "no further block can ever fit" — not merely "not one more
   // byte remains." A block that arrives when less than kMaxTraceBlockBytes
@@ -798,12 +835,13 @@ uint32_t free_bytes() {
 }
 
 // --------------------------------------------------------------- jumps.csv
-void jumps_append(uint32_t n, float takeoff_s, float airtime_raw_s,
-                  float airtime_s, float height_m,
-                  uint16_t med_a_mg, uint16_t med_w_dps,
-                  uint16_t med_acorr_mg, uint16_t n_air) {
-  if (!s_fs_ok) return;
-  if (s_jumps_append_off + JUMP_RECORD_BYTES > JUMPS_REGION_BYTES) return;  // region full
+AppendResult jumps_append(uint32_t n, float takeoff_s, float airtime_raw_s,
+                          float airtime_s, float height_m,
+                          uint16_t med_a_mg, uint16_t med_w_dps,
+                          uint16_t med_acorr_mg, uint16_t n_air) {
+  if (!s_fs_ok) return AppendResult::FS_DOWN;
+  if (s_jumps_append_off + JUMP_RECORD_BYTES > JUMPS_REGION_BYTES)
+    return AppendResult::REGION_FULL;
 
   flashWake();
   JumpRecord rec;
@@ -847,12 +885,13 @@ void jumps_append(uint32_t n, float takeoff_s, float airtime_raw_s,
     // pair already agrees with no reboot required.
     s_jumps_append_off =
         skipPastTornWrite(s_jumps_append_off, JUMP_RECORD_BYTES, JUMPS_REGION_BYTES);
-    return;
+    return AppendResult::WRITE_FAILED;
   }
 
   s_jumps_append_off += JUMP_RECORD_BYTES;
   s_jumps_count++;
   if (height_m > s_jumps_best_m) s_jumps_best_m = height_m;
+  return AppendResult::OK;
 }
 
 void jumps_scan(uint32_t& count, float& best_m) {
@@ -1000,6 +1039,8 @@ bool feedSample(const char* line, size_t len) {
 
 bool trace_append(const char* data, size_t len) {
   if (!s_fs_ok || len == 0) return false;
+  if (s_trace_wedged) return false;  // F-07: layout unknowable after a failed
+                                     // erase — never append into it
   if (s_trace_full) return false;  // main.cpp already gates on trace_is_full()
                                    // before calling us; this is belt+suspenders.
 
@@ -1025,6 +1066,14 @@ bool trace_append(const char* data, size_t len) {
 }
 
 uint32_t trace_bytes()   { return s_trace_csv_bytes; }
+
+uint32_t trace_bytes_recomputed() {
+  if (!s_fs_ok) return 0;
+  flashWake();
+  const uint32_t n = traceCsvBytesRecomputed();
+  flashSleep();
+  return n;
+}
 bool     trace_is_full() { return s_trace_full; }
 
 // ---------------------------------------------------- framed raw read-back
@@ -1096,6 +1145,9 @@ void close_read() {
 //
 // The superblock is rewritten LAST and s_fs_ok gates on it, exactly as
 // clear() does — a half-finished erase must never look like success.
+bool trace_wedged() { return s_trace_wedged; }
+void set_trace_wedged(bool w) { s_trace_wedged = w; }
+
 void trace_clear() {
   if (!s_fs_ok) return;
   flashWake();
@@ -1139,9 +1191,27 @@ void trace_clear() {
   //
   // Same sectors, same time, same power risk — one order self-heals and the
   // other corrupts.
+  // F-07 (audit 2026-08-22): STOP on the first failure. This loop used to
+  // accumulate `all_erased &= ...` and keep going, which is the one thing it
+  // must not do.
+  //
+  // Descending order makes a POWER CUT safe: everything above the cut is
+  // erased, everything below is intact, and the boot scan finds the boundary.
+  // A FAILED SECTOR is a different animal. Continuing past it erases the
+  // sectors below it too, leaving a stale ISLAND with erased space on both
+  // sides — and findTraceAppendPoint() scans upward from offset 0, stops at
+  // the first erased byte, and sets an append point BELOW the island. It
+  // structurally cannot see what is above it. Appending then walks into
+  // stale blocks, and NOR programming only clears bits, so the write
+  // AND-merges and reports success. Silent corruption, exactly the class the
+  // 40-line comment below this function exists to prevent.
+  //
+  // Reproduced in the repo's own harness before fixing (FAIL_NEXT_ERASE):
+  // clear reported ok=1, TRACE_BYTES went to 0, and an append succeeded into
+  // a region still holding 280 KB of old samples.
   bool all_erased = true;
   for (uint32_t i = trace_sectors_used; i > 0; --i) {
-    all_erased &= erase_fed(first_sector + i - 1);
+    if (!erase_fed(first_sector + i - 1)) { all_erased = false; break; }
   }
 
   // The superblock is deliberately NOT touched. An earlier comment here
@@ -1167,11 +1237,19 @@ void trace_clear() {
     s_trace_csv_header_counted = false;
     s_trace_full       = false;
   } else {
-    // A sector refused to erase. Do NOT assume offset 0 — that is the same
-    // write-on-top-of-old-data hazard as ascending order. Re-derive the truth
-    // from the chip: the scan finds the real boundary and storage stays up and
-    // honest, which with descending order is always a consistent state.
-    findTraceAppendPoint();
+    // A sector refused to erase, so the region's layout is now UNKNOWABLE by
+    // scanning: there may be a stale island above wherever the scan stops.
+    // Re-deriving an append point here (what this code used to do) produced
+    // exactly the corruption described above — the scan cannot see past the
+    // first erased byte.
+    //
+    // Refuse further trace appends instead. Scoped to the trace: jumps are a
+    // separate region, untouched by this operation, and taking them down too
+    // would lose the rider's actual results over a raw-sample problem
+    // (clear() takes the whole store down because it erases the whole store;
+    // this one must not).
+    s_trace_wedged = true;
+    findTraceAppendPoint();   // best-effort state for reporting only
   }
   // s_fs_ok is deliberately NOT touched: nothing above can leave the chip in
   // an uncertain state, so there is no reason to take storage down (and every

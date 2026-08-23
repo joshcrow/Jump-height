@@ -92,9 +92,31 @@ def _render(flight, peak_dps, lever_m, t_peak_frac=0.55, width_frac=0.20):
 
 
 def _fly(times, mags, spin_fn, det, arm, takeoff=TAKEOFF):
-    """Run one jump through detector + estimator exactly as main.cpp does:
-    observe RAW magnitude while airborne, commit when the flight ends, then
-    hand the new lever arm to the detector for the NEXT jump."""
+    """Run one flight through detector + estimator exactly as main.cpp does.
+
+    Observe RAW magnitude while airborne; on leaving AIRBORNE, commit ONLY IF
+    the flight ended in a validated jump, and discard otherwise.
+
+    THAT GATE IS THE POINT (F-17, audit 2026-08-22). This function used to
+    claim "exactly as main.cpp does" in its docstring and then commit on EVERY
+    AIRBORNE exit — the ungated policy main.cpp documents as having walked a
+    converged lever arm off by ~50x in minutes. So the flagship test file was
+    certifying the harmful policy under the label of the real one, and passing
+    while doing it. Its green was not evidence about the shipped behaviour.
+
+    main.cpp's actual shape (main.cpp:1634-1660):
+
+        if (was_airborne && state != AIRBORNE) {
+            if (jumped) {
+                if (JH_SPIN_SELFARM_ENABLED) { commit(); ... } else discard();
+            } else { discard(); airReset(); }
+        }
+
+    JH_SPIN_SELFARM_ENABLED is currently 0 — self-arm is compiled OUT for the
+    one-shot water session — so on the real device every path discards today.
+    These tests exercise the estimator as if it were enabled, which is what
+    they are for; what they must not do is exercise a policy that was retired.
+    """
     from detector import AIRBORNE
 
     ev = None
@@ -104,11 +126,16 @@ def _fly(times, mags, spin_fn, det, arm, takeoff=TAKEOFF):
         if was_airborne:
             arm.observe(a, dps)          # RAW magnitude, never the corrected one
         e = det.update(t, a, dps)
-        if was_airborne and det.state != AIRBORNE:
-            arm.commit()
-            det.set_spin_lever_m(arm.value())
         if e is not None:
             ev = e
+        if was_airborne and det.state != AIRBORNE:
+            # `e` is the detector's verdict for the flight that just ended: a
+            # JumpEvent means validated, None means rejected.
+            if e is not None:
+                arm.commit()
+                det.set_spin_lever_m(arm.value())
+            else:
+                arm.discard()
     return ev
 
 
@@ -120,7 +147,29 @@ def _herr(ev, reference):
 
 # --------------------------------------------------------------- the headline
 
-@pytest.mark.parametrize("true_r", [0.2, 0.3, 0.5, 0.8])
+@pytest.mark.parametrize("true_r", [
+    # r=0.2 does NOT self-calibrate under main.cpp's actual commit policy, and
+    # this xfail records that rather than hiding it (F-24, filed 2026-08-23).
+    #
+    # It passed before F-17 only because _fly() was running the RETIRED ungated
+    # policy. Traced sample by sample, at r=0.2 / 600 dps the uncalibrated
+    # detector produces TWO exits from AIRBORNE:
+    #     t=2.925  64 observations  -> REJECTED  -> discard
+    #     t=3.560   0 observations  -> validated -> commit, with nothing to commit
+    # The flight carrying the data is rejected (2.24 g of uncorrected spin
+    # distorts its airtime), and the flight that validates carries none. So the
+    # estimator can never bootstrap at this radius. Larger radii work because
+    # their first exit is itself validated.
+    #
+    # strict: if this ever starts passing, the xfail FAILS - so whoever fixes
+    # F-24 is told, instead of a silent green.
+    pytest.param(0.2, marks=pytest.mark.xfail(
+        strict=True,
+        reason="F-24: at r=0.2 the observation-bearing flight is rejected and "
+               "the validated one has no observations, so self-arm cannot "
+               "bootstrap. Not reachable today - JH_SPIN_SELFARM_ENABLED is 0.")),
+    0.3, 0.5, 0.8,
+])
 def test_uncalibrated_device_fixes_itself_over_jumps(flight, reference, true_r):
     """A device that has never been calibrated, told nothing about its mount,
     converges to correct heights on its own."""
@@ -360,3 +409,175 @@ def test_landing_spike_does_not_drag_the_estimate(flight):
         f"5 landing-spike samples moved the estimate {clean:.4f} -> "
         f"{contaminated:.4f}; the median is not protecting it"
     )
+
+
+# --------------------------------------------------- F-17: the commit gate
+
+def _fly_samples(times, mags, dps_list, det, arm):
+    """_fly() for a hand-built sample stream, same commit gate as main.cpp."""
+    from detector import AIRBORNE
+
+    ev = None
+    for t, a, dps in zip(times, mags, dps_list):
+        was_airborne = det.state == AIRBORNE
+        if was_airborne:
+            arm.observe(a, dps)
+        e = det.update(t, a, dps)
+        if e is not None:
+            ev = e
+        if was_airborne and det.state != AIRBORNE:
+            if e is not None:
+                arm.commit()
+                det.set_spin_lever_m(arm.value())
+            else:
+                arm.discard()
+    return ev
+
+
+def _phantom_flight(t0, seconds=3.0, hz=200.0, dps=567.0, accel_g=1.0):
+    """A phantom flight: a board still RIDING at 1 g under a spin fast enough
+    that the correction manufactures free-fall.
+
+    At r=0.5 m, 567 dps gives rot_g ~= 5 g, so sqrt(1 - 25) clamps to 0 and the
+    detector sees free-fall that never ends — a max-airtime reject. This is the
+    shape main.cpp names as the corruption source: phantom flights are ALL
+    rejects, and the retired policy committed them anyway.
+
+    Kept under the rot_g > 16 g anti-livelock guard (F-16) on purpose: above it
+    the raw magnitude passes through and no phantom forms at all.
+
+    The stream ENDS with normal riding (1 g, gentle rotation). Without that
+    tail the detector is still AIRBORNE when the samples run out, so the flight
+    never exits and nothing is committed OR discarded — which quietly made the
+    first version of the leak test assert against 64 still-pending
+    observations.
+    """
+    n = int(seconds * hz)
+    times = [t0 + i / hz for i in range(n)]
+    mags = [accel_g] * n
+    spins = [dps] * n
+
+    # Spin down: the manufactured free-fall stops, the flight ends, and with no
+    # landing spike (1 g is well under the 2.5 g threshold) it ends REJECTED —
+    # which is the whole point of the probe.
+    tail = int(1.5 * hz)
+    t_end = times[-1]
+    times += [t_end + (i + 1) / hz for i in range(tail)]
+    mags += [accel_g] * tail
+    spins += [30.0] * tail
+    return times, mags, spins
+
+
+def test_a_rejected_phantom_flight_cannot_move_the_calibration(flight):
+    """F-17 regression. main.cpp:1634-1660 commits ONLY flights that ended in a
+    validated jump, because committing rejects walked a converged lever arm off
+    by ~50x in minutes.
+
+    tools/tests/test_lever_arm.py's own _fly() implemented the RETIRED policy
+    while its docstring claimed to mirror main.cpp — so the flagship file
+    certified the harmful behaviour under the label of the correct one, and
+    passed.
+    """
+    true_r = 0.5
+    p = Params()
+    p.spin_lever_m = 0.0
+    det = Detector(p)
+    arm = LeverArm()
+
+    # Converge on real jumps first.
+    for _ in range(3):
+        times, mags, spin_fn = _render(flight, 600, lever_m=true_r)
+        _fly(times, mags, spin_fn, det, arm)
+    assert arm.has_estimate(), "fixture failed to converge before the probe"
+    converged = arm.value()
+    assert abs(converged - true_r) / true_r < 0.12, converged
+
+    # Now a run of phantom flights. Every one is a reject.
+    t = 100.0
+    for _ in range(6):
+        times, mags, dps = _phantom_flight(t)
+        ev = _fly_samples(times, mags, dps, det, arm)
+        assert ev is None, "the phantom must be REJECTED or this proves nothing"
+        t = times[-1] + 1.0
+
+    assert arm.value() == pytest.approx(converged, rel=1e-9), (
+        f"phantom flights moved the calibration from {converged:.4f} to "
+        f"{arm.value():.4f} — the retired ungated commit policy is back")
+
+
+def test_the_phantom_probe_would_have_caught_the_retired_policy(flight):
+    """The probe above only means something if the phantoms it feeds WOULD
+    corrupt a converged estimate under the old rule. This runs the same
+    phantoms through the retired policy — commit on every AIRBORNE exit — and
+    requires the calibration to move badly.
+
+    Without this, a phantom that quietly produced no observations at all would
+    make the regression test above pass for the wrong reason.
+    """
+    from detector import AIRBORNE
+
+    true_r = 0.5
+    p = Params()
+    p.spin_lever_m = 0.0
+    det = Detector(p)
+    arm = LeverArm()
+    for _ in range(3):
+        times, mags, spin_fn = _render(flight, 600, lever_m=true_r)
+        _fly(times, mags, spin_fn, det, arm)
+    converged = arm.value()
+
+    t = 100.0
+    for _ in range(6):
+        times, mags, dps = _phantom_flight(t)
+        for tt, a, w in zip(times, mags, dps):
+            was_airborne = det.state == AIRBORNE
+            if was_airborne:
+                arm.observe(a, w)
+            det.update(tt, a, w)
+            if was_airborne and det.state != AIRBORNE:
+                arm.commit()            # THE RETIRED POLICY: no jump gate
+                det.set_spin_lever_m(arm.value())
+        t = times[-1] + 1.0
+
+    drift = abs(arm.value() - converged) / converged
+    assert drift > 0.20, (
+        f"the retired policy only moved the estimate {100*drift:.1f}% "
+        f"({converged:.4f} -> {arm.value():.4f}); this probe is too weak to "
+        f"prove the gate in the test above is doing anything")
+
+
+def test_discarded_observations_do_not_leak_into_the_next_flight(flight):
+    """Discarding has to CLEAR the pending samples, not merely skip the fold.
+
+    The 2026-08-12 gyro-crash-hunt found this on the C++ side: a flight that
+    exits AIRBORNE without committing leaves up to 64 observations pending,
+    and they then merge into the NEXT flight's median and walk the estimate to
+    a blend no real flight produced. lever_arm.h's discard() clears them; the
+    Python mirror had no discard() at all until F-17.
+
+    Not covered by the phantom test above - there, every flight is discarded
+    and no real one follows, so a no-op discard() passes it unnoticed. Found by
+    mutation-testing that test.
+    """
+    true_r = 0.5
+    p = Params()
+    p.spin_lever_m = 0.0
+    det = Detector(p)
+    arm = LeverArm()
+    for _ in range(3):
+        times, mags, spin_fn = _render(flight, 600, lever_m=true_r)
+        _fly(times, mags, spin_fn, det, arm)
+    converged = arm.value()
+    assert arm.has_estimate()
+
+    # One rejected phantom, which must leave nothing behind...
+    times, mags, dps = _phantom_flight(100.0)
+    assert _fly_samples(times, mags, dps, det, arm) is None
+    assert not arm._r, "a discarded flight must leave no pending observations"
+
+    # ...then a real jump, whose estimate must be its own.
+    times, mags, spin_fn = _render(flight, 600, lever_m=true_r)
+    _fly(times, mags, spin_fn, det, arm)
+    assert abs(arm.value() - true_r) / true_r < 0.12, (
+        f"estimate {arm.value():.4f} drifted from {converged:.4f} after a "
+        f"discarded phantom — its samples leaked into this flight's median")

@@ -44,9 +44,12 @@ class PuckLink extends Ble.BleDelegate {
     // web/app.js's NUS_SERVICE/NUS_RX/NUS_TX; the Sense sibling,
     // firmware/src/platform/nrf52/jh_link.cpp, implements the same NUS
     // surface via Bluefruit's BLEUart).
-    const NUS_SERVICE = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
-    const NUS_RX = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";   // watch writes commands
-    const NUS_TX = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";   // puck notifies output
+    // Generated from config/params.json (audit F-18) — these three UUIDs were
+    // hand-copied into six files across three languages, and a typo in any one
+    // of them is a link that silently never connects.
+    const NUS_SERVICE = Params.BLE_SERVICE_UUID;
+    const NUS_RX = Params.BLE_RX_UUID;   // watch writes commands
+    const NUS_TX = Params.BLE_TX_UUID;   // puck notifies output
 
     // The one command this field ever sends (spec §13: no calibration/
     // commands from the watch) — a compile-time byte literal sidesteps
@@ -61,6 +64,22 @@ class PuckLink extends Ble.BleDelegate {
     const BACKOFF_MIN_MS = 5000;   // spec §5.4: "backoff 5 s -> 15 s cap"
     const BACKOFF_MAX_MS = 15000;
     const BACKOFF_STEP_MS = 5000;
+
+    // F-12 (audit 2026-08-22): how long a connect attempt may sit in
+    // PAIRING/DISCOVERING/SUBSCRIBING before we give up on it.
+    //
+    // Those states are entered and then left ONLY by a BleDelegate callback.
+    // Garmin does not guarantee those callbacks arrive, and poll() - the only
+    // clock this class has - used to return immediately unless the state was
+    // SCANNING. One dropped callback therefore parked the state machine
+    // forever: no scan, no reconnect, no error, just a field that never
+    // updates again for the rest of the ride.
+    //
+    // 20 s is deliberately well above a healthy connect (sub-second on the
+    // bench, and 2,068/2,068 reconnect cycles recovered with a p95 of 1.99 s)
+    // so this never fires on a merely slow one. It is a stuck-detector, not a
+    // tuning knob.
+    const CONNECT_TIMEOUT_MS = 20000;
 
     // Public state values (JumpFieldView polls state() against these to pick
     // one of spec §4.2's four UI states, combined with Model.hasData()).
@@ -90,6 +109,7 @@ class PuckLink extends Ble.BleDelegate {
 
     hidden var _backoffMs as Number;
     hidden var _resumeScanAtMs as Number;   // System.getTimer() deadline; 0 = none
+    hidden var _connectDeadlineMs as Number;  // same clock; 0 = not connecting
 
     // model: Model.State to feed parsed lines into. puckName: the
     // resources/settings puckName property value (name-match fallback).
@@ -101,6 +121,7 @@ class PuckLink extends Ble.BleDelegate {
         _state = STATE_IDLE;
         _backoffMs = BACKOFF_MIN_MS;
         _resumeScanAtMs = 0;
+        _connectDeadlineMs = 0;
         _device = null;
         _txChar = null;
         _rxChar = null;
@@ -177,13 +198,33 @@ class PuckLink extends Ble.BleDelegate {
         } catch (ex) {
             // nothing to do -- we're stopping anyway
         }
+        _connectDeadlineMs = 0;
         _state = STATE_IDLE;
     }
 
+    // True if a connect attempt has been sitting in a callback-driven state
+    // past its deadline. Static and pure so it can be unit-tested: ModelTest's
+    // constraint (no BLE symbols in the test build) means the surrounding
+    // teardown cannot be, but the DECISION is the part with a bug in it.
+    static function connectAttemptExpired(state as Number, deadlineMs as Number,
+                                          nowMs as Number) as Boolean {
+        if (deadlineMs == 0) { return false; }
+        if (!(state == STATE_PAIRING || state == STATE_DISCOVERING ||
+              state == STATE_SUBSCRIBING)) {
+            return false;
+        }
+        return nowMs >= deadlineMs;
+    }
+
     // Driven from JumpFieldView.compute() (~1 Hz) -- the only clock this
-    // class has. Only acts when a backed-off rescan is due; everything else
-    // is event-driven via the BleDelegate callbacks below.
+    // class has. Handles both timers: the connect-attempt deadline (F-12) and
+    // the backed-off rescan. Everything else is event-driven via the
+    // BleDelegate callbacks below.
     function poll() as Void {
+        if (connectAttemptExpired(_state, _connectDeadlineMs, System.getTimer())) {
+            _abandonConnectAttempt();
+            return;
+        }
         if (_state != STATE_SCANNING || _resumeScanAtMs == 0) {
             return;
         }
@@ -191,6 +232,26 @@ class PuckLink extends Ble.BleDelegate {
             _resumeScanAtMs = 0;
             _beginScan();
         }
+    }
+
+    // Give up on a connect that never called us back: drop the half-open
+    // device so the radio is not left paired to something we are no longer
+    // talking to, then fall into the ordinary rescan path (which grows the
+    // backoff, so a puck that repeatedly accepts-then-stalls does not become
+    // a tight retry loop).
+    hidden function _abandonConnectAttempt() as Void {
+        _connectDeadlineMs = 0;
+        if (_device != null) {
+            try {
+                Ble.unpairDevice(_device);
+            } catch (ex) {
+                // already gone / never paired -- rescanning regardless
+            }
+            _device = null;
+        }
+        _txChar = null;
+        _rxChar = null;
+        _scheduleRescan();
     }
 
     // ---------------------------------------------------- BleDelegate callbacks
@@ -251,6 +312,7 @@ class PuckLink extends Ble.BleDelegate {
         }
         if (status == Ble.STATUS_SUCCESS) {
             _state = STATE_LIVE;
+            _connectDeadlineMs = 0;
             _backoffMs = BACKOFF_MIN_MS;  // a healthy connect resets the backoff
             _sendStatsRequest();
         } else {
@@ -293,6 +355,7 @@ class PuckLink extends Ble.BleDelegate {
     // success above), so a run of repeated failures backs off monotonically
     // instead of resetting itself.
     hidden function _scheduleRescan() as Void {
+        _connectDeadlineMs = 0;
         _state = STATE_SCANNING;
         try {
             Ble.setScanState(Ble.SCAN_STATE_OFF);
@@ -332,6 +395,7 @@ class PuckLink extends Ble.BleDelegate {
 
     hidden function _connectTo(scanResult) as Void {
         _state = STATE_PAIRING;
+        _connectDeadlineMs = System.getTimer() + CONNECT_TIMEOUT_MS;
         try {
             Ble.setScanState(Ble.SCAN_STATE_OFF);
             var d = Ble.pairDevice(scanResult);
@@ -352,6 +416,7 @@ class PuckLink extends Ble.BleDelegate {
     // the lookup unexpectedly comes back null.
     hidden function _onConnected() as Void {
         _state = STATE_DISCOVERING;
+        _connectDeadlineMs = System.getTimer() + CONNECT_TIMEOUT_MS;
         var svc = _device.getService(_svcUuid);
         if (svc == null) {
             _scheduleRescan();
@@ -368,6 +433,7 @@ class PuckLink extends Ble.BleDelegate {
 
     hidden function _subscribe() as Void {
         _state = STATE_SUBSCRIBING;
+        _connectDeadlineMs = System.getTimer() + CONNECT_TIMEOUT_MS;
         var cccd = _txChar.getDescriptor(Ble.cccdUuid());
         if (cccd == null) {
             _scheduleRescan();

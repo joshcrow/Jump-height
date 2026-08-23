@@ -43,6 +43,7 @@ import glob
 import json
 import math
 import os
+import re
 import select
 import shutil
 import statistics
@@ -2369,10 +2370,15 @@ def cmd_boards(args) -> int:
     # wander versus 3 mV. The physics was right; the sample count was not.
     # A detector that needs enough samples must REFUSE to run with too few,
     # rather than emit a confident wrong answer.
-    if int(getattr(args, "samples", 4)) < 3:
-        print("--samples must be at least 3: with two reads a floating rail "
-              "can look stable and a real cell can look floating (both "
-              "happened on 2026-08-20).")
+    # One variable, read once. This was getattr(args,"samples",4) here and
+    # getattr(args,"samples",3) twice in the loop below — two different
+    # defaults for one setting (F-15).
+    MIN_SAMPLES = 3
+    n_samples = int(getattr(args, "samples", 4))
+    if n_samples < MIN_SAMPLES:
+        print(f"--samples must be at least {MIN_SAMPLES}: with two reads a "
+              f"floating rail can look stable and a real cell can look "
+              f"floating (both happened on 2026-08-20).")
         return 2
     names = _ble_scan_names(timeout=float(getattr(args, "scan_timeout", 12.0)))
     if not names:
@@ -2386,20 +2392,48 @@ def cmd_boards(args) -> int:
     for nm in sorted(names):
         print(f"── {nm}")
         samples, info = [], {}
-        for i in range(int(getattr(args, "samples", 3))):
+        failures = []
+        for i in range(n_samples):
             kv = _ble_stats_pinned(nm)
             if not kv:
-                continue
-            info = kv or info
-            try:
-                samples.append((int(kv["vbat_mv"]), int(kv.get("chg", "0"))))
-            except (KeyError, ValueError):
-                pass
-            if i + 1 < int(getattr(args, "samples", 3)):
+                # F-15: this used to `continue` — no counter, and skipping the
+                # sleep as well, so four attempts could collapse into one fast
+                # burst and a single surviving read still reached the verdict.
+                failures.append(f"read {i + 1}: no reply")
+            else:
+                info = kv or info
+                try:
+                    samples.append((int(kv["vbat_mv"]), int(kv.get("chg", "0"))))
+                except (KeyError, ValueError) as e:
+                    failures.append(f"read {i + 1}: unparseable vbat_mv "
+                                    f"({type(e).__name__})")
+            # Sleep on EVERY path including failures: the whole method depends
+            # on the reads being seconds apart. A retry burst measures the ADC's
+            # noise floor, not the rail's inertia.
+            if i + 1 < n_samples:
                 time.sleep(2.0)
+
+        for f in failures:
+            print(f"   ! {f}")
 
         if not samples:
             print("   no answer (asleep, busy, or connected elsewhere)\n")
+            continue
+
+        # A SKIP IS NOT A PASS. The three-sample minimum is enforced on the
+        # REQUEST above; this enforces it on what actually arrived. Reproduced
+        # 2026-08-20 by stubbing 3 failures of 4 against JumpHeight-45ED, a
+        # board with no battery at all: the single surviving read produced
+        # "battery present and stable (97%) — this board can measure power."
+        # One sample has no spread, and no spread reads as a perfectly steady
+        # cell.
+        if len(samples) < MIN_SAMPLES:
+            print(f"   vbat       {', '.join(str(v) + ' mV' for v, _ in samples)}")
+            print(f"   INCONCLUSIVE — only {len(samples)}/{n_samples} reads "
+                  f"succeeded, and this test needs {MIN_SAMPLES} to tell a real "
+                  f"cell from a floating divider.")
+            print(f"   Not a verdict about the hardware: retry with the board "
+                  f"awake and nothing else connected to it.\n")
             continue
 
         src = info.get("src", "?")
@@ -2643,7 +2677,7 @@ def cmd_simtest(args) -> int:
 
     # 2. Generated params header is in sync with config/params.json
     r = _run([sys.executable, "tools/gen_params.py", "--check"])
-    results.append(("params.gen.h in sync with config/params.json", r.returncode == 0,
+    results.append(("generated params in sync with config/params.json", r.returncode == 0,
                     "" if r.returncode == 0 else "run ./tools/jump gen"))
 
     # 2b. Build identity is in sync with the sources it claims to identify.
@@ -2679,6 +2713,42 @@ def cmd_simtest(args) -> int:
                     abs(x - y) <= 0.002 for ra, rb in zip(a, b) for x, y in zip(ra, rb)))
                 results.append(("C++ and Python detectors agree exactly", parity,
                                 f"C++ {len(a)} jumps vs Python {len(b)}"))
+
+                # GYRO-PATH PARITY (F-16, audit 2026-08-22). The check above
+                # only ever exercises the accel-only update(), on both sides —
+                # so every gyro-path divergence was invisible BY CONSTRUCTION.
+                # F-16 was exactly such a divergence: the Python mirror was
+                # missing jump_detector.h's rot_g > 16 g anti-livelock guard,
+                # and no amount of running simtest could have shown it.
+                #
+                # data/spin_railed_gyro.csv contains a real jump followed by a
+                # railed-gyro segment while still riding at 1 g. Without the
+                # guard, quadrature subtraction turns that 1 g into 0 g —
+                # manufactured free-fall — and the run reports a SECOND,
+                # fabricated 0.84 m jump. With it, both sides report the one
+                # real jump. The lever is a calibration, not a sample, so both
+                # harnesses read it from JH_SPIN_LEVER_M.
+                gyro_csv = REPO / "data" / "spin_railed_gyro.csv"
+                if gyro_csv.exists():
+                    genv = dict(os.environ, JH_SPIN_LEVER_M="0.5")
+                    with open(gyro_csv) as f:
+                        gc = subprocess.run([binp], stdin=f, capture_output=True,
+                                            text=True, env=genv)
+                    gp = subprocess.run([sys.executable, "sim/golden.py", str(gyro_csv)],
+                                        capture_output=True, text=True, cwd=REPO,
+                                        env=genv)
+                    ga, gb = nums(gc.stdout), nums(gp.stdout)
+                    gparity = (len(ga) == len(gb) and len(ga) == 1 and all(
+                        abs(x - y) <= 0.002
+                        for ra, rb in zip(ga, gb) for x, y in zip(ra, rb)))
+                    detail = f"C++ {len(ga)} jumps vs Python {len(gb)} (expect 1)"
+                    if len(ga) > 1 or len(gb) > 1:
+                        detail += " — a spurious jump here means the rot_g>16 " \
+                                  "guard is missing on that side"
+                    results.append(("C++/Python agree on the GYRO path", gparity, detail))
+                else:
+                    results.append(("C++/Python agree on the GYRO path", False,
+                                    "data/spin_railed_gyro.csv is missing"))
     else:
         results.append(("C++ parity check", True, "skipped: no g++ on this machine"))
 
@@ -2689,9 +2759,74 @@ def cmd_simtest(args) -> int:
         results.append(("CLI + fake-device integration tests", True,
                         "skipped inside wizard"))
     else:
-        r = _run([sys.executable, "-m", "unittest", "discover", "-s", "tools/tests"])
-        results.append(("CLI + fake-device integration tests", r.returncode == 0,
-                        (r.stderr or r.stdout)[-600:] if r.returncode != 0 else ""))
+        # F-02 (audit 2026-08-22): this used to be `unittest discover`, which
+        # silently collected 137 of 191 tests. Module-level pytest-style files
+        # (test_gyro_bias.py, test_spin_correction.py, test_lever_arm.py and
+        # dependents — 54 tests) define plain functions, not TestCase classes,
+        # so unittest walks straight past them. Those 54 are the ONLY guards on
+        # the duplicated spin/lever/gyro logic, and CI (which runs pytest) saw
+        # all 191 while the local pre-flash gate saw none of them. A mutation
+        # to gyro_bias.h passed simtest.
+        #
+        # ACCEPTANCE IS COUNT PARITY, NOT A HARDCODED NUMBER: assert that what
+        # this gate runs equals what pytest collects on the same tree, so the
+        # two can never diverge again silently. Hardcoding 191 would rot the
+        # moment anyone adds a test.
+        r = _run([sys.executable, "-m", "pytest", "tools/tests", "-q"])
+        out = (r.stdout or "") + (r.stderr or "")
+        detail = ""
+        ok = (r.returncode == 0)
+
+        # A MISSING PYTEST MUST FAIL, NOT SKIP (CLAUDE.md rule 3). simtest runs
+        # on bare bench machines; a gate that quietly passes because its runner
+        # is absent is the exact defect this ticket exists to remove.
+        if "No module named pytest" in out or r.returncode == 4:
+            ok, detail = False, ("pytest is not installed — simtest cannot "
+                                 "verify anything. Install it; do NOT treat "
+                                 "this as a skip.")
+        else:
+            # Sum every OUTCOME, not just passes. A failing test lowers the
+            # "passed" count, and comparing that to "collected" would report a
+            # COLLECTION GAP for what is really a test failure — sending the
+            # reader after the wrong bug. (Caught by mutation-testing this very
+            # gate: breaking gyro_bias.h produced "ran 190 of 191", which was
+            # true but misattributed.)
+            def _n(word):
+                mm = re.search(rf"(\d+) {word}", out)
+                return int(mm.group(1)) if mm else 0
+            passed, failed = _n("passed"), _n("failed")
+            errors, skipped = _n("error"), _n("skipped")
+            # xfailed/xpassed are outcomes too, and leaving them out made this
+            # gate report a COLLECTION GAP the moment the first xfail was added
+            # (F-17's r=0.2 case). The gate was right to fire — the count did
+            # not add up — but the cause was this list being short, not a test
+            # going invisible. Any pytest outcome that is not counted here
+            # looks identical to a test that vanished.
+            xfailed, xpassed = _n("xfailed"), _n("xpassed")
+            accounted = passed + failed + errors + skipped + xfailed + xpassed
+
+            c = _run([sys.executable, "-m", "pytest", "tools/tests", "-q",
+                      "--collect-only"])
+            cm = re.search(r"(\d+) tests? collected",
+                           (c.stdout or "") + (c.stderr or ""))
+            collected = int(cm.group(1)) if cm else -1
+
+            if collected < 0 or accounted == 0:
+                ok, detail = False, ("could not read pytest's counts "
+                                     f"(accounted={accounted}, collected={collected})")
+            elif accounted != collected:
+                # THIS is F-02's defect returning: tests the gate cannot see.
+                ok = False
+                detail = (f"COLLECTION GAP: only {accounted} of {collected} "
+                          "collected tests reported an outcome — some are "
+                          "invisible to this gate (F-02's defect returning).")
+            elif failed or errors:
+                ok = False
+                detail = f"{failed} failed, {errors} error(s) of {collected}"
+            else:
+                detail = f"{passed}/{collected} tests"
+        results.append(("CLI + fake-device integration tests", ok,
+                        detail or (out[-600:] if not ok else "")))
 
     print()
     all_ok = True
@@ -2807,8 +2942,12 @@ def cmd_gen(args) -> int:
     import gen_params
     import gen_build
 
-    gen_params.HEADER_PATH.write_text(
-        gen_params.render_header(gen_params.load_config(CONFIG_PATH)))
+    # BOTH outputs (F-18). Writing only the header here while --check verified
+    # two files would make `jump gen` unable to fix what the gate reports.
+    _cfg = gen_params.load_config(CONFIG_PATH)
+    gen_params.HEADER_PATH.write_text(gen_params.render_header(_cfg))
+    gen_params.MONKEYC_PATH.parent.mkdir(parents=True, exist_ok=True)
+    gen_params.MONKEYC_PATH.write_text(gen_params.render_monkeyc(_cfg))
     print(f"wrote {gen_params.HEADER_PATH}")
 
     # Build identity LAST: it hashes the firmware sources, and params.gen.h is

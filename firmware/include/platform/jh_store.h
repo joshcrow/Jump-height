@@ -8,7 +8,12 @@
 // fs_ok gate; this seam only owns the actual file I/O.
 //
 // Units/format: jumps.csv rows are
-// "n,takeoff_s,airtime_raw_s,airtime_s,height_m\n"; trace.csv rows are
+// "n,takeoff_s,airtime_raw_s,airtime_s,height_m,med_a_g,med_w_dps,
+// med_acorr_g,n_air\n" — NINE columns since the flight medians were added;
+// this comment claimed five until F-20 (audit 2026-08-22), and a host-side
+// reader that trusted it parsed n_air as the jump height. New columns are
+// APPENDED, never inserted, so field indices are stable; read by index, never
+// by counting back from the end. trace.csv rows are
 // "t,mag\n" — both exactly the wire format the FILE-framed dump already
 // sends, so a client never has to know the on-device format changed
 // (docs/sense.md §3.2 plans an eventual binary trace with this same CSV
@@ -75,12 +80,28 @@ bool hard_format(void (*announce)(const char* line));
 uint32_t free_bytes();
 
 // ---- jumps.csv ----
-// Append one row (writes the CSV header first time only). No-op if storage
-// isn't mounted.
-void jumps_append(uint32_t n, float takeoff_s, float airtime_raw_s,
-                  float airtime_s, float height_m,
-                  uint16_t med_a_mg = 0, uint16_t med_w_dps = 0,
-                  uint16_t med_acorr_mg = 0, uint16_t n_air = 0);
+// Why this reports a status (F-10, audit 2026-08-22): jumps_append() was
+// `void` with THREE bare-return refusal paths, and main.cpp incremented
+// stored_jumps unconditionally afterwards. Nothing lied to the rider —
+// jumps_scan() re-derives the count from flash — but the seam made
+// "refused" and "stored" indistinguishable to every caller, which is the
+// same shape as F-07 (a void trace_clear() whose failure had nowhere to go)
+// and F-09 (a self-test that printed a verdict it never checked). Three
+// bugs, one interface habit. A caller that cannot ask cannot report.
+enum class AppendResult : unsigned char {
+  OK = 0,
+  FS_DOWN,       // storage not mounted — nothing was written
+  REGION_FULL,   // jumps region has no room for another record
+  WRITE_FAILED,  // short/failed write; the append offset was skipped forward
+                 // past the torn bytes (never resumed on top of them)
+};
+
+// Append one row (writes the CSV header first time only). Returns OK only if
+// the record is actually on flash; see AppendResult for the refusals.
+AppendResult jumps_append(uint32_t n, float takeoff_s, float airtime_raw_s,
+                          float airtime_s, float height_m,
+                          uint16_t med_a_mg = 0, uint16_t med_w_dps = 0,
+                          uint16_t med_acorr_mg = 0, uint16_t n_air = 0);
 // Parse the stored file: row count and the max value of its last column
 // (height_m). Both 0 if storage is down or the file is empty/missing.
 void jumps_scan(uint32_t& count, float& best_m);
@@ -93,6 +114,13 @@ void jumps_scan(uint32_t& count, float& best_m);
 bool trace_append(const char* data, size_t len);
 // Bytes a trace dump will stream (equals stored bytes on platforms that store CSV).
 uint32_t trace_bytes();
+// Recompute trace_bytes() the slow, pre-F-08 way — snprintf-formatting every
+// stored sample — by re-walking the region. This is the cross-check for the
+// arithmetic length used at mount: if the two ever disagree, THIS one is
+// right. Costs a full region read (hundreds of ms on a full chip), so it is a
+// deliberate diagnostic (`tracecheck`), never something a boot or a rider
+// action triggers.
+uint32_t trace_bytes_recomputed();
 bool trace_is_full();
 
 // ---- framed raw read-back (jumps/trace/dump commands) ----
@@ -116,5 +144,19 @@ void clear();
 // history and the watch's reconnect source. See the implementation comment
 // and docs/garmin-only.md §3. No-op when storage is not mounted.
 void trace_clear();
+
+// F-07 (audit 2026-08-22): true when a trace_clear() erase FAILED and the
+// region's layout became unknowable by scanning. trace_append() refuses while
+// this is set, because a stale island may sit above the derived append point
+// and NOR programming would AND-merge into it and report success. Query it
+// rather than assuming trace_clear() worked — it used to report ok
+// unconditionally, which is how the corruption stayed invisible.
+bool trace_wedged();
+
+// Restore the wedged flag from persistent storage at boot, or clear it after
+// an operation that re-erased the region. jh_store does NOT reach into
+// jh_persist itself — main.cpp owns that bracket, exactly as it already does
+// for Key::StoreGuard around mount.
+void set_trace_wedged(bool wedged);
 
 }  // namespace jh_store

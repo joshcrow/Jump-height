@@ -16,6 +16,9 @@ firmware/.piolibdeps/
 *.log
 data/*.csv
 !data/example_session.csv
+# Parity fixture, not a capture: the gyro-path golden trace (audit F-16).
+# Regenerate with sim/make_spin_trace.py.
+!data/spin_railed_gyro.csv
 data/sessions/
 data/logs/
 data/diagnostics/

@@ -135,6 +135,10 @@ class HostDevice:
             [str(binp)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             cwd=str(REPO), env=env)
         self._buf = b""
+        # Everything the device has said, in order. wait_for() drops
+        # non-matching lines on the floor, which makes narration lines
+        # BETWEEN two tagged lines unassertable without this.
+        self.seen: list[str] = []
 
     def write_line(self, s: str) -> None:
         assert self.proc.stdin is not None
@@ -150,7 +154,9 @@ class HostDevice:
             if nl >= 0:
                 line = self._buf[:nl]
                 self._buf = self._buf[nl + 1:]
-                return line.decode(errors="replace")
+                text = line.decode(errors="replace")
+                self.seen.append(text)
+                return text
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return None
@@ -342,7 +348,18 @@ class TestJumpDetectionAndStorage(HostDevTestCase):
             self.assertLessEqual(
                 abs(airtime_raw - freefall_s), 0.1,
                 f"airtime_raw_s={airtime_raw} not within 0.1s of scripted {freefall_s}")
-            self.assertGreater(float(kv["height_m"]), 0.0)
+            # F-20: `> 0.0` was too loose to catch the host store parsing the
+            # WRONG COLUMN, because n_air (an in-air sample count, ~114 here) is
+            # also positive. Pin the height to the physics instead: for a
+            # ballistic flight h = g*t^2/8, so a 0.676 s airtime is ~0.56 m.
+            # 0.56 vs 114 is the discriminator the old assert threw away.
+            height = float(kv["height_m"])
+            airtime = float(kv["airtime_s"])
+            expected_h = 9.80665 * airtime * airtime / 8.0
+            self.assertLessEqual(
+                abs(height - expected_h), 0.01,
+                f"height_m={height} does not match g*t^2/8={expected_h:.3f} "
+                f"for airtime_s={airtime}")
 
             lines = dev.command("jumps")
             self.assertTrue(any(ln.startswith("FILE jumps.csv BEGIN") for ln in lines))
@@ -350,10 +367,72 @@ class TestJumpDetectionAndStorage(HostDevTestCase):
             data_rows = [ln for ln in lines if "," in ln and not ln.startswith(("n,", "#", "FILE"))]
             self.assertEqual(len(data_rows), 1, f"expected exactly one stored jump row, got {lines}")
             cells = data_rows[0].split(",")
+            self.assertEqual(len(cells), 9,
+                             "jumps.csv is a NINE-column schema; a reader that "
+                             "counts back from the end breaks when a column is "
+                             "appended (F-20): " + data_rows[0])
             self.assertEqual(cells[0], "1")  # n
             self.assertLessEqual(abs(float(cells[2]) - freefall_s), 0.1)  # airtime_raw_s
+            self.assertLessEqual(abs(float(cells[4]) - height), 0.001,
+                                 "field 4 must be height_m: " + data_rows[0])
+
         finally:
             dev.close()
+
+    def test_stored_best_survives_restart_as_a_height_not_a_sample_count(self) -> None:
+        """F-20: the host jumps_scan() took find_last_of(',') and parsed the
+        TAIL as height_m — true only while the schema had five columns. It has
+        had nine since the flight medians were appended, so "best" on the host
+        was n_air, an in-air SAMPLE COUNT (~114 here), reported in metres.
+
+        This needs a process RESTART to see. main.cpp keeps stored_best in RAM
+        and updates it from the live JumpEvent; jumps_scan() only runs at boot
+        (and on mount/clear), so an in-process `stats` reads the RAM copy and
+        the parser is never exercised. An earlier version of this test asserted
+        in-process and passed against the known-broken parser.
+        """
+        freefall_s = 0.65
+        script = write_script(self.tmp_path / "script.txt",
+                              f"rest 2.0\njump {freefall_s}\nrest 2.0\n")
+        host_dir = self.tmp_path / "hostdir"
+
+        dev = HostDevice(self.host_binary, host_dir, script)
+        try:
+            self.assertTrue(dev.drain_boot())
+            jump_line = dev.wait_for("JUMP", timeout=10.0)
+            self.assertIsNotNone(jump_line, "no JUMP line from the scripted toss")
+            height = float(parse_kv(jump_line)["height_m"])
+            rows = [ln for ln in dev.command("jumps")
+                    if "," in ln and not ln.startswith(("n,", "#", "FILE"))]
+            self.assertEqual(len(rows), 1, rows)
+            n_air = float(rows[0].split(",")[8])
+        finally:
+            dev.close()
+
+        # The discriminator: these two must be far apart or the test proves
+        # nothing about WHICH column was read.
+        self.assertGreater(n_air, 10.0,
+                           f"n_air={n_air} too close to height={height} for this "
+                           f"test to distinguish the columns: {rows[0]}")
+
+        # Fresh process, same store directory: boot re-derives stored_best by
+        # PARSING the file, which is the code path under test.
+        dev2 = HostDevice(self.host_binary, host_dir, script)
+        try:
+            self.assertTrue(dev2.drain_boot())
+            stats_line = next((ln for ln in dev2.command("stats")
+                               if ln.startswith("STATS ")), None)
+            self.assertIsNotNone(stats_line)
+            kv = parse_kv(stats_line)
+            self.assertEqual(int(kv["stored_jumps"]), 1, stats_line)
+            best = float(kv["stored_best_m"])
+            self.assertLessEqual(
+                abs(best - height), 0.001,
+                f"stored_best_m={best} after restart should be the jump height "
+                f"{height}, not n_air={n_air} — the host store is parsing the "
+                f"wrong column (F-20)")
+        finally:
+            dev2.close()
 
 
 class TestPtyBridge(HostDevTestCase):
@@ -499,3 +578,61 @@ class TestOffCommand(HostDevTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestStorageRefusalIsVisible(HostDevTestCase):
+    """F-10: jumps_append() refusals were bare returns and main.cpp incremented
+    stored_jumps regardless.
+
+    Driven through a read-only store directory, which is the one refusal path
+    the host platform can actually produce (its init() cannot fail, and it has
+    no region cap — the REGION_FULL path is device-only and is covered against
+    the real nrf52 store in tools/tests/test_store_host.py).
+    """
+
+    def test_write_failure_is_reported_once_and_not_counted(self) -> None:
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            self.skipTest("root ignores directory permissions, so no write can fail")
+
+        host_dir = self.tmp_path / "readonly_store"
+        host_dir.mkdir()
+        os.chmod(host_dir, 0o500)   # readable + traversable, NOT writable
+
+        script = write_script(self.tmp_path / "script.txt",
+                              "rest 2.0\njump 0.65\nrest 2.0\njump 0.65\nrest 2.0\n")
+        dev = HostDevice(self.host_binary, host_dir, script)
+        try:
+            boot = dev.drain_boot()
+            self.assertTrue(boot and boot[-1].strip() == "READY")
+
+            first = dev.wait_for("JUMP", timeout=10.0)
+            self.assertIsNotNone(first, "the detector must still report the jump")
+            second = dev.wait_for("JUMP", timeout=10.0)
+            self.assertIsNotNone(second, "second scripted toss never detected")
+
+            stats = dev.command("stats")
+            stats_line = next((ln for ln in stats if ln.startswith("STATS ")), None)
+            self.assertIsNotNone(stats_line, f"no STATS line: {stats}")
+            kv = parse_kv(stats_line)
+
+            # The jumps happened, so the SESSION count must advance — the puck
+            # is not allowed to under-report the ride just because its flash is
+            # unwritable.
+            self.assertEqual(int(kv["session_jumps"]), 2, stats_line)
+
+            # But nothing reached storage, so the STORED count must not move.
+            # This is the actual F-10 defect: it used to read 2.
+            self.assertEqual(int(kv["stored_jumps"]), 0,
+                             "stored_jumps counted records the store refused: " + stats_line)
+
+            # And the rider is told once, not once per jump — two jumps
+            # both refused must not produce two identical warnings.
+            transcript = "\n".join(dev.seen)
+            n_warnings = transcript.count("# jump NOT saved")
+            self.assertEqual(n_warnings, 1,
+                             f"expected exactly one refusal warning, got {n_warnings}:\n{transcript}")
+            self.assertIn("flash write failed", transcript,
+                          "the warning must name the actual reason")
+        finally:
+            dev.close()
+            os.chmod(host_dir, 0o700)   # before tearDown's rmtree

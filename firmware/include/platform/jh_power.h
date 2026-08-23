@@ -142,6 +142,28 @@ uint8_t breadcrumb_last();            // stage found at boot (0 = clean)
 // ERR instead. The full sleep design (motion wake via the IMU interrupt,
 // auto-off timers, low-voltage cutoff) remains the S2 milestone — this is
 // only the manual switch.
+// DC/DC regulator (F-05, audit 2026-08-22).
+//
+// Enabling the nRF52840's internal buck measured **1.39x endurance** on this
+// project's own same-board A/B (STATUS 2026-08-20: 5.58/5.49 h baselines vs
+// 7.70 h, ~0.72x current) — the largest power lever in the repo. It was
+// reachable ONLY from the `dcdc` console command, so every boot ran on the
+// LDO, and DCDCEN is volatile: any watchdog reset (which StoreGuard
+// deliberately produces) silently reverted a hand-typed enable with nothing
+// on the wire to say so.
+//
+// enable_dcdc() is safe to call unconditionally: POWER is SoftDevice-owned,
+// so the nRF52 implementation routes through sd_power_dcdc_mode_set() when
+// the SoftDevice is up and touches the register directly when it is not.
+// Boards without the inductors fitted brown out and reboot — which is itself
+// the answer, and self-clearing. Both of this project's boards are proven
+// populated (STATUS 2026-08-19).
+//
+// dcdc_enabled() READS BACK rather than remembering what was requested: a
+// write that did not take must not report success.
+void enable_dcdc();
+int  dcdc_enabled();      // 1 on, 0 off, -1 unknown/not applicable
+
 bool system_off();
 
 }  // namespace jh_power

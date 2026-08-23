@@ -67,6 +67,9 @@ int vbat_mv_tacq(int tacq_code) {
   return vbat_mv();
 }
 
+void enable_dcdc() {}              // no regulator on the host
+int  dcdc_enabled() { return -1; } // "not applicable", never a false 1
+
 bool system_off() {
   // Mirrors the capability rule main.cpp keys on (vbat_mv() >= 0 means
   // "battery platform" means "off is real"): with JH_VBAT_MV scripted the

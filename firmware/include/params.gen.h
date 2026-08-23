@@ -23,4 +23,10 @@
 #define JH_I2C_SDA 21
 #define JH_I2C_SCL 22
 
+// --- shared ---
+#define JH_M_TO_FT 3.28084f
+#define JH_BLE_SERVICE_UUID "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
+#define JH_BLE_RX_UUID "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
+#define JH_BLE_TX_UUID "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
+
 #define JH_PARAMS_SUMMARY "airtime_offset_s=0.0257 freefall_confirm_s=0.08 freefall_enter_g=0.35 g=9.80665 height_scale=1 landing_settle_s=0.5 landing_threshold_g=2.5 max_airtime_s=3 min_airtime_s=0.25 spin_lever_m=0"

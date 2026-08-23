@@ -67,33 +67,64 @@ EXTRA_ARGS: list = []
 
 FIELDS = ["wall_utc", "wall_local", "mono_s", "phase", "ok",
           "uptime_s", "vbat_mv", "batt_pct", "chg",
-          "stored_jumps", "trace_bytes", "connect_s", "note"]
+          "stored_jumps", "trace_bytes", "connect_s", "note",
+          # F-13 (audit 2026-08-22): which board each row came from. Without
+          # these, a log that silently interleaved two boards — one of them a
+          # floating divider reading a confident 97% — is indistinguishable
+          # afterwards from a clean one. The data has to carry its own
+          # provenance; a flag at launch time is not in the file.
+          "board_name", "board_addr"]
 
 
-def read_stats(timeout_s: float) -> tuple[dict, float, str]:
+def read_stats(timeout_s: float) -> tuple[dict, float, str, str, str]:
     """One BLE `stats` read, as a subprocess.
 
     Deliberately a subprocess and not an in-process bleak call: a wedged BLE
     stack cannot then hang the whole night's loop — the timeout kills a child
-    process instead of deadlocking us. Returns (parsed, seconds, note).
+    process instead of deadlocking us.
+
+    Returns (parsed, seconds, note, board_name, board_addr).
+
+    F-13: this used to read only r.stdout. blecmd's two-board census warning
+    goes to STDERR, and capture_output=True captured it — so the one message
+    designed to say "you are reading an ambiguous board" was collected and
+    thrown away, every sample, all night.
     """
     t0 = time.monotonic()
     try:
         r = subprocess.run(
             [sys.executable, str(BLECMD), *EXTRA_ARGS, "stats"],
             capture_output=True, text=True, timeout=timeout_s)
-        out = r.stdout
+        out, err = r.stdout, r.stderr
     except subprocess.TimeoutExpired:
-        return {}, time.monotonic() - t0, "timeout"
+        return {}, time.monotonic() - t0, "timeout", "", ""
     except Exception as e:                                   # never die at 3am
-        return {}, time.monotonic() - t0, f"error:{type(e).__name__}"
+        return {}, time.monotonic() - t0, f"error:{type(e).__name__}", "", ""
     dt = time.monotonic() - t0
+
+    # Pass the child's stderr through so an operator watching the run sees the
+    # census warning live, not only in the file afterwards.
+    if err.strip():
+        print(err.rstrip(), file=sys.stderr, flush=True)
+
+    # Which board actually answered — blecmd prints this on connect.
+    board_name, board_addr = "", ""
+    m = re.search(r"connecting to (\S+) \(([^)]*)\)", out)
+    if m:
+        board_addr, board_name = m.group(1), m.group(2)
+
+    notes = []
+    if "AMBIGUOUS" in err:
+        # Loud in the data as well as on the console: a night's log is read
+        # weeks later by someone who never saw the terminal.
+        notes.append("AMBIGUOUS-MULTIPLE-BOARDS")
 
     line = next((l for l in out.splitlines() if "STATS " in l), None)
     if not line:
-        return {}, dt, "no STATS line"
+        notes.append("no STATS line")
+        return {}, dt, ";".join(notes), board_name, board_addr
     kv = dict(re.findall(r"(\w+)=([-\w.]+)", line.split("STATS ", 1)[1]))
-    return kv, dt, ""
+    return kv, dt, ";".join(notes), board_name, board_addr
 
 
 def main() -> int:
@@ -110,6 +141,28 @@ def main() -> int:
     ap.add_argument("--name", default=None, help="advertised-name prefix to pin")
     ap.add_argument("--addr", default=None, help="address prefix to pin (strongest)")
     args = ap.parse_args()
+
+    # F-13: refuse to start unpinned. blecmd defaults --name to the bare
+    # prefix "JumpHeight", which every board on the bench matches; an
+    # overnight log could therefore interleave two boards, one of them a
+    # floating divider reporting a confident 97%, with nothing in the CSV to
+    # tell them apart afterwards. That has already corrupted two analyses.
+    #
+    # A refusal and not a default: this tool runs unattended for ten hours,
+    # and the cost of picking the wrong board is a whole night. Ten seconds of
+    # typing at the start is the cheaper side of that trade.
+    if not args.name and not args.addr:
+        print("battlog: refusing to run unpinned — this logs for hours "
+              "unattended and an unpinned read can silently land on another "
+              "board.\n"
+              "  Pin it:  --name JumpHeight-E2C4     (the OG — the only board "
+              "with a cell, so the only one a battery log means anything on)\n"
+              "  or:      --addr <address prefix>    (strongest; survives a "
+              "renamed board)\n"
+              "  `./tools/jump boards` lists what is actually awake.",
+              file=sys.stderr)
+        return 2
+
     if args.name: EXTRA_ARGS.extend(["--name", args.name])
     if args.addr: EXTRA_ARGS.extend(["--addr", args.addr])
 
@@ -150,7 +203,7 @@ def main() -> int:
                 time.sleep(min(60.0, sleep_to - time.monotonic()))
             continue
 
-        kv, dt, note = read_stats(args.timeout)
+        kv, dt, note, board_name, board_addr = read_stats(args.timeout)
         connected_total += dt
         ok = bool(kv)
         n_ok, n_fail = (n_ok + 1, n_fail) if ok else (n_ok, n_fail + 1)
@@ -180,6 +233,8 @@ def main() -> int:
             "trace_bytes": kv.get("trace_bytes", ""),
             "connect_s": f"{dt:.1f}",
             "note": note,
+            "board_name": board_name,
+            "board_addr": board_addr,
         })
         fh.flush()
         print(f"[{phase}] {datetime.now():%H:%M:%S} "

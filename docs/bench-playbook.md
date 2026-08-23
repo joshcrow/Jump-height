@@ -38,6 +38,35 @@ table is a rediscovery waiting to happen.**
    build hash is not the one you flashed, you are looking at a different
    board — or a stale flash.
 
+**How pinning works now (2026-08-23, audit F-13/F-14).** The census lives in
+one place, `tools/blepin.py`, and the tools share it instead of each growing
+their own near-copy:
+
+| tool | pin flags | on two matches |
+|---|---|---|
+| `blecmd.py` | `--name` / `--addr` | warns, then picks the lowest name |
+| `dualjump.py` | `--name` / `--addr` | warns, then picks the lowest name |
+| `battlog.py` | `--name` / `--addr` | **refuses to start unpinned at all** |
+| `otadfu.py` | `--name` / `--addr` (**new**) | **refuses — it writes firmware** |
+
+Reads warn and continue because a read can simply be retaken. Writes refuse,
+because they cannot: on 2026-08-12 an unpinned trigger flashed the WRONG BOARD
+and the post-flash "the app is back" check was fooled by the same collision, so
+the run reported success. `otadfu.py` now also confirms that the board which
+came back is the one it sent to DFU, by address.
+
+So the flashing command is:
+
+```bash
+python3 tools/otadfu.py --name JumpHeight-E2C4 <package.zip>
+```
+
+`OTADFU_ADDR` still works, for older bench notes.
+
+`battlog.py` additionally writes `board_name,board_addr` into every CSV row —
+a flag at launch time is not in the file, and an interleaved overnight log is
+otherwise indistinguishable afterwards from a clean one.
+
 ### 1b. Keeping this table honest
 
 When a change introduces a **new way to identify a board** — a unique
@@ -347,3 +376,30 @@ explanations. The artifact was never inspected until several steps in.
 
 Practical consequence: simulator screenshots ARE available, just not while the
 machine is locked. Capture them when someone is physically at the Mac.
+
+### Running the watch unit tests (2026-08-23)
+
+`monkeyc` and `monkeydo` fail with **"Unable to locate a Java Runtime. Please
+visit http://www.java.com"** even though Java is installed. `/usr/bin/java` on
+this Mac is Apple's stub, and the SDK finds that one first. The real JDK is
+Homebrew's; export `JAVA_HOME` before any SDK command:
+
+```bash
+export JAVA_HOME=/opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home
+export PATH="$JAVA_HOME/bin:$PATH"
+SDK=$(ls -d ~/Library/Application\ Support/Garmin/ConnectIQ/Sdks/*/bin | head -1)
+cd garmin/jumpfield
+"$SDK/monkeyc" -f monkey.jungle -o bin/JumpField-test.prg \
+    -y ~/.garmin-ciq/developer_key.der -d instinct3solar45mm -t
+"$SDK/monkeydo" bin/JumpField-test.prg instinct3solar45mm -t
+```
+
+The simulator must already be running (`"$SDK/connectiq" &`); `monkeydo` does
+not start it. Expect `PASSED (passed=57, failed=0, errors=0)`.
+
+Two traps in that block:
+- **Do not pipe monkeyc through `tail` and read `$?`** — that is `tail`'s exit
+  status, and this project has now made that mistake more than once. The Java
+  error above printed while `echo "exit=$?"` cheerfully reported 0.
+- **`timeout` does not exist on this Mac** (it is `gtimeout`, from coreutils,
+  and only if installed).

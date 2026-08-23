@@ -170,7 +170,7 @@ bool readRecord(CalRecord& rec) {
 // like littlefs exists — see lfs_rename() in the installed
 // Adafruit_LittleFS/src/littlefs/lfs.c) — so at every instant either the
 // OLD kPath is still intact, or the NEW one is, never neither.
-void writeRecord(const CalRecord& rec) {
+bool writeRecord(const CalRecord& rec) {
   // Clear out any stale tmp file a PRIOR crash (a power cut between THIS
   // remove and the rename below, on some earlier save() attempt) might
   // have left behind — this is the tmp path only, never kPath itself, so it
@@ -179,22 +179,21 @@ void writeRecord(const CalRecord& rec) {
   InternalFS.remove(kTmpPath);
   Adafruit_LittleFS_Namespace::File f =
       InternalFS.open(kTmpPath, Adafruit_LittleFS_Namespace::FILE_O_WRITE);
-  if (!f) return;  // couldn't even start the write; kPath is untouched
+  if (!f) return false;  // couldn't even start the write; kPath is untouched
   const size_t n = f.write((const uint8_t*)&rec, sizeof(rec));
   f.close();
-  if (n != sizeof(rec)) { InternalFS.remove(kTmpPath); return; }  // short write: don't
+  if (n != sizeof(rec)) { InternalFS.remove(kTmpPath); return false; }  // short write: don't
                                                                   // let a partial tmp
                                                                   // file get promoted
 
   // The one moment kPath's identity actually changes — atomic per the
   // reasoning above, so readRecord() can never observe kPath missing or
   // half-written, even across a power cut landing exactly here.
-  InternalFS.rename(kTmpPath, kPath);  // fire-and-forget, matching
-                                       // jh_persist.h's save()/clear()
-                                       // contract (no failure path to
-                                       // report) — see this function's
-                                       // own comment for what's actually
-                                       // guaranteed either way.
+  // The rename is the commit point, so its result IS the save's result
+  // (F-10 sibling sweep): it used to be discarded with a comment citing a
+  // fire-and-forget contract that no longer holds now that safety guard bits
+  // live in this record.
+  return InternalFS.rename(kTmpPath, kPath);
 }
 
 }  // namespace
@@ -217,13 +216,14 @@ float load(Key k, float def, bool* from_store) {
       case Key::VbatScale:      has = rec.has_vbat;   val = rec.vbat;   break;
       case Key::ProbeGuard:     has = 1;  val = (rec.guard & 0x01) ? 1.0f : 0.0f; break;
       case Key::StoreGuard:     has = 1;  val = (rec.guard & 0x02) ? 1.0f : 0.0f; break;
+      case Key::TraceGuard:     has = 1;  val = (rec.guard & 0x04) ? 1.0f : 0.0f; break;
     }
   }
   if (from_store) *from_store = has;
   return has ? val : def;
 }
 
-void save(Key k, float value) {
+bool save(Key k, float value) {
   CalRecord rec;
   if (!readRecord(rec)) {
     memset(&rec, 0, sizeof(rec));
@@ -238,21 +238,24 @@ void save(Key k, float value) {
       rec.guard = (value > 0.5f) ? (rec.guard | 0x01) : (rec.guard & ~0x01); break;
     case Key::StoreGuard:
       rec.guard = (value > 0.5f) ? (rec.guard | 0x02) : (rec.guard & ~0x02); break;
+    case Key::TraceGuard:
+      rec.guard = (value > 0.5f) ? (rec.guard | 0x04) : (rec.guard & ~0x04); break;
   }
-  writeRecord(rec);
+  return writeRecord(rec);
 }
 
-void clear(Key k) {
+bool clear(Key k) {
   CalRecord rec;
-  if (!readRecord(rec)) return;  // nothing saved: already "cleared"
+  if (!readRecord(rec)) return true;  // nothing saved: already "cleared"
   switch (k) {
     case Key::AirtimeOffsetS: rec.has_offset = 0; break;
     case Key::HeightScale:    rec.has_scale  = 0; break;
     case Key::VbatScale:      rec.has_vbat   = 0; break;
     case Key::ProbeGuard:     rec.guard &= ~0x01; break;
     case Key::StoreGuard:     rec.guard &= ~0x02; break;
+    case Key::TraceGuard:     rec.guard &= ~0x04; break;
   }
-  writeRecord(rec);
+  return writeRecord(rec);
 }
 
 }  // namespace jh_persist

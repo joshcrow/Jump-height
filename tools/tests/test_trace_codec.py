@@ -280,3 +280,88 @@ class TestTraceCodecParity(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+CSV_LEN_SWEEP_SRC = r"""
+// Sweep trace_codec::csv_line_len() against the snprintf it predicts.
+// Prints one line per mismatch, then a summary. F-08 (audit 2026-08-22).
+#include <cstdio>
+#include <cstdint>
+#include "trace_codec.h"
+
+static long mismatches = 0, checked = 0;
+
+static void check(double t, float m) {
+  ++checked;
+  const uint32_t fast = trace_codec::csv_line_len(t, m);
+  const uint32_t slow = trace_codec::csv_line_len_formatted(t, m);
+  if (fast != slow) {
+    ++mismatches;
+    if (mismatches <= 20)
+      std::printf("MISMATCH t=%.9g mag=%.9g fast=%u slow=%u\n", t, (double)m, fast, slow);
+  }
+}
+
+int main() {
+  // Digit boundaries and the carries across them, from both sides.
+  const double edges[] = {0.0, 0.0004, 0.0005, 0.0006, 0.999, 0.9994, 0.9995,
+                          0.9996, 1.0, 9.999, 9.9994, 9.9995, 9.9996, 10.0,
+                          99.9995, 100.0, 999.9995, 1000.0, 9999.9995, 10000.0,
+                          99999.9995, 100000.0};
+  for (unsigned i = 0; i < sizeof(edges)/sizeof(edges[0]); ++i) {
+    for (int sign = 0; sign < 2; ++sign) {
+      const double t = sign ? -edges[i] : edges[i];
+      check(t, (float)t);
+      check(t, 1.0f);
+      check(12.345, (float)t);
+    }
+  }
+  // Dense off-lattice sweep: 1/7000 steps land nowhere near k/1000, which is
+  // exactly where a truncate-instead-of-round bug shows up.
+  for (long i = 0; i < 200000; ++i) {
+    const double t = (double)i / 7000.0;
+    check(t, (float)(t * 0.013));
+    check(-t, (float)(-t * 0.013));
+  }
+  std::printf("SWEEP checked=%ld mismatches=%ld\n", checked, mismatches);
+  return 0;
+}
+"""
+
+
+class CsvLineLenSweep(unittest.TestCase):
+    """F-08: the mount-time byte counter computes each CSV line's length
+    instead of formatting it. This is the direct proof that the arithmetic
+    matches snprintf.
+
+    It exists because the store-level parity test CANNOT prove it. Everything
+    that reaches flash is already quantized to the k/1000 lattice - mag_g
+    decodes from uint16 milli-g, t_s is a millisecond t0 plus index/log_hz - so
+    replacing llround() with a truncation still passes there, and negative
+    values never occur at all. Both mutants survived the store test and die
+    here. The lattice argument is why the fast path is SAFE in production; it
+    is also why production data cannot test it.
+    """
+
+    def test_arithmetic_length_matches_snprintf_everywhere(self):
+        tmp = tempfile.mkdtemp()
+        src = Path(tmp) / "csv_len_sweep.cpp"
+        src.write_text(CSV_LEN_SWEEP_SRC)
+        binp = str(Path(tmp) / "csv_len_sweep")
+        r = subprocess.run(
+            [_gxx(), "-std=c++14", "-Wall", "-Wextra", "-O2",
+             "-I", str(REPO / "firmware" / "include"), str(src), "-o", binp],
+            capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, f"sweep failed to compile:\n{r.stderr}")
+
+        run = subprocess.run([binp], capture_output=True, text=True)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        out = run.stdout
+        self.assertIn("SWEEP ", out, out)
+        summary = [ln for ln in out.splitlines() if ln.startswith("SWEEP ")][0]
+        checked = int(summary.split("checked=")[1].split()[0])
+        mismatches = int(summary.split("mismatches=")[1])
+        self.assertGreater(checked, 300000, "sweep should be dense: " + summary)
+        self.assertEqual(mismatches, 0,
+                         "csv_line_len() disagrees with the snprintf it "
+                         "predicts:\n" + out[:2000])

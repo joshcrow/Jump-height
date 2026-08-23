@@ -10,7 +10,8 @@
 //     live.
 //   * Motion gate: only detects/logs while the board is actually moving.
 //   * Logs to on-device storage (the jh_store seam):
-//       jumps.csv — one line per jump (n,takeoff_s,airtime_raw_s,airtime_s,height_m)
+//       jumps.csv — one line per jump (n,takeoff_s,airtime_raw_s,airtime_s,
+//                    height_m,med_a_g,med_w_dps,med_acorr_g,n_air)
 //       trace.csv — JH_LOG_HZ "t,mag" trace while moving, for offline re-tuning
 //   * Power-on self-test with plain-English fix hints; a wiring failure does
 //     NOT brick the session — fix the wires and type `selftest` to recover.
@@ -357,12 +358,45 @@ static uint16_t medianOf(const uint16_t* src, uint16_t n) {
   return tmp[n / 2];
 }
 
-static void logJump(const jump::JumpEvent& ev, uint16_t med_a_mg,
+// One line per storage outage, not one per jump: a rider mid-session with a
+// full region would otherwise get the same sentence after every single jump,
+// which is how a real warning becomes noise the eye skips. Cleared by
+// scanStoredJumps(), so a `mount`/`format`/`clear` re-arms it.
+static bool store_refusal_reported = false;
+
+// Returns true only if the record actually reached flash (F-10). The caller
+// counts on that: stored_jumps used to increment whether or not the store
+// kept anything.
+static bool logJump(const jump::JumpEvent& ev, uint16_t med_a_mg,
                     uint16_t med_w_dps, uint16_t med_acorr_mg, uint16_t n_air) {
-  if (!fs_ok) return;
-  jh_store::jumps_append(stored_jumps, ev.takeoff_time_s, ev.airtime_raw_s,
-                          ev.airtime_s, ev.height_m,
-                          med_a_mg, med_w_dps, med_acorr_mg, n_air);
+  if (!fs_ok) return false;
+  // stored_jumps + 1 because the increment now happens only on success, and
+  // the record's `n` field should still be its 1-based index in the file.
+  const jh_store::AppendResult r =
+      jh_store::jumps_append(stored_jumps + 1, ev.takeoff_time_s,
+                             ev.airtime_raw_s, ev.airtime_s, ev.height_m,
+                             med_a_mg, med_w_dps, med_acorr_mg, n_air);
+  if (r == jh_store::AppendResult::OK) return true;
+  if (!store_refusal_reported) {
+    store_refusal_reported = true;
+    switch (r) {
+      case jh_store::AppendResult::REGION_FULL:
+        emitLine("# jump NOT saved: storage region full. The ride still counts "
+                 "on your watch; `dump` then `clear` to make room.");
+        break;
+      case jh_store::AppendResult::WRITE_FAILED:
+        emitLine("# jump NOT saved: flash write failed. Watch totals are "
+                 "unaffected; `dump` what is there before `format`.");
+        break;
+      case jh_store::AppendResult::FS_DOWN:
+        emitLine("# jump NOT saved: storage down. `mount` retries, `format` "
+                 "rebuilds (DESTROYS data).");
+        break;
+      case jh_store::AppendResult::OK:
+        break;  // unreachable; kept so a new enum value fails the build here
+    }
+  }
+  return false;
 }
 
 static void printFileFramed(jh_store::StoredFile which, const char* name) {
@@ -402,6 +436,10 @@ static void printFileFramed(jh_store::StoredFile which, const char* name) {
 static void scanStoredJumps() {
   stored_jumps = 0;
   stored_best  = 0.0f;
+  // Re-arm the storage-refusal warning: every caller of this function has
+  // just mounted, formatted or cleared, so the next refusal is NEW news and
+  // the rider should hear it (F-10).
+  store_refusal_reported = false;
   if (!fs_ok) return;
   jh_store::jumps_scan(stored_jumps, stored_best);
 }
@@ -572,7 +610,7 @@ static bool runSelfTest() {
 
 // ---------------- Commands ----------------
 static void printHelp() {
-  emitLine("# commands: help | stats | jumps | trace | dump | clear | selftest | revive | i2cdiag | dcdc | info | off | dfu | uf2 | fakejump | mount | format");
+  emitLine("# commands: help | stats | jumps | trace | tracecheck | dump | clear | selftest | revive | i2cdiag | dcdc | info | off | dfu | uf2 | fakejump | mount | format");
   emitLine("#           set <airtime_offset_s|height_scale|vbat_scale> <value|default>");
   emitLine("#           vbatscan  (bench: battery ADC vs acquisition time)");
   emitLine("#           gyro      (bench: raw + bias-corrected rate, 2 s)");
@@ -657,6 +695,21 @@ static void handleCommand(const String& cmd) {
     flushTrace();
     printFileFramed(jh_store::StoredFile::TRACE, "trace.csv");
     emitLine("OK trace");
+  } else if (cmd == "tracecheck") {
+    // F-08's cross-check. The mount-time byte counter computes each sample's
+    // CSV length arithmetically instead of snprintf-ing it; this re-walks the
+    // whole region measuring the old, slow way and compares. Deliberately a
+    // command and not a boot step: it costs a full region read (~200 ms on a
+    // full chip in the harness, longer here), which is the exact cost F-08
+    // removed from every boot.
+    flushTrace();
+    const uint32_t fast = jh_store::trace_bytes();
+    const uint32_t slow = jh_store::trace_bytes_recomputed();
+    emitf("# tracecheck fast=%lu slow=%lu %s\n", (unsigned long)fast,
+          (unsigned long)slow,
+          fast == slow ? "agree"
+                       : "DISAGREE — the slow number is the correct one");
+    emitLine(fast == slow ? "OK tracecheck" : "ERR tracecheck mismatch");
   } else if (cmd == "dump") {
     flushTrace();
     printFileFramed(jh_store::StoredFile::JUMPS, "jumps.csv");
@@ -664,6 +717,10 @@ static void handleCommand(const String& cmd) {
     emitLine("OK dump");
   } else if (cmd == "clear") {
     jh_store::clear();
+    if (jh_store::ok()) {   // a fully-succeeded clear re-erased the trace region
+      jh_store::set_trace_wedged(false);
+      jh_persist::save(jh_persist::Key::TraceGuard, 0.0f);
+    }
     if (fs_ok && !jh_store::ok()) {   // same mirror-refresh as trace_clear
       fs_ok = false;
       emitLine("# storage DOWN after clear — not recording. `mount` retries, `format` rebuilds.");
@@ -703,8 +760,28 @@ static void handleCommand(const String& cmd) {
     emitLine("# census touched live sensor pins — running audited revive");
     const bool census_revived = jh_imu::revive();
     jh_link::watchdog_feed();
-    emitf("# revive %s\n", census_revived ? "ok" : "FAILED — sensor left down; reboot or `revive`");
-    emitLine("OK pincensus");
+    if (!census_revived) {
+      emitLine("# revive FAILED — sensor left down; reboot or `revive`");
+      emitLine("OK pincensus");
+    } else {
+      // F-09 (audit 2026-08-22): revive() alone is NOT recovery.
+      //
+      // It opens with bus_release() (s_bus.end(), begun_=false), cycles the
+      // rail, and returns true unconditionally — it never calls begin() on
+      // the bus or the IMU. So this handler used to print "revive ok" while
+      // leaving every subsequent read returning BUSERR, with sensor_ok still
+      // true: a diagnostic that silently destroys the instrument and then
+      // reports success. The `revive` COMMAND does not have this bug because
+      // it follows revive() with runSelfTest(), which re-probes and re-begins
+      // the bus. Do the same here, and report what it actually found rather
+      // than a hardcoded "ok".
+      emitLine("# rail cycled — re-running selftest to actually restore the bus");
+      const bool ok = runSelfTest();
+      jh_link::watchdog_feed();
+      emitf("# revive %s\n", ok ? "ok — sensor answering"
+                                 : "INCOMPLETE — selftest still failing, sensor is down");
+      emitLine("OK pincensus");
+    }
 #if defined(NRF52840_XXAA)
   } else if (cmd.startsWith("fillstore")) {
     // BENCH ONLY — fill the trace region fast, to test the ONE storage path
@@ -932,6 +1009,10 @@ static void handleCommand(const String& cmd) {
       emitf("# reas=0x%08lX\n", (unsigned long)jh_power::reset_reason());
     if (jh_power::fast_charge_state() >= 0)
       emitf("# hichg=%d chg=%d\n", jh_power::fast_charge_state(), jh_power::charging());
+    // dcdc= is an adder key (absent where the concept does not apply, e.g.
+    // the host build). F-05: without this, a reverted DCDCEN was invisible.
+    if (jh_power::dcdc_enabled() >= 0)
+      emitf("# dcdc=%d\n", jh_power::dcdc_enabled());
     if (jh_link::local_name()[0])
       emitf("# name=%s\n", jh_link::local_name());  // WHICH puck — quiver world
     if (jh_power::breadcrumb_last() != 0)
@@ -1034,6 +1115,11 @@ static void handleCommand(const String& cmd) {
     jh_persist::save(jh_persist::Key::StoreGuard, 0.0f);
     if (fmt_ok) {
       fs_ok = true;
+      // The whole chip was just erased, so the trace region's geometry is
+      // known-good again. This is the recovery the wedge message promises;
+      // without it that message would be a dead end.
+      jh_store::set_trace_wedged(false);
+      jh_persist::save(jh_persist::Key::TraceGuard, 0.0f);
       scanStoredJumps();
       emitLine("OK format");
     } else {
@@ -1054,7 +1140,7 @@ static void handleCommand(const String& cmd) {
     if (h_m > session_best) session_best = h_m;
     if (at > session_best_airtime) session_best_airtime = at;
     emitf("JUMP n=%lu airtime_raw_s=%.3f airtime_s=%.3f height_m=%.3f height_ft=%.1f best_m=%.3f\n",
-          (unsigned long)session_jumps, at, at, h_m, h_m * 3.28084f, session_best);
+          (unsigned long)session_jumps, at, at, h_m, h_m * JH_M_TO_FT, session_best);
     emitLine("OK fakejump");
   } else if (cmd == "gyro") {
     // BENCH DIAGNOSTIC, SENSE_FIRST_BOOT item 26 step 1: has the gyro ever
@@ -1152,6 +1238,19 @@ void setup() {
   // Persist first — it's INTERNAL flash (no external bus, nothing to wedge)
   // and both crash guards live in it, so it must be readable before any
   // external-bus first contact.
+  // F-05 (audit 2026-08-22): enable the internal DC/DC at every boot.
+  //
+  // Measured 1.39x endurance on this project's own same-board A/B
+  // (STATUS 2026-08-20). It used to be reachable only from the `dcdc` console
+  // command, so every boot ran on the LDO — and because DCDCEN is volatile,
+  // any watchdog reset silently reverted a hand-typed enable with nothing on
+  // the wire to reveal it. STATUS:527's gate ("earns a place in boot only
+  // after the A/B") was satisfied on 2026-08-20; this is that place.
+  //
+  // After jh_power::init() so the SoftDevice-state check inside the seam has
+  // run once already, and before anything power-hungry starts.
+  jh_power::enable_dcdc();
+
   jh_persist::init();
   loadCalibration();
   // Seed the advertised battery before BLE first advertises (loop() refreshes it).
@@ -1175,6 +1274,17 @@ void setup() {
     jh_persist::save(jh_persist::Key::StoreGuard, 1.0f);
     fs_ok = jh_store::init(emitLine);
     jh_persist::save(jh_persist::Key::StoreGuard, 0.0f);
+  }
+
+  // F-07: re-arm the trace wedge across the reboot. jh_store's flag is RAM,
+  // and the mount above just re-derived an append point by scanning — the
+  // same scan that cannot see a stale island. Without this, one watchdog
+  // reset (which a failing flash chip makes likely, not hypothetical) would
+  // silently re-enable the exact append the wedge exists to prevent.
+  if (jh_persist::load(jh_persist::Key::TraceGuard, 0.0f) > 0.5f) {
+    jh_store::set_trace_wedged(true);
+    emitLine("# trace: WEDGED from a previous failed erase — raw sample "
+             "recording is OFF until `format`. Jumps still record.");
   }
 
   // Bring BLE up before the self-test so the `ble` row reflects the real result.
@@ -1307,8 +1417,18 @@ void loop() {
     // 200 Hz the real work (one I2C burst, the detector, an occasional flash
     // block) is a few hundred microseconds out of 5 ms, so the CPU spent
     // ~90% of its life re-reading a clock at 64 MHz. That is the dominant
-    // term in the MEASURED 11.6 mA — against a plan that had assumed ~4 mA
+    // term in the device's idle draw — against a plan that had assumed ~4 mA
     // from an idle that did not exist.
+    //
+    // F-21 (audit 2026-08-22): this comment used to cite "the MEASURED
+    // 11.6 mA". That figure is RETRACTED (docs/battery-measurement.md:11,
+    // STATUS:497) — it came from a batt_pct extrapolation through a region
+    // nobody had measured. The honest baseline is the conservation bound
+    // **<=9.7 mA** (250 mAh datasheet capacity / 25.7 h measured runtime).
+    // Rule 2 exists because retracted numbers come back: this audit's own
+    // first pass repeated 11.6 mA after reading it HERE, which is the proof
+    // of harm. If you need a current figure, take it from
+    // docs/battery-measurement.md, never from a comment.
     //
     // delay() here is vTaskDelay: it yields to the idle task, which sleeps
     // the core until the next ~0.98 ms tick. The 1200 us guard band means we
@@ -1322,7 +1442,32 @@ void loop() {
     // 2.5 mm at a 1 s flight — negligible against 0.8-1.6 m jumps.
     // Falsifier on record: if post-change sample deltas run >2 ms off
     // cadence, or desk-test airtimes shift systematically, revert.
-    if (next_us - now_us > 1200) delay(1);
+    // F-06 (audit 2026-08-22): the guard was 1200 us, which meant that below
+    // 1200 us remaining we RETURNED WITHOUT DELAYING — loop() spun at 64 MHz
+    // for the "final tight approach". Measured ~24% of wall-clock.
+    //
+    // That approach bought nothing. This core's micros() is TICK-DERIVED at
+    // 976.5625 us steps (DWT cycle counting is off), so a spin between ticks
+    // cannot observe time passing at all: it re-reads the same value until
+    // the tick rolls, then exits. It burned current to wait for the very
+    // event delay(1) waits for, only without sleeping.
+    //
+    // WHY NOT THE OTHER FIX. The audit's preferred option was to enable the
+    // DWT cycle counter so micros() becomes precise and the band could shrink
+    // honestly. This repo already prohibits that, for a reason recorded in
+    // twim_bounded.h:57 — enabling DWT shrinks micros()'s wrap period to
+    // ~67 s and BREAKS jh_clock's wrap arithmetic, which every timestamp in
+    // the system depends on. That fix would trade a power bug for a
+    // correctness bug across the whole measurement. DWT stays off.
+    //
+    // So: one tick (977 us) is the smallest honest guard on this clock.
+    // Below it there is nothing to approach — the next tick IS the resolution.
+    // Jitter cost is unchanged from the analysis above (at most ~1 ms on an
+    // individual sample; long-run rate stays exact because next_us advances
+    // by INTERVAL regardless), and the falsifier on record is unchanged:
+    // if post-change sample deltas run >2 ms off cadence, or desk-test
+    // airtimes shift systematically, REVERT rather than rationalise.
+    if (next_us - now_us > 977) delay(1);
     return;
   }
   next_us += SAMPLE_INTERVAL_US;
@@ -1335,7 +1480,13 @@ void loop() {
     // Skipping the sample is right for a transient I2C hiccup; staying quiet
     // about a dead IMU is not. One warning, once, so a live client sees it
     // without the line repeating at the sample rate.
-    if (++accel_fail_count == 200 && !sensor_warned) {  // ~1 s at 200 Hz
+    // F-09 sibling sweep: this was `== 200`, a strict-equality one-shot. Any
+    // earlier transient that walked the counter past 200 consumed the warning
+    // forever — the sensor could then die permanently and never say so. `>=`
+    // with the existing latch is the same one-shot behaviour without the
+    // pre-consumption hole (CLAUDE.md rule 3: a skipped warning is not a
+    // passing one).
+    if (++accel_fail_count >= 200 && !sensor_warned) {  // ~1 s at 200 Hz
       sensor_warned = true;
       emitLine("# WARNING accelerometer not answering — this session is "
                "recording nothing. Check wiring, then `selftest`.");
@@ -1392,6 +1543,19 @@ void loop() {
     emitLine("# trace region was FULL and a new session is starting —");
     emitLine("# clearing the trace to make room. Stored jumps are untouched.");
     jh_store::trace_clear();
+    // F-07: a failed erase leaves the region unappendable. Say so — silence
+    // here is how a puck records nothing while looking healthy.
+    if (jh_store::trace_wedged()) {
+      // Persist BEFORE reporting: if the next thing to happen is the reset
+      // that a sick flash chip tends to cause, the flag must already be down.
+      // And check it — an unstored guard bit is a guard that is not there,
+      // and the rider should know the protection did not take (F-10 sweep).
+      if (!jh_persist::save(jh_persist::Key::TraceGuard, 1.0f))
+        emitLine("# WARNING: could not persist the trace-wedge flag — a reboot "
+                 "will re-enable raw recording into a bad region. Run `format`.");
+      emitLine("ERR trace_clear — erase failed; raw trace recording is OFF "
+               "until a full `format`. Jumps still record.");
+    }
     // Re-read the store's own verdict. main's fs_ok is a MIRROR, and a mirror
     // that never refreshes is how "records nothing, reports healthy" happens:
     // every writer gates on this copy, and `stats` prints fs=down from it.
@@ -1497,12 +1661,12 @@ void loop() {
   }
   if (jumped) {
     session_jumps++;
-    stored_jumps++;
     if (ev.height_m > session_best) session_best = ev.height_m;
-    if (ev.height_m > stored_best)  stored_best  = ev.height_m;
+    // stored_jumps/stored_best move only if the store actually kept it —
+    // updated after logJump() below (F-10).
     emitf("JUMP n=%lu airtime_raw_s=%.3f airtime_s=%.3f height_m=%.3f height_ft=%.1f best_m=%.3f\n",
           (unsigned long)session_jumps, ev.airtime_raw_s, ev.airtime_s,
-          ev.height_m, ev.height_m * 3.28084f, session_best);
+          ev.height_m, ev.height_m * JH_M_TO_FT, session_best);
     // Medians over the flight just ended. The corrected value subtracts the
     // rotation term the detector itself uses, so it is directly comparable to
     // the sim's predicted 0-0.07 g band; the raw one is kept because it is
@@ -1514,7 +1678,10 @@ void loop() {
     const float    corr_g = (w_rad * w_rad * r_m) / 9.80665f;   // omega^2*r
     float          acorr  = med_a / 1000.0f - corr_g;
     if (acorr < 0.0f) acorr = 0.0f;
-    logJump(ev, med_a, med_w, (uint16_t)(acorr * 1000.0f + 0.5f), s_air_n);
+    if (logJump(ev, med_a, med_w, (uint16_t)(acorr * 1000.0f + 0.5f), s_air_n)) {
+      stored_jumps++;
+      if (ev.height_m > stored_best) stored_best = ev.height_m;
+    }
     emitf("# flight n=%lu med_a=%.3fg med_w=%udps med_acorr=%.3fg n_air=%u\n",
           (unsigned long)session_jumps, med_a / 1000.0, (unsigned)med_w,
           (double)acorr, (unsigned)s_air_n);

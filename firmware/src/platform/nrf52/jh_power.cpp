@@ -355,6 +355,26 @@ int fast_charge_state() {
   return ((port->OUT >> bit) & 1) ? 0 : 1;             // driving LOW = 100 mA
 }
 
+void enable_dcdc() {
+  // SoftDevice owns POWER when it is enabled — writing NRF_POWER->DCDCEN
+  // directly under a live SoftDevice is the "Trap 1" hard-fault this project
+  // already paid for once (STATUS 2026-08-16).
+  uint8_t sd_en = 0;
+  sd_softdevice_is_enabled(&sd_en);
+  if (sd_en) {
+    sd_power_dcdc_mode_set(NRF_POWER_DCDC_ENABLE);
+  } else {
+    NRF_POWER->DCDCEN = 1;
+  }
+}
+
+int dcdc_enabled() {
+  // Read the register, do not cache the request. DCDCEN is volatile across
+  // resets and the whole point of F-05 is that a silently-reverted enable
+  // looked identical to a working one.
+  return (NRF_POWER->DCDCEN & 1u) ? 1 : 0;
+}
+
 bool system_off() {
   // The LSM6DS3 is the one always-on consumer System OFF doesn't kill by
   // itself: its rail is power-gated by D15/P1.08 (jh_imu.cpp owns that pin
