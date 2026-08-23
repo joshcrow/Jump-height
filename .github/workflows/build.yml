@@ -18,6 +18,16 @@ name: build
 on:
   push:
     branches: [main]
+  # Pull requests too (2026-08-23). Until now CI ran ONLY on pushes to main,
+  # so a branch was never checked until after it had been merged — including
+  # the branch carrying the 2026-08-22 audit's own build and test gates, which
+  # sat in a PR with zero checks on it. F-03 and F-04 were both "the gate did
+  # not actually run"; a gate that only runs after the merge is the same shape.
+  #
+  # Safe for the Pages half: the `pages` job is already gated on
+  # `github.ref == 'refs/heads/main'`, so a PR builds and tests but publishes
+  # nothing.
+  pull_request:
   workflow_dispatch:
 
 permissions:
