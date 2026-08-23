@@ -347,3 +347,30 @@ explanations. The artifact was never inspected until several steps in.
 
 Practical consequence: simulator screenshots ARE available, just not while the
 machine is locked. Capture them when someone is physically at the Mac.
+
+### Running the watch unit tests (2026-08-23)
+
+`monkeyc` and `monkeydo` fail with **"Unable to locate a Java Runtime. Please
+visit http://www.java.com"** even though Java is installed. `/usr/bin/java` on
+this Mac is Apple's stub, and the SDK finds that one first. The real JDK is
+Homebrew's; export `JAVA_HOME` before any SDK command:
+
+```bash
+export JAVA_HOME=/opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home
+export PATH="$JAVA_HOME/bin:$PATH"
+SDK=$(ls -d ~/Library/Application\ Support/Garmin/ConnectIQ/Sdks/*/bin | head -1)
+cd garmin/jumpfield
+"$SDK/monkeyc" -f monkey.jungle -o bin/JumpField-test.prg \
+    -y ~/.garmin-ciq/developer_key.der -d instinct3solar45mm -t
+"$SDK/monkeydo" bin/JumpField-test.prg instinct3solar45mm -t
+```
+
+The simulator must already be running (`"$SDK/connectiq" &`); `monkeydo` does
+not start it. Expect `PASSED (passed=57, failed=0, errors=0)`.
+
+Two traps in that block:
+- **Do not pipe monkeyc through `tail` and read `$?`** — that is `tail`'s exit
+  status, and this project has now made that mistake more than once. The Java
+  error above printed while `echo "exit=$?"` cheerfully reported 0.
+- **`timeout` does not exist on this Mac** (it is `gtimeout`, from coreutils,
+  and only if installed).

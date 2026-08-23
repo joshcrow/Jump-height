@@ -388,3 +388,67 @@ function testStats_stillReseedsUPWARDafterAColdStart(logger) as Boolean {
     Test.assert(m.sessionBestM() > 1.39);
     return true;
 }
+
+// ---------------------------------------------------------------- F-11
+// The JUMP path used to assign session best/count straight off the wire while
+// the STATS path guarded them. That mattered more, not less: JUMP is the path
+// JumpFieldView.compute() pushes into FitOut.updateSession() at ~1 Hz, so a
+// decrease there lands in the PERMANENT activity record.
+
+(:test)
+function testJump_rebootReseedDoesNotDriveCountOrBestDown(logger) {
+    var m = new Model.State();
+    m.onLine(Protocol.parseKV(
+        "JUMP n=12 airtime_raw_s=0.92 airtime_s=0.93 height_m=1.05 height_ft=3.4 best_m=1.05"));
+    Test.assertEqual(m.jumpCount(), 12);
+    Test.assertEqual(m.sessionBestM(), 1.05);
+
+    // The puck browns out. Its session counters are RAM statics, so they
+    // reseed from zero and the next real jump reports n=1. Every field here is
+    // individually plausible and the wire invariant (best >= height) holds, so
+    // _jumpIsCorrupt cannot reject it. Only the comparison against what the
+    // watch already knows can.
+    m.onLine(Protocol.parseKV(
+        "JUMP n=1 airtime_raw_s=0.39 airtime_s=0.40 height_m=0.20 height_ft=0.7 best_m=0.20"));
+
+    Test.assertEqual(m.jumpCount(), 12);        // was 1 before F-11
+    Test.assertEqual(m.sessionBestM(), 1.05);   // was 0.20 before F-11
+
+    // But the jump itself is real and must still register: the newest height
+    // is the one just landed, and the flash/vibrate still arm. Freezing those
+    // too would trade a wrong number for a dead display.
+    Test.assertEqual(m.lastHeightM(), 0.20);
+    Test.assertEqual(m.lastAirtimeS(), 0.40);
+    Test.assertEqual(m.isFlashing(), true);
+    Test.assertEqual(m.consumeNewJump(), true);
+    return true;
+}
+
+(:test)
+function testJump_stillAdoptsHigherTotalsFromALateJoin(logger) {
+    // The guard refuses DECREASES only. A watch that joins mid-session sees
+    // its first JUMP carrying totals well above its own zeros and must take
+    // them (US6) - otherwise the fix for one failure creates another.
+    var m = new Model.State();
+    m.onLine(Protocol.parseKV("JUMP n=1 airtime_s=0.5 height_m=0.3 best_m=0.3"));
+    m.onLine(Protocol.parseKV("JUMP n=20 airtime_s=1.4 height_m=2.0 best_m=2.0"));
+    Test.assertEqual(m.jumpCount(), 20);
+    Test.assertEqual(m.sessionBestM(), 2.0);
+    return true;
+}
+
+(:test)
+function testJump_absurdBestIsRejectedEvenWhenItExceedsTheJump(logger) {
+    // _jumpIsCorrupt bounded height but not best. Its rule 4 only asks that
+    // best >= height, so best_m=9000 alongside a 0.5 m jump passed every
+    // check and would have pinned session best at 9000 m for the activity -
+    // and, being a maximum, nothing later could bring it back down.
+    var m = new Model.State();
+    m.onLine(Protocol.parseKV("JUMP n=1 airtime_s=0.5 height_m=0.3 best_m=0.3"));
+    m.onLine(Protocol.parseKV("JUMP n=2 airtime_s=0.6 height_m=0.5 best_m=9000.0"));
+
+    Test.assertEqual(m.jumpCount(), 1);         // whole line rejected...
+    Test.assertEqual(m.sessionBestM(), 0.3);
+    Test.assertEqual(m.lastHeightM(), 0.3);     // ...not half-applied
+    return true;
+}
