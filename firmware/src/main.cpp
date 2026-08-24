@@ -611,8 +611,14 @@ static bool runSelfTest() {
 
 // ---------------- Commands ----------------
 static void printHelp() {
-  emitLine("# commands: help | stats | jumps | trace | tracecheck | dump | clear | selftest | revive | i2cdiag | dcdc | info | off | dfu | uf2 | fakejump | mount | format");
+  // The "# commands:" line is machine-read: `jump status` greps it out of the
+  // ELF and diffs it against the dispatch table below (audit F-25 — pincensus
+  // was dispatched but absent from every help line, so the one instrument
+  // DECISION #38 makes mandatory looked unshipped to anyone who checked the
+  // documented way). Every `cmd == "..."` arm must appear here.
+  emitLine("# commands: help | stats | jumps | trace | tracecheck | dump | clear | selftest | revive | i2cdiag | dcdc | info | off | dfu | uf2 | fakejump | mount | format | pincensus | vbatscan | gyro");
   emitLine("#           set <airtime_offset_s|height_scale|vbat_scale> <value|default>");
+  emitLine("#           pincensus (bench: every GPIO vs pull-down/pull-up — DECISION #38)");
   emitLine("#           vbatscan  (bench: battery ADC vs acquisition time)");
   emitLine("#           gyro      (bench: raw + bias-corrected rate, 2 s)");
 }
