@@ -106,7 +106,15 @@ if only public exists, option 2 is fine.)*
 ## Step 6 — submit and wait
 
 Garmin's own published figure: **reviews complete within 72 hours** (+48 h if
-an app uses ANT+ profiles; ours does not).
+an app uses ANT+ profiles; ours does not). **Caveat added 2026-08-23: this
+number is not independently confirmed.** `docs/store-submission.md` §6
+fetched Garmin's live App Review Guidelines page and found no committed SLA
+text there, and could not load the FAQ page's answer content (client-side
+JS). A fresh attempt today against both the FAQ URL and the guidelines page
+hit the same wall (404 on the FAQ path, JS-only content on the guidelines
+page) — still unconfirmed from a primary source, not disproven. Treat 72 h
+as the planning assumption, not a guarantee; if the actual dashboard states
+a number after submitting, that supersedes this.
 
 **Submit as early as you can.** It is the longest-latency item between here
 and the water day, and it is the only one where waiting cannot be compressed

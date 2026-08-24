@@ -7,13 +7,30 @@ brother tomorrow evening + weekend (no water), and agents that can run in
 parallel.** This document is the work's single sequencing authority until
 the water day gets a date; plan.md remains the water-day protocol itself.
 
+> **2026-08-23 — this plan's week has elapsed; outcomes are recorded inline
+> below (Phase B table, Phase C note, Phase E2).** Read it as a record with a
+> live tail, not as a schedule: Phases A–C ran, Phase D's weekend is now, and
+> Phase E is unblocked because B6 passed. Two of its framings have since been
+> superseded and are corrected where they appear: the third board is no
+> longer "unassessed", and Phase E's "the mule" named the wrong board.
+> `hardening-plan.md` (2026-08-21) is the longer-range sequencing authority
+> and calls this document "this week's tactics"; that is the right reading.
+>
+> **The four open decisions in §1 are all still open** — the water-day date
+> still does not exist anywhere in the repo (every mention asks for one),
+> glue-vs-removable is unmade, and the µA-meter question has not been put
+> since `ea10fc1` (2026-08-16) declined a PPK2 against the *mA* question.
+> Since §1.1 gates the freeze, **there is still no freeze window**, and a new
+> dependency now sits in front of the date: the Connect IQ store review
+> (Phase C).
+
 ## 0. The resource map (what we actually have)
 
 | resource | identity | role this plan assigns |
 |---|---|---|
 | **OG** | `JumpHeight-E2C4`, battery, pigtails | **The product board.** Endurance truth, final builds only, the water build. Protected: no experiments. |
 | **Spare** | `JumpHeight-45ED`, USB-only | **The bench board.** Storage/lifecycle rehearsals, BLE targets, dualcentral, first flash of every build. |
-| **Third — "Puck"** | `B96D14EA…`, USB-only, unassessed since 08-12 | **The Era-2 development board.** Standby/System-OFF/wake work and deliberate OTA-abort testing — work that can strand a board. *(Never call it "the mule": that name belongs to the OG historically, and reusing it is how this project nearly treated its product board as disposable — bench-playbook.md §1.)* USB-only makes it perfect: VBUS replug always wakes it. Needs bring-up first (it predates the drive-strength fix's verification on it; "written off, almost certainly fine"). |
+| **Third — "Puck"** | **`JumpHeight-8673`** (`B96D14EA…`), USB-only. ~~unassessed since 08-12~~ **BROUGHT UP 2026-08-20 and HEALTHY** (`26d4b41`): `src=15b2d468`, selftest **6/6**, accel 1.050 g, noise 0.0045 g, flash 2093056B_free — the fourth "dead board" verdict in this project to prove wrong. Registry row updated the same commit, per CLAUDE.md §4. | **The Era-2 development board.** Standby/System-OFF/wake work and deliberate OTA-abort testing — work that can strand a board. *(Never call it "the mule": that name belongs to the OG historically, and reusing it is how this project nearly treated its product board as disposable — bench-playbook.md §1, which now carries a `~~"Mule"~~ retired name` row saying the mule and the OG are the SAME board.)* USB-only makes it perfect: VBUS replug always wakes it. ~~Needs bring-up first~~ — **done; it is ready for Phase E.** |
 | **Epix Gen 2** | owner's wrist | **The dev watch.** Simulator-verified builds land here first; onTimerReset and glance tests run here. |
 | **Instinct 3 Solar** | brother's wrist, available Thu eve + weekend | **The product watch.** P0 bring-up Thursday; full-dress rehearsal on the weekend. |
 | Brother | Thu evening + weekend, no water | The rider. Bring-up assistant Thursday, rehearsal rider on the weekend, rider-brief recipient. |
@@ -74,7 +91,42 @@ Unblocked work proceeds regardless, but each decision opens a branch:
 | **B5. store submission draft** | Listing text, screenshots list, `.iq` export checklist, review-guideline pass. No account actions. | Owner review before anything is submitted | Yes |
 | **B6. third-board bring-up** | Replug (owner, any time) → flash current proven build → falsifier selftest → registry row updated with its advertised name. | 6/6 selftest, name recorded | Hardware: me + one owner replug |
 
+**Phase B outcome, recorded 2026-08-23** (this plan was written for Thursday
+08-20; three of six closed, one is partial, one is unbuilt):
+
+| stream | outcome | evidence |
+|---|---|---|
+| B1 | **PARTIAL.** The bulk-export leg **PASSED** on the spare: both centrals received 300,022 identical bytes (sha256 `9d3d52fb880beb6e`), 19,839 well-formed rows each, `tx_drops` 0, with central B polling `stats` 39× *during* A's export. The JUMP-line leg — the one that matters, and the 2026-08-11 failure mode — is **INCONCLUSIVE, not passed**: `dualjump.py`'s first run printed FAIL, and that was the harness, since macOS CoreBluetooth multiplexes one physical link across central managers so B's subscribe starved A. It now counts links first and returns INCONCLUSIVE rather than FAIL on a single link. **A real answer needs two separate hosts**, which is the Epix + Instinct config — now blocked, see Phase C. | `06c9344` |
+| B2 | **NOT BUILT.** `garmin/jumpfield/source/Model.mc` has no baseline, no `Application.Storage` persistence, no `onTimerReset` clear. What *did* land is different work: monotonic guards refusing count/best **decreases** (`329c543`, F-11 `18e718f`) — the opposite failure from the session delta. | source, `329c543`, `18e718f` |
+| B3 | **DONE**, and verified on the OG rather than only the third board. | see Phase E2 below |
+| B4 | **DONE.** Session card carries the reboot ritual and the "there is no single `reboot` command" note (`docs/session-card.md:33`, `:41-44`); the rider brief exists as `docs/rider-brief.md`. | filesystem |
+| B5 | **DONE, and then redone.** `95e61c1` built the package + runbook; `22ed92f` **rebuilt** it on 08-23 because the 08-22 build predated F-11 and F-12. `garmin/jumpfield/bin/JumpField.iq`, 79,145 B, 4/4 device variants clean. **Not submitted** — and it is no longer optional (Phase C). | `95e61c1`, `22ed92f` |
+| B6 | **DONE.** `JumpHeight-8673`, 6/6, registry updated. Same commit also found that the floating-battery detector inverted all three boards at `--samples 2`; it now refuses fewer than 3 and defaults to 4. | `26d4b41` |
+
 ### Phase C — Thursday evening: the Instinct session (brother + watch, ~90 min)
+
+> **Outcome, recorded 2026-08-23 — item 1 succeeded and then invalidated most
+> of the rest of this phase.** `4e35d26` (08-22): `tools/mtp_send` worked
+> first try; device read from its own `GarminDevice.xml` rather than assumed
+> (`Instinct 3 - 45mm, Solar`, part `006-B4585-00`, **firmware 15.18**, unit
+> 3505032989), 17,996 bytes pushed and **verified by reading the file back**.
+> The Epix-specific storage-id worry in item 1 was real and was handled by
+> enumerating (`Garmin/Apps` = 16777221, storage `0x00020001`).
+>
+> Then `de77de0`: **that firmware deletes the sideloaded `.prg`.** File gone
+> after a reboot, `Restore` empty, no CIQ apps in `Garmin/Apps` at all. Root
+> cause in `d5641d2`: Instinct 3 keeps CIQ apps in an **internal registry**,
+> not as files — `OUT.BIN` grew by 48 bytes when the rider installed a free
+> store data field from his phone. File-copy sideloading is **architecturally
+> impossible** on this watch at this firmware; the build was never implicated
+> (correct product id, compatible SDK floor, 54/54 on target).
+>
+> So items 3–6 (render every tier on the real MIP, desk test, FIT pull, the
+> two-watch test that B1 is waiting on) **cannot run until the store install
+> lands**. The one silver lining is in `d5641d2`: the store channel is
+> *confirmed working on this exact watch and firmware*. The Epix procedure
+> remains valid for the Epix. Found two weeks before a water day rather than
+> two days before it — which is why this phase was scheduled early.
 *Puck for all watch work: **the OG** (session-card's own pairing) unless it
 is mid-endurance-run, in which case the spare — state which was used in the
 notes, because two boards on the air is how identity errors start.*
@@ -131,17 +183,35 @@ NOT pull the OG out of its endurance run for this.
 5. OG: second overnight battlog on the new build (n=2 for the drain
    regression), plus a full charge cycle.
 
-### Phase E — Era 2 opens (now, on the mule — not gated on the water day)
+### Phase E — Era 2 opens (now, on the third board — not gated on the water day)
 *The freeze protects the water build (OG + proven watch build). The third
 board is explicitly not that. Sequenced by the revised doc's order:*
+
+> **CORRECTED 2026-08-23.** This phase said "the mule" in four places. Per
+> `bench-playbook.md` §1 — the registry, which is ground truth — **"the mule"
+> is a RETIRED alias for the OG, the product board**; the registry now
+> carries an explicit `~~"Mule"~~` row saying so. So the original text
+> instructed destructive standby and OTA-abort work on the *product board*,
+> in a sentence that simultaneously warns "on the OG = stranded." §0 of this
+> same document already forbade the word. Every occurrence below now names
+> the board: **the third board, "Puck", `JumpHeight-8673`.**
 1. **E0 — OTA safety** (or §1.2 makes it moot): resumable/verified
    transfer already exists; add spare-first rule + never-near-session rule
    to the playbook; prototype an authenticated `dfu` trigger. Deliberate
    mid-transfer aborts on the third board to characterize dark-bootloader
    recovery cost.
-2. **E1 — timebase** = B3, flashed and verified on the mule.
+2. ~~**E1 — timebase** = B3, flashed and verified on the mule.~~ **DONE
+   2026-08-21 — and it went further than this line planned.** The `double`
+   sweep and the falsifier landed
+   (`firmware/include/jump_detector.h:62`/`:152`/`:161`/`:241-242`,
+   `firmware/src/main.cpp:1502`, `firmware/include/trace_codec.h:224`,
+   `tools/tests/test_timebase_falsifier.py:48`), the `assert()`-would-brick-a-
+   puck follow-up landed (`37394ae`), and it is verified **on the OG**, not
+   just the third board: `src=e83f6395` (`29f03e1`). Still unbuilt from §3a:
+   the session-relative reset and the session-identity column.
 3. **E2 — standby**: LSM6DS3 wake-engine registers + nRF SENSE/DETECT +
-   auto-off + low-battery cutoff, developed entirely on the mule (System
+   auto-off + low-battery cutoff, developed entirely on **the third board**
+   (`JumpHeight-8673`) (System
    OFF with a broken wake config on a USB board = replug; on the OG =
    stranded). **Opens with the off-current question**: if the meter was
    bought, measure; if not, the deliverable is an upper bound and the doc

@@ -53,8 +53,16 @@ That's the entire measurement. Everything else is just detecting `T` cleanly.
 Calibration ships in the formula today (not "future"): the detector actually
 computes `height = height_scale · g · (airtime + airtime_offset_s)² / 8`, where
 `airtime_offset_s` (additive, from bench drop tests) and `height_scale`
-(multiplicative, from on-water video ground truth) both default to identity
-(0.0 and 1.0) so uncalibrated output is exactly `g·T²/8`.
+(multiplicative, from on-water video ground truth) are both **designed** to
+default to identity (0.0 and 1.0) so an uncalibrated build reports exactly
+`g·T²/8`. **`height_scale` still does** (`firmware/include/params.gen.h:14`,
+`JH_HEIGHT_SCALE 1.0f`). `airtime_offset_s` no longer does: commit `a6e477d`
+(2026-08-11) baked the first real bench-drop measurement, **+0.0257 s**, into
+`config/params.json` as the shipped default, so every build since compiles
+in that correction rather than 0.0 (`firmware/include/params.gen.h:13`,
+`JH_AIRTIME_OFFSET_S 0.0257f`). It is a measured constant, not a placeholder
+— but a fresh port to different hardware starts from a *non-zero* number
+unless `config/params.json` is reset first.
 
 ### What this assumes (and how good the assumptions are)
 
@@ -144,7 +152,7 @@ Defined once in `Params` (both languages). Start here, tune against real data:
 | `min_airtime_s`      | 0.25 | Floor; below this it's almost certainly not a real jump. |
 | `max_airtime_s`      | 3.0  | Wing physical-plausibility cap (a 3 s air is ~11 m — absurd for a wing); also rejects a stuck AIRBORNE state. Matches `config/params.json` and `sim/detector.py`. |
 | `landing_settle_s`   | 0.5  | If `|a|` stays ordinary this long in AIRBORNE, release + reject (no landing spike seen). |
-| `airtime_offset_s`   | 0.0  | Additive airtime calibration from bench drop tests; identity by default. |
+| `airtime_offset_s`   | 0.0257 | Additive airtime calibration from bench drop tests. Identity (0.0) by *design*, but the shipped `config/params.json` default has carried the first real measurement since commit `a6e477d` (2026-08-11) — reset it to 0.0 for a fresh, uncalibrated build. |
 | `height_scale`       | 1.0  | Multiplicative height calibration from on-water video ground truth; identity by default. |
 
 Because sample **timing** sets your height accuracy, sample fast and timestamp

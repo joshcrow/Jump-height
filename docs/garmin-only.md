@@ -41,8 +41,12 @@ Two consequences worth writing down now:
 
 - **The FIT developer-field path is the product's real output**, not a
   side-effect. It already carries `jumps`, `best_jump`, `best_airtime` and a
-  per-record `jump_height` stream (verified on a real activity 2026-08-18).
-  Adding time-on-foil means adding fields to a path already proven.
+  per-record `jump_height` stream (verified on a real activity 2026-08-18 —
+  *attributed 2026-08-23: that verification ran on the owner's Epix Gen 2,
+  not the rider's Instinct 3 Solar*, `docs/STATUS.md:702,721-726`).
+  Adding time-on-foil means adding fields to a path already proven
+  **on that watch**; the Instinct's own FIT output is unconfirmed pending
+  the store install (`docs/store-submission-runbook.md`).
 - **It changes what the water session is for.** Beyond answering "are wing
   jumps ballistic", that day is the **first and only source of real foiling
   data** — the training set for every future metric. Time on foil is an IMU

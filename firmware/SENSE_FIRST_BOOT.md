@@ -435,19 +435,30 @@ arrived fine. Full evidence table and the two ruled-out causes are in
 board runs `platform/nrf52/jh_link.cpp`, whose `sendOneChunk()` takes the
 MINIMUM MTU across subscribed connections, queries it fresh per chunk, and
 writes per-connection rather than broadcasting one buffer. Verified by
-reading it. (The ESP32 bug is still real and still worth fixing on that
-platform — it is just not this.)
+reading it. (The ESP32 bug was real at the time this was written; moot
+now — **the ESP32 v1 platform was retired 2026-08-18** (commit `12480c6`,
+DECISION #40, owner decision): `firmware/src/platform/esp32/` no longer
+exists on `main`. The comparison above is kept as the historical reason
+this board's bug was ruled distinct; the code it points at is recoverable
+only via `git show 12480c6^:firmware/src/platform/esp32/jh_link.cpp`.)
 
-*Leading hypothesis:* Connect IQ silently dropping notifications, with two
-subscribers doubling per-chunk work in `sendOneChunk()` and the second
-central adding traffic. **Untested.** Settle it by rendering the raw
-received line on the watch for one sideload before changing any firmware —
-two confident wrong diagnoses were already produced by reasoning from
-rendered numbers instead of received bytes.
+*Leading hypothesis (superseded 2026-08-23 — root cause found and fixed):*
+Connect IQ silently dropping notifications, with two subscribers doubling
+per-chunk work in `sendOneChunk()` and the second central adding traffic.
+Was "Untested" here; settled 2026-08-14 by reading the code, not by the
+watch-sideload experiment this item proposed. Actual cause:
+`sendOneChunk()` ignored `BLEUart::write()`'s return (0 on notify
+failure) and advanced the queue tail anyway, silently discarding a chunk
+per-connection — exactly the missing-field signature seen above. Fixed:
+per-connection retry, bounded at 8 passes, counted as `tx_drops` in
+STATS. Evidence: `firmware/src/platform/nrf52/jh_link.cpp:266,305-360`;
+commit `216f75f`.
 
-*Still untested even now:* whether the corruption survives with the watch
-as the ONLY central. Until that single-central run happens, "two centrals"
-is a correlation, not the cause.
+*Also answered, same commit:* whether the corruption survives with the
+watch as the ONLY central — **yes**. The commit message states the bug is
+"reachable by a single central under load," so this was never a
+two-centrals-only correlation; it is a single-central product defect that
+a second central merely made easier to trigger.
 
 ## 15. NUS UUID + name are in the advertisement/scan response — never scanned-for by a real central
 
@@ -471,7 +482,7 @@ full `INFO` readout — firmware version, 200 Hz, params, calibration —
 without knowing the chip underneath had changed. Advertising → connect →
 notify round-trip all working against a real central.
 
-## 16. UF2 flashing procedure — never actually dragged a file onto a real Sense board
+## 16. UF2 flashing procedure — CONFIRMED 2026-07-31 on a real Sense board (heading corrected 2026-08-23: this item's own body reaches "CONFIRMED... with field notes" below; the "never actually dragged" heading predates that bench session)
 
 **File:** `.github/workflows/build.yml`'s new `.uf2` conversion step;
 `tools/uf2conv.py`.
@@ -500,7 +511,7 @@ serial DFU over the bootloader's CDC port) programmed it cleanly in ~23 s.
 Practical takeaway: UF2 drag-drop is real but macOS's automount is not to
 be trusted twice in a row; serial DFU is the reliable scripted path.
 
-## 16b. OTA DFU — the sealed box's only firmware path, and it is NOT yet trustworthy
+## 16b. OTA DFU — the sealed box's only firmware path — GATE PASSED 2026-08-12 (heading corrected 2026-08-23: this item's own body reaches "GATE PASSED" below; the "NOT yet trustworthy" heading was never updated to match)
 
 **Files:** `firmware/src/platform/nrf52/jh_link.cpp` (`BLEDfu` service +
 `reboot_to_dfu()` / the `dfu` command), `tools/otadfu.py` (legacy DFU over
@@ -847,7 +858,10 @@ Owner's directive: no multimeter session; a third, final board plugged
 in; "take care of this problem once and for all." The meter question
 ("is the 6D rail coming up?") got answered in software instead.
 
-**The instrument** — `railcheck` (mule-only branch `mule-railcheck`):
+**The instrument** — `railcheck` (mule-only; **pointer corrected
+2026-08-23** — this lived on branch `mule-railcheck`, which no longer
+exists (`main` is now the only branch); recover the code from annotated
+tag `archive/mule-railcheck` via `git show archive/mule-railcheck`):
 detach the bus (audited `bus_release()`), put weak internal PULL-DOWNS
 on SDA/SCL, then step EN (P1.08) high/low/high. The module's own 4.7 k
 I2C pull-ups hang off the SAME switched rail as the sensor, so against
@@ -906,7 +920,9 @@ stress rating, no recovery path documented). Three real blockers found
 and fixed before anything was flashed:
 1. Working-tree contamination — railcheck (experimental electrical
    code) would have shipped to the one-shot board. Board #3's build is
-   clean main (`dca2985`); railcheck stays on the mule branch.
+   clean main (`dca2985`); railcheck stayed off main (**now archived as
+   tag `archive/mule-railcheck`, corrected 2026-08-23** — its branch was
+   deleted; it was never merged).
 2. railcheck left the bus detached with `sensor_ok` stale-true —
    silent sample loss until the next selftest. Fixed: railcheck now
    ends with a full selftest, like revive.
@@ -1311,7 +1327,7 @@ No firmware change: on the water the puck is strapped to a board and this
 sensitivity is what you want. Bench expectation: a tethered bare board on
 a live desk WILL record intermittently — that's the gate working.
 
-## 24. Battery telemetry ADC accuracy — built 2026-08-04, never checked against a meter
+## 24. Battery telemetry ADC accuracy — built 2026-08-04, checked against a meter and RESOLVED 2026-08-11 (heading corrected 2026-08-23: this item's own body reaches "RESOLVED" and "APPLIED AND VERIFIED ON SILICON" below; only the per-unit residual, flagged "still open" in the body, remains genuinely open)
 
 **File:** `firmware/src/platform/nrf52/jh_power.cpp` (the whole file — the
 jh_power seam's real implementation).
@@ -1620,15 +1636,26 @@ LATER milestone (S2 battery/sleep, S3 update path, S4 the puck, S5 the
 metrics ladder) and was deliberately not touched here, so nothing about it
 appears above as a VERIFY item:
 
-- Battery telemetry, charge-current selection (P0.13), low-voltage System
-  OFF (docs/sense.md §3.4) — firmware reports nothing about the battery yet.
-- Sleep/wake, System OFF, the IMU hardware motion interrupt
-  (`PIN_LSM6DS3TR_C_INT1`, unused by this poll-loop port) (docs/sense.md §3.5).
+- ~~Battery telemetry, charge-current selection (P0.13), low-voltage System
+  OFF (docs/sense.md §3.4) — firmware reports nothing about the battery yet.~~
+  **STALE, built 2026-08-04+:** `jh_power.cpp` reports `vbat_mv`/`batt_pct`/
+  `chg` (item 24 above); this list item was never updated once that
+  milestone landed.
+- ~~Sleep/wake, System OFF, the IMU hardware motion interrupt
+  (`PIN_LSM6DS3TR_C_INT1`, unused by this poll-loop port) (docs/sense.md
+  §3.5).~~ **STALE, built 2026-08-04+:** the `off` command and
+  `jh_power::system_off()` are shipped and soak-tested (item 25 above).
+  INT1 usage specifically remains unbuilt (motion still polls) — that
+  narrower point still stands.
 - The RGB status LED language (docs/sense.md §3.10) — no LED code exists in
-  this port.
-- Nordic DFU / `BLEDfu` (docs/sense.md §3.3) — this port's CI publishes a
+  this port. Still accurate 2026-08-23: only `Bluefruit.autoConnLed(false)`
+  (the stock connection LED, disabled) exists; no custom LED language.
+- ~~Nordic DFU / `BLEDfu` (docs/sense.md §3.3) — this port's CI publishes a
   `.uf2` for cable/drag-drop recovery and first-flash only; wireless update
-  is unbuilt.
+  is unbuilt.~~ **STALE, built and gate-passed 2026-08-12:** `BLEDfu`
+  starts in `jh_link.cpp::begin()`, the `dfu` command triggers it, and
+  item 16b above records two complete OTA loops back-to-back,
+  checkpoint-verified. Wireless update is built, not unbuilt.
 - Antenna keep-out / range testing (docs/sense.md §3.11) — a housing/RF
   concern, not firmware.
 - Drop calibration re-run on the Sense build (docs/sense.md §3.7) — a bench

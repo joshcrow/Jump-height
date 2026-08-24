@@ -60,14 +60,39 @@ rehearsal).
 | item | state | remaining proof |
 |---|---|---|
 | Seven storage/BLE fixes | 42-cycle soak ran on the **third board**; the spare's evidence is different in kind (dualcentral pass, flash-wedge recovery); OG carries the build | OG desk test done |
-| Monotonic STATS reseed | staged in tonight's `.prg` | runbook §4b on-hardware proof |
-| Puck-id header | staged | see `E2C4` on a wrist while connected |
-| Two-central JUMP delivery | **unproven** — tonight's Epix+Instinct test | 20/20 on both, `!` absent |
-| Reboot-before-activity ritual | on the session card | brother executes it in rehearsal |
+| Monotonic STATS reseed | ~~staged in tonight's `.prg`~~ **code landed** (`329c543`); **cannot be installed on the product watch** — see the 08-23 note below | runbook §4b on-hardware proof — **blocked** |
+| Puck-id header | ~~staged~~ **shipped** (`582ffe4`) | see `E2C4` on a wrist while connected — **blocked**, same reason |
+| Two-central JUMP delivery | **unproven** — ~~tonight's Epix+Instinct test~~ **the test could not run**; the host-side attempt is INCONCLUSIVE by design (`06c9344`: macOS multiplexes one physical link, so a single link now returns INCONCLUSIVE, never FAIL) | 20/20 on both, `!` absent — **still owed, and now gated on the store install** |
+| Reboot-before-activity ritual | on the session card — **verified present**, `docs/session-card.md:33`, `:41-44`, including "there is no single `reboot` command" and the reset-button route | brother executes it in rehearsal |
 | Rider brief | written | delivered and understood |
-| **Calibration provenance selftest row** | **to build — R1's one *new* code item** | see §2.1 |
+| **Calibration provenance selftest row** | ~~**to build — R1's one *new* code item**~~ **BUILT 2026-08-21** (`4a97250`), with the FAIL policy host-side rather than as a device row — see §2.1, which has said so since it landed | **on-silicon proof is IN**: the warning fired on the OG 2026-08-23 (`29f03e1`), naming all three keys as `defaults`. What remains is not the row, it is the owner's drop ritual — see the OG re-calibration line below |
 | Timebase rework (double sweep + saturation) | **rides along on ANY OG flash** — firmware builds from HEAD, not cherry-picks. On the spare as of 2026-08-21 (`37394ae` lineage). | its 48 h soak IS the R1 soak below |
 | OG re-calibration (drop ritual) | **owner action** | reads back `source=device` |
+
+> **2026-08-23 — R1's watch half has a new hard dependency, and the OG has
+> moved off the build this table describes.**
+>
+> 1. **The product watch cannot be sideloaded.** Instinct 3 on fw 15.18
+>    deletes a copied `.prg` (`de77de0`), because it keeps CIQ apps in an
+>    internal registry rather than as files (`d5641d2` — `OUT.BIN` grew 48 B
+>    when the rider installed a store field from his phone). So every row
+>    above whose proof is *"see it on a wrist"* — monotonic reseed, puck-id
+>    header, two-central JUMP delivery, and the rider's half of the ritual —
+>    is now gated on the **Connect IQ store submission**, with Garmin's
+>    stated 72 h review in front of it. R4 lists that submission as a
+>    post-water nicety; it is now on R1's critical path. Package is built
+>    (`22ed92f`, 79,145 B) and **not submitted**.
+> 2. **"OG carries the build" no longer means this build.** The OG has been
+>    reflashed twice since: `src=9b35f734` (`dfecb73`, 08-22) and
+>    `src=e83f6395` (`29f03e1`, 08-23). Both carry the audit's F-01…F-21
+>    work. Self-test passed on the current one; a **desk test on
+>    `e83f6395` is not on record**, and §0.2 ("installed is not proven")
+>    plus plan.md's after-every-flash gate both say that is owed.
+> 3. Two watch fixes landed *after* the 08-22 store package was built and
+>    forced a rebuild (`22ed92f`): F-11 (`18e718f`, the JUMP path could drive
+>    session count and best DOWN into the saved FIT) and F-12 (`781eabd`, one
+>    dropped BLE callback parked the link permanently). Neither is in the
+>    table above; both belong in R1.
 
 **R1 gate:** full suite green · **48 h soak of the R1 candidate build on the
 spare — which is the HEAD lineage including the timebase rework, because
@@ -98,7 +123,14 @@ order:
 1. **OTA safety rules** (or mooted by the glue-vs-removable decision):
    spare-first, never-near-session, authenticated `dfu` trigger, deliberate
    mid-transfer-abort characterization on the third board.
-2. **Timebase completion.** The double sweep landed (commit `37394ae`);
+2. **Timebase completion.** The double sweep landed (commit `37394ae`
+   — *cite the code, not that hash: `2f3a700` records that a `git add -A`
+   scrambled attribution across that day, so the sweep is best evidenced by
+   `firmware/include/jump_detector.h:62`/`:152`/`:161`/`:241-242`,
+   `firmware/src/main.cpp:1502`, `firmware/include/trace_codec.h:224` and
+   `tools/tests/test_timebase_falsifier.py`. `37394ae` is specifically the
+   follow-up that replaced the device-live `assert()` with saturation.
+   Verified on the OG as `src=e83f6395`, `29f03e1`*);
    what remains is the **session-relative reset** — gated on detector state
    == RIDING (the livelock the attack found), plus the **session column** in
    the jump record (reset ≠ identity). Proof: multi-day soak on the third
@@ -113,7 +145,15 @@ order:
    off-current measurement against the pre-committed kill threshold
    (>200 µA ⇒ stop and find the leak; QSPI first suspect).** Requires the
    µA-meter decision.
-5. **Watch hardening**: PuckLink state deadlines + DEAD retry; duration-aware
+5. **Watch hardening**: ~~PuckLink state deadlines~~ **landed 2026-08-23 as
+   F-12** (`781eabd`): PAIRING/DISCOVERING/SUBSCRIBING each stamp a 20 s
+   deadline, `poll()` tears the attempt down on expiry into the ordinary
+   rescan path, and teardown now unpairs — `PuckLink.mc:209-216`,
+   `connectAttemptExpired()` written as a static pure function so it is
+   testable without BLE. 60/60 in the simulator, mutation-tested three ways.
+   **Still open: DEAD retry** — `STATE_DEAD` is set at `PuckLink.mc:190` and
+   `:263` and **nothing transitions out of it**, so a BLE stack that fails at
+   registration is terminal for the ride. Also still open: duration-aware
    staleness (read the `_staleSinceMs` that is already stored); `NO REC` on
    every layout tier.
 6. **Foil-signal spec**: raw variance metric line from the puck; threshold +
@@ -148,10 +188,14 @@ with zero identity incidents.
 
 Inductive charging or pogo dock, potting, adhesive qualification (the coupon soak
 starts its 6-month clock **only when STATUS records it going into the
-bucket — as of 2026-08-21 no such entry exists**, so it has NOT started;
+bucket — as of 2026-08-21 no such entry exists**, *re-checked 2026-08-23:
+still none, so this has now slipped two more days*, so it has NOT started;
 this plan's first draft claimed otherwise, which is exactly the
-claimed-done-but-wasn't failure STATUS.md §rules exists to stop), store-distributed watch app (draft
-exists; 72 h review), Qi-through-the-wall experiment before any custom
+claimed-done-but-wasn't failure STATUS.md §rules exists to stop), ~~store-distributed watch app (draft
+exists; 72 h review)~~ — **moved out of R4 on 2026-08-23: the store is no
+longer a distribution upgrade, it is the only way to install on the product
+watch (`de77de0`, `d5641d2`), so it belongs to R1's critical path** —
+Qi-through-the-wall experiment before any custom
 hardware.
 
 ## 2. The hardening backlog, by subsystem
@@ -176,7 +220,7 @@ Sized: S = hours, M = a day, L = multi-day. Each carries its proof.
 ### 2.3 BLE / link (task #15 absorbed here)
 | item | size | proof |
 |---|---|---|
-| PuckLink deadlines + DEAD retry | S | pull the puck's power mid-pair; field recovers within 90 s. **Puck-side baseline now measured (2026-08-22): 2,068/2,068 cycles, full recovery median 1.9 s / p95 2.0 s — the puck is never the bottleneck, so any watch-side recovery slower than ~5 s is the watch's own state machine and unambiguously attributable.** |
+| PuckLink deadlines **(landed, F-12 `781eabd`)** + DEAD retry **(still unbuilt — `STATE_DEAD` is terminal, `PuckLink.mc:190`/`:263`)** | S | pull the puck's power mid-pair; field recovers within 90 s. **Puck-side baseline now measured (2026-08-22): 2,068/2,068 cycles, full recovery median 1.9 s / p95 2.0 s — the puck is never the bottleneck, so any watch-side recovery slower than ~5 s is the watch's own state machine and unambiguously attributable.** The deadline half is proven in the simulator only; the on-hardware proof is gated on the store install (§1/R1 note). |
 | Duration-aware staleness | S | 20-min silent puck shows "no data — 20 min" |
 | Two-central JUMP delivery (tonight) then **retire second central in rider build** (R3) | S | dualjump equivalent on two real hosts |
 
@@ -199,7 +243,7 @@ Sized: S = hours, M = a day, L = multi-day. Each carries its proof.
 |---|---|---|
 | Foam-pack cell + strain-relief + photograph (next capsule opening — adversary's replacement for shock isolation) | S | photo on record |
 | Reseal card zip-tied to capsule | S | it survives the weekend rehearsal |
-| Coupon soak + trunk thermometer (started) | calendar | monthly readout in STATUS |
+| Coupon soak + trunk thermometer — ~~(started)~~ **NOT started, as of 2026-08-23.** This cell contradicted §1/R4 in this same document, which is correct: no commit in the 80 since 08-20 puts a coupon in a bucket or a thermometer anywhere, and no STATUS entry records either. The 6-month clock has not begun | calendar | monthly readout in STATUS |
 
 ## 3. Verification infrastructure (the workstream that hardens the hardening)
 

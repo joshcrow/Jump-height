@@ -31,7 +31,14 @@ five rounds to green — see [../garmin/FIRST_COMPILE.md](../garmin/FIRST_COMPIL
 **M1 (protocol core, simulator-only) met.** **On-watch install and the live
 BLE link are proven on silicon 2026-08-11** — on the owner's **Epix Gen 2**
 (`epix2`, added to the manifest ahead of M5; the Instinct 3 Solar is his
-brother's and only occasionally on hand). Scan → pair → discover →
+brother's and only occasionally on hand). *(Superseded 2026-08-23: the
+"occasionally on hand" framing is stale — the owner decided 2026-08-20 the
+brother is the rider on the water day full stop, the owner is not on the
+wing, and the Instinct is therefore the product's only real screen, not a
+secondary device. Everything in this paragraph and the corruption bug below
+is Epix-only evidence; see `docs/instinct-night.md` and
+`docs/store-submission-runbook.md` for the Instinct's own, separate status.)*
+Scan → pair → discover →
 subscribe → decode → render all work, and a real toss registered on the
 wrist. **M2 is NOT signed off:** with a second BLE central subscribed the
 displayed values are corrupt — jump count and best wrong, airtime missing,
@@ -245,7 +252,17 @@ Field usage:
 
 ### 5.5 FIT enrichment (US4) — developer fields
 
-One developer-data UUID (constant in FitOut.mc). Fields:
+One developer-data UUID (constant in FitOut.mc). *(Corrected 2026-08-23: this
+undersells what was actually found and built. The real, confirmed
+`FitContributor.createField()` signature — `(name, fieldId, type,
+{count,mesgType,units})` — takes no UUID argument at all; Connect IQ ties
+developer fields to the app's own manifest identity automatically. The
+`DEVELOPER_DATA_ID` constant in `FitOut.mc:38` is kept only as a literal
+match of `manifest.xml`'s app id, for a human to visibly cross-check the two
+— it is not passed to any FitContributor call and does no wiring
+(`garmin/jumpfield/source/FitOut.mc:29-38`, which documents this itself; also
+flagged in `docs/STATUS.md`'s own stale-docs table). This spec sentence read
+as if the constant were load-bearing; it is not.)* Fields:
 
 | id | name            | type    | scope   | units |
 |----|-----------------|---------|---------|-------|
@@ -302,10 +319,25 @@ per-OS sideload guide; (b) *Connect IQ Store*: developer account, store
 checklist (§11.3), submit, respond to review. AC: owner's watch runs a
 Release-asset build installed per the guide; store listing approved; the
 website's watch section shows the store badge.
+*(Corrected 2026-08-23: channel (a) is dead for the device that matters.
+File-copy sideloading to the Instinct 3 Solar — the rider's watch — was
+tried twice on 2026-08-22 and is confirmed architecturally impossible on its
+firmware, 15.18; the watch deletes any `.prg` from `Garmin/Apps` on next USB
+disconnect (`docs/STATUS.md:855-909`). Channel (b), the Store, is now the
+only path onto that watch, not one of two — see
+`docs/store-submission-runbook.md`.)*
 
 **M6 — field trial.** One real water session wearing it, with the beach
 phone connected at the same time (requires §7's two-central firmware).
 AC: US1-US6 each verified true on the water, or filed as issues.
+*(Flagged 2026-08-23, not yet corrected in the plan itself: this AC's own
+premise — a second central live during the ride — is exactly the standing
+prohibition documented in `docs/ble-dependability.md` §6 ("the product
+default stays one central... the second slot remains for bench work") and
+restated as a hard rule in `docs/instinct-night.md` ("no second central
+while riding. That rule holds until this passes"), because the real-hardware
+two-host JUMP-line test remains INCONCLUSIVE, not passed. M6 as worded here
+should not run with a second central until that test passes.)*
 
 ## 7. Firmware companions (OUR repo)
 
@@ -357,21 +389,37 @@ API docs; compatible-devices list):**
 - ✅ Instinct 3 Solar display: 176×176 semi-octagon (corners clipped).
 
 **Still open (check in M0/M2/M4):**
-1. Exact datafield memory limit for Instinct 3 Solar (read from the SDK's
-   device files at M0; API 5.1-era limits are expected to be generous —
-   budget stays conservative regardless).
+1. *(Resolved 2026-08-23: 32,768 B total budget; the field's own static
+   footprint measures 12,417 B, `monkeyc --build-stats`,
+   `docs/STATUS.md` "static 12,417 B of the 32,768 B datafield budget". The
+   124 KB fear some earlier notes carried was `.prg` **file size**, not
+   runtime memory — retracted, do not resurrect it.)*
 2. *(resolved above)*
 3. Whether `Attention.vibrate` is permitted from a data field on Instinct 3;
    if not, drop US3 silently (setting hidden; invert-flash is the nudge).
-4. Whether the 128-bit NUS service UUID is visible in CIQ scan results on
-   target (else match by name from scan response).
+   *(Still open 2026-08-23: the guarded call ships, `has :vibrate` checked,
+   but it has never actually fired on any watch — nothing has yet forced
+   `Model.consumeNewJump()` true on real hardware.)*
+4. *(Resolved 2026-08-23: yes — scan, pair, discover and subscribe all work
+   by service UUID on real hardware, proven on the Epix Gen 2 2026-08-11 and
+   in 2,068/2,068 reconnect cycles against a third board 2026-08-22,
+   `docs/STATUS.md:855` region and reconnect-soak entries. Name-fallback
+   matching exists but is effectively unreachable — see
+   `docs/puck-identity.md` §2/§7 on why that already causes a real bug.)*
 5. *(resolved above)*
 6. FIT developer-field rendering in Garmin Connect for windsurf-family
    activities (charts render for most sports; confirm on a real save).
+   *(Still open 2026-08-23: proven only by offline-parsing the downloaded
+   FIT file; nobody has opened the activity on connect.garmin.com to look,
+   per `docs/store-submission.md` §5/§7.)*
 7. Store review constraints on the word "Garmin" and on BLE scan duration
    in data fields (respect current guidelines at submit time).
-8. Whether the owner's watch mounts as USB mass storage or MTP-only on
-   macOS (decides which sideload guide applies — §11.1).
+8. *(Resolved 2026-08-23, and it turned out not to matter: MTP-only, found
+   2026-08-22 — but file-copy sideloading over MTP is now confirmed
+   **architecturally impossible** on the Instinct 3's firmware (15.18)
+   regardless of transport; `docs/STATUS.md:855-909`. §11.1's per-OS sideload
+   guide does not reach this device at all — the Connect IQ Store is the
+   only path, see `docs/store-submission-runbook.md`.)*
 9. BLE delegate callback delivery while the field's data page is not the
    currently visible screen (must keep receiving jumps regardless).
 10. Current Connect IQ SDK license terms re: CI builds — until confirmed,
@@ -389,6 +437,18 @@ with zero configuration must satisfy US1-US6 completely.
 
 ### 11.1 Sideloading — the honest per-OS guide (ships in garmin/README.md
 and, post-M2, as a short page linked from the web app)
+
+> **CORRECTED 2026-08-23: this guide does not work for the Instinct 3
+> Solar.** Tried twice on real hardware (fw 15.18) — the file copies and
+> read-back-verifies fine, and the watch deletes it on the next USB
+> disconnect regardless. Connect IQ apps on this firmware live only in an
+> internal registry (`OUT.BIN`); a loose `.prg` in `GARMIN/APPS` never joins
+> it (`docs/STATUS.md:855-909`). For this device the Connect IQ Store
+> (§11.3, `docs/store-submission-runbook.md`) is not a friction-reduction
+> upgrade over this guide — it is the only channel that reaches it at all.
+> This guide may still be accurate for other sideload-tolerant devices
+> (unverified either way here); it is not optional-but-recommended for the
+> Instinct.
 
 1. Download `JumpField-<device>.prg` for your watch model (Release asset;
    .prg files are built PER DEVICE — installing the wrong model's file

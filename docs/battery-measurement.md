@@ -82,7 +82,7 @@ claim the argument needed.
 Power work is product quality, not a session blocker, and must not consume
 bench time that drop calibration, the capsule test, and the mount need.
 
-## 4. LIVE FINDING: fast charge is not measurably working
+## 4. LIVE FINDING: fast charge is not measurably working — RESOLVED 2026-08-18/19, kept for the record (see the dated update at the end of this section)
 
 The review surfaced a decisive asset my original plan missed: a **complete
 50 mA charge baseline already exists** — `data/soaks/
@@ -132,6 +132,25 @@ What this does and does not establish:
    (confirmed) is that I named it and then never scheduled it. It is now
    Phase A.
 
+**RESOLVED 2026-08-18/19 (STATUS.md).** Step 2's `hichg=` readback shipped
+2026-08-17 and immediately found the real bug: `hichg=0 chg=1` while
+charging — the pin was never driven. Root cause was a macro, not
+hardware: `JH_FAST_CHARGE_ENABLED` was `#define`d in `main.cpp` but
+consumed by `#if JH_FAST_CHARGE_ENABLED` in `jh_power.cpp` — a different
+translation unit that never saw the definition, so an undefined macro in
+`#if` evaluated to 0 and `update_charge_current()`'s body compiled to
+nothing. "Present and called at 1 Hz" (as read from source, above) was
+true of an empty function. Fixed by moving the `#define` into
+`firmware/include/platform/jh_power.h`, the header both translation units
+share (confirmed still there: `jh_power.h:100-101`). Flashed as
+`src=66b5137b`, then proven on the OG (`ef37e568`, 2026-08-19): `hichg=1`
+while charging, and a clean full-cycle comparison against the archived
+50 mA baseline measured **0.70** (30% faster charge; the CC-phase-only
+ratio implied is ~0.58, close to the ~0.44 expected once the board's own
+draw is subtracted). The HICHG net topology question below (§7) is
+answered by this: the pin drives fine, the firmware just wasn't reaching
+it.
+
 Also from review: **time-to-full is demoted to a logged curiosity.** From a
 ~28 % start the CC phase halves but the CV taper does not, so even a working
 fast charge shows only ~1.6-1.8× on time-to-full — a weak signal buried in
@@ -161,7 +180,9 @@ endurance run's starting point is stated honestly.
    unattended dead-cell dwell at cutoff is exactly the kind of avoidable cell
    abuse the project cannot afford on the only board with a battery pigtail.
    Report hours-to-3900/3800/3700/3600 mV. **Label: bounds check.**
-4. `hichg=` readback lands with the next routine flash — not a special flash.
+4. ~~`hichg=` readback lands with the next routine flash — not a special
+   flash.~~ **DONE 2026-08-17** — shipped, and it is what found the §4 bug
+   (`firmware/src/main.cpp:1011`, `# hichg=%d chg=%d`).
 
 **Phase B — DEFERRED by owner decision (2026-08-16): no PPK2 purchase now**
 
@@ -222,7 +243,9 @@ to-death discharge if a true-zero endpoint is ever worth one cell cycle.
   running show none. Still on the schematic-check list, with one addition
   from review: the exposure is largest **while charging** (VBAT at its
   highest), which is also when we now deliberately log.
-- **HICHG net topology** — the live question of §4.
+- ~~**HICHG net topology** — the live question of §4.~~ **ANSWERED
+  2026-08-18/19** — see the resolution note in §4. The topology was never
+  in question; the macro wiring was.
 - **Pack protection threshold** — unverified; one more reason for the
   3600 mV floor.
 

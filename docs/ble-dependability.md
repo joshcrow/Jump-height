@@ -42,12 +42,12 @@ busy session (50 Hz trace + jump lines) can exhaust the same buffers.
 
 | Layer | Question | Today |
 |---|---|---|
-| 1. Byte integrity | do the bytes we queue arrive? | **BROKEN** — §1 |
+| 1. Byte integrity | do the bytes we queue arrive? | **BROKEN** — §1 *(CORRECTED 2026-08-23: fixed the same day this row was written — `jh_link.cpp:323-359` now retries per-connection, bounded at `TX_RETRY_MAX`, counts forced drops as `tx_drops`. Verified, not just built: 240 KB single-central export 2026-08-18, 150 KB and then 300 KB two-central exports 2026-08-19/21, all byte-identical with `tx_drops` at zero — `docs/STATUS.md`'s TWO-CENTRAL PASS entries. Current status: FIXED, VERIFIED under the load that broke it.)* |
 | 2. Line integrity | if bytes are lost, can we TELL? | **NO** — no checksum, no per-line sequence |
 | 3. Session continuity | what happens across a dropout? | partial — live data dropped, storage retains, reseed on reconnect |
-| 4. Discovery & pairing | does it just connect? | works; no bonding; no multi-puck story |
+| 4. Discovery & pairing | does it just connect? | works; no bonding; no multi-puck story *(CORRECTED 2026-08-23: per-puck identity SHIPPED 2026-08-18 — see §3 Layer 4 below, unique `JumpHeight-XXXX` names, prefix/service matching everywhere. What remains unsolved is specifically the two-riders-two-pucks BINDING case, §Layer 4b below, not multi-puck identity in general.)* |
 | 5. Observability | can the user tell link state from device state? | **NO** — one "no BLE" appearance for every cause |
-| 6. Policy | two centrals? authenticated `dfu`? | undecided / `dfu` is unauthenticated |
+| 6. Policy | two centrals? authenticated `dfu`? | undecided / `dfu` is unauthenticated *(CORRECTED 2026-08-23: two-centrals is decided, see §3 Layer 6 below — "keep the capability, fix the cause... product default stays one central, the second slot remains for bench work." `dfu` remains unauthenticated and ungated — that half of this row still stands.)* |
 
 ### Layer 2 is the one that turns a glitch into a lie
 
@@ -242,6 +242,16 @@ ambiguity that made "is it even on?" unanswerable.
   alone doubles as this.
 - **Bench soak before the water**: N jump lines emitted, N rendered on
   the watch, counters at zero.
+
+**Status update, 2026-08-23 — the first two of these are done, not still
+proposed:** the induced-failure soak ran as `tools/dualcentral.py`
+(300,022 bytes, two centrals, `tx_drops` 0, `docs/STATUS.md`'s two-central
+entries) and the raw-line diagnostic already ran on 2026-08-11
+(`bin/JumpField-DIAG-epix2.prg`, `docs/STATUS.md:2343`), which is what found
+the ATT_MTU-23 fragmentation this document's §1 is built on. The
+single-central control run and the JUMP-line (as opposed to bulk-export)
+two-central test remain genuinely open — see `docs/instinct-night.md` step 5
+and its own "INCONCLUSIVE" finding.
 
 ## 6. Open questions
 

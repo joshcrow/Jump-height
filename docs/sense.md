@@ -23,8 +23,11 @@ LSM6DS3 driver, raw QSPI store with binary trace v2 + codec parity tests,
 watchdog); CI publishes a drag-and-drop `.uf2`. Every runtime assumption
 that only hardware can prove is numbered in
 **[../firmware/SENSE_FIRST_BOOT.md](../firmware/SENSE_FIRST_BOOT.md)**
-(21 items) — day one is flash + work down that list, i.e. milestone S0
-and most of S1 already have prebuilt answers waiting.
+(21 items as of first writing; **that file has grown to 26 numbered
+items plus lettered sub-items (16b–16j) as of 2026-08-23** — treat "21"
+as a historical count, not the current one) — day one is flash + work
+down that list, i.e. milestone S0 and most of S1 already have prebuilt
+answers waiting.
 
 **Product statement.** The Sense puck is a **tiny Garmin data-field
 adder**: it rides the board, measures, and feeds the watch live — phone
@@ -155,9 +158,13 @@ is the cable path. Revisit only if we ever swap bootloaders.)*
   (absent on ESP32/host-default → v1 protocol byte-identical; host build
   scripts values via `JH_VBAT_MV`/`JH_CHG` for CI). The web app shows a
   header battery pill + the device card line; the fake device emulates
-  the keys (`--vbat-mv/--charging/--no-battery`). Bench-pending:
-  vbat-vs-multimeter check (SENSE_FIRST_BOOT item 24 — SAADC acquisition
-  time vs the ~340 kΩ divider impedance). Still to build (deliberately,
+  the keys (`--vbat-mv/--charging/--no-battery`). **Done and closed
+  2026-08-11 (updated 2026-08-23):** vbat-vs-multimeter check ran
+  (SENSE_FIRST_BOOT item 24 — SAADC acquisition time vs the ~340 kΩ
+  divider impedance): the acquisition-time error (~50 mV) is fixed with a
+  15 µs TACQ; a residual per-unit gain error (~75 mV / 1.8%) is recorded
+  as calibration data, not something firmware alone can close. Still to
+  build (deliberately,
   with the sleep milestone where they belong): the low-battery LED
   pattern and the **low-voltage System OFF at ~3.45 V**. Note the cell
   actually installed (2026-08) is **250 mAh**, not the 500 mAh this
@@ -351,26 +358,57 @@ duty cycle) and replace this table with numbers.
 
 ## 7. VERIFY at bring-up (answer on the bench, then edit this doc)
 
-1. Bluefruit two-central links: `begin(2, 0)`, per-connection MTU +
-   notify, TX FIFO depth under our line rates.
-2. NUS 128-bit UUID in the advertisement (Garmin scan filter), name in
-   scan response.
-3. Internal I2C pins / `Wire` instance for the IMU in the Seeed
+**This list itself was never edited once items were answered — the
+instruction in its own heading was not followed. Items 1, 2, 3 and 9 are
+answered (dated below); 4-6, 8, 10 are not, and item 7 is half-answered.**
+
+1. ~~Bluefruit two-central links: `begin(2, 0)`, per-connection MTU +
+   notify, TX FIFO depth under our line rates.~~ **ANSWERED 2026-07-31
+   (single central) and 2026-08-11 (two real centrals, over an hour)** —
+   SENSE_FIRST_BOOT.md item 14. A watch-corruption bug turned up along
+   the way (root-caused and fixed 2026-08-14, same item) but the
+   mechanics this item asked about are proven.
+2. ~~NUS 128-bit UUID in the advertisement (Garmin scan filter), name in
+   scan response.~~ **ANSWERED** — the Garmin field has scanned for and
+   connected to the puck on real hardware since 2026-08-10/11
+   (`garmin/FIRST_COMPILE.md`); this could not work if the UUID/name
+   were missing from the advertisement.
+3. ~~Internal I2C pins / `Wire` instance for the IMU in the Seeed
    variant; LSM6DS3TR-C FIFO size *(4 KB confirmed from ST docs
-   2026-07-28; register-map cross-check on the bench remains)*.
+   2026-07-28; register-map cross-check on the bench remains)*.~~
+   **ANSWERED** — confirmed against the installed variant
+   (`variants/Seeed_XIAO_nRF52840_Sense/variant.cpp`: D16=P0.27 SCL,
+   D17=P0.07 SDA) and working since first bring-up.
 4. nRF Connect (iOS) DFU against the Adafruit bootloader, end-to-end,
-   twice consecutively.
+   twice consecutively. **Still open** — SENSE_FIRST_BOOT.md §16b's own
+   gate-passed note lists this specific run as "ceremony only," not yet
+   done, even after the OTA gate passed by other means.
 5. QSPI deep-power-down API in Adafruit SPIFlash + metered µA delta.
+   **Still open** — SENSE_FIRST_BOOT.md item 8 lists the µA delta as
+   "completely unmeasured" under its own "Verify (remaining)."
 6. System OFF current with the IMU motion-watch armed; a wake threshold
-   that ignores a car ride.
+   that ignores a car ride. **Still open** — no motion-wake code exists
+   yet (confirmed: no `STANDBY`/`WAKE_UP_SRC`/`INACT_EN` in
+   `firmware/src/`), per docs/power-states.md's own status banner.
 7. Charge LED behavior with no battery attached (bench use); P0.13
-   actually selecting 100 mA.
+   actually selecting 100 mA. **Half-answered:** P0.13/100 mA is
+   confirmed working (`hichg=1` while charging, STATUS.md 2026-08-19,
+   after a macro-scoping bug was found and fixed) — the no-battery LED
+   behavior is not separately confirmed.
 8. The 500 mAh cell: protection PCB present; exact dimensions for the
-   housing.
-9. PlatformIO `xiaoblesense_adafruit` builds our tree; adafruit-nrfutil
-   upload works; CLI port filter catches `usbmodem`.
+   housing. **Superseded, not answered:** the cell actually installed is
+   the 250 mAh LP502030 (§3.4 above, cell identified 2026-08-18 —
+   `battery-measurement.md`), not the 500 mAh this item asks about.
+9. ~~PlatformIO `xiaoblesense_adafruit` builds our tree; adafruit-nrfutil
+   upload works; CLI port filter catches `usbmodem`.~~ **ANSWERED** —
+   this has been the working flash path since first bring-up
+   (2026-07-31 onward) and is now `./tools/jump flash`'s default target
+   (`main` env retargeted 2026-08-18 when the ESP32 env was retired).
 10. PDM mic rail: confirm unpowered by default, or power it down
-    explicitly.
+    explicitly. **Still open** — SENSE_FIRST_BOOT.md item 17: no PDM
+    code exists in this port, so it's very likely unpowered, but "not
+    exhaustively traced, and no current measurement exists either way"
+    per that item's own text.
 
 ## 8. Explicitly out of scope (for v2)
 

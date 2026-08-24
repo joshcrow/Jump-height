@@ -44,9 +44,17 @@ power work; the real figure still permits that decision, but only just.
 
 **Every one of these is power/timing code, so every one runs on board #3
 first — never on the OG board before the session.** Board #3 exists precisely
-for this.
+for this. **SUPERSEDED 2026-08-15/16:** this rule was replaced by owner
+discipline the same window it was written — the OG is the only board with
+a battery pigtail, so it is the only board power work can be *measured*
+on at all. `power-optimisation.md`'s header states the change explicitly
+("The rule is replaced by discipline: archive a known-good build, change
+one thing at a time, and re-run the desk test after each"), and
+`battery-measurement.md` §9 records a reviewer finding that tried to
+enforce this exact rule as REFUTED, for the same reason. Both changes
+below did in fact ship and get measured on the OG.
 
-### 2.1 Let the CPU sleep between samples — the big one
+### 2.1 Let the CPU sleep between samples — the big one — SHIPPED (see power-optimisation.md §1 for the code and the measured outcome, which did not match this section's "3-5x" prize)
 Replace the spin with a real wait, so the RTOS idle task runs and the core
 sleeps. Potentially takes CPU duty from ~100 % to ~10 %.
 
@@ -58,7 +66,7 @@ sleeps. Potentially takes CPU duty from ~100 % to ~10 %.
 - **Test:** on board #3, log inter-sample intervals for 10 minutes before and
   after; compare the distribution, not the mean.
 
-### 2.2 Enable the DC/DC regulator — one line
+### 2.2 Enable the DC/DC regulator — one line — SHIPPED 2026-08-22 (audit F-05; runs at every boot, `firmware/src/main.cpp:1252`)
 Never enabled anywhere in the stack. Typically ~40 % off the MCU's own draw.
 
 - **Prize:** perhaps 2-3 mA.
@@ -91,6 +99,15 @@ mixed 19 % recording with 81 % idle and cannot separate them.
 true airborne acceleration is **exactly zero by definition**, so this measures
 the instrument's own floor. Without it, the 0.079 g median from the walkabout
 cannot be split into physics and sensor offset.
+
+**NOTE (2026-08-23):** this had, in fact, already happened before this
+document was written — `a6e477d` (2026-08-11) recorded ten drops,
+`airtime_offset_s = 0.0257`, on the OG. This section's framing as an
+undone first step was stale even on 2026-08-15. Ironically it is genuinely
+open again now, for a different reason: the OG's live calibration reads
+`CAL … source=defaults` as of tonight's flash (STATUS.md READ-THIS-FIRST
+table) — the measured value is gone, not merely superseded — so the ritual
+needs re-running regardless.
 
 ### 3.3 A labelled activity corpus (see §4 for how)
 Walk, drive, stairs, running, a bag on a car seat, the board resting. Each

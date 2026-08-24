@@ -291,14 +291,24 @@ What the app does:
   export per session, and **Back up all / Restore** (a JSON file) so browser
   storage is never the only copy. The laptop's `./tools/jump sync` remains
   the archival path into `data/sessions/`.
-- **Install**: flash a brand-new board from the web page (ESP Web Tools) —
-  no toolchain, no terminal. `./tools/jump web` stages binaries from your
-  local build; CI builds them for the hosted page.
+- **New device** (**corrected 2026-08-23**: this row used to say "Install:
+  flash a brand-new board from the web page (ESP Web Tools)". That stopped
+  being true on **2026-08-18**, when the ESP32 v1 platform was retired —
+  ESP Web Tools cannot flash an nRF52, so the in-browser flasher was removed
+  along with it). The tab is now a signpost, not a flasher
+  (`web/index.html:170-179`; `web/app.js:1431-1444` `initInstallTab()`): it
+  reads *"Firmware ships from the bench: `./tools/jump flash` over USB, or
+  `tools/otadfu.py` over the air."* There is also a drag-and-drop `.uf2` the
+  same CI run publishes to Pages next to the app (onto the bootloader's
+  mounted "XIAO-SENSE" USB drive) — but the app's Install tab itself does not
+  surface that option; it only names the two bench paths above.
 
 **Hosted version (for sharing the project):** the GitHub Action builds the
-firmware and publishes the app + flasher binaries to GitHub Pages. One-time
-setup: repo **Settings → Pages → Source: "GitHub Actions"**. After that,
-anyone can open your Pages URL and flash a board from the browser.
+firmware and publishes the app + a `.uf2` to GitHub Pages. One-time setup:
+repo **Settings → Pages → Source: "GitHub Actions"**. After that, anyone can
+open your Pages URL to use the live/sync features against a board already
+flashed — **not** to flash a new one from the browser; see the correction
+above.
 
 **⚠️ Upgrading a device that has sessions on it:** Phase 3 changes the flash
 partition layout, which reformats stored data on first boot after the new
@@ -315,16 +325,24 @@ firmware. Run `./tools/jump sync` (and confirm the report looks right)
 | **`./tools/jump report`** | **diagnostic bundle to send to Claude when stuck** |
 | `./tools/jump setup` | one-time toolchain install |
 | `./tools/jump simtest` | full software test suite (no hardware) |
+| `./tools/jump boards` | scan every puck over BLE, report ground truth per board, flag floating (batteryless) readings |
+| `./tools/jump status` | live machine-checked status: build/tests/hardware/doc-freshness in one glance |
 | `./tools/jump flash` | settings → build → upload → self-test |
 | `./tools/jump selftest` | wiring/sensor/storage check, fix hints |
 | `./tools/jump desktest` | guided assembly verification (3 tosses) |
 | `./tools/jump drop` | guided timing calibration from measured drops |
 | `./tools/jump sync` | download session → analyze → report.md |
-| `./tools/jump web` | serve the browser app (live BLE stats, sessions, flasher) |
+| `./tools/jump validate --pairs f` | video ground-truth check: compare stored jumps to filmed airtimes, recommend/apply calibration (see below) |
+| `./tools/jump web` | serve the browser app (live BLE stats, session sync/history) — **not** a firmware flasher; see the Phase 3 correction above |
 | `./tools/jump eval` | score the detector over labeled sessions ([docs/data-pipeline.md](docs/data-pipeline.md)) |
 | `./tools/jump replay --csv f` | re-run the detector over any saved capture |
 | `./tools/jump monitor` | raw serial console (type `help`) |
 | `./tools/jump gen` | regenerate firmware settings from config/params.json |
+
+(Command set verified against `tools/jump`'s subcommand registrations,
+2026-08-23: `boards`/`status`/`validate` were previously missing from this
+table — `boards` added `3f5522f`, `status` added `b5d2c06`, `validate` added
+`e2766b7`, none of which touched this table at the time.)
 
 Add `--fake` to selftest/desktest/drop/sync to rehearse without hardware, and
 `--port /dev/ttyUSB0` anywhere if auto-detection picks the wrong port.

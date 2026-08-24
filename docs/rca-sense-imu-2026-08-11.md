@@ -181,13 +181,20 @@ mule, not scrapped.
 ## The fix that shipped (fifth design, and the lesson)
 
 Every outside-in "is the bus safe?" probe lied. The shipped design stops
-asking: **crash-loop detection** — a magic+flag pair in `.noinit` RAM set
-before the first Wire touch and cleared after. A held bus costs one
-watchdog reset (~3.5 s), after which boots skip the sensor and come up
-commandable with an honest FAIL row. The healthy path runs *zero* extra
-bus operations — which is why it is the first design that cannot lie.
-Verified on the new board: `i2c PASS`, accel 0.970 g, noise 0.0010 g,
-5/5 consecutive.
+asking: **crash-loop detection** — a magic+flag pair set before the first
+Wire touch and cleared after. A held bus costs one watchdog reset
+(~3.5 s), after which boots skip the sensor and come up commandable with
+an honest FAIL row. The healthy path runs *zero* extra bus operations —
+which is why it is the first design that cannot lie. Verified on the new
+board: `i2c PASS`, accel 0.970 g, noise 0.0010 g, 5/5 consecutive.
+**CORRECTED 2026-08-23:** this said the flag pair lives in "`.noinit`
+RAM" — measured NOT to work: this core's linker scripts define no
+`.noinit` region, so flags placed there land in ordinary
+zero-initialised RAM and the skip never fires (`firmware/src/platform/
+nrf52/jh_imu.cpp:153-154`, comment recording the measurement). The
+mechanism that actually ships and survives resets is `jh_persist`
+(internal LittleFS) — "the one store measured to survive both watchdog
+resets AND the bootloader's register sanitizing" per that same file.
 
 ## Lessons, earned twice now
 
@@ -199,13 +206,25 @@ Verified on the new board: `i2c PASS`, accel 0.970 g, noise 0.0010 g,
 - The failure `arc` argument (§5.1's fatigue narrative) fit the wrong
   facts equally well — arcs are weak evidence.
 
-## Still open (tracked in SENSE_FIRST_BOOT)
+## Still open (tracked in SENSE_FIRST_BOOT) — ALL THREE CLOSED as of 2026-08-14, kept for the record
 
-- Old board: root cause of the genuinely held bus.
-- New board: QSPI mount fails since an interrupted-format event
-  (mounted and formatted fine on its first boots; item 21's scenario);
-  0xAB wake and 0x66/0x99 JEDEC reset retries both insufficient.
-  Storage-independent work proceeds meanwhile.
-- Boot-time selftest reads accel 0.960 g / noise 0.0966 g deterministically
-  vs 0.970 g / 0.0010 g on command — likely filter settle vs boot timing;
-  benign-looking, unverified.
+- ~~Old board: root cause of the genuinely held bus.~~ **CLOSED (DECISION
+  #37, SENSE_FIRST_BOOT.md §16i):** the rail never rose because
+  `pinMode()` selected 0.5 mA standard GPIO drive against a ~1.6 mA load
+  (sensor + two 10k pull-ups) on a pin that IS the sensor's supply, not a
+  regulator enable. Fixed with `nrf_gpio_cfg(...H0H1...)`; no hardware
+  fault, nothing damaged.
+- ~~New board: QSPI mount fails since an interrupted-format event...~~
+  **CLOSED 2026-08-13 (commit `bd0334d`):** the chunked-erase watchdog
+  feed was silently binding to an empty stub declared inside
+  `namespace jh_store` (C++ lookup resolved every call in that file to
+  the stub, not the real `jh_link::watchdog_feed`), so a 512-sector
+  format reset the board mid-erase every time. Fixed by moving the stub
+  to global scope.
+- ~~Boot-time selftest reads accel 0.960 g / noise 0.0966 g
+  deterministically vs 0.970 g / 0.0010 g on command...~~ **CLOSED
+  (DECISION #35, commit `dca2985`):** one all-zero accel triple, read
+  before the sensor's first post-power-up conversion landed, was folding
+  into the noise stats and guaranteeing `noise FAIL`/the odd 0.960 g/
+  0.0966 g row on a perfectly healthy sensor. Fixed by discarding samples
+  until the first non-zero triple (bounded) before computing statistics.

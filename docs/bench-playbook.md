@@ -18,7 +18,7 @@ table is a rediscovery waiting to happen.**
 
 | Board | Advertised name | BLE addr | USB serial (our fw) | **Battery?** | State (2026-08-20) |
 |---|---|---|---|---|---|
-| **"OG"** — original Sense (a.k.a. "the mule") | **`JumpHeight-E2C4`** | `185D88EE…` (bootloader `EB2503CC…`) | `7ACE98D972CB56F8` | **YES — pigtail SOLDERED. The only board with a cell.** | **THE product board.** Running `src=ef37e568` (older build, still lacks the `clear()` watchdog fix). Healthy: 3810 mV / 42 %, 23.8 h continuous uptime. Drop calibration was measured on this board. Water-test candidate. |
+| **"OG"** — original Sense (a.k.a. "the mule") | **`JumpHeight-E2C4`** | `185D88EE…` (bootloader `EB2503CC…`) | `7ACE98D972CB56F8` | **YES — pigtail SOLDERED. The only board with a cell.** | **THE product board.** *2026-08-20 snapshot (kept for the record):* running `src=ef37e568` (older build, still lacks the `clear()` watchdog fix), 3810 mV / 42 %, 23.8 h continuous uptime, drop calibration measured on this board. **UPDATED 2026-08-23 (STATUS.md, current authority):** now running `src=e83f6395` (reflashed, selftest PASS, `dcdc=1`), `vbat_mv=4088 batt_pct=92`. **The drop calibration is GONE** — `CAL … source=defaults`, not the measured value; heights are NOT trustworthy until the drop ritual is re-run. Confirm build and CAL source with `stats`/`info` before any water-test claim, never assume from this table. |
 | **"The spare"** — 3rd Sense *(registry formerly titled this row "Board #3"; that ordinal now collides with "the third board" = the Puck/8673, and identity confusion has cost four wrong verdicts — so the ordinal is retired; this board is THE SPARE, full stop)* | **`JumpHeight-45ED`** | `14E6E6F1…` | `11641737F0ECA0D6` | **NO — no pigtail, USB only.** | Bench board. Running `src=54b2e904`. Healthy sensor (`accel 1.021 g / noise 0.0025 g`). **Its `vbat_mv` / `batt_pct` are a FLOATING divider and mean nothing** — seen reading 3742 mV/23 % and 4133 mV/97 % minutes apart. Never log a battery figure from it. |
 | **"Puck"** — 2nd Sense (2026-08-12) | **`JumpHeight-8673`** | `B96D14EA…` | `2513620E30AE413D` | **NO** — USB only | **REASSESSED 2026-08-20: HEALTHY.** Flashed `src=15b2d468`, selftest 6/6 (accel 1.050 g, noise 0.0045 g, flash 2093056B_free). The fourth "dead board" verdict in this project to prove wrong. Role: Era-2 development board (standby/System-OFF/OTA-abort work — never the OG). |
 | ~~"Mule"~~ | — | — | — | — | Retired name: the "mule" and the "OG" are the SAME board (row 1). Calling the product board sacrificial is how it nearly got treated as disposable. |
@@ -177,12 +177,20 @@ flashes per replug; spend it once, deliberately.
 
 - **A battery-backed board never truly resets.** Every wedge that survives
   "unplug it" survives because the battery kept the chips alive. True cold
-  start = battery *and* USB removed. This applies to PERIPHERALS, not just
-  the MCU: an I2C slave caught mid-transaction when the MCU dies keeps
-  clamping SDA through every warm reset — only power removal (or a 9-clock
-  SCL bus-clear, the standard I2C unstick, not yet implemented — see
-  SENSE_FIRST_BOOT 16d/16f) releases it. Both boards' "held bus" (2026-08-12)
-  match this signature: continuous power since a mid-transaction death.
+  start = battery *and* USB removed. This is still true and still the
+  right cold-start procedure. **The peripheral clamp-theory extension below
+  it is RETRACTED (2026-08-12, same night):** it read "an I2C slave caught
+  mid-transaction when the MCU dies keeps clamping SDA through every warm
+  reset — only power removal (or a 9-clock SCL bus-clear, not yet
+  implemented) releases it. Both boards' 'held bus' match this signature."
+  SENSE_FIRST_BOOT.md §16f's own falsifiers fired that evening ("Clamp
+  theory dead" — the Puck failed truly cold, and an archaeology-control
+  binary that had read the sensor healthy two days prior boot-looped on
+  it too): the real mechanism is the rail never rising, so the pull-ups
+  are unpowered and both lines sit low regardless of any prior
+  transaction. The 9-clock bus-clear this implied is also moot: bounded
+  TWIM (`twim_bounded.h`, commit `3607811`) turns a held bus into a 2 ms
+  timeout instead, proven 3/3 on the mule's actual held bus.
 - **macOS gates new USB accessories behind an Allow prompt** (Sequoia+).
   A board that shows in `ioreg` as `!registered, !matched` with no
   `/dev/cu.*` node may just be sitting at that dialog — check the screen
@@ -257,20 +265,31 @@ flashes per replug; spend it once, deliberately.
 > five rules; that document is the law they come from.
 
 1. **No MCU line into a peripheral's power domain may be energized while
-   that domain is down.** Power-up: float bus → rail up → settle (regulator
-   3 ms + device Ton 35 ms) → attach. Power-down: detach (Wire1.end()) →
-   float lines → rail down. Both sequences exist in code now (jh_imu::revive,
-   jh_power::system_off) — new code copies them, never improvises.
+   that domain is down.** Power-up: float bus → rail up → settle (**120 ms**
+   — corrected 2026-08-23; there is no regulator on this net, the GPIO pad
+   IS the supply, and 45 ms measured to fail 1-in-6 revives, see
+   `firmware/src/platform/nrf52/jh_imu.cpp:198-205`) → attach. Power-down:
+   detach (Wire1.end()) → float lines → rail down. Both sequences exist in
+   code now (jh_imu::revive, jh_power::system_off) — new code copies them,
+   never improvises.
 2. **Any code that touches a power/rail/bus pin gets a datasheet-or-web
    sequencing check BEFORE silicon.** The off-path back-feed was documented
    on Nordic DevZone the whole time; ten minutes of searching would have
    prevented it.
 3. **New-board quarantine: a fresh board meets only the current audited
-   build.** Never experimental electrical code. The spare Sense stays
-   SEALED until the damage mechanism is confirmed fixed and a sacrificial
-   board has survived the off/sleep/wake cycle repeatedly.
+   build.** Never experimental electrical code. **STALE 2026-08-23:** "the
+   spare Sense stays SEALED" describes a state that ended 2026-08-13 — the
+   owner unsealed it (hardware-protection.md §5), and per this file's own
+   registry (§1, row 2) the spare is now an active bench board running
+   `src=54b2e904`, not sealed. The quarantine rule itself (fresh board →
+   audited build only, no experimental code) still stands; it just has no
+   currently-sealed board to apply to.
 4. **Electrical experiments run on the designated sacrificial board only**
-   (currently: the mule).
+   (currently: the mule). **STALE 2026-08-23:** "the mule" is a retired
+   name for the OG (row 1 of §1) — the product board, not a sacrificial
+   one. Calling it sacrificial is the exact mistake row 24 of §1 warns
+   against. No board is currently designated for electrical experiments;
+   name one (not the OG) before the next such change.
 5. **One flash per session where possible; batch changes.** Seven-flash
    evenings are where sequencing mistakes compound.
 
@@ -296,23 +315,37 @@ Scored the same night (2026-08-12, late) — **the falsifiers fired**:
    unplug is a no-op on a battery-backed board (§4).
 3. Mule sensor return — moot with #1 dead; superseded below.
 
-Open:
+Open (all three CLOSED as of 2026-08-14; kept for the record, not as
+live TODOs — see the dated notes under each):
 1. **Meter, not code** — software has nothing left to say about either
    IMU bus. Full 2-minute protocol + interpretation table:
    SENSE_FIRST_BOOT **16g** (written after the overnight web findings:
    the 6D rail powers the sensor AND its pull-ups via a P1.08-enabled
    regulator; bus-energized-while-rail-down back-feed is a documented
    sensor-corrupter on this module, and our `off` path did it for hours
-   per sleep — fixed in code, unflashed pending the meter).
+   per sleep — fixed in code, unflashed pending the meter). **CLOSED:**
+   software did have one more thing to say — `pincensus` (DECISION #38),
+   which read every pin against a control pin in one pass and made the
+   held-domain fault unmissable without a meter. The "P1.08-enabled
+   regulator" framing here is also superseded: there is no regulator
+   (docs/xiao-hardware-truth.md).
 2. **Common-mode question** on record: two IMU buses dead days apart,
    same bench, same hub, same kapton workflow, same firmware lineage.
    Noted correlation, mechanism unknown, not the whole story (the mule
    died BEFORE the probe-era rail-cycling code existed): the Puck ran
    probe-era builds during the 08-12 falsifier session and was dead
-   within a day.
+   within a day. **CLOSED (DECISION #37, 2026-08-14):** GPIO drive
+   strength (`pinMode()` selecting standard drive on a pin that sources
+   ~1.6 mA) explains both boards' symptoms, including the timing
+   difference — no common-mode environmental cause needed, and nothing
+   was ever damaged.
 3. Mule battery-unclip experiment still worth one clean run (if it wasn't
    truly unclipped): `mount` verdict on the 61-jump history stands or
-   falls there.
+   falls there. **CONTRADICTED by this same file, §1b above (2026-08-14):**
+   both boards were `format`ed to repair storage, so the OG's 61-jump
+   history is gone for good — the experiment this item proposes can no
+   longer run, and its premise (an unformatted, still-recoverable
+   history) no longer holds.
 
 ## 1d. Committing while agents are working (lesson, 2026-08-21)
 

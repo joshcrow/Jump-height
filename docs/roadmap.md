@@ -12,8 +12,20 @@
 > WRONG. It is kept for its reasoning trail, not for its status. `STATUS.md` is
 > the single source of truth; where they disagree, this file is stale.
 > **Several Phase 2 boxes are done but unticked** (battery soldered with working
-> telemetry, capsule bought, drop calibration measured), and the milestone this file
+> telemetry, capsule bought, ~~drop calibration measured~~), and the milestone this file
 > calls open disagrees with docs/garmin-datafield.md. Trust STATUS.md.
+>
+> **2026-08-23 — two corrections to this banner itself:**
+> 1. **"Drop calibration measured" is no longer true of the OG.** It reads
+>    `CAL … source=defaults` on all three keys — compiled defaults, not
+>    measurements (`2041962` found the loss; `29f03e1` confirms it persists
+>    on `src=e83f6395` and was not caused by that flash). The ritual is owed
+>    again before any height claim.
+> 2. **The watch decision below is reversed.** This file's Phase 3 narrative
+>    treats the Epix Gen 2 as the target and the Instinct as the brother's
+>    spare. Since `91709d3` (2026-08-20) **the brother is the rider and the
+>    Instinct 3 Solar is the product watch**; the Epix is the dev watch.
+>    Read the Phase 3 paragraph as the 2026-08 record it is.
 
 
 

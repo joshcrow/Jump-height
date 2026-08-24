@@ -34,6 +34,15 @@ Full registry: [bench-playbook.md §1](bench-playbook.md).
 - [ ] Capsule bucket-tested, loaded, and floating.
 - [ ] Camera: **1080p/120**. Not 4K/30. Check it is actually set.
 - [ ] Phone or paper for notes, with the real time visible.
+- [ ] **The field is installed on the RIDER's watch, and he has put it on a
+      data screen once, at home.** This is not a beach task. It is also not
+      guaranteed to be possible: the Instinct 3 (fw 15.18) **deletes a
+      sideloaded `.prg` on the next USB disconnect** — pushed, read back by
+      file id and exact byte count, gone after a reboot, `Restore` empty. So
+      **Connect IQ store approval is the only route onto that watch**, and it
+      has an external review queue you do not control. If approval has not
+      landed, that is not a reason to cancel — see below.
+- [ ] Hand the rider [rider-brief.md](rider-brief.md). One page, his job only.
 
 ## Powering on (the ritual, in order)
 
@@ -54,7 +63,21 @@ Full registry: [bench-playbook.md §1](bench-playbook.md).
    trace is 50 Hz, so it can be absent from the data entirely.
 3. **Write down the wall-clock time, to the second.** Trace time is seconds
    since boot; this is the only thing that ties it to the real world.
-4. Confirm the watch shows the puck connected before anyone gets wet.
+4. Confirm the watch shows the puck connected before anyone gets wet — and
+   that the rider **started his activity**, which is the one step of his that
+   actually matters (no activity = the ride never reaches his watch).
+
+   **If there is no watch app, run the day anyway.** The puck stores
+   everything on its own flash and the session's headline number — median
+   airborne |a| per jump — comes off the trace with no watch involved at all.
+   A missing watch costs you the live display and the FIT, not the session.
+
+5. **Once he is on the water, nobody else connects to the puck.** No phone,
+   no laptop, no `dump`, not "just to check". A second central alongside the
+   riding watch is precisely the 2026-08-11 configuration that corrupted a
+   capture, and a `dump` mid-session blocks recording outright. The single
+   exception is if `dualcentral.py` has been run and passed beforehand —
+   which, unless you did it, it has not.
 
 ## In the water — the two things that decide whether this works
 

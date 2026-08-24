@@ -79,3 +79,10 @@ no document. The facts were all correct. Nothing could join them to the screen.
 
 The general form: **a new identifier without a lookup entry is a rediscovery
 waiting to happen.**
+
+The mirror case costs the same and is easier to cause: **when you retire an
+identifier, fix what pointed at it in the same commit.** Deleting the
+`mule-railcheck` branch on 08-23 left three docs telling a reader to find
+`railcheck` with `git branch -a` — a command that now returns nothing, for a
+claim that is still perfectly true (it lives on tag `archive/mule-railcheck`).
+A dead pointer reads as a wrong fact.

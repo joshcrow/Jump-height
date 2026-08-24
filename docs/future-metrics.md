@@ -112,6 +112,29 @@ to forbid, for a metric nobody has requested yet.
 1. **Make sure the whole session is recorded.** ~2 h fits in the ~5 h region,
    and the storage-lifecycle decision (`garmin-only.md` §3) must not auto-wipe
    mid-session. This is the one way to lose everything.
+   - **RESOLVED 2026-08-23 — the auto-clear shipped, and its policy is
+     narrow enough to satisfy this.** `firmware/src/main.cpp:1540-1545`
+     requires **all three** of: the trace is *already full* (so clearing
+     cannot make the present worse), the board has been still for
+     `AUTO_CLEAR_IDLE_MS` = **1 h** (`main.cpp:87-91` — above any in-session
+     pause, below the gap between outings), and **motion has just resumed**.
+     It clears the **trace only**; stored jumps are untouched. So it cannot
+     fire mid-session, and it cannot delete a trace that is still recording.
+   - **Proven on silicon, not just reasoned** (`ca754b7`): region filled to
+     genuinely full, three real tossed jumps stored as the stakes, left
+     idle past the threshold, then shaken. `trace_bytes` 14,708,969 → 20,139
+     (that counter is decoded-CSV length, not flash bytes — the physical
+     region is `2,097,152 − 65,536 ≈ 1.94 MB`,
+     `firmware/src/platform/nrf52/jh_store.cpp:106`, `:735-739`);
+     `stored_jumps` 3 → 3; the three records **read back individually** with
+     airtimes 0.380/0.411/0.466 s and heights 0.177/0.208/0.266 m
+     byte-identical to the previous night. (A surviving *count* is not
+     surviving *data* — that check is the one that matters here.)
+   - **What this costs future-metrics work, stated plainly:** the trade is
+     that **old raw trace is sacrificed so the current session records.** For
+     this file's purposes that is exactly the "data you threw away" case in
+     §0 — so *sync before a session if the old trace matters*, and treat the
+     region as a rolling window rather than an archive.
 2. **Note in the session log what the rider was doing when** — even coarse
    ranges. Time-on-foil is a *classification* problem and it needs labels;
    the `tools/label.py` "none/jump" vocabulary should grow a `foiling` /

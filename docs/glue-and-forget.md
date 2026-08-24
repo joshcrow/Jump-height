@@ -62,15 +62,45 @@ was that the first draft forced none of these)
    - The Instinct stops being the port target and becomes **the product's
      only screen on the water**. Everything "proven on the Epix" is proven
      on the wrong watch: FIT dev fields, reconnect behavior, corruption
-     gate, vibrate, layout tiers — all epix2-only evidence today. The
-     Instinct has never even been sideloaded.
+     gate, vibrate, layout tiers — all epix2-only evidence today. ~~The
+     Instinct has never even been sideloaded.~~
+     - **CORRECTED 2026-08-23.** It has been, once: `4e35d26` (08-22) pushed
+       17,996 bytes to `Instinct 3 - 45mm, Solar`, firmware **15.18**,
+       verified by reading the file back off the device.
+     - **And then a blocker landed that changes this whole bullet.**
+       `de77de0`: that firmware **deletes a sideloaded `.prg`** — file gone
+       after a reboot, `Restore` empty, no CIQ apps in `Garmin/Apps` at all.
+       Root cause in `d5641d2`: Instinct 3 keeps CIQ apps in an internal
+       registry (`OUT.BIN` grew by 48 bytes when the rider installed a store
+       field from his phone), so a copied `.prg` is unreferenced and swept.
+       **File-copy sideloading is architecturally impossible on the product
+       watch** — not merely blocked. See the store item in §4 Pillar 3.5,
+       which is no longer a nice-to-have.
    - **Static memory is now measured and comfortable**: 12,417 B code+data
      against the 32,768 B datafield limit (monkeyc --build-stats, tonight).
      The "124 KB vs 32 KB" fear was PRG file size, which is not runtime
      memory. Runtime peak still needs one simulator session, but the
      plausible-OOM threat is largely retired.
-   - The MIP screen is monochrome and 176×176: tier layouts were designed
-     against it but never eyeballed even in the simulator.
+     - *2026-08-23:* the 12,417 B figure still stands (`10d2553`), and the
+       **per-line leak question is now answered**: ~1,200 lines of realistic
+       mixed traffic grew total memory by 248 B, and 0 B / 0 B across two
+       300-line blocks. Absolute runtime headroom still needs the GUI memory
+       view or the real watch — the unit-test PRG does not run in the
+       data-field memory context, so `getSystemStats()` there is the wrong
+       yardstick (a first version of that probe "failed" while reporting
+       40,072 B used before allocating anything).
+   - ~~The MIP screen is monochrome and 176×176: tier layouts were designed
+     against it but never eyeballed even in the simulator.~~
+     - **CORRECTED 2026-08-23.** They have been, in the simulator:
+       `b493eb2` computed the Instinct geometry, and `4222973` rendered and
+       saved the full tier once the screen-lock problem was understood. That
+       run produced a *specific* open question rather than closing the item:
+       the header reads "JumpHei… 0 jumps" with the count apparently running
+       under the watch's **circular sub-display** — a hole in the mid-right
+       of an otherwise usable rectangle that no Connect IQ obscurity flag
+       describes. Whether it is genuinely unreadable on glass or simulator
+       bezel art **still needs a photograph on the device**, which now waits
+       on the store install.
    - **A rider brief becomes part of the deliverable.** The user is now
      someone who didn't build the system: he must start the activity
      (windsurf profile, field on a data screen — a one-time setup on HIS
@@ -92,6 +122,55 @@ was that the first draft forced none of these)
 ## 3. The two headline defects — corrected by the attack
 
 ### 3a. The timebase defect (worse, earlier, and less novel than first stated)
+
+> **STATUS 2026-08-23 — the float32 half of this defect is CLOSED, in firmware
+> and on the OG's flashed build.** Everything below is kept: the analysis is
+> why the fix exists and what it was allowed to cost. Only the *status*
+> changed. Verified against the tree today, not against another document:
+>
+> - `firmware/include/jump_detector.h:62` — `double takeoff_time_s;` — and
+>   `:241` / `:242` — `double takeoff_time_`, `double last_low_time_`.
+> - `firmware/include/jump_detector.h:152` and `:161` — **both** `update()`
+>   overloads take `double t_s`, with a comment that cites this section by
+>   name and restates the 18.2 h / ~4 d / 6-month numbers below.
+> - `firmware/src/main.cpp:146` — `static int64_t t0_us`; `:1502` —
+>   `const double t = (now_us - t0_us) * 1e-6;`, feeding `detector.update()`
+>   at `:1621` / `:1626`. *(This is the site the fix list below calls
+>   `main.cpp:1326`; the line has moved.)*
+> - `firmware/src/platform/nrf52/jh_store.cpp:1001-1008` — the `(float)atof()`
+>   re-narrowing is gone, with the reason in place: *"atof() already returns
+>   double; this used to re-narrow it to float."* *(Called `jh_store.cpp:960`
+>   below.)*
+> - `firmware/include/trace_codec.h:224` — `llround`, with the **explicit
+>   int32-bound check** this section demanded instead of trusting the suite
+>   (`:226` host assert, `:228-229` device saturation). *(Called
+>   `trace_codec.h:172` below.)*
+> - The falsifier this section called "ready-made, one line" is now a
+>   permanent test: `tools/tests/test_timebase_falsifier.py:48`,
+>   `OFFSET_S = 604800.0`. Its docstring records the divergence it was proven
+>   against *before* the fix — C++ read 0.625 s / 0.519 m against Python's
+>   0.600 s / 0.480 m, a 0.025 s gap, 25× `simtest`'s 0.002 parity tolerance.
+> - **The fix was itself audited before it flew.** Commit `37394ae`,
+>   *"Timebase fix would have KILLED a puck at 24.9 days — abort replaced
+>   with saturation"*: the first version's `assert()` is live in the device
+>   build (no `-DNDEBUG` in this toolchain), so a puck that merely ran long
+>   enough would have called `abort()`. It now saturates and keeps running,
+>   asserting on host builds only.
+> - On silicon: the OG is flashed to `src=e83f6395` (commit `29f03e1`,
+>   2026-08-23), which is downstream of all of the above.
+> - **Not taken on trust — the falsifier was RUN while writing this note**:
+>   `python3 -m pytest tools/tests/test_timebase_falsifier.py -q` →
+>   `1 passed in 0.52s`. It compiles `host_test.cpp` against the real
+>   `jump_detector.h` and diffs it against `sim/detector.py` at +604,800 s.
+>   Had `t_s` regressed to `float`, that run would have failed.
+>
+> **What this does NOT close**, and must not be read as closing:
+> - The **session-relative timebase reset** and the **session counter column**
+>   — both in the fix list below — are unbuilt. `trace_codec.h:221-222` still
+>   names the reset as the real fix for the anchor's u32 ceiling. `double`
+>   makes that ceiling unreachable in practice, so this is no longer urgent —
+>   but it is not *done*, and must not be counted as done.
+> - **§3b (session counters) is a separate defect and remains open.**
 
 The float32 resolution table was verified exact (attacked by independent
 recomputation and by `nextafterf()` on the literal expression). Everything
@@ -129,31 +208,61 @@ the 49.7 days the first draft claimed — and `trace_codec.h:172` uses
 to it**. The fix needs an explicit int32-bound assertion, not trust in the
 suite.
 
-**The fix, sharpened by attack:**
-- `float → double` for `t_s`, `takeoff_time_`, `last_low_time_`,
-  `JumpEvent::takeoff_time_s`, and `main.cpp:1326`; `llround` at the anchor.
-  Cost: a few soft-float subtracts per 5 ms sample on the M4F. Sub-ms
-  resolution for ~285,000 years.
-- **Ready-made falsifier already in the repo:** `sim/detector.py` mirrors the
-  detector in IEEE doubles, so offsetting every golden-trace timestamp by
-  +604,800 s makes `simtest` diverge *today* and re-converge exactly when
-  `t_s` becomes double. One-line test change.
-- **The session-boundary timebase reset from the first draft carries an
-  unstated livelock**: the detector holds absolute timestamps, so a reset
+**The fix, sharpened by attack** *(status markers added 2026-08-23; the text
+itself is as written on 08-20)*:
+- **✅ SHIPPED.** `float → double` for `t_s`, `takeoff_time_`,
+  `last_low_time_`, `JumpEvent::takeoff_time_s`, and `main.cpp:1326`;
+  `llround` at the anchor. Cost: a few soft-float subtracts per 5 ms sample
+  on the M4F. Sub-ms resolution for ~285,000 years. *(All five sites cited in
+  the status block above. The `llround` landed with the int32-bound check
+  and, after `37394ae`, device-side saturation rather than an abort.)*
+- **✅ SHIPPED — Ready-made falsifier already in the repo:** `sim/detector.py`
+  mirrors the detector in IEEE doubles, so offsetting every golden-trace
+  timestamp by +604,800 s makes `simtest` diverge *today* and re-converge
+  exactly when `t_s` becomes double. One-line test change. *(It became
+  `tools/tests/test_timebase_falsifier.py`, a permanent regression guard
+  rather than a one-off — the other parity tests replay the CSV at its native
+  timestamps and structurally cannot see this bug.)*
+- **⬜ UNBUILT. The session-boundary timebase reset from the first draft
+  carries an unstated livelock**: the detector holds absolute timestamps, so a reset
   while AIRBORNE makes both landing releases unfirable. Gate any reset on
   `state == RIDING`, or reset the detector with it.
-- **A timebase reset is NOT session identity** (first draft conflated them):
-  it gives a heuristic delimiter that fails on ordinary patterns (short
-  session then long one). Identity needs a session counter column in the
-  jump record — additive, independent, and cross-session ordering already
-  survives via the `stored_jumps` key.
+- **⬜ UNBUILT. A timebase reset is NOT session identity** (first draft
+  conflated them): it gives a heuristic delimiter that fails on ordinary
+  patterns (short session then long one). Identity needs a session counter
+  column in the jump record — additive, independent, and cross-session
+  ordering already survives via the `stored_jumps` key.
 - **The blocker is conditional on a standby design choice the first draft
-  suppressed**: if Era 2 standby is System OFF, every wake is a cold boot
+  suppressed** *(still undecided as of 2026-08-23)*: if Era 2 standby is
+  System OFF, every wake is a cold boot
   and `t0_us` resets for free — most of this section dissolves. If standby
   is System ON idle (the current design table's choice, to keep BLE alive),
   uptime accumulates and the double fix is mandatory. Decide together.
 
 ### 3b. Session counters (upgraded: not inferred — already demonstrated)
+
+> **STATUS 2026-08-23 — still OPEN.** Re-checked against source today, not
+> against another document. The counters are still RAM statics
+> (`firmware/src/main.cpp:133`, `static uint32_t session_jumps = 0;`,
+> incremented at `:1663`), there is still **no `reboot` command** in the
+> firmware's dispatch (`main.cpp` `cmd ==` table: help/stats/jumps/trace/
+> tracecheck/dump/clear/selftest/revive/i2cdiag/dcdc/info/off/dfu/uf2/
+> fakejump/mount/format/gyro/pincensus/vbatscan), and the Era-2 watch-side
+> delta is **unbuilt** — `garmin/jumpfield/source/Model.mc` contains no
+> baseline, no `Application.Storage` persistence and no `onTimerReset` clear.
+> The water-day mitigation is still the reboot ritual.
+>
+> **Do not mistake the guards that DID land for this fix.** `329c543` and
+> `18e718f` (F-11) made `Model.mc` refuse *decreases* in session count and
+> best on both the STATS and JUMP paths — a puck that brownouts mid-ride can
+> no longer archive "0 jumps, best 0.00". That is the *opposite* failure from
+> the one below: this section's defect is a stale count carried **upward**
+> into a new activity, which a decrease-refusing guard cannot see, and in
+> fact makes stickier. Both are real; only one is fixed.
+>
+> One number below is now stale: the suite the delta would ride is no longer
+> 40 tests. It is **60/60 on `instinct3solar45mm`** as of F-12 (`781eabd`,
+> ledger `32010eb`).
 
 The first draft presented this as a code-read finding. It has already
 happened in a real archive: the M2 activity's FIT (2026-08-18) recorded
@@ -198,6 +307,26 @@ collapse; auto-sleep, motion wake, low-battery cutoff all unbuilt (motion
 wake verified genuinely firmware-only: INT1 is routed to P0.11 — that
 prerequisite is already paid). Off-current never measured.
 
+**2026-08-23 — one input to that arithmetic moved, and the numbers above have
+NOT been re-measured against it.** F-05 (`3079f96`) found that
+`sd_power_dcdc_mode_set()` was reachable only from the `dcdc` console command:
+`setup()` never called it, and `DCDCEN` is volatile, so every boot — and every
+watchdog reset — ran on the LDO. The project's own same-board A/B on
+2026-08-20 had already measured this lever at **1.39× endurance / ~0.72×
+current** over a fixed voltage window, and the code was never changed. It is
+now enabled at every boot (`firmware/src/main.cpp:1252`) and `dcdc_enabled()`
+reads the register back rather than remembering the request; `dcdc=1` was
+confirmed live on the OG's `src=e83f6395` boot (`29f03e1`). So every mA and
+every hour above describes a regime the shipped firmware no longer runs in.
+Per this repo's own rule, **the corrected figures do not go in until somebody
+measures them** — the pending evidence is the next OG discharge night, which
+`3079f96` predicts should move toward ~30 h on the 4.10→3.50 V window.
+Standby life (the section below) is unaffected: DC/DC is a run-current lever,
+and off-current is still unmeasured for want of a meter (§2.3).
+Still unbuilt as of today, re-checked in source: `system_off()` is reachable
+only from the `off` command (`main.cpp:1047-1057`) — no auto-sleep, no wake
+engine, no low-battery cutoff anywhere in `main.cpp`.
+
 **Corrected arithmetic** (first draft's "~1 year standby / 4–6 weeks riding"
 was electronics-only and internally inconsistent):
 
@@ -240,7 +369,14 @@ threshold; it does not close with it.
   **rolling ~5-hour window** (≈ the last 2–3 rides), evicting only when
   full. Fine for detection; it does cap raw-data retention for
   future-metrics work unless synced within a couple of rides.
-- Timebase and session identity: see §3a.
+- Timebase and session identity: see §3a — **the float32 half closed
+  2026-08-23; the session-identity column is still unbuilt.** It is still
+  cheap: `JumpRecord` is 32 bytes with a live `_pad[2]`
+  (`firmware/src/platform/nrf52/jh_store.cpp:160-164`), so the column fits
+  without resizing the region. But it is the *same* on-flash record the
+  jumps-region lifecycle decision above would change, so decide the lifecycle
+  first and land both as one schema change — two uncoordinated flashes to one
+  struct is how a region becomes unreadable.
 
 ### Pillar 3 — Garmin platform (verdicts updated by web research)
 
@@ -264,8 +400,18 @@ threshold; it does not close with it.
    (v19.41) specifically for CIQ apps crashing after updates, and SDK
    signature changes have forced sideload rebuilds. Standing habit: after
    every watch OTA, verify the field renders before the next ride.
-   The store channel remains the structural fix — and Garmin's live docs
+   ~~The store channel remains the structural fix~~ — and Garmin's live docs
    now state **review within 72 hours**, so it is cheaper than feared.
+   - **UPGRADED 2026-08-23 — the store is not the structural fix, it is the
+     ONLY channel to the product watch, and therefore the critical path to
+     the water day.** Instinct 3 on fw 15.18 sweeps copied `.prg` files
+     (`de77de0`, `d5641d2` — §2.4). The same evidence confirms the store
+     path *works* on this exact watch and firmware: the rider installed a
+     free store data field from his phone and it stuck. Package built and
+     rebuilt against the two watch fixes: `garmin/jumpfield/bin/JumpField.iq`,
+     79,145 bytes, 2026-08-23 (`95e61c1`, `22ed92f`). Not submitted.
+     Consequence for §2.1: the water day now sequences off a **72 h review
+     clock we do not control**, on top of the date that still does not exist.
 6. **Strava does not render CIQ developer fields** (allowlist only). If
    rides cross-post to Strava, every puck metric silently vanishes there.
    Garmin Connect is the archive of record; say so once and accept it.
@@ -285,6 +431,19 @@ Unchanged: false-positive budget (default now proposed, §2.5), sensor-death
 invisible on the wrist, no long-horizon IMU sanity check. New link: the
 timebase defect's six-month failure mode (silent dropped jumps, §3a) lands
 in this pillar — the two compound.
+
+**2026-08-23 — that specific compounding is retired.** The silent-drop mode
+was the float32 grid, and `t_s` is `double` throughout
+(`firmware/include/jump_detector.h:152`, `:161`, `:241-242`, `:62`;
+`firmware/src/main.cpp:1502`), pinned by
+`tools/tests/test_timebase_falsifier.py`. This pillar's own three items are
+untouched, and one new trust item belongs here rather than in §3a:
+**the OG is running on compiled calibration defaults, not measured ones.**
+`CAL … source=defaults` on all three keys; the provenance warning added in
+`4a97250` fired exactly as designed on the product board (`29f03e1`,
+`2041962`). Heights read off this build are not the instrument's calibrated
+heights until the owner re-runs the drop ritual and `source=device` reads
+back.
 
 ### Pillar 5 — Hardware survival (one claim retracted)
 
@@ -329,6 +488,22 @@ sequenced by dependency and ignored calendar):
 4. The store submission draft (72 h review makes this cheap).
 5. Set the water-day date (§2.1) — everything else keys off it.
 
+**Week-0 status, checked 2026-08-23 (three days later, 80 commits later) —
+four of the five have not started.** Checked against `git log` and the
+filesystem, not against another plan document:
+
+| # | item | status | evidence |
+|---|---|---|---|
+| 1 | Adhesive coupon in saltwater | **NOT STARTED** | no commit since 08-20 touches a coupon or a bucket except the two documents that *ask* for it (`f6a5a17`, `2c0ddb6`). The 6-month clock has not started, so it has now slipped 3 days. |
+| 2 | Temperature logger / thermometer | **NOT STARTED** | no commit mentions one; the only `temperature` hit in the log is `05cbf01` (08-16), the battery plan, unrelated. |
+| 3 | µA-meter decision | **NOT MADE** | last word is still `ea10fc1` (2026-08-16), *"Owner call: no PPK2 purchase."* That call was made against the mA question; §2.3's µA question has not been put. |
+| 4 | Store submission draft | **MOVED — the only one that did.** Package **built**, not submitted | `95e61c1` (08-22) built it with a runbook; `22ed92f` (08-23) **rebuilt** it because the 08-22 package predated F-11 and F-12. `garmin/jumpfield/bin/JumpField.iq`, 79,145 B, 4 of 4 device variants clean. **It also stopped being optional** — see §2.4 / §4 P3.5. |
+| 5 | Water-day date | **DOES NOT EXIST** | every mention in the repo asks for it; none states one. So there is *still* no freeze window, exactly as §2.1 said on 08-20 — and R1's gate, defined as *date − 4 days*, still cannot be evaluated. |
+
+The compounding fact: item 5 was already the pin everything else hangs on,
+and item 4 has now added a **72 h review clock we do not control** in front of
+it. The water day cannot be sooner than *submission + review*.
+
 **Era 1 — prove the instrument (→ water day).** Freeze *starts when the date
 exists*. Zero-code additions only:
 - Session-card line: **reboot the puck right before starting the activity**
@@ -342,8 +517,19 @@ opened** (meter, water-day labels, store filing). This project's measured
 write→trustworthy-verdict multiplier is 3–5×; the tail is verification, not
 authorship. Order:
 0. OTA safety rules for any non-bench puck (or moot via §2.2).
-1. The double-timebase sweep + falsifier (§3a) — ships with anything.
-2. Watch-side session delta with the restart guard (§3b).
+1. ~~The double-timebase sweep + falsifier (§3a) — ships with anything.~~
+   **DONE 2026-08-21, on the OG's flashed build as of 2026-08-23** — it did
+   ship with everything else, exactly as predicted, because firmware builds
+   from the tree rather than from cherry-picks. Citations in §3a's status
+   block. **What is left of this item, and it is not nothing:** the
+   session-relative reset (gated on `state == RIDING`, per the livelock) and
+   the session-identity column in `JumpRecord`. Both unbuilt; the column is
+   coupled to the jumps-region lifecycle decision (§4 P2), so it is one
+   schema change, not two.
+2. Watch-side session delta with the restart guard (§3b) — **still unbuilt**;
+   `Model.mc` has the monotonic *decrease* guards (`329c543`, `18e718f`) but
+   no baseline, no `Application.Storage` persistence, no `onTimerReset`
+   clear. Those guards solve the opposite failure (§3b status block).
 3. Standby: wake engine + SENSE/DETECT + auto-off + cutoff — **opening
    with the off-current measurement against the pre-committed kill
    threshold** (§4 P1).
@@ -367,12 +553,12 @@ maintenance schedule.
 | Field on screen 2, fakejump, flip back | compute()-runs-off-screen (the design's core bet) | 10 min |
 | Start activity, fakejump ×3, end, start new activity | **onTimerReset fires on real hardware** (the watch-side fix depends on it; simulator-vs-silicon has bitten twice) | 10 min |
 | `dualcentral.py` + 20 fakejumps, 2 centrals | the corruption fix, before any two-watch outing | 1 evening |
-| Simulator memory view, instinct target | runtime peak vs 32 KB (static now measured: 12.4 KB) | 1 hour |
+| Simulator memory view, instinct target — **half done 2026-08-21** (`10d2553`) | runtime peak vs 32 KB (static measured: 12.4 KB). The *leak* half is answered: 248 B over ~1,200 lines, 0 B / 0 B across two 300-line blocks. **Absolute peak still unmeasured** — the unit-test PRG is the wrong memory context | 1 hour |
 | Write >32 B of dev fields in one message, inspect the FIT | the provisional FIT budget (§4 P3.7) | 30 min |
 | Pause activity, fakejump ×3, resume, save, parse FIT | auto-pause record semantics | 15 min |
 | Two 3 h wear days, field on/off | watch battery cost | passive |
 | After every watch firmware OTA: does the field render? | the documented Epix-family update risk | 1 min, standing habit |
-| `simtest` with golden timestamps +604,800 s | the timebase falsifier diverges as predicted | 15 min |
+| ~~`simtest` with golden timestamps +604,800 s~~ **DONE 2026-08-21** | the timebase falsifier diverged as predicted, and is now a permanent test rather than a one-off — `tools/tests/test_timebase_falsifier.py` | run by `./tools/jump simtest` |
 
 ## 8. The one-paragraph version (rewritten)
 
@@ -390,6 +576,23 @@ mostly on the watch where retuning is trivial, the jumps region lasts 6–9
 months not 5, and one unasked question — *glued, or removable?* — can
 delete the hardest remaining era outright. Five decisions are yours (§2);
 everything else is work on a known path.
+
+**2026-08-23 addendum — what three days changed.** The paragraph above stands
+except in one clause: *"the timebase fix is one type and the falsifier already
+exists"* is no longer a proposal. Both shipped, and the falsifier is a
+permanent test; the fix was itself caught out-damaging its bug (a live
+`assert()` would have killed a puck at 24.9 days) and replaced with saturation
+before it flew (§3a). The float32 half of headline defect #1 is closed. Two
+things moved the other way. **The product watch cannot be sideloaded at all** —
+Instinct 3 on fw 15.18 keeps CIQ apps in an internal registry and sweeps
+copied `.prg` files, so the Connect IQ store stopped being the structural fix
+and became the *only* route to the rider's wrist, with a 72 h review clock in
+front of a water day that still has no date. And **four of the five week-0
+calendar items have not started**, including the adhesive coupon whose entire
+point was that its clock is six months long. Headline defect #2 (session
+counters) is unchanged and unfixed: the water-day mitigation is still a
+reboot, and the guards that did land on the watch refuse the opposite error.
+Net: the instrument got more trustworthy; the calendar got worse.
 
 ## 9. Revision changelog (what the attack changed)
 
@@ -424,3 +627,43 @@ everything else is work on a known path.
 - **Survived attack unchanged**: the ULP table, the honest verdict, the
   motion-wake-is-firmware characterization, the 250 mAh usable-capacity
   assumption, and the overall pillar structure.
+
+### 2026-08-23 — status pass against the tree (not a new audit)
+
+Every entry below is a **status** change, checked against code, `git log` and
+the filesystem. No analysis above was deleted and no retracted figure was
+resurrected; the reasoning is the document's asset and it stays as written.
+
+- **§3a timebase — CLOSED (the float32 half).** `t_s`, `takeoff_time_`,
+  `last_low_time_`, `JumpEvent::takeoff_time_s` and the `main.cpp` feed are
+  all `double`; the `(float)atof()` re-narrowing in `jh_store.cpp` is gone;
+  `llround` at the anchor with an explicit int32-bound check; the falsifier
+  is a permanent test (`tools/tests/test_timebase_falsifier.py`). The fix was
+  audited before flashing — `37394ae` replaced a device-live `assert()`
+  (which would have aborted a puck at 24.9 days) with saturation. On the OG
+  as of `src=e83f6395` (`29f03e1`). **Still unbuilt from that section:** the
+  session-relative reset and the session-identity column.
+- **§3b session counters — still OPEN**, verified in source. `Model.mc` gained
+  monotonic *decrease* guards (`329c543`, `18e718f`); those are the opposite
+  failure and do not touch this. Stale number corrected: the watch suite is
+  **60/60**, not 40 (`781eabd`).
+- **§2.4 Instinct — two claims corrected.** It *has* been sideloaded once
+  (`4e35d26`), and the tier layouts *have* been rendered in the simulator
+  (`b493eb2`, `4222973`, which found a sub-display obscuring the header).
+  Both superseded by a blocker: fw 15.18 sweeps copied `.prg` files
+  (`de77de0`, `d5641d2`).
+- **§4 P3.5 store — upgraded from "structural fix" to "only channel, critical
+  path."** Package built and rebuilt (`95e61c1`, `22ed92f`); not submitted.
+- **§4 P1 power — one input moved, no number changed.** DC/DC was
+  console-only and is now enabled at every boot (`3079f96`, confirmed
+  `dcdc=1` live in `29f03e1`), so the ~7–11 mA / 25.7–34 h figures describe a
+  regime the firmware no longer runs in. **Deliberately not restated** —
+  nobody has re-measured, and this repo does not print unmeasured numbers.
+- **§4 P4 data trust — the §3a compounding is retired**, and one item added:
+  the OG is on `CAL source=defaults`, so its calibration is compiled, not
+  measured (`2041962`, `29f03e1`).
+- **§6 week 0 — four of five have not started**, three days and 80 commits
+  on. The store draft is the only one that moved. The water-day date still
+  does not exist, so there is still no freeze window.
+- **§7 — falsifier row done; simulator-memory row half done** (leak answered,
+  absolute peak not).

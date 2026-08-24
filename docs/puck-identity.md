@@ -185,7 +185,17 @@ single puck, which is what the water day is.
   later layer legible.
 - **With the watch-side session-delta work (Era 2):** the header id (3d) and
   the bind/prefer logic (3b–3f) — they touch the same files and share a test
-  pass.
-- **Whenever the rider build is cut:** one central (§4).
+  pass. *(Updated 2026-08-23: 3d shipped early, ahead of this sequencing —
+  the owner had it built for Instinct night, 2026-08-21
+  (`PuckLink.connectedId()`, `garmin/jumpfield/source/PuckLink.mc:148-162`),
+  and it is live in the build sideloaded/submitted since. The bind/prefer
+  logic (3b–3f) and the name-beats-UUID match-order fix are still not
+  built — `_matchesPuck()` still checks the service UUID first and returns
+  before the name is ever considered, `garmin/jumpfield/source/PuckLink.mc:
+  377-393` — so two-puck binding remains exactly as unsolved as this
+  document originally found it.)*
+- **Whenever the rider build is cut:** one central (§4). *(Still open as of
+  2026-08-23: `firmware/src/platform/nrf52/jh_link.cpp:170` still reads
+  `kMaxPrphConnections = 2`; no rider-specific build flag exists yet.)*
 - **Never, unless a third rider appears:** anything more clever than the
   above.

@@ -53,7 +53,7 @@ recording work.
 
 ---
 
-## 1. Change one: let the CPU sleep between samples
+## 1. Change one: let the CPU sleep between samples — SHIPPED (guard band tuned during implementation; prediction did not hold — see the note after "Expected gain")
 
 ### The problem
 `main.cpp:1027`:
@@ -81,11 +81,30 @@ sleeps the core. The 1200 µs guard means we never oversleep a deadline: one
 tick is ~977 µs, so there is always >200 µs of margin left for the final
 tight approach.
 
+**As shipped** (`firmware/src/main.cpp:1470`), the guard is `977`, not
+`1200`: DWT (which would make `micros()` precise enough to shrink the band
+further) stays off deliberately — it breaks `jh_clock`'s wrap arithmetic,
+which every timestamp in the system depends on (`twim_bounded.h:57`) — so
+977 µs (one clock tick) is the smallest honest guard on this clock, and
+the code comment there says so explicitly.
+
 ### Expected gain
 Duty cycle falls from ~100 % to roughly 25-30 % (work + guard band). If the
 MCU is ~6-7 mA of the 11.6, this should land somewhere around **6-7 mA
 total — call it a 1.7-2x improvement**. A tighter guard band would win more;
 start conservative and measure.
+
+**MEASURED, prediction did NOT hold (STATUS.md, 2026-08-15/16 idle-floor
+run):** the 7.5 h idle-floor measurement ran WITH this sleep change already
+on the board, and it is not at 6-7 mA. The exact current has itself been
+revised more than once since (see battery-measurement.md and STATUS.md's
+idle-floor entry for the current-best figure and its own caveats) — no
+number from that chain is repeated here, per this project's rule against
+resurrecting a figure without knowing whether it is the current one. The
+one durable conclusion: this change alone did not deliver the predicted
+1.7-2x, so the remaining gap is either the DC/DC step (§2) or overhead this
+plan didn't model (e.g. TWIM left enabled — see docs/power-states.md §5a
+finding 3).
 
 ### The risk, quantified
 Sample timing jitter. This matters because **airtime is the measurement**.
@@ -121,6 +140,13 @@ If the post-change delta distribution shows samples arriving **later than
 > it" premise below is RESOLVED — what remains unmeasured is the size of the
 > saving, which the free matched-window A/B will give once the OG is back.
 > Still never at boot until then. Detail: STATUS.md, 2026-08-18.
+>
+> **UPDATED 2026-08-23 — now IS at boot (audit F-05, 2026-08-22):**
+> `jh_power::enable_dcdc()` runs unconditionally at every boot
+> (`firmware/src/main.cpp:1252`), no longer only via the manual `dcdc`
+> command. The "only after it is proven live" gate in §2-OLD below was
+> satisfied by a same-board A/B (STATUS.md, 2026-08-20) measuring 1.39×
+> endurance before this landed in boot.
 
 ## 2-OLD. The original reasoning (kept for the trail)
 

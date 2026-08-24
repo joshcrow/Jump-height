@@ -6,20 +6,37 @@ tests, commits and bench logs — not from other documents.
 ## READ THIS FIRST — the physical facts, and where they live
 
 This block exists because on 2026-08-20 this file **already contained** the
-fact I got wrong (line ~567, written 08-18), and so did the board registry,
+fact I got wrong — written 08-18, in the entry *Spare board soak-gated on the
+fast-charge-fix build*, which states plainly that the spare has no battery and
+even names the floating-divider fingerprint — and so did the board registry,
 and I got it wrong anyway. Two correct documents lost to 1,800 lines of
 chronology. Everything below is a *slow-changing physical fact* — the class
 that is expensive to re-derive and cheap to state once.
 
+> **Pointer repaired 2026-08-23.** This paragraph used to cite "line ~567".
+> That line number no longer holds the fact (it is now inside a BLE-export
+> entry) and could not have survived any edit to the file above it. **A
+> self-referential line number in a growing file is a pointer with an
+> expiry date** — the entry title is cited instead, and titles survive.
+
 | Question | Answer | Authority |
 |---|---|---|
-| Which boards exist, and which has a **battery**? | **Only the OG (`JumpHeight-E2C4`) has a cell.** The spare (`JumpHeight-45ED`) is USB-only; its battery readings are floating noise. | [bench-playbook.md §1](bench-playbook.md) |
+| Which boards exist, and which has a **battery**? | **THREE boards. Only the OG (`JumpHeight-E2C4`) has a cell.** The spare (`JumpHeight-45ED`) and the Puck (`JumpHeight-8673`) are USB-only; their battery readings are floating noise. | [bench-playbook.md §1](bench-playbook.md) (registry rows for all three) |
 | Which board can measure power / run untethered? | **The OG only.** Drain, endurance, DC/DC and the desk test are meaningless elsewhere. | bench-playbook.md §1a |
-| Why did my BLE reading change between calls? | Two boards advertise. **Unpinned tools answer from either.** Always `--name JumpHeight-XXXX`. | bench-playbook.md §1a rule 2 |
+| Why did my BLE reading change between calls? | **Three boards can be on the air at once** (the 08-22 reconnect soak ran with all three advertising). **Unpinned tools answer from whichever replies first.** Always `--name JumpHeight-XXXX`. Since audit F-13/F-14 the pinning census is shared in `tools/blepin.py`, and `battlog.py`/`otadfu.py` **refuse to start unpinned**. | bench-playbook.md §1a rule 2 + the table at §1a |
 | Is the cell healthy / what is its real capacity? | LP502030, 250 mAh, 3.0 V cutoff — datasheet-anchored, not inferred. | [battery-measurement.md](battery-measurement.md) |
-| Can I trust a "dead board" verdict? | **No.** Three have been wrong. Establish the board's *configuration* first. | [xiao-hardware-truth.md](xiao-hardware-truth.md) |
+| Can I trust a "dead board" verdict? | **No.** **Four** have been wrong — the fourth was the Puck (`8673`), reassessed HEALTHY on 2026-08-20 with selftest 6/6. Establish the board's *configuration* first. | [xiao-hardware-truth.md](xiao-hardware-truth.md); count from [bench-playbook.md §1](bench-playbook.md) registry row 3 |
 | What firmware is on the OG right now? | **`src=e83f6395`** (flashed 2026-08-23, self-test PASS, `dcdc=1`). Confirm with `stats` before trusting it — `src=` is the only authority, never a commit date. | 2026-08-23 entry below |
 | Are the OG's heights trustworthy today? | **No.** `CAL source=defaults` — the drop calibration is gone. **Re-run the drop ritual first.** | 2026-08-23 entry below |
+
+**Last two rows re-read off the board 2026-08-23 evening**, USB, not inferred:
+`INFO … src=e83f6395`, `# dcdc=1`, `# name=JumpHeight-E2C4`,
+`CAL airtime_offset_s=0.0257 height_scale=1.000 source=defaults off_src=defaults
+scale_src=defaults vbat_src=defaults`, `STATS … stored_jumps=18
+stored_best_m=1.536 trace_bytes=1583181`, selftest i2c/whoami/accel/noise/ble/flash
+all PASS. Both rows stand. (`dcdc=` is an adder key on `info`'s chatter lines —
+main.cpp:1012-1015 — not a key on the `INFO` line, so a tool that parses only
+`INFO` will not see it.)
 
 **The maintenance rule that would have prevented today:** when a change adds a
 new way to *identify* a board (a unique advertised name, a serial format, a
@@ -63,7 +80,14 @@ do not.**
 
 ---
 
-## CHANGED AFTER THE AUDIT — grouped by date, newest first (2026-08-14 → 2026-08-18)
+## CHANGED AFTER THE AUDIT — dated blocks (2026-08-14 → 2026-08-23)
+
+> **Header corrected 2026-08-23.** It read "newest first (2026-08-14 →
+> 2026-08-18)". Both halves were wrong: the newest block is 2026-08-23, and the
+> `##` date headers are NOT in strict order — `grep -n '^## ' docs/STATUS.md`
+> returns 08-23, 08-20, 08-20, 08-22, 08-22, 08-21, 08-17, 08-16, 08-15, 08-14,
+> and the 08-18 and 08-19 entries live under the first `## 2026-08-20` header.
+> **Search this file; do not navigate it by header order.**
 
 ## 2026-08-23 — the 2026-08-22 adversarial audit is CLOSED: F-01…F-21 all landed
 
@@ -120,6 +144,18 @@ would have destroyed:
 
 **Three findings filed rather than absorbed:** F-22, F-23, F-24. None blocks
 the water session.
+
+> **Amended later on 2026-08-23 — a FOURTH was filed: F-25**
+> (`docs/audit-2026-08-22.md`). `./tools/jump status` reported the firmware's
+> **help text** under the label "commands in binary". They are not the same
+> list: `main.cpp:613`'s `# commands:` literal names 18, and the dispatch table
+> at `main.cpp:623-1183` handles three more plain commands — `gyro`,
+> `pincensus`, `vbatscan` — plus two parameterised ones (`set …`,
+> `fillstore …`). **`pincensus` is the instrument DECISION #38 makes mandatory
+> for any "this pin is stuck" claim**, so anyone checking its availability the
+> documented way concluded it had never shipped. Still minor, still not a
+> session blocker — but it is the third time in this project that a *label* on
+> a reading, rather than the reading, produced a wrong answer.
 
 **What did NOT survive contact with measurement.** The audit is a document, not
 an oracle, and two of its own claims were wrong: F-08's proposed fix would not
@@ -782,6 +818,16 @@ report whatever it likes. **A test that has never failed has not been tested.**
   `trace.csv` dump over BLE with a second central subscribed. Until that
   measurement exists neither entry should be promoted — this note exists so the
   contradiction is visible rather than resolved by guesswork.
+- **CLOSED 2026-08-23 (bookkeeping caught up).** The measurement this note
+  named as the closing condition has been taken twice: *TWO-CENTRAL concurrent
+  export: PASS* (OG, 2026-08-19 — 150,034 bytes byte-identical to both
+  centrals, `tx_drops` absent before and after) and *Two-central gate* (spare,
+  2026-08-21 — 300,022 bytes, sha256 identical, `tx_drops` 0, with central B
+  polling `stats` 39 times **during** A's export). The two entries below are
+  no longer `built-unverified`; both now carry corrections saying so. The one
+  thing still NOT measured is the sparse-JUMP-line pattern — `dualjump.py`
+  returns INCONCLUSIVE on this Mac by host limitation, and that is a different
+  traffic shape from a bulk export.
 
 ## 2026-08-20
 
@@ -848,6 +894,14 @@ report whatever it likes. **A test that has never failed has not been tested.**
 - **Store package built:** `garmin/jumpfield/bin/JumpField.iq`, 77,564 bytes,
   4/4 device variants clean, ready to upload. Runbook for the human half:
   [store-submission-runbook.md](store-submission-runbook.md).
+  > **SUPERSEDED 2026-08-23 — that 77,564-byte package must not be uploaded.**
+  > It predated two watch fixes, and was rebuilt in commit `22ed92f` ("Store
+  > package rebuilt — the old one predated the two watch fixes"). The package
+  > on disk today is **79,145 bytes, 2026-08-23**. The 77,564 figure is kept
+  > because it is what was measured on 08-22, not because it is current. The
+  > `.iq` is gitignored (`.gitignore:44`), so the byte count is the only handle
+  > on which build is sitting there — check the file's own size and mtime, never
+  > this line.
 - OG deliberately **not flashed**: the hardening plan schedules its single R1
   flash after the spare's 48 h soak completes (~37 h remaining), and the
   store review now runs in parallel, so nothing is gained by rushing it.
@@ -1748,13 +1802,48 @@ is the delta since.
   through the download. Until then it claims nothing rather than crying wolf.
 
 ### BLE per-connection retry — chunk length latched
-- **State:** built-unverified
+- **State:** ~~built-unverified~~ → **proven-on-hardware (corrected 2026-08-23)**
 - **Evidence:** `jh_link.cpp` `s_chunk_n`, commit 9277821
-- **Gap:** never on silicon. The latch fixes a regression the first version
+- **Gap:** ~~never on silicon.~~ The latch fixes a regression the first version
   introduced (recomputing the chunk while a retry was pending could drop bytes
   on a second connection).
+- **Corrected 2026-08-23:** "never on silicon" was already stale when the
+  *BLE batch* bookkeeping entry flagged it on 08-18 (9277821 precedes
+  `src=0c09863c`, flashed 08-17), and the *effect* has since been measured in
+  the configuration this latch exists for — two concurrent centrals, 08-19
+  (150,034 B byte-identical) and 08-21 (300,022 B, sha256 identical,
+  `tx_drops` 0 with 39 interleaved `stats` polls). Nothing here is unverified
+  any more.
 
 ---
+
+> **READ THIS BEFORE THE FIVE STATE SECTIONS BELOW (banner added 2026-08-23).**
+> `PROVEN ON HARDWARE` / `PARTIAL` / `BUILT, UNVERIFIED` / `TESTED` /
+> `NOT BUILT` are a **2026-08-14 audit snapshot**, exactly like the stale-docs
+> table at the end of the file. The dated blocks at the TOP of this file are
+> newer, and **where they disagree the dated blocks win** — the same rule that
+> table already carries. Two consequences, both measured on 2026-08-23:
+>
+> - **The `**Gap:**` lines are the dangerous half.** They are claims about the
+>   present ("never run", "never flashed", "does not exist") written nine days
+>   ago, and a good number have since been closed by work recorded above.
+>   Individually-corrected rows below carry a dated correction; a row with no
+>   correction has been checked and still stands, *or* has not been re-checked
+>   — treat `Gap:` as a lead, never as a finding.
+> - **`file:line` citations have drifted.** The code moved; the symbols did
+>   not. Deliberately NOT mass-renumbered on 2026-08-23: renumbering 200 rows
+>   would rewrite an audit snapshot into something that looks current, which
+>   is the exact failure this file exists to prevent. Grep for the **symbol**
+>   named in the citation, not the line. Spot-checked examples of drift:
+>   `jh_imu.cpp` `pin_census()` :315 → **:327**, `bus_rail_sweep()` :251 →
+>   **:263**; `jh_store.cpp` `align4()` :234 → **:266**, `skipPastTornWrite()`
+>   :270 → **:302**; `main.cpp` `printHelp()` :424 → **:612**.
+>
+> **The `NOT BUILT` section is the single most expensive one to leave stale** —
+> it is the list that causes work to be redone. On 2026-08-23, **five of its
+> eleven rows described work that was already built**, and two more kept a
+> correct verdict on top of evidence that had entirely died. It now carries a
+> row-by-row tally.
 
 ## PROVEN ON HARDWARE  (44)
 
@@ -1782,7 +1871,7 @@ is the delta since.
 
 ### Bench diagnostics: `pincensus` and `i2cdiag`
 - **Evidence:** firmware/src/main.cpp:512/531, firmware/src/platform/nrf52/jh_imu.cpp:315 pin_census()/:251 bus_rail_sweep()/:361 bus_diag_twim()/:376 bus_diag_wire(); their output is the measurement that closed the drive-strength RCA on 2026-08-14 (SENSE_FIRST_BOOT.md:962-965, 983-987)
-- **Gap:** `pincensus` is missing from printHelp (main.cpp:424-427), so the project's designated first diagnostic is undiscoverable from the device.
+- **Gap:** `pincensus` is missing from printHelp, so the project's designated first diagnostic is undiscoverable from the device. **STILL TRUE, re-checked 2026-08-23 — only the pointer moved:** printHelp is now `main.cpp:612-616` and its `# commands:` literal (`:613`) names 18 commands; the dispatch table (`main.cpp:623-1183`) handles `pincensus` at `:735`, plus `gyro` `:1145`, `vbatscan` `:1183`, and `fillstore …` `:786`. `gyro`/`vbatscan`/`set` at least appear on printHelp's continuation lines; **`pincensus` and `fillstore` appear nowhere in `help` at all.** This is the defect filed as F-25 — see the 2026-08-23 entry.
 
 ### Binary trace v2 codec (encode on device, CSV on the wire)
 - **Evidence:** firmware/include/trace_codec.h; tools/tests/test_trace_codec.py + firmware/test/trace_codec_harness.cpp parity (65 tests passed with siblings 2026-08-14); byte-identical readback on silicon 2026-07-31
@@ -1829,7 +1918,7 @@ is the delta since.
 
 ### Jump detection state machine (airtime method)
 - **Evidence:** firmware/include/jump_detector.h:138 update(); 61 session jumps recorded on the Sense 2026-08-11, best 1.495 m, firmware a6e477d (docs/rca-sense-imu-2026-08-11.md:15); C++/Python parity `./tools/jump simtest` PASS re-run 2026-08-14 (C++ 4 jumps vs Python 4)
-- **Gap:** No jump has been detected on silicon on ANY build since 2026-08-11 — i.e. never on the current build, which changed the IMU rail drive, the store watchdog feed and begin() retry. The 3-toss desk test (docs/plan.md:121) is the unrun gate.
+- **Gap:** ~~No jump has been detected on silicon on ANY build since 2026-08-11 — i.e. never on the current build, which changed the IMU rail drive, the store watchdog feed and begin() retry. The 3-toss desk test (docs/plan.md:121) is the unrun gate.~~ **CLOSED — corrected 2026-08-23.** The desk test ran the same day this row was written: three untethered tosses on the OG, 2026-08-14 (*END-TO-END: a jump detected on real motion and read back from flash* above; three non-`--fake` logs, `data/logs/20260814-1651*-desktest.log`). It has been re-closed repeatedly since — 18 stored jumps, best 1.536 m, on 2026-08-22, and the OG still reports `stored_jumps=18 stored_best_m=1.536` on a live read tonight. The remaining gap is narrower and different: **no jump has ever been detected on WATER.**
 
 ### Model corruption gate (_jumpIsCorrupt + STATS mirror)
 - **Evidence:** Model.mc:180-256; 6 dedicated tests testCorrupt_* in ModelTest.mc, all PASS in today's 43/43 run. Field-validated on Epix Gen 2 2026-08-11 with the DIAG build: 3 corrupt lines rejected, count held at 0 while the puck counted 12 (commit d5d6a26). Independently corroborated by the saved FIT: SESSION jumps=0 (scratchpad 2026-08-11-18-02-00.fit).
@@ -1934,7 +2023,8 @@ is the delta since.
 
 ### A correct jump height displayed on a real wrist (US1 — the product)
 - **Evidence:** Exactly one on-wrist frame has ever carried a value matching the puck: FIRST_COMPILE.md:146-151, 2026-08-11 — last=0.5 ft against the puck's 0.164 m — and in that SAME frame count=64 (puck said 1), best=0.3 ft (puck said 0.5) and airtime=0.00 s were all fabricated by byte loss. After the gate shipped: 0 jumps on the wrist while the puck counted 12 (commit ad51a24; commit d5d6a26), corroborated by the saved activity's SESSION jumps=0/best_jump=0.0.
-- **Gap:** There has never been a session in which the watch displayed a jump that was verified correct. Needs: the puck-side BLE fixes on silicon, then a bench run where N emitted jump lines equal N rendered on the wrist with rejectedCount at 0.
+- **Gap:** ~~There has never been a session in which the watch displayed a jump that was verified correct. Needs: the puck-side BLE fixes on silicon, then a bench run where N emitted jump lines equal N rendered on the wrist with rejectedCount at 0.~~ **CLOSED on the Epix 2026-08-18 — corrected 2026-08-23.** See *WATCH M2 CLOSED* above: the field reconciled the 3 stored tosses on connect and then rendered 10 live fakejumps one by one, with the owner reading heights off his wrist, and the books balanced exactly (session_jumps 13 = 3 real + 10 fake; stored_jumps stayed 3; session_best stayed 1.285 m). The same activity's FIT carried `jumps=13` and `best_jump=4.216 ft` = exactly the 1.285 m toss.
+- **What actually remains, and it is narrower but not small:** every one of those proofs is **epix2-only**, and since 2026-08-20 the Epix is the dev bench — **the rider wears the Instinct**, which has never rendered a jump and cannot be sideloaded at all on fw 15.18. US1 is closed on the bench watch and open on the product watch.
 
 ### BLE pacing to the negotiated connection interval
 - **Evidence:** firmware/src/platform/nrf52/jh_link.cpp:236-251 (MTU-23 measurement) and :288-298 (pace to slowest subscriber); the pacing fix was flashed 2026-08-11 ~18:25 (ad51a24 content, docs/rca-sense-imu-2026-08-11.md:17)
@@ -1950,75 +2040,91 @@ is the delta since.
 
 ### Jump written to flash and read back (end-to-end persistence)
 - **Evidence:** firmware/src/main.cpp:1027 logJump -> firmware/src/platform/nrf52/jh_store.cpp:749 jumps_append; tools/tests/test_store_host.py 18/18 pass (re-run 2026-08-14); on-silicon trace readback of 14,402 samples at 20.0 ms cadence 2026-07-31 (firmware/SENSE_FIRST_BOOT.md:1264-1294)
-- **Gap:** The only on-silicon jump history (61 jumps) was erased by `format` on 2026-08-14 (docs/bench-playbook.md:20-23). No jump has been written AND read back on the current build; that is exactly what the desk test would prove.
+- **Gap:** ~~The only on-silicon jump history (61 jumps) was erased by `format` on 2026-08-14 (docs/bench-playbook.md:20-23). No jump has been written AND read back on the current build; that is exactly what the desk test would prove.~~ **CLOSED — corrected 2026-08-23.** The 61-jump erasure is still true and still permanent, but write-and-read-back has been proven many times since: the 2026-08-14 desk test read three tosses back off flash; the OG's 18 jumps survived the 08-22 flash byte-identically and were verified 18 = 18 by `jump sync`'s three-check gate; the 08-21 auto-clear rehearsal read three records back individually and byte-compared them to the previous night's. Live read tonight: `STATS … stored_jumps=18 stored_best_m=1.536`.
 
 ### Settings/properties (US7)
 - **Evidence:** properties.xml defaults are what actually runs — sideload installs receive no settings (docs/garmin-datafield.md:380-387). Defaults proven live: units (above) and puckName 'JumpHeight' matching the firmware's advertised name (firmware/src/main.cpp:889 jh_link::begin("JumpHeight"), jh_link.cpp:418 Bluefruit.setName).
-- **Gap:** resources/settings/settings.xml (the Garmin Connect UI) has never been exercised at all — it requires the Connect IQ Store channel, which does not exist yet (M5 not started).
+- **Precision correction 2026-08-23 — the match is now a PREFIX match, and that is load-bearing.** Since unique names shipped on 08-18 the firmware advertises **`JumpHeight-XXXX`**, not the bare string handed to `begin()` (`jh_link.cpp:495-504`; the OG answered `# name=JumpHeight-E2C4` on a live read tonight). The `puckName` default is still `"JumpHeight"` (`JumpFieldView.mc:650`), and it still works **only because `PuckLink.mc:389` matches by prefix rather than equality** — the comment there says so explicitly. Anyone who "fixes" that to an equality test breaks every board. Line refs have drifted: `main.cpp:889` → **:1292**, `jh_link.cpp:418` → **:504**.
+- **Gap:** resources/settings/settings.xml (the Garmin Connect UI) has never been exercised at all — it requires the Connect IQ Store channel. **Corrected 2026-08-23:** that channel is no longer "does not exist yet (M5 not started)" — the `.iq` is built (79,145 B) and the store is now the *only* install path to the rider's watch. It is unsubmitted, not unbuilt. See the Connect IQ Store row under NOT BUILT.
 
 ### Two concurrent BLE centrals served by the puck
 - **Evidence:** Epix Gen 2 + tools/blecmd.py subscribed >1h, both served, advertising continued, Mac stats round-tripped clean (SENSE_FIRST_BOOT.md:415-430)
-- **Gap:** concurrency works; the watch's DISPLAYED values were corrupt (count 64 vs session_jumps=1, FIRST_COMPILE.md:145-152). Single-central control run never done.
+- **Gap:** concurrency works; the watch's DISPLAYED values were corrupt (count 64 vs session_jumps=1, FIRST_COMPILE.md:145-152). Single-central control run never done. **Corrected 2026-08-23:** the corruption's cause is fixed and the fix is now MEASURED in the configuration that produced it — 08-19 on the OG (150,034 bytes byte-identical to both centrals, `tx_drops` zero) and 08-21 on the spare (300,022 bytes, sha256 identical, `tx_drops` 0, with B polling `stats` 39 times during A's export). What is still unmeasured is the *sparse JUMP-line* pattern, which is a different traffic shape — `dualjump.py` returns INCONCLUSIVE on this Mac because CoreBluetooth multiplexes one physical link per process.
 
 ### Two-central concurrent service
 - **Evidence:** firmware/src/platform/nrf52/jh_link.cpp:267 subscribedHandles()/:277 sendOneChunk(); 2026-08-11: both centrals served, `stats` round-tripped all session, killing the Mac's central left the watch connected — but the watch rendered corrupt values (count 64 / best 0.3 ft while the puck reported 1 / 0.164 m) (SENSE_FIRST_BOOT.md:415-450)
-- **Gap:** The identified cause (silently discarded chunk per connection) is fixed in code only; the two-central configuration has not been re-run since.
+- **Gap:** ~~The identified cause (silently discarded chunk per connection) is fixed in code only; the two-central configuration has not been re-run since.~~ **CLOSED — corrected 2026-08-23.** Re-run twice, on two boards, with byte-level comparison of the RAW streams (deliberately not decoded lines: decoding first lets a lost chunk re-glue into a plausible line, which is exactly how the original bug survived three days). See the row above and the 08-19/08-21 entries. **Standing operational rule is unchanged and is NOT a statement about this code: no second central while the rider is on the water**, until the sparse-JUMP-line run passes on two genuinely separate hosts.
 
 ### USB bulk export (`dump` / `jumps` / `trace` over serial)
 - **Evidence:** firmware/src/main.cpp:233 printFileFramed(); proven at 14,402 samples on silicon 2026-07-31 — but the bounded serial emit added 2026-08-12 (commit afba536, main.cpp:150-152) DROPS an entire block when Serial.availableForWrite() < len, and that dropping was observed on silicon 2026-08-14 swallowing a long pincensus line (main.cpp:520-522 comment)
-- **Gap:** Never exercised at session scale since afba536. This is the path the water-session data is meant to come home through (docs/plan.md:112-115) and it can silently truncate.
+- **Gap:** ~~Never exercised at session scale since afba536. This is the path the water-session data is meant to come home through (docs/plan.md:112-115) and it can silently truncate.~~ **CLOSED — corrected 2026-08-23.** The drop is gone on the file path: exports set `s_serial_must_not_drop` and `waitForSerialRoom()` waits, bounded and WDT-fed, counting any genuine loss (`main.cpp:196-227`). Chatter still drops, deliberately. Exercised far past session scale: **9,872,675 bytes twice, byte-identical, 2026-08-15**, and **13,434,228 bytes twice, byte-identical (sha256 `a037bb62…`), 2026-08-19** — 36 % larger than the previous best and far beyond any real session.
 
 ### USB session download at session scale
 - **Evidence:** main.cpp:150 — emitBytes drops the serial copy whenever Serial.availableForWrite() < len
-- **Gap:** silent block loss on the exact path the water-session data comes home through; changed 2026-08-13, never exercised at session scale (plan.md:113-116)
+- **Gap:** ~~silent block loss on the exact path the water-session data comes home through; changed 2026-08-13, never exercised at session scale (plan.md:113-116)~~ **CLOSED — corrected 2026-08-23.** Duplicate of the row above; same correction, same evidence.
 
-### Web app — in-browser flasher (ESP Web Tools)
-- **Evidence:** web/manifest.json declares exactly one build, `"chipFamily": "ESP32"`, pointing at firmware/bootloader.bin + partitions.bin + firmware.bin. web/app.js:1381-1382 mounts <esp-web-install-button manifest="manifest.json">. web/firmware/*.bin on this machine are dated Aug 4 (ESP32-era) and web/firmware/ is gitignored.
-- **Gap:** Cannot flash the nRF52840 Sense — the board README.md:38 calls the product. The Install tab's fallback text (web/app.js:1372) also tells users to run `./tools/jump flash`, which fails on that board.
+### ~~Web app — in-browser flasher (ESP Web Tools)~~ — **REMOVED, not partial (corrected 2026-08-23)**
+- **Evidence (2026-08-14) — every file it cites is now DELETED:** web/manifest.json declares exactly one build, `"chipFamily": "ESP32"`, pointing at firmware/bootloader.bin + partitions.bin + firmware.bin. web/app.js:1381-1382 mounts <esp-web-install-button manifest="manifest.json">. web/firmware/*.bin on this machine are dated Aug 4 (ESP32-era) and web/firmware/ is gitignored.
+- **Actually, 2026-08-23:** the browser flasher was **deleted outright** with the ESP32 v1 platform on 2026-08-18 — commit `12480c6`, DECISION #40, and *HARDWARE DEPRECATION* above. `web/` now holds only `app.js`, `index.html`, `style.css`; `web/manifest.json` and `web/firmware/` do not exist, and `grep -i esp-web-install web/` returns nothing. **Read the evidence above from git history, not from the tree.** The conclusion — there is no browser flash path — is unchanged and was the reason it was removed.
 
 ### `off` / System OFF
 - **Evidence:** firmware/src/platform/nrf52/jh_power.cpp:239 system_off() (bus_release -> rail down -> sd_power_system_off); entry proven 2026-08-04; measured 2026-08-14: with USB attached it enters System OFF and stays there — wake needs a VBUS rising edge or the reset button (SENSE_FIRST_BOOT.md:1091-1116)
-- **Gap:** The version proven on silicon used pinMode for the rail; the current H0H1 rail drop (216f75f) is unflashed. Off-current has never been measured — the overnight voltage-delta procedure (item 25c) is unrun, so 'months of standby' is arithmetic, not data.
+- **Gap:** ~~The version proven on silicon used pinMode for the rail; the current H0H1 rail drop (216f75f) is unflashed.~~ **Half corrected 2026-08-23:** `216f75f` has been on silicon since `src=0c09863c` (08-17) and is in every build since, including tonight's `src=e83f6395` — "unflashed" is nine days stale. What still stands: **off-current has never been measured** — the overnight voltage-delta procedure (item 25c) is unrun, so 'months of standby' is arithmetic, not data. And the off/wake soak needs the OG, since only it has a cell (a USB-only board's replug is a cold boot, not a System OFF wake).
 
-### jump flash (build + upload)
-- **Evidence:** firmware/platformio.ini:15 `default_envs = firebeetle32`; tools/jump:2420 runs `pio run -d firmware -t upload` with NO `-e`, so it always builds ESP32. The one real attempt against the current board failed: data/logs/20260813-075419-flash.log — 'Serial port /dev/cu.usbmodem1101 ... A fatal error occurred: Failed to connect to ESP32' → 'firebeetle32 FAILED'.
-- **Gap:** Works for the frozen ESP32 v1; cannot flash the nRF52840 Sense at all. The Sense paths are .uf2 drag-drop, `pio run -e xiaoblesense_adafruit -t upload`, or tools/otadfu.py — none reachable from `jump flash`.
+### ~~jump flash (build + upload)~~ — **FALSE since 2026-08-18 (corrected 2026-08-23)**
+- **Evidence (2026-08-14, now false in both particulars):** firmware/platformio.ini:15 `default_envs = firebeetle32`; tools/jump:2420 runs `pio run -d firmware -t upload` with NO `-e`, so it always builds ESP32. The one real attempt against the current board failed: data/logs/20260813-075419-flash.log — 'Serial port /dev/cu.usbmodem1101 ... A fatal error occurred: Failed to connect to ESP32' → 'firebeetle32 FAILED'.
+- **Actually, 2026-08-23:** `firmware/platformio.ini:17` reads **`default_envs = xiaoblesense_adafruit`**. Removing the esp32 envs (`12480c6`, 08-18) made the Sense pio's default, so the same no-`-e` invocation now builds and uploads the *Sense* — that was called out as the deprecation's free win. `cmd_flash` (now `tools/jump:2998`) has since been rebuilt around the measured flash doctrine (probe the app → drop it into the bootloader with the firmware's own `uf2` → **one** attempt, verified by marker, never blind retries). **Proven repeatedly on silicon:** "one replug, one flash, `Device programmed`" on the spare 08-21 and the OG 08-22, and the `src=e83f6395` flash on 08-23.
+- **Gap:** the one-flash-per-replug budget is real and is a property of the host's CDC, not of this tool — after 2-3 rapid flashes only a physical replug recovers.
 
-### jump simtest (the local 'software is good' gate)
-- **Evidence:** Runs and passes: 'RESULT: PASS ✅ — software is good'. But step 4 shells `python -m unittest discover -s tools/tests` (tools/jump:2264), which collects only unittest.TestCase classes. Measured: unittest discover = 109 tests; pytest collects 163. Per file: test_gyro_bias unittest=0/pytest=13, test_lever_arm unittest=0/pytest=22, test_spin_correction unittest=0/pytest=19.
-- **Gap:** 54 tests — the entire gyro-bias, lever-arm and spin-correction suites — are silently invisible to simtest while it prints PASS. Fix: run pytest, or convert those three files to TestCase. CI is unaffected (it runs pytest separately).
+### ~~jump simtest (the local 'software is good' gate)~~ — **FIXED by audit F-02 (corrected 2026-08-23)**
+- **Evidence (2026-08-14, now false):** Runs and passes: 'RESULT: PASS ✅ — software is good'. But step 4 shells `python -m unittest discover -s tools/tests` (tools/jump:2264), which collects only unittest.TestCase classes. Measured: unittest discover = 109 tests; pytest collects 163. Per file: test_gyro_bias unittest=0/pytest=13, test_lever_arm unittest=0/pytest=22, test_spin_correction unittest=0/pytest=19.
+- **Actually, 2026-08-23:** simtest runs **pytest** (`tools/jump:2775`) and **asserts count parity** against what pytest collects on the same tree, rather than a hardcoded number — so a suite going invisible again fails the gate instead of passing it. The code comment at `:2564-2573` records the arithmetic at the time of the fix: 137 of 191. This was audit **F-02**; see the 2026-08-22 audit-work entry.
+- **Gap:** None on this row. Note the shape of the original defect, because it recurs: **the local pre-flash gate — the one a human trusts immediately before flashing — was blind while CI was not.**
 
-### jump status (machine-checked status command)
-- **Evidence:** Added today, commit b5d2c06 (2026-08-14 10:54). Ran it: build/commands section works ('commands in binary (16): help stats jumps trace dump clear selftest revive i2cdiag info off dfu uf2 fakejump mount format'), Garmin SDK detection works. Exits rc=1 because tools/jump:2171-2174 requires docs/STATUS.md, which does not exist (`ls docs/` has no STATUS.md).
-- **Gap:** Create docs/STATUS.md, or the doc-freshness gate is a permanent red. The hardware branch (tools/jump:2146-2167) has never run with a board attached — both status logs in data/logs show 'no board connected'.
+### ~~jump status (machine-checked status command)~~ — **its two blockers are gone (corrected 2026-08-23)**
+- **Evidence (2026-08-14):** Added today, commit b5d2c06 (2026-08-14 10:54). Ran it: build/commands section works ('commands in binary (16): help stats jumps trace dump clear selftest revive i2cdiag info off dfu uf2 fakejump mount format'), Garmin SDK detection works. Exits rc=1 because tools/jump:2171-2174 requires docs/STATUS.md, which does not exist (`ls docs/` has no STATUS.md).
+- **Actually, 2026-08-23 — run tonight with the OG attached, all three parts working:**
+  - **`docs/STATUS.md` exists** (it is this file), so the freshness gate is green, not a permanent red: `STATUS.md is at least as new as the newest code change ✅`.
+  - **The hardware branch has now run with a board attached** — it printed the OG's `INFO … src=e83f6395`, its `CAL … source=defaults`, and six PASS self-test rows. The 08-14 note that "both status logs show 'no board connected'" no longer describes the tool's reach.
+  - The command list is no longer 16 and is no longer labelled "in binary": **18 advertised by help**, with the three dispatched-but-undocumented commands (`gyro`, `pincensus`, `vbatscan`) now reported as a warning. That relabelling is audit **F-25** — see the 2026-08-23 entry.
+- **Gap:** it is still USB-only, so it is unusable at a beach on a sealed capsule.
 
 ### jump sync (USB download → session dir + report.md)
 - **Evidence:** data/logs/20260731-094641-sync.log (no --fake, /dev/cu.usbmodem101) → data/sessions/20260731-094650/trace.csv, 201634 bytes of real device trace. But that session's jumps.csv is header-only (0 rows) — cat data/sessions/*/jumps.csv shows only 'n,takeoff_s,airtime_raw_s,airtime_s,height_m' in all 3 sessions. Sim coverage: tools/tests/test_cli.py::TestSync (2 tests).
-- **Gap:** The trace half is proven; the jumps half has NEVER moved a single real row over the wire. No non---fake sync since 2026-07-31 (all 175 later sync logs are --fake). One real session with real jumps would close it.
+- **Gap:** ~~The trace half is proven; the jumps half has NEVER moved a single real row over the wire. No non---fake sync since 2026-07-31 (all 175 later sync logs are --fake). One real session with real jumps would close it.~~ **CLOSED — corrected 2026-08-23.** Non-`--fake` sync logs run 2026-08-17 → 2026-08-22, and **five session directories carry real jump rows** — 3, 3, 3, 6, 12 and 18 (`data/sessions/20260822-100749/jumps.csv` has 18, verified 18 = 18 by the tool's own three-check gate). `cmd_sync` also gained the download-verification gate on 08-19 and refuses to offer `clear` on an unverified pull.
 
 ### jump wizard (guided end-to-end setup)
-- **Evidence:** tools/tests/test_cli.py::test_wizard_fake_end_to_end_and_resume passes (all 5 steps + resume + calibration written). But the real path is unexercised, and tools/jump:2717-2718 prints ESP32 wiring instructions — 'VCC→3V3 GND→GND SDA→SDA(IO21) SCL→SCL(IO22)' — for a board (XIAO nRF52840 Sense) that has an on-board LSM6DS3TR-C and no wires.
-- **Gap:** Its flash step calls cmd_flash (ESP32-only) and its desktest/drop steps call the untethered flows that have never run. On the current board the wizard would fail at step 3.
+- **Evidence:** tools/tests/test_cli.py::test_wizard_fake_end_to_end_and_resume passes (all 5 steps + resume + calibration written). But the real path is unexercised, and ~~tools/jump:2717-2718 prints ESP32 wiring instructions — 'VCC→3V3 GND→GND SDA→SDA(IO21) SCL→SCL(IO22)' — for a board (XIAO nRF52840 Sense) that has an on-board LSM6DS3TR-C and no wires.~~ **Corrected 2026-08-23:** that text is gone — `grep -n 'IO21\|IO22' tools/jump` returns nothing, and `cmd_wizard`'s flash step now says in a comment that the Sense carries its IMU on-board, naming `12480c6` as the commit that fixed `cmd_flash` but missed this step.
+- **Gap:** ~~Its flash step calls cmd_flash (ESP32-only) and its desktest/drop steps call the untethered flows that have never run. On the current board the wizard would fail at step 3.~~ **Corrected 2026-08-23:** `cmd_flash` is no longer ESP32-only (see that row), so step 3 is no longer a guaranteed failure. What stands: the wizard's real path has still never been run end to end on hardware, and its desktest/drop steps call flows whose untethered branches have thin coverage.
 
 ---
 
-## BUILT, UNVERIFIED  (13)
+## BUILT, UNVERIFIED  (13 as of 2026-08-14 — **the four BLE rows are now VERIFIED**)
+
+> **Corrected 2026-08-23.** The four BLE rows below all read "never flashed" /
+> "never on silicon". That was already stale on 2026-08-18, when the *BLE
+> batch* bookkeeping entry above pointed out that `216f75f`/`9277821` predate
+> `src=0c09863c` — flashed 08-17 — and it has been comprehensively false since
+> the 08-19 and 08-21 two-central measurements. **The bookkeeping entry and
+> these rows sat in the same file contradicting each other for five days**;
+> that entry existed precisely so the contradiction would be visible rather
+> than resolved by guesswork, and this is the resolution.
 
 ### Advertising restart while one central remains; slow idle advertising; connection LED off
 - **Evidence:** firmware/src/platform/nrf52/jh_link.cpp:177-196 (restart on connect/disconnect), :465-471 (autoConnLed(false), 20 ms fast / 1 s idle — commit 216f75f)
-- **Gap:** The 216f75f half is unflashed; the restart-with-one-central-remaining path has no bench record.
+- **Gap:** ~~The 216f75f half is unflashed;~~ **corrected 2026-08-23 — `216f75f` has been in every binary since `src=0c09863c` (08-17), including tonight's `src=e83f6395`.** The advertising restart is also now exercised hard: 2,068/2,068 reconnect cycles overnight on 08-22, zero failures, median recovery 1.90 s / p95 1.99 s. What stands: the restart-**with-one-central-still-connected** path specifically has no bench record — the soak reconnects a single central.
 
 ### BLE TX queue: honor write() return, per-connection retry, tx_drops counter
 - **Evidence:** firmware/src/platform/nrf52/jh_link.cpp:323-359, surfaced at firmware/src/main.cpp:473-477; commit 216f75f body states 'Not yet on silicon: both boards are unplugged'; a chunk-length regression inside it was caught by review before it ever ran (commit 9277821)
-- **Gap:** Never flashed. This is the fix for the watch-corruption signature, so its verification is the watch session's real gate.
+- **Gap:** ~~Never flashed. This is the fix for the watch-corruption signature, so its verification is the watch session's real gate.~~ **VERIFIED — corrected 2026-08-23.** Flashed since 08-17, and the gate it names has been run: two concurrent centrals, 150,034 B byte-identical with `tx_drops` absent (OG, 08-19) and 300,022 B sha256-identical with `tx_drops` 0 under 39 interleaved `stats` polls (spare, 08-21). That is the exact configuration in which the original corruption appeared.
 
 ### BLE bulk export (queue-full inline paced drain)
 - **Evidence:** firmware/src/platform/nrf52/jh_link.cpp:531-549 — inline paced drain with wdtFeed() every iteration, the one sanctioned exception to 'write() only queues'
-- **Gap:** No record of a full jumps.csv + trace.csv dump over BLE on silicon; SENSE_FIRST_BOOT item 2's 'no multi-sample trace gaps during a dump with two centrals' check is still open.
+- **Gap:** ~~No record of a full jumps.csv + trace.csv dump over BLE on silicon;~~ **corrected 2026-08-23:** 240,506 bytes / 17,031 valid rows / 61 s at ~3.9 KB/s with `tx_drops` absent (spare, 08-18) and 300,022 bytes under two centrals (08-21). BLE is a proven session-download path at ~4 KB/s — the sealed-puck fallback if USB fails at the beach. **Still open:** SENSE_FIRST_BOOT item 2's 'no multi-sample trace gaps during a dump with two centrals' — the byte-level comparison passed, the *trace-gap* check has not been made.
 
 ### BLE silent-drop fix: per-connection retry + tx_drops counter
 - **Evidence:** firmware/src/platform/nrf52/jh_link.cpp:336-359 and :401; surfaced main.cpp:474; commit 216f75f, regression fix 9277821
-- **Gap:** never flashed — no bench log after 2026-08-14 10:29; plan.md:122 says "DONE in code, awaiting a board"
+- **Gap:** ~~never flashed — no bench log after 2026-08-14 10:29; plan.md:122 says "DONE in code, awaiting a board"~~ **VERIFIED — corrected 2026-08-23.** Duplicate of the row above; same evidence. Note `plan.md:122`'s "awaiting a board" is itself now stale and should be fixed there.
 
 ### UI states NO_BLE and RECONNECTING
 - **Evidence:** JumpFieldView.mc:302-326 (_uiState/_subText) and :385-396 (dot glyphs). No commit, log, screenshot or doc records either state ever appearing on a device or in the simulator.
@@ -2026,23 +2132,23 @@ is the delta since.
 
 ### Vibration on new jump (US3)
 - **Evidence:** JumpFieldView.mc:568-591 — property read, `has :vibrate` guard, try/catch, all three degrade silently. No commit, log, image or doc records it ever firing.
-- **Gap:** It can only fire behind Model.consumeNewJump(), which has never returned true on hardware. docs/garmin-datafield.md:364 §9 item 3 (is Attention.vibrate permitted from a data field) is still genuinely open on both watch models.
+- **Gap:** ~~It can only fire behind Model.consumeNewJump(), which has never returned true on hardware.~~ **Premise corrected 2026-08-23:** `consumeNewJump()` demonstrably returned true on hardware on 2026-08-18 — the Epix rendered 3 reconciled tosses and then 10 live fakejumps one at a time (*WATCH M2 CLOSED* above). So the trigger fires; **whether the watch actually buzzed was not observed or recorded**, which is the honest remaining gap. docs/garmin-datafield.md:364 §9 item 3 (is `Attention.vibrate` permitted from a data field) is still genuinely open on both watch models.
 
 ### Web app — export/import/share-image/delete-session/console drawer
-- **Evidence:** Implemented at web/app.js:744 (deleteSession), :1024 (drawShareCanvas), :1419 (console form), :1711-1719 (export-all, import-file, clear-device). None of the 10 Playwright test names in tools/tests/test_web.py touch export-all, import, share, delete or the console.
+- **Evidence:** Implemented at web/app.js:744 (deleteSession), :1024 (drawShareCanvas), :1419 (console form), :1711-1719 (export-all, import-file, clear-device). ~~None of the 10 Playwright test names~~ **None of the 13 Playwright tests (re-counted 2026-08-23)** in tools/tests/test_web.py touch export-all, import, share, delete or the console. The three added since are the download-integrity gate's (`test_short_download_is_refused_and_not_saved`, `test_short_jumps_file_is_refused_even_when_trace_is_perfect`, `test_device_reported_incomplete_transfer_is_believed`), so the coverage gap on this row is unchanged.
 - **Gap:** Add Playwright coverage; iOS share-sheet paths (commit 58fe5f3) are entirely unverified since that commit.
 
 ### `uf2` command (reboot into the bootloader's MSC drive)
 - **Evidence:** firmware/src/platform/nrf52/jh_link.cpp:618-624, magic 0x57; docs/bench-playbook.md:107 cites the magic value, not a run
-- **Gap:** No bench record of the command itself ever being issued.
+- **Gap:** ~~No bench record of the command itself ever being issued.~~ **CLOSED — corrected 2026-08-23.** `uf2` is no longer an unexercised command, it is on the *default* flash path: `cmd_flash` probes the app and, if it answers, sends `uf2` itself to enter a fresh bootloader before uploading (`tools/jump`, cmd_flash's documented sequence, redesigned 08-20 from a 9-flash soak). Every successful flash since — the spare 08-21, the OG 08-22, `src=e83f6395` on 08-23 — issued it. The 08-18 delivery entry also records the trap worth keeping: **the software `uf2` command mounts MSC minutes late or not at all; the physical double-tap mounts it in ~6 s.**
 
 ### compute() keeps running while another data page is on-glass
 - **Evidence:** The whole design depends on it — PuckLink.poll(), the vibrate trigger and the FIT writes are all driven from compute() (JumpFieldView.mc:102-124). Called out as an untested bet in FIRST_COMPILE.md:414-428 item 12 and docs/garmin-datafield.md:377-378 §9 item 9.
 - **Gap:** Two-screen test: put the field on data screen 2, leave screen 1 showing, toss the puck, confirm the jump was captured.
 
 ### jump desktest — untethered flow (the path real hardware takes)
-- **Evidence:** tools/jump:881-882 `if not getattr(args, 'fake', False): return _desktest_untethered(dev)` — the --fake branch is a completely different code path. Zero non---fake desktest logs among 86 desktest logs in data/logs (all `desktest --fake --fast`). docs/plan.md:153 still lists '`./tools/jump desktest` on the OG board — 3 untethered tosses | owner | 10 min' as an OPEN action as of 2026-08-14.
-- **Gap:** One 10-minute run on the OG board. Helpers _stored_rows / _wait_for_port_return / _is_plausible_toss have unit tests (tools/tests/test_cli.py:134-182); _desktest_untethered, _reopen_after_replug and _autopsy_trace have none.
+- **Evidence:** tools/jump:881-882 `if not getattr(args, 'fake', False): return _desktest_untethered(dev)` — the --fake branch is a completely different code path. ~~Zero non---fake desktest logs among 86 desktest logs in data/logs (all `desktest --fake --fast`).~~ **Corrected 2026-08-23: there are three**, all from 2026-08-14 — `data/logs/20260814-165134-desktest.log`, `-165225`, `-165354` — and they are the run written up as *END-TO-END … GATE CLOSED* above. docs/plan.md:153 listing it as OPEN was accurate that morning and stale by that afternoon.
+- **Gap:** ~~One 10-minute run on the OG board.~~ Done 2026-08-14. Helpers _stored_rows / _wait_for_port_return / _is_plausible_toss have unit tests (tools/tests/test_cli.py:134-182); **_desktest_untethered, _reopen_after_replug and _autopsy_trace still have none** — that is what remains of this row.
 
 ### jump drop — untethered flow (real hardware path)
 - **Evidence:** tools/jump:1002-1003 gates _drop_untethered on `not args.fake`. Zero non---fake drop logs among 178 drop logs. The one real calibration that exists was NOT taken with this command — commit a6e477d says 'Ten drops from 48.5 in ... via the web app's phone flow, in the sealed case'.
@@ -2066,7 +2172,8 @@ is the delta since.
 
 ### CI (GitHub Actions build.yml)
 - **Evidence:** gh run 31811825117 (2026-08-14T14:54Z, main): 'test' job → '154 passed, 9 skipped in 61.16s' and 'RESULT: PASS ✅'; firmware job → firebeetle32 SUCCESS, Sense build SUCCESS, 'Wrote 351232 bytes to web/firmware/jumpheight-sense-0.4.3.uf2'; pages job success. Last 8 runs on main all green.
-- **Gap:** The 9 skips are all of tools/tests/test_hostdev.py — the CI test job installs only `pytest pyserial playwright` (build.yml), never platformio, so the only tests that drive the REAL C++ firmware core never run in CI.
+- **Gap:** ~~The 9 skips are all of tools/tests/test_hostdev.py — the CI test job installs only `pytest pyserial playwright` (build.yml), never platformio, so the only tests that drive the REAL C++ firmware core never run in CI.~~ **FIXED by audit F-03/F-04 — corrected 2026-08-23.** `build.yml:62` now installs `pytest pyserial playwright platformio bleak`, so the host-platform tests that drive the real C++ core actually run; F-04 additionally made the job that publishes the `.uf2` **check the build-identity stamp it was baking in** (verified: `gen_build.py --check` exits 1 on a mutated stamp). CI also runs on pull requests now (`29f03e1`).
+- **Two details in the evidence line above are historical, not current (2026-08-23):** there is no `firebeetle32` job any more — that env was deleted with the ESP32 platform on 08-18 (`12480c6`), and `build.yml:134` says so in a comment — and the suite has grown from 154 to **231 passed / 1 xfailed** (`e9fa917`). The `.uf2` publish step still exists (`build.yml:146-167`) and still writes into `web/firmware/`, which the repo does not track.
 
 ### Detection algorithm (C++/Python parity, wing-ballistic validation)
 - **Evidence:** 163 tests pass (python -m pytest tools/tests); sim/experiments/e2_montecarlo.py at N=200,000: overshoot mean 1.0128x, p99 1.0622x, RMSE 4.6cm, 5 silent misses; firmware/include/jump_detector.h shared core
@@ -2074,7 +2181,7 @@ is the delta since.
 
 ### Firmware builds clean for the Sense target at HEAD
 - **Evidence:** `pio run -d firmware -e xiaoblesense_adafruit` SUCCESS at HEAD 9277821 (RAM 10.1% / Flash 21.7%, 175584 B); .github/workflows/build.yml:85 builds the same env in CI and :113 converts to .uf2
-- **Gap:** Building is not running: nothing after commit 0e2345b (2026-08-14 00:11) has been on a board.
+- **Gap:** ~~Building is not running: nothing after commit 0e2345b (2026-08-14 00:11) has been on a board.~~ **Corrected 2026-08-23.** Many builds have been on boards since — `0c09863c` (08-17), `66b5137b`/`fed76059`/`dac58553` (08-18), `ef37e568`/`7fdec1fe` (08-19), `15b2d468` (08-20), `71cab7c8` (08-21/22), `9b35f734` and `e83f6395` (08-23, the OG right now). **The principle stands and is worth keeping: a green build says nothing about a board.** What is true today is narrower — the tree builds clean, and `src=e83f6395` is the specific build that has been on silicon.
 
 ### Layout geometry for both device targets (Layout.mc)
 - **Evidence:** 13 LayoutTest cases, PASS in today's 43/43 run on both targets. I re-derived the ground truth independently from the SDK's own device files (~/Library/Application Support/Garmin/ConnectIQ/Devices/{epix2,instinct3solar45mm}/simulator.json → layouts[0].datafields): epix2 slots 416/207/132/146/103 and instinct 176x176, 99x72, 176x104, 110x27 all match LayoutTest.mc:79-92,201-211.
@@ -2086,7 +2193,7 @@ is the delta since.
 
 ### Reconnect / STATS reseed on a real link (US6)
 - **Evidence:** PuckLink.mc:340-353 sends 'stats\n' once per subscribe; ModelTest testStats_seedsAfterReconnectPreservingArrivalOrder PASSES (today's run).
-- **Gap:** Never exercised on a watch: the M2 checklist item 'power-cycle the puck → count and best correct after reconnect' (garmin/README.md:189-194) is unticked and no run is recorded anywhere.
+- **Gap:** ~~Never exercised on a watch: the M2 checklist item 'power-cycle the puck → count and best correct after reconnect' (garmin/README.md:189-194) is unticked and no run is recorded anywhere.~~ **Largely closed — corrected 2026-08-23.** On 2026-08-18 the Epix **reconciled the 3 stored desk tosses on connect** — the reseed working on first contact — and the books balanced exactly afterwards. The puck half of the reconnect question is separately proven at scale: 2,068/2,068 cycles on 08-22, every one greeting correctly. **What genuinely remains:** the specific *power-cycle-the-puck* variant, and the R1 monotonic-reseed behaviour, which the store-submission runbook's §4b staged reboot is written to exercise. Also still open by construction: `best_airtime` cannot be reseeded at all, because STATS carries `stored_best_m` but no stored best-airtime — a real inconsistency found by parsing the FIT, filed post-water.
 
 ### Self-calibrating lever arm (mount calibration)
 - **Evidence:** firmware/include/lever_arm.h:125 observe()/153 commit(); tools/tests/test_lever_arm.py::test_uncalibrated_device_fixes_itself_over_jumps, ::test_no_deliberate_shave
@@ -2102,7 +2209,7 @@ is the delta since.
 
 ### Watch-side corrupt-line rejection gate
 - **Evidence:** garmin/jumpfield/source/Model.mc:180 _jumpIsCorrupt(), :213 reject+count; 17 (:test) functions in garmin/jumpfield/tests/ModelTest.mc; commits eb87382 + d5d6a26 (2026-08-11)
-- **Gap:** never exercised on the watch against a genuinely corrupt line; simulator tests only
+- **Gap:** ~~never exercised on the watch against a genuinely corrupt line; simulator tests only~~ **Corrected 2026-08-23 — this row contradicted its own duplicate in the PROVEN section for nine days.** The *Model corruption gate* entry above records it field-validated on the Epix on 2026-08-11: 3 corrupt lines rejected, the count held at 0 while the puck counted 12, corroborated by the saved FIT's `SESSION jumps=0`. **The real gap is the mirror image of what this row said:** the gate has never had to pass a GOOD line on a wrist against genuinely corrupt traffic — as of 08-18 it has now seen good lines (13 rendered), but not good and corrupt in the same session.
 
 ### Web app — bench toss test (phone-only)
 - **Evidence:** tools/tests/test_web.py::test_bench_toss_flow_passes_on_three_clean_tosses (mock device). Implementation web/app.js:1117-1220.
@@ -2114,11 +2221,12 @@ is the delta since.
 
 ### `clear` (non-destructive-to-storage reset of stored data)
 - **Evidence:** firmware/src/platform/nrf52/jh_store.cpp:1011; tools/tests/test_store_host.py::test_clear_then_reuse, ::test_failed_clear_leaves_not_ok_and_no_resurrection
-- **Gap:** No record of `clear` ever running on silicon. Item 13's worst case (up to ~495 sector erases with the device unresponsive and no progress callback) is unmeasured.
+- **Gap:** ~~No record of `clear` ever running on silicon. Item 13's worst case (up to ~495 sector erases with the device unresponsive and no progress callback) is unmeasured.~~ **CLOSED — corrected 2026-08-23, and the feared worst case turned out to be REAL.** Item 13's ~495-sector scenario was measured on 2026-08-19: ≈20 s of erasing against a 3.5 s watchdog, board reset at sector ~87, and — because `clear()` erased the superblock FIRST — it came back **unmountable**. Found by a sweep, reproduced on hardware (13.4 MB region, `uptime_s=0.001`), root-caused to a missing watchdog feed, fixed, and re-proven on the same board in the same state: **8 s, storage cleared, uptime ran straight through 425 → 446 s.** Then soaked: **42/42 fills cleared in 8.4 s every single time, min = max = mean**, zero resets (08-21). The galling part is on the record above: the identical fix already existed 30 lines up in `eraseChipFed` and had been applied to one caller only.
 
 ### `mount` (non-destructive try_mount, never formats)
 - **Evidence:** firmware/src/platform/nrf52/jh_store.cpp:673 try_mount(); tools/tests/test_store_host.py::test_try_mount_corrupt_superblock_never_touches_data, ::test_try_mount_valid_store_resumes_everything, ::test_try_mount_virgin_chip_refuses_to_format
-- **Gap:** The single hardware attempt (2026-08-12) hung and cost a watchdog reset (SENSE_FIRST_BOOT.md:717-720). It has never succeeded on silicon, and the storage fault it was built for turned out to be the watchdog-stub bug instead.
+- **Gap:** The single hardware attempt (2026-08-12) hung and cost a watchdog reset (SENSE_FIRST_BOOT.md:717-720). ~~It has never succeeded on silicon,~~ **corrected 2026-08-23 — it succeeded on silicon in the one situation that mattered most.** After the OG's total battery death on 2026-08-19 it rebooted with the flash unmounted, reporting `stored_jumps=0 trace_bytes=0`; **one `mount` restored all 3 jumps, best 1.285 m, 150,034 trace bytes. Nothing was lost.** That answered the death run's own question: a flat battery does not cost the session's data. And the storage fault it was originally built for did still turn out to be the watchdog-stub bug — both things are true.
+- **What followed from that success is the part worth keeping:** *nobody types `mount` at a beach.* The retry is now automatic (every 30 s inside the same StoreGuard bracket as boot, announcing `# storage RECOVERED automatically`), and `fs=down` is surfaced on the watch as **`NO REC`** in place of the jump count — because a puck in this state looks perfectly healthy and saves nothing.
 
 ### jump desktest — scripted --fake flow
 - **Evidence:** tools/tests/test_cli.py::TestDesktest::test_full_desktest_flow passes; data/logs/20260812-151714-desktest.log (`desktest --fake --fast`).
@@ -2159,7 +2267,7 @@ is the delta since.
 
 ### tools/fake_device.py (protocol emulator)
 - **Evidence:** Drives 32 CLI tests in tools/tests/test_cli.py, all passing. FW_VERSION 0.4.3 matches firmware/src/main.cpp:61.
-- **Gap:** Implements 10 of the firmware's 16 commands (help/stats/jumps/trace/dump/clear/selftest/set/info/_sim). Missing: revive, i2cdiag, off, dfu, uf2, fakejump, mount, format. `off` is covered instead by test_hostdev; the rest are covered nowhere at CLI level.
+- **Gap:** Implements 10 commands (help/stats/jumps/trace/dump/clear/selftest/set/info/_sim). ~~of the firmware's 16~~ — **re-counted 2026-08-23: the firmware dispatches 23** (`main.cpp:623-1183`), so the emulator's coverage has fallen from 10/16 to **10/23** without a line of it changing. Missing: revive, i2cdiag, off, dfu, uf2, fakejump, mount, format — **and, new since 08-14: tracecheck, pincensus, fillstore, dcdc, gyro, vbatscan.** `off` is covered instead by test_hostdev; the rest are covered nowhere at CLI level. **The lesson is the drift itself:** a fixture's coverage decays silently every time the thing it emulates grows, and nothing in this repo counts the two lists against each other. (`jump status` now does exactly that for the *help text* vs the dispatch table — audit F-25 — but nothing does it for the emulator.)
 
 ### tools/hostdev.py + host-platform integration tests
 - **Evidence:** tools/tests/test_hostdev.py — 9 tests pass locally (boot sequence, info keys, `set` persistence across process restart, scripted jump detected+stored, selftest over the bridged pty, battery telemetry present/absent, `off` unsupported → ERR, `off` on battery platform). Drives firmware/src/main.cpp built as env:host.
@@ -2167,51 +2275,85 @@ is the delta since.
 
 ---
 
-## NOT BUILT  (11)
+## NOT BUILT  (11 as of 2026-08-14 — **5 have since been BUILT; only 2 are untouched**)
 
-### Connect IQ Store distribution (M5)
-- **Evidence:** No .iq bundle, no store artifacts, no developer-account trace in the repo; garmin/README.md documents only the sideload path.
-- **Gap:** Blocks settings.xml being reachable at all, and therefore US7.
+> **Re-checked row by row on 2026-08-23, against code and the filesystem, not
+> against other documents.** This is the section that causes work to be redone,
+> so it is the one that had to be re-derived rather than trusted. The exact
+> tally, because "mostly stale" is not a finding:
+>
+> - **5 rows are simply FALSE — the thing is built.** Connect IQ Store
+>   distribution, corrupt-line rejection on glass, download-integrity
+>   verification, the desk-test storage gate, and the data-field memory budget.
+> - **2 rows keep their verdict but lost every fact under it** — the two
+>   labeled-corpus rows. There is still zero *admissible* ground truth, but
+>   `labels.csv` and `session.json` both exist now, so anyone re-running the
+>   cited checks gets a different answer than the row predicts. **A right
+>   answer with dead evidence is still a defect**, because the next reader
+>   cannot tell which half to trust.
+> - **2 rows are right except for one clause each** — the standby-tier pair.
+>   Battery *in the advertisement* shipped on 2026-08-18; everything else in
+>   them (motion wake, auto-off, low-voltage cutoff, LED language) is genuinely
+>   unbuilt.
+> - **2 rows stand unchanged and re-verified:** the non-ballistic
+>   self-diagnosis flag, and `railcheck` (whose *claim* was right — only its
+>   verification method had rotted).
 
-### Corrupt-line rejection made visible to the rider
-- **Evidence:** Model.rejectedCount() (Model.mc:173) has ZERO callers in /Users/joshcrow/Jump-height/garmin/jumpfield/source (grep: only ModelTest.mc references it). The 'x3' readout came from bin/JumpField-DIAG-epix2.prg (built 2026-08-11 18:06), whose source is not in the tree.
-- **Gap:** In the shipping build a rider sees a stale number with no indication that lines are being dropped — the exact silent-failure class the gate exists to prevent, moved one layer up.
+### ~~Connect IQ Store distribution (M5)~~ — **BUILT (corrected 2026-08-23)**
+- **Evidence (2026-08-14, now false):** No .iq bundle, no store artifacts, no developer-account trace in the repo; garmin/README.md documents only the sideload path.
+- **Actually, 2026-08-23:** `garmin/jumpfield/bin/JumpField.iq` exists — **79,145 bytes, built 2026-08-23** (rebuilt in `22ed92f`; the 08-22 build was 77,564 B). `docs/store-submission.md` (drafted 08-21) and `docs/store-submission-runbook.md` both exist. The channel is not merely built but **PROVEN on the product watch**: the rider installed a free store data field and it appeared, while a sideloaded `.prg` did not survive a USB disconnect — see *BLOCKER: the Instinct 3 (fw 15.18) DELETES a sideloaded .prg* above.
+- **Gap:** Still blocks settings.xml/US7 **until the submission is actually approved** — the package is built and unsubmitted, and Garmin's stated review time is 72 h. Note this row inverted in importance as well as truth: the store is no longer the optional M5 nicety, it is **the only known install path to the rider's watch**.
+- **Note:** the `.iq` is gitignored (`.gitignore:44`), which is why a repo-only search found nothing on 08-14 and would find nothing today either. **A repo grep is not a filesystem check.**
 
-### Download integrity verification (CLI + web)
-- **Evidence:** firmware/src/main.cpp:141-153 emitBytes silently DROPS the whole write when Serial.availableForWrite() < len; main.cpp:243 printFileFramed pushes 240-byte blocks through it with no retry. tools/jump:1215-1225 writes the dump straight to disk with no byte-count check, even though STATS already reports trace_bytes (main.cpp:479-486) explicitly flushed at main.cpp:438 'so trace_bytes matches what a dump would actually deliver'. web/app.js:920 captures expected=lastTraceBytes for the progress bar only; onSyncDone (web/app.js:929-983) never compares it.
-- **Gap:** Compare received bytes against STATS trace_bytes on both paths and refuse the 'clear device' offer on a short read. docs/plan.md:114 already names this as a top water-session risk.
+### ~~Corrupt-line rejection made visible to the rider~~ — **BUILT (corrected 2026-08-23)**
+- **Evidence (2026-08-14, now false):** Model.rejectedCount() (Model.mc:173) has ZERO callers in /Users/joshcrow/Jump-height/garmin/jumpfield/source (grep: only ModelTest.mc references it). The 'x3' readout came from bin/JumpField-DIAG-epix2.prg (built 2026-08-11 18:06), whose source is not in the tree.
+- **Actually, 2026-08-23:** `rejectedCount()` is defined at `Model.mc:181` and **called in the shipping view** at `JumpFieldView.mc:203-204`, which appends `" !" + rejectedCount()` to the count text when it is non-zero. The rider sees the rejection count on glass.
+- **Gap:** Never observed firing on a wrist in the shipping build — the on-wrist "x3" readout that exists came from the DIAG build. Same class of gap as *Vibration on new jump*: the code path is real, the sighting is not.
 
-### Jump survives to storage on the current build (desk test gate)
-- **Evidence:** every data/logs/*desktest*.log carries --fake (0 non-fake of 30+); storage path changed 2026-08-13 (bd0334d, watchdog-feed stub in a nested namespace) and both boards were format-ed after
-- **Gap:** 10 minutes of owner time; plan.md:121 names it the one hard pre-water gate
+### ~~Download integrity verification (CLI + web)~~ — **BUILT AND PROVEN (corrected 2026-08-23)**
+- **Evidence (2026-08-14, now false):** firmware/src/main.cpp:141-153 emitBytes silently DROPS the whole write when Serial.availableForWrite() < len; main.cpp:243 printFileFramed pushes 240-byte blocks through it with no retry. tools/jump:1215-1225 writes the dump straight to disk with no byte-count check, even though STATS already reports trace_bytes (main.cpp:479-486) explicitly flushed at main.cpp:438 'so trace_bytes matches what a dump would actually deliver'. web/app.js:920 captures expected=lastTraceBytes for the progress bar only; onSyncDone (web/app.js:929-983) never compares it.
+- **Actually, 2026-08-23, all three halves closed:**
+  1. **Firmware** — the silent drop is gone on the file path. `emitBytes` still drops for CHATTER (deliberate: a wedged terminal must never cost the device) but file exports set `s_serial_must_not_drop` and **wait** for CDC room, bounded, feeding the watchdog, counting any genuine loss — `main.cpp:196-227`.
+  2. **CLI** — `tools/jump:320-335` compares received bytes against the device's own `trace_bytes` and prints `✅ trace verified` / `❌ TRACE INCOMPLETE`, and says so plainly when the device is too old to report it. Proven on the OG 2026-08-19: `✅ download verified: 150,034 bytes`.
+  3. **Web** — `web/app.js:1029-1040` compares and **returns before saving** on a mismatch, so the "clear the device" offer is unreachable on an unverified download. Four Playwright tests cover it, including `test_short_download_is_refused_and_not_saved` and `test_device_reported_incomplete_transfer_is_believed`.
+- **Gap:** None outstanding on this row. See the 08-19/08-20 entries above for the 13.4 MB byte-exact proof.
 
-### Labeled session corpus (the data-pipeline loop's input)
-- **Evidence:** data/sessions/ contains 3 dirs, all dated 2026-07-31, all with header-only jumps.csv and no labels.csv/session.json. No baselines/ directory exists. The only real jump data ever recorded on a Sense — the OG's 61 jumps — was erased: docs/bench-playbook.md:19-22 'both boards were format-ed ... the OG's 61-jump history is gone for good'.
-- **Gap:** One filmed water session, or the land dress rehearsal docs/plan.md:124 already schedules.
+### ~~Jump survives to storage on the current build (desk test gate)~~ — **CLOSED 2026-08-14 (corrected 2026-08-23)**
+- **Evidence (2026-08-14, false the same day it was written):** every data/logs/*desktest*.log carries --fake (0 non-fake of 30+); storage path changed 2026-08-13 (bd0334d, watchdog-feed stub in a nested namespace) and both boards were format-ed after
+- **Actually:** three non-`--fake` desktest logs exist from that same afternoon — `data/logs/20260814-165134`, `-165225`, `-165354-desktest.log` — and the run is written up above as *END-TO-END: a jump detected on real motion and read back from flash — GATE CLOSED*: three untethered tosses, cable out, read back off the device. Re-closed many times since; the OG holds 18 jumps on a live read tonight. **This row and that entry were in the same file, disagreeing, for nine days.**
 
-### Labeled water data / eval corpus
-- **Evidence:** data/sessions/*/ contain only trace.csv, jumps.csv, report.md, session-info.txt — no labels.csv, no session.json; all three report.md files read "0 jumps"
-- **Gap:** one filmed water session; and per plan.md:63-73 the label schema itself must change (current video truth is circular)
+### ~~Labeled session corpus (the data-pipeline loop's input)~~ — **PARTLY FALSE (corrected 2026-08-23)**
+- **Evidence (2026-08-14, now false in its particulars):** data/sessions/ contains 3 dirs, all dated 2026-07-31, all with header-only jumps.csv and no labels.csv/session.json. No baselines/ directory exists. The only real jump data ever recorded on a Sense — the OG's 61 jumps — was erased: docs/bench-playbook.md:19-22 'both boards were format-ed ... the OG's 61-jump history is gone for good'.
+- **Actually, 2026-08-23:** `data/sessions/` holds **14 directories**, ten of them `session.json`-bearing, and **five carry real jump rows** (3, 3, 3, 6, 12 and 18 rows on 08-17 → 08-22). `find . -name labels.csv` returns **one** — `data/sessions/jitter-check/20260815-190012/` — which has existed since 08-15.
+- **Gap, restated honestly:** the conclusion survives even though every piece of its evidence died. There are still **zero *admissible* labels**: that one `labels.csv` is refused by `sim/evaluate.py` because its three `jump` rows share a single timestamp (a `label.py jump x3` count, not per-jump truth) — see the *jump eval* entry and commit `e9fa917`. One filmed water session, or the land dress rehearsal, is still what closes it. The 61-jump erasure is still permanent.
 
-### Memory/peak budget under the data-field limit (spec §5.6, <28 KB)
-- **Evidence:** No measurement exists anywhere in the repo; the simulator memory view has never been run. docs/garmin-datafield.md:265-272 defers it to M3, which has not started.
-- **Gap:** One simulator session with the memory view open.
+### ~~Labeled water data / eval corpus~~ — **duplicate row; same correction (2026-08-23)**
+- **Evidence (2026-08-14, now false):** data/sessions/*/ contain only trace.csv, jumps.csv, report.md, session-info.txt — no labels.csv, no session.json; all three report.md files read "0 jumps"
+- **Actually:** see the row above — `session.json` is present in ten session directories and one `labels.csv` exists. The *substantive* gap is unchanged: one filmed water session, and per plan.md:63-73 the label schema itself must change (current video truth is circular).
 
-### Non-ballistic self-diagnosis flag (median airborne |a| > 0.12 g)
-- **Evidence:** sim/selfdiag.py exists; zero matches for selfdiag/median-|a| gating in firmware/include/jump_detector.h or firmware/src/main.cpp
+### ~~Memory/peak budget under the data-field limit (spec §5.6, <28 KB)~~ — **MEASURED (corrected 2026-08-23)**
+- **Evidence (2026-08-14, now false):** No measurement exists anywhere in the repo; the simulator memory view has never been run. docs/garmin-datafield.md:265-272 defers it to M3, which has not started.
+- **Actually:** measured twice, and it is written up above. **Static code+data = 12,417 B of the 32,768 B budget** (`monkeyc --build-stats`, instinct3solar45mm, 2026-08-20). And `garmin/jumpfield/tests/MemoryProbeTest.mc` (2026-08-21) answers the runtime question headlessly via `System.getSystemStats()`: **no per-line leak** — 248 B over ~1,200 lines, 0 B and 0 B over two 300-line blocks. The plausible-OOM threat is retired on measurement.
+- **Gap:** one GUI look at absolute data-field headroom on the Instinct is still owed — the unit-test PRG does not run in the data-field memory context, so the probe's *baseline* is the wrong yardstick and only its *delta* is valid.
+
+### Non-ballistic self-diagnosis flag (median airborne |a| > 0.12 g) — **STILL NOT BUILT (re-verified 2026-08-23)**
+- **Evidence:** sim/selfdiag.py exists; zero matches for selfdiag/median-|a| gating in firmware/include/jump_detector.h or firmware/src/main.cpp — **still zero on 2026-08-23.** (`med_a` is *computed and logged* per jump at main.cpp:1674-1686; nothing gates on it.)
 - **Gap:** RESULTS.md:86-88 and wing-ballistic-sim.md:128 call it a firmware requirement; sense.md:199 describes it as already "riding along"
 
-### Standby / motion-wake power tier
-- **Evidence:** INT1 only ever floated (jh_imu.cpp:206); no LED code in src/platform/nrf52 (grep empty); advertisement carries no battery or armed state
+### Standby / motion-wake power tier — **STILL NOT BUILT, one clause corrected (2026-08-23)**
+- **Evidence:** INT1 only ever floated (jh_imu.cpp:206 → now **:218**, still `pinMode(PIN_LSM6DS3TR_C_INT1, INPUT)`, "no pull — truly floating"); no LED code in src/platform/nrf52 (grep still empty); ~~advertisement carries no battery or armed state~~ — **that clause is FALSE since 2026-08-18**: the scan response now carries manufacturer data `[FF FF][batt_pct][flags]`, `jh_link.cpp:460-476`, proven by passive scan (*Advertised battery + state: "puck 78%" WITHOUT connecting* above). The rest of the row stands.
 - **Gap:** main-loop restructure; power-states.md's own banner is accurate here
 
-### Standby tier: motion wake, auto-off, low-voltage cutoff, LED language, battery in the advertisement
-- **Evidence:** Verified by code read: INT1 is only ever floated (firmware/src/platform/nrf52/jh_imu.cpp:206); no LED, PDM, BLEBas or advertisement-payload code exists anywhere in firmware/src/platform/nrf52 (grep); the 20 s idle timeout gates recording only (main.cpp:956). docs/power-states.md:2-20 states the same after its own code read.
+### Standby tier: motion wake, auto-off, low-voltage cutoff, LED language, battery in the advertisement — **STILL NOT BUILT except the advertisement (2026-08-23)**
+- **Evidence:** Verified by code read: INT1 is only ever floated (firmware/src/platform/nrf52/jh_imu.cpp:206 → now **:218**); no LED, PDM or BLEBas code exists anywhere in firmware/src/platform/nrf52 (grep); the 20 s idle timeout gates recording only (main.cpp:956). docs/power-states.md:2-20 states the same after its own code read.
+- **Corrected 2026-08-23:** "no **advertisement-payload** code" is no longer true — see the row above. Motion wake, auto-off, low-voltage cutoff and the LED language remain unbuilt; **battery in the advertisement is built and proven**, so this row's title now over-states what is missing.
 - **Gap:** Deliberately deferred past the water session (docs/plan.md:138-143).
 
-### `railcheck` diagnostic
-- **Evidence:** Absent from main — exists only on branch mule-railcheck (git branch -a); no railcheck symbol in firmware/src/platform/nrf52 on HEAD
+### `railcheck` diagnostic — **STILL NOT BUILT; the POINTER was broken (fixed 2026-08-23)**
+- **Evidence:** Absent from main. ~~exists only on branch mule-railcheck (`git branch -a`)~~ — **that branch was DELETED on 2026-08-23 and `git branch -a` now returns nothing for it.** The code is preserved as the annotated tag **`archive/mule-railcheck`** (pushed to origin); read it with `git show archive/mule-railcheck`. The tag's own message records why it was never merged: it touches `firmware/src/platform/esp32/jh_imu.cpp`, and the ESP32 platform was retired 2026-08-18, so merging would resurrect a deleted platform.
+- **The claim itself is UNCHANGED and re-verified 2026-08-23:** `grep -rn railcheck firmware/src/` returns **nothing**. `railcheck` survives only in prose — DECISIONS.md, SENSE_FIRST_BOOT.md, xiao-hardware-truth.md, hardware-protection.md and this file.
 - **Gap:** Its verdict is still quoted as current fact in docs/hardware-protection.md:78, and that verdict was retracted (SENSE_FIRST_BOOT.md:1027-1034).
+- **Why this is worth the words:** the claim was true and the *verification method* was what died. A reader who ran the cited command would have got an empty result and had no way to tell "the branch is gone" from "the claim was wrong". **A citation is a promise that someone can re-run it.**
 
 ---
 
@@ -2227,15 +2369,27 @@ The worst offenders carry a SUPERSEDED banner pointing here.
 > - **The browser-flasher rows** (`README.md:37 and docs/roadmap.md:75-76`,
 >   `README.md:37`) cite `web/manifest.json` and `web/firmware/` as their
 >   evidence. Those files no longer exist: the ESP32 deprecation deleted the
->   flasher outright on 2026-08-18 (see *HARDWARE DEPRECATION* under
->   `## 2026-08-18` above). The corrected claim stands — there is no browser
->   flash path — but its evidence must now be read from git history.
+>   flasher outright on 2026-08-18 — commit **`12480c6`**, DECISION #40, entry
+>   *HARDWARE DEPRECATION: the ESP32 v1 platform is retired*. The corrected
+>   claim stands — there is no browser flash path — but its evidence must now
+>   be read from git history (`git show 12480c6`), not from the tree. Verified
+>   again 2026-08-23: `web/` holds only `app.js`, `index.html`, `style.css`.
 > - **The "no jump has ever been correctly displayed on a watch" rows**
 >   (`README.md:53-57`, and the M2-unsigned framing in `garmin/README.md`,
->   `docs/garmin-datafield.md`, `docs/roadmap.md`) are superseded by *WATCH M2
->   CLOSED* under `## 2026-08-18` above: 3 reconciled real tosses plus 10 live
->   fakejumps rendered on the owner's Epix Gen 2. Those rows' corrective text
->   was accurate on 2026-08-14 and is now itself out of date.
+>   `docs/garmin-datafield.md`, `docs/roadmap.md`) are superseded by entry
+>   *WATCH M2 CLOSED: jumps rendered on a real wrist (2026-08-18 ~17:00)*:
+>   3 reconciled real tosses plus 10 live fakejumps rendered on the owner's
+>   Epix Gen 2. Those rows' corrective text was accurate on 2026-08-14 and is
+>   now itself out of date. **Read with the 2026-08-20 decision, though:** the
+>   Epix is the dev bench and the *rider's Instinct* is the product screen, and
+>   it has still never rendered a jump.
+>
+> **Pointer repair 2026-08-23.** Both bullets above said "under `## 2026-08-18`
+> above". **There is no `## 2026-08-18` header in this file** — those entries
+> live under the first `## 2026-08-20`. Both now name the entry's own title,
+> which survives reorganisation in a way a header reference does not. Same
+> class of defect as the `railcheck` row's dead `git branch -a`: the claim was
+> right and the way to find it had rotted.
 
 | File | Claims | Actually |
 |---|---|---|
@@ -2251,7 +2405,7 @@ The worst offenders carry a SUPERSEDED banner pointing here.
 | `docs/sense.md` | §3.4, lines 133-135: battery telemetry is 'Bench-pending: vbat-vs-multimeter check (SENSE_FIRST_BOOT item 24 — SAADC acquisition time vs the ~340 kOhm | Done and closed 2026-08-11: the TACQ sweep ran on silicon, the acquisition-time half was fixed (15 us via raw SAADC registers) and verified 4035-4044 -> 4079-4082 mV; the remaining 1.88% is  |
 | `docs/sense.md` | §7 'VERIFY at bring-up (answer on the bench, then edit this doc)', lines 324-345 — all ten items presented as open; header line 3 says the board is 'o | Items 1, 2, 3 and 9 were answered on 2026-07-31 / 2026-08-11 and the doc was never edited as its own instruction requires. The checklist now runs to item 26 plus lettered sub-items. The inst |
 | `firmware/SENSE_FIRST_BOOT.md` | 'Explicitly out of scope' section, lines 1629-1631: 'Nordic DFU / BLEDfu (docs/sense.md §3.3) — this port's CI publishes a .uf2 for cable/drag-drop re | All three are built and on silicon: BLEDfu starts at jh_link.cpp:441, the `dfu` command works, and the OTA gate passed twice on 2026-08-12 (same file, lines 583-592); battery telemetry and ` |
-| `firmware/src/main.cpp` | File header lines 1-41: 'Built today for the FireBeetle 2 ESP32-E field board (platform/esp32)... The BLE stack lives behind the jh_link seam (ESP32 i | The primary target is the XIAO nRF52840 Sense; the ESP32 build is feature-frozen (DECISIONS #27). handleCommand (main.cpp:433) implements 20 commands: help, stats, jumps, trace, dump, clear, |
+| `firmware/src/main.cpp` | File header lines 1-41: 'Built today for the FireBeetle 2 ESP32-E field board (platform/esp32)... The BLE stack lives behind the jh_link seam (ESP32 i | The primary target is the XIAO nRF52840 Sense; ~~the ESP32 build is feature-frozen (DECISIONS #27). handleCommand (main.cpp:433) implements 20 commands~~. **STILL STALE, and MORE so — re-checked 2026-08-23.** The header is unchanged and now describes a platform that has been **deleted**, not frozen: `firmware/src/platform/` holds only `host/` and `nrf52/`, so the header's `src/platform/esp32/jh_link.cpp` citation points at nothing (`12480c6`, DECISION #40). Its `Commands: help stats jumps trace dump clear selftest info` line is 8 of the **23** the dispatch table now handles (`main.cpp:623-1183`, not `:433`). **This is the file every new reader opens first, and its first 41 lines are the most wrong prose in the repo.** |
 | `firmware/src/main.cpp` | FW_VERSION "0.4.3" (line 61) — reported to every client as INFO fw=0.4.3 and in the BLE greet banner. | Unchanged since the seam split in late July, across the bounded-TWIM driver, the drive-strength fix, the storage watchdog fix, the begin() retry and the BLE transmit fix. No client — and no  |
 | `README.md` | Status table line 35: 'the original became the bench mule after an IMU-bus fault'; lines 41-47: the watch-numbers bug is 'Fixed on both ends (puck pac | The original board never had an IMU-bus fault; it is healthy and is the chosen product board (docs/bench-playbook.md:13). The puck-side pacing change did ship and run, but the transmit fix t |
 | `/Users/joshcrow/Jump-height/garmin/README.md:16-22` | "Status: compiles clean and all 24 unit tests PASS in the simulator (2026-08-04)... You are M2: sideload to the real watch and scan for the real puck. | There are 43 tests, not 24 (17 ModelTest + 13 ProtocolTest + 13 LayoutTest). I ran them today: 43/43 PASS on epix2 AND instinct3solar45mm. The sideload happened 2026-08-10 and the live link  |
@@ -2271,18 +2425,18 @@ The worst offenders carry a SUPERSEDED banner pointing here.
 | `/Users/joshcrow/Jump-height/garmin/README.md:10-14` | "Read FIRST_COMPILE.md before your first build — this code was authored without access to the Connect IQ SDK... every API call was researched but not  | SDK 9.2.0 is installed and active; the first compile was 2026-08-04 and both targets build today. FIRST_COMPILE.md's own header block says so — the README intro still reads as pre-compile. |
 | `/Users/joshcrow/Jump-height/tools/jump:846-849` | desktest advice: "A second BLE central corrupts the watch display (open bug, garmin/FIRST_COMPILE.md), and watch-only is also the control run that inv | The cause is identified and is reachable with one central. Pairing the watch alone is still prudent, but the "open bug / control run needed" framing is three days out of date and points read |
 | `/Users/joshcrow/Jump-height/docs/plan.md:123` | "17 Model tests cover it [the corruption gate]." | ModelTest.mc has 17 tests in total; 6 of them (testCorrupt_*) are the gate's. The gate is real and hardware-validated — only the count is the file's, not the feature's. |
-| `/Users/joshcrow/Jump-height/docs/STATUS.md` | tools/jump:2168-2178 treats docs/STATUS.md as the project's single source of truth and warns when code is newer than it. | The file does not exist. Today's run recorded "⚠️ docs/STATUS.md missing — there is no single source of truth" (data/logs/20260814-105535-status.log). The one machine-checked staleness guard |
+| `/Users/joshcrow/Jump-height/docs/STATUS.md` | tools/jump:2168-2178 treats docs/STATUS.md as the project's single source of truth and warns when code is newer than it. | ~~The file does not exist.~~ **ROW RESOLVED 2026-08-23 — this file IS docs/STATUS.md; it was created in response to this very row.** `./tools/jump status` run tonight with the OG attached prints `STATUS.md is at least as new as the newest code change ✅`. Kept, not deleted, because it is the record of why this file exists at all. (The historical evidence stands: `data/logs/20260814-105535-status.log`.) |
 | `docs/roadmap.md:18,25,31` | 'Phase 1 — Bench firmware ✅ COMPLETE (hardware-validated 2026-07-25)' … 'on hardware, a passed desk test on the real assembly (untethered tosses) plus | docs/plan.md:153 (2026-08-14) still lists '`./tools/jump desktest` on the OG board — 3 untethered tosses / owner / 10 min' as an open P0 action, calling it 'the ONLY proof that a jump surviv |
 | `README.md:40 and docs/roadmap.md:64-67` | 'Browser app / ✅ Live BLE stats, session sync, charts, in-browser flashing' and 'A zero-install browser flasher (ESP Web Tools) adds an Install button | web/manifest.json declares one build with "chipFamily": "ESP32". The board README.md:38 names as the product is the XIAO nRF52840 Sense, which ESP Web Tools cannot flash. The Sense's .uf2 IS |
 | `docs/roadmap.md:67-69` | 'On hardware: BLE validated end-to-end (Bluefy on iPhone, live jumps, sync, bench flows)'. | Connect + INFO readout is evidenced (SENSE_FIRST_BOOT.md:466-472) and the bench drop flow is evidenced (commit a6e477d). I found no primary record of a web-app *sync* (dump) on hardware, and |
-| `docs/data-pipeline.md:10` | 'You already have ~70% of it.' | The capture/analysis half exists; the ground-truth half is 0%. `find . -name labels.csv` and `-name session.json` both return nothing, `./tools/jump eval --verbose` prints 'No labeled sessio |
+| `docs/data-pipeline.md:10` | 'You already have ~70% of it.' | The capture/analysis half exists; the ground-truth half is 0%. ~~`find . -name labels.csv` and `-name session.json` both return nothing, `./tools/jump eval --verbose` prints 'No labeled sessio~~ **EVIDENCE CORRECTED 2026-08-23:** `find . -name labels.csv` returns **one** (`data/sessions/jitter-check/20260815-190012/`, present since 08-15) and `session.json` exists in **ten** session directories. `jump eval` said "none" only because discovery was one level deep — fixed in `e9fa917`; it now reports that labels.csv **EXCLUDED**, because its three `jump` rows share one timestamp. **The verdict is unchanged — zero *admissible* ground truth — but every fact it rested on was wrong.** |
 | `docs/data-pipeline.md:141` | 'airtime_offset_s — `jump drop` (bench drop tests). Already wired.' | `jump drop` has never run on hardware — all 178 drop logs are `--fake`, and its real-hardware branch (tools/jump:1002) is unreachable in --fake mode. The one calibration that exists (commit  |
 | `sim/experiments/RESULTS.md` | Dated 2026-08-04, headed 'The six experiments' (E1–E6), reporting E1 'frac_detected = 1.000 (3072/3072)' and 'All five run experiments carry an indepe | Last touched by commit 8cc9d2e (2026-08-10) and never updated since. It omits g4 (run 2026-08-05), g5 lever-tolerance (run 2026-08-10, commit 49eb900), and E2′ — the N=200,000 rerun of 2026- |
 | `docs/gyro-sim-plan.md:48` | 'g5 landing attitude / SKIP' and the headline 'exactly ONE sim is worth running (g4)'. | sim/experiments/g5_lever_tolerance.py was written and run on 2026-08-10 (commit 49eb900) with a load-bearing result — a deliberate 5% lever shave 'broke 5 of 8 lever x spin cases outright'.  |
 | `docs/bench-playbook.md:221` | 'Mule battery-unclip experiment still worth one clean run … `mount` verdict on the 61-jump history stands or falls there.' | Contradicted by lines 19-22 of the same file, dated 2026-08-14: 'both boards were `format`ed to repair storage, so the OG's 61-jump history is gone for good … the erase is what made it perma |
-| `tools/jump:2171-2174` | cmd_status treats docs/STATUS.md as 'the single source of truth' and warns/exits 1 if code is newer than it. | docs/STATUS.md does not exist. `./tools/jump status` prints '⚠️ docs/STATUS.md missing — there is no single source of truth' and returns rc=1 on a clean checkout. The command built today (co |
-| `tools/jump:2717-2718 (wizard) and web/index.html:7` | Wizard step 3 instructs 'Make sure the 4 sensor wires are connected … VCC→3V3 GND→GND SDA→SDA(IO21) SCL→SCL(IO22)'; index.html's header comment says ' | Both are ESP32 + external MPU-6050 era. The current product board has an on-board LSM6DS3TR-C and no wiring step. The wizard would then call cmd_flash, which builds firebeetle32 only (firmwa |
-| `web/app.js:1372 (Install-tab fallback) and BUILD.md:302` | 'To build and flash them yourself, run ./tools/jump flash — it builds the firmware locally and uploads it over USB' / '`./tools/jump flash` / settings | tools/jump:2420 issues `pio run -t upload` with no `-e`, so it always builds the ESP32 default env. Against the Sense it fails with 'A fatal error occurred: Failed to connect to ESP32' (data |
+| `tools/jump:2171-2174` | cmd_status treats docs/STATUS.md as 'the single source of truth' and warns/exits 1 if code is newer than it. | ~~docs/STATUS.md does not exist … returns rc=1 on a clean checkout.~~ **ROW RESOLVED 2026-08-23** — duplicate of the row above. The file exists, the gate is green, and the code moved to `tools/jump:2639-2669`. The `⚠️ docs/STATUS.md missing` branch is still there (`:2641`) and is still correct behaviour: **a guard that cannot find its reference must say so, not pass.** |
+| `tools/jump:2717-2718 (wizard) and web/index.html:7` | Wizard step 3 instructs 'Make sure the 4 sensor wires are connected … VCC→3V3 GND→GND SDA→SDA(IO21) SCL→SCL(IO22)'; index.html's header comment says ' | Both are ESP32 + external MPU-6050 era. The current product board has an on-board LSM6DS3TR-C and no wiring step. ~~The wizard would then call cmd_flash, which builds firebeetle32 only~~ **HALF FIXED, verified 2026-08-23:** the wizard's wiring text is **gone** — `grep -n 'IO21\|IO22' tools/jump` returns nothing, and `cmd_wizard`'s flash step now carries a comment saying the Sense has its IMU on-board and naming `12480c6` as "the commit that fixed cmd_flash but missed this step". `cmd_flash` no longer builds firebeetle32. **`web/index.html` is fixed too — I checked rather than assumed:** its header now reads "the same nRF52/Sense firmware", and its three remaining ESP32 mentions (`:16`, `:54`, `:173`) are all deliberate *retirement notes* dated 2026-08-18, not stale instructions. **Row fully resolved.** |
+| `web/app.js:1372 (Install-tab fallback) and BUILD.md:302` | 'To build and flash them yourself, run ./tools/jump flash — it builds the firmware locally and uploads it over USB' / '`./tools/jump flash` / settings | ~~tools/jump:2420 issues `pio run -t upload` with no `-e`, so it always builds the ESP32 default env. Against the Sense it fails with 'A fatal error occurred: Failed to connect to ESP32'~~ **ROW RESOLVED 2026-08-23 — and it resolved in the advice's favour.** `firmware/platformio.ini:17` is now `default_envs = xiaoblesense_adafruit` (`12480c6`), so the same no-`-e` invocation builds the Sense, and `jump flash` has put `src=e83f6395` on the OG. The `web/app.js:1372` half of the citation is moot: the Install tab was deleted with the flasher. **`BUILD.md:302`'s advice is now correct by accident, which is not the same as being maintained** — BUILD.md still describes the FireBeetle build throughout. |
 | `README.md:38` | The puck is the "second unit" and "the original became the bench mule after an IMU-bus fault — full story in docs/rca-sense-imu-2026-08-11.md" | There was never an IMU-bus fault. DECISIONS #37 / SENSE_FIRST_BOOT.md:938-1004: GPIO drive strength; "Nothing was ever damaged." The original IS the product board again as of 2026-08-14 (ben |
 | `README.md:44-57` | "Watch-numbers bug, root-caused: Connect IQ negotiates the minimum BLE packet size, so jump lines fragment five ways and under-paced sending lost frag | Superseded. The confirmed defect (code read, 2026-08-14) is the ignored BLEUart::write() return in jh_link.cpp — ble-dependability.md:15-39 states pacing was not it. The firmware half was on |
 | `README.md:40` | Browser app: "in-browser flashing" listed with an unqualified green check | ESP Web Tools is ESP32-only; web/firmware/ holds only bootloader.bin/firmware.bin/partitions.bin. The Sense — the board README:218 tells you to build — has no browser flash path at all (sens |
@@ -2333,13 +2487,27 @@ The worst offenders carry a SUPERSEDED banner pointing here.
 | `BUILD.md (whole file)` | "the hardware-day runbook" — shopping list, MPU-6050 header soldering (:114-127), FireBeetle wiring table, wizard flow, partition-upgrade warning (:28 | Every word describes the frozen FireBeetle/ESP32 build, while README:218 says "Build this one — Seeed XIAO nRF52840 Sense." No Sense build runbook exists anywhere in the repo. DECISIONS #27  |
 | `docs/hardware.md:77-79` | "Accelerometer range: set ±8 g (or ±16 g). ...±8 g keeps free-fall resolution good while capturing landings." | The Sense ships ±16 g by deliberate decision (DECISIONS #25, lsm6ds3_min.h CTRL1_XL=0x54). README:240 sends readers here for "full BOM, wiring, power budget", and the whole page is ESP32-era |
 | `DECISIONS.md:69-70 (#32, #33)` | #32: the off-path back-feed was "proven 'both directions' on silicon... the very day before the mule's sensor stopped ACKing". #33: "The Puck, a fresh | #37 (:74), five rows later, establishes that no board was ever damaged and drive strength explains every symptom including the intermittency. #32/#33 carry no superseded marker, so read alon |
-| `firmware/src/main.cpp:424 (shipped `help` text)` | "# commands: help / stats / jumps / trace / dump / clear / selftest / revive / i2cdiag / info / off / dfu / uf2 / fakejump / mount / format" | Omits `pincensus`, which exists at main.cpp:512 and which DECISIONS #38, xiao-hardware-truth.md:91 and bench-playbook.md:129 all designate as THE first diagnostic to run before any hardware  |
+| `firmware/src/main.cpp:613` (shipped `help` text) — **line and quote corrected 2026-08-23; it was `:424` with an older list** | Now reads: `# commands: help \| stats \| jumps \| trace \| tracecheck \| dump \| clear \| selftest \| revive \| i2cdiag \| dcdc \| info \| off \| dfu \| uf2 \| fakejump \| mount \| format` — **18 commands.** (`tracecheck` and `dcdc` were added by the audit; the separator changed from `/` to `\|`.) | **STILL OMITS `pincensus`** — now at `main.cpp:735`, not `:512` — which DECISIONS #38, xiao-hardware-truth.md:91 and bench-playbook.md:129 all designate as THE first diagnostic to run before any hardware verdict. Also omitted: **`fillstore`** (`:786`). `gyro` (`:1145`) and `vbatscan` (`:1183`) at least appear on printHelp's continuation lines (`:614-616`), so they are discoverable; `pincensus` and `fillstore` are not discoverable from the device at all. The dispatch table handles **23**. This is audit **F-25**, and the fix is one line in `printHelp()` on the next flash batch — **it must not be flashed on its own**, per the batch-firmware rule. |
+
 ## 2026-08-22 (audit work)
+
+> **Placement note, 2026-08-23:** this dated block sits *after* the stale-docs
+> table rather than with the other dated blocks at the top of the file. Left
+> where it is — moving it would churn the file for no gain — but it is a
+> reason not to trust reading this file top-to-bottom. Search it.
 
 ### Audit Phases 1–2 landed and flashed: 9 tickets, DC/DC on at boot for the first time
 - Working `docs/audit-2026-08-22.md` (F-01…F-21). **Phase 1** (build/test
   gates) and **Phase 2** (firmware/power) complete; the OG carries the batch
   as `src=9b35f734`.
+  > **SUPERSEDED 2026-08-23: the OG is no longer on `9b35f734`.** Phases 3-5
+  > landed on top and the OG was reflashed; it answered `src=e83f6395` on a
+  > live USB read tonight, alongside `# dcdc=1` and `# name=JumpHeight-E2C4`.
+  > `9b35f734` was true when written and names the Phase-1–2 batch, which is
+  > why it is kept. **Never take "which build is on the board" from a dated
+  > entry — take it from the board.** The READ THIS FIRST table at the top of
+  > this file carries the current answer, and even that says to confirm with
+  > `stats`.
 - **F-01** — the platform builder hard-codes `-Ofast`, which implies
   `-ffinite-math-only`, which DELETED both `isfinite()` guards from the
   shipped image. Proven on the project's own ARM toolchain: `-Ofast` compiles

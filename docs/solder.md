@@ -157,6 +157,15 @@ overnight.
 
 ## 3. Job B — 8-pin header → GY-521 MPU-6050
 
+**Note added 2026-08-23:** this job is for the FireBeetle/GY-521 v1 rig,
+which is now retired hardware. The ESP32 v1 platform (and the MPU-6050
+driver with it) was removed from `firmware/src/` on 2026-08-18 (commit
+`12480c6`, DECISION #40) — `BUILD.md` itself now carries a
+"FROZEN ESP32/FireBeetle v1 build" banner. "The self-test says so" below
+refers to that frozen build's firmware, not anything buildable from
+`main` today; there is no current path to build or reflash a self-test
+for this rig.
+
 The Ximimark boards ship with the header strip loose. Four of the eight pins
 are all this project ever uses ([BUILD.md](../BUILD.md) has the pin table),
 but solder all eight — a partially-populated header rocks under the iron.

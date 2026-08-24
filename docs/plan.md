@@ -29,6 +29,15 @@ tested, because nobody has been on the water.**
 The water session needs the brother's board, a kayak, a windy day, and someone
 filming from the water. It is **one shot, hard to repeat, ~2 weeks out.**
 
+> **2026-08-23: "~2 weeks out" has expired without being replaced.** Written
+> 08-14, it would have meant ~08-28. **No date was ever set** — every mention
+> of a water-day date in this repo asks for one. And a new dependency now
+> sits in front of it that did not exist on 08-14: the field cannot be
+> installed on the rider's watch except through the Connect IQ store
+> (`de77de0`, `d5641d2`), whose stated review is 72 h and which has not been
+> submitted. The session cannot be sooner than *submission + review*.
+> Treat the constraint below as still true and the schedule as unknown.
+
 So the goal is not speed. It is: **make that one session impossible to waste,
 and make it answer the question even if the filming goes badly.**
 
@@ -159,8 +168,8 @@ in it did not, and three real bugs fell out. **Fixed in code already:**
 |---|---|---|---|
 | 1 | **Flash + verify the batch** — *flashed; per-item verification still open* | BLE silent-drop fix, LED off, slow advertising, `system_off` drive, boot-scan watchdog feeds, spin self-arm gated. The batch is no longer "never on silicon": both `216f75f` (08-14 10:29) and `9277821` (08-14 10:46) predate `src=0c09863c` (flashed 08-17) and `src=66b5137b` (flashed 08-18), so the code has booted. What is still unverified is each fix's **effect** — STATUS.md's own *BLE silent-drop fix* and *chunk length latched* entries still read `built-unverified / never flashed` and now contradict the newer dated entries. Re-audit sub-item by sub-item; see STATUS.md → `## 2026-08-18` → *BLE batch: on silicon since 08-17, effect still unmeasured* | eng, needs a board |
 | 2 | ~~**Download integrity**~~ **DONE 2026-08-14, verified at scale 2026-08-15** | §3.3 — and the desk test reads its own result back through this path. Fixed in `b7c3644` (STATUS.md *USB session download — WAS LOSSY, now fixed and verified*), then proven at 2x a real water session: two independent 9,872,675-byte downloads byte-identical, zero `INCOMPLETE` warnings (STATUS.md *Session-scale USB download — PROVEN at 2x a real water session*). Residual, non-blocking: **"BLE bulk export at this scale is still unmeasured"** — the desk-test/download gate itself runs over USB | eng |
-| 3 | **Desk test, 3 tosses — AFTER the flash, and after EVERY flash** — *recurring gate, PASSED 2026-08-14 / 08-17 / 08-18; still gates the next flash* | The only proof a jump survives to storage on this build (§3.2). A gate, not a task. Passes so far: 08-14 (`desktest` PASS, 3 untethered tosses, best 0.238 m — STATUS.md *END-TO-END … GATE CLOSED*); 08-17 18:42 (3 jumps, best 1.00 m, `build_src=0c09863c` — `data/sessions/20260817-184208/`); 08-18 08:57 (3 jumps, best 1.28 m — `data/sessions/20260818-085718/`; the 1.285 m toss the watch reconciled at M2). **Still open for the pending OG post-death-run flash** (STATUS.md → `## 2026-08-18` → *HARDWARE DEPRECATION*) | **you, 10 min** |
-| 3b | ~~**Record median airborne \|a\| and \|ω\| per jump**~~ **DONE 2026-08-15** | §3.4 item 1 — without it the primary deliverable is unmeasurable. Columns shipped and populated on 10 real jumps; nine read `med_a` 0.039–0.154 g against the sim's 0–0.070 g ballistic band, and jump 7's 1.393 g exposed a false positive nothing else in the record distinguishes (STATUS.md *Per-jump flight physics — first real values*). **Still open underneath it:** there is **no zero calibration**, so *"0.079 g cannot yet be split into real signal vs sensor offset"* — a 10-minute drop calibration closes that | eng |
+| 3 | **Desk test, 3 tosses — AFTER the flash, and after EVERY flash** — *recurring gate, PASSED 2026-08-14 / 08-17 / 08-18; still gates the next flash* | The only proof a jump survives to storage on this build (§3.2). A gate, not a task. Passes so far: 08-14 (`desktest` PASS, 3 untethered tosses, best 0.238 m — STATUS.md *END-TO-END … GATE CLOSED*); 08-17 18:42 (3 jumps, best 1.00 m, `build_src=0c09863c` — `data/sessions/20260817-184208/`); 08-18 08:57 (3 jumps, best 1.28 m — `data/sessions/20260818-085718/`; the 1.285 m toss the watch reconciled at M2). **Still open for the pending OG post-death-run flash** (STATUS.md → `## 2026-08-18` → *HARDWARE DEPRECATION*). **2026-08-23: still open, and now against a much newer build.** The OG has been reflashed twice since this row was written — `src=9b35f734` (`dfecb73`, 08-22) and `src=e83f6395` (`29f03e1`, 08-23), carrying the whole F-01…F-21 audit. `29f03e1` records "one replug, one flash, `Device programmed.`, self-test PASS, 18 stored jumps and 1.55 MB of trace survived" — **self-test, not desk test.** By this row's own rule ("a gate, not a task") the 3-toss gate is owed on `e83f6395` | **you, 10 min** |
+| 3b | ~~**Record median airborne \|a\| and \|ω\| per jump**~~ **DONE 2026-08-15** | §3.4 item 1 — without it the primary deliverable is unmeasurable. Columns shipped and populated on 10 real jumps; nine read `med_a` 0.039–0.154 g against the sim's 0–0.070 g ballistic band, and jump 7's 1.393 g exposed a false positive nothing else in the record distinguishes (STATUS.md *Per-jump flight physics — first real values*). **Still open underneath it:** there is **no zero calibration**, so *"0.079 g cannot yet be split into real signal vs sensor offset"* — a 10-minute drop calibration closes that. **2026-08-23, and this got worse:** the OG's previously-*measured* drop calibration is **gone**. It reads `CAL … source=defaults` on all three keys — compiled defaults, not measurements (`2041962` found it; `29f03e1` confirms it survived the latest flash and was not caused by it). The per-key provenance warning added in `4a97250` fired exactly as designed on the product board. So the drop ritual is now owed twice over: once for the zero, once to restore the height scale. Heights off this build are not calibrated heights | eng |
 | 3c | **Bucket-test the capsule; write the backup rule** | §3.4 item 4 | **you, 15 min** |
 | 4 | ~~**Fix the labeling procedure**~~ **DONE 2026-08-15** | §3.1 — `data-pipeline.md` rewritten around an independent ruler measurement, and enforced in code: `labels.csv` gains `height_src`, `sim/evaluate.py` excludes non-independent heights from RMSE and says why | eng |
 | 5 | **Sealed 3 h battery run** | "60 h" is a paper estimate. And `off` is a **one-way door in a sealed case** — §16j proves it wakes only on a VBUS edge or the reset button, neither reachable through a closed lid | both |
@@ -191,7 +200,19 @@ comfortably today. Destabilising firmware in the fortnight before a one-shot
 experiment is the wrong risk. It waits for real data.
 
 Also out: two-central *support* (fix the cause, don't chase the feature),
-NFC/solar/primary cells, store submission, bonding.
+NFC/solar/primary cells, ~~store submission~~, bonding.
+
+> **CORRECTED 2026-08-23 — store submission is now the critical path, not
+> "explicitly out."** Instinct 3 on fw 15.18 sweeps copied `.prg` files
+> (`de77de0`, `d5641d2`), so with the brother riding (§6.2) the store is the
+> only way to get the field onto the watch that will be on the water. The
+> package is built (`garmin/jumpfield/bin/JumpField.iq`, 79,145 B, `95e61c1`
+> then rebuilt `22ed92f`) and **not submitted**; Garmin's stated review is
+> 72 h. This also moves **"Instinct 3 Solar"** out of the P2 list above.
+>
+> The rest of this section still holds, and the power/standby paragraph holds
+> emphatically — nothing about standby has been built (`system_off()` is
+> still reachable only from the `off` command, `firmware/src/main.cpp:1047-1057`).
 
 ## 5. The freeze protocol
 
@@ -210,12 +231,31 @@ NFC/solar/primary cells, store submission, bonding.
 ## 6. Decisions needed from you
 
 1. **Session date** — everything sequences off it, including the mount's 24 h
-   cure and the freeze.
-2. **Which watch goes in the water?** Recommendation: **your Epix Gen 2** — the
+   cure and the freeze. *(Still unset as of 2026-08-23: every mention of a
+   water-day date in this repo asks for one; none states one. So the §5
+   freeze protocol still has no window to open.)*
+2. ~~**Which watch goes in the water?** Recommendation: **your Epix Gen 2** — the
    only device where the full chain is proven. The Instinct is your brother's
-   and is simulator-only.
+   and is simulator-only.~~
+   - **DECIDED 2026-08-20, the opposite way** (`91709d3`, "The brother rides:
+     Instinct promoted to P0"): **the brother is the rider and the Instinct
+     3 Solar is the product's only screen on the water.** The owner is not on
+     the wing. Everything "proven on the Epix" is therefore proven on the
+     wrong watch.
+   - **And "simulator-only" is no longer true either.** The full suite runs on
+     the `instinct3solar45mm` target — 48/48, plus a memory probe showing no
+     per-line leak (`10d2553`) — and the field was pushed to the physical
+     watch on 08-22 (`4e35d26`: `Instinct 3 - 45mm, Solar`, fw 15.18, 17,996
+     bytes, verified by read-back).
+   - **The live question this became:** fw 15.18 **deletes** a sideloaded
+     `.prg` (`de77de0`), because it keeps CIQ apps in an internal registry
+     rather than as files (`d5641d2`). The Connect IQ store is now the only
+     route onto the rider's wrist, and therefore on the critical path — see
+     the corrected "not in the two weeks" list in §4.
 3. **Is the brother briefed?** He needs to mount the puck ≥24 h ahead, wear the
    watch, and jump roughly abeam of the kayak so the mast-ruler works.
+   *(2026-08-23: a written brief now exists — `docs/rider-brief.md` — but
+   delivery-and-understood is still owed.)*
 4. **P1 order** if time is short: watch-first, or download-integrity-first.
 
 ## 7. How this plan stays honest
@@ -223,5 +263,14 @@ NFC/solar/primary cells, store submission, bonding.
 - `STATUS.md` is the source of truth; this plan may only reference it.
 - `./tools/jump status` machine-checks the build, the suites, the hardware,
   and whether `STATUS.md` has gone stale relative to the code.
+  - **Caveat found 2026-08-23 — one of its lines is weaker than it looks.**
+    `commands in binary (N)` is produced by running `strings` on the ELF and
+    grepping for the `# commands:` string literal (`tools/jump:2563-2567`).
+    That literal is the **help text** (`firmware/src/main.cpp:613`), not the
+    dispatch table. The firmware dispatches `gyro` (`main.cpp:1145`),
+    `pincensus` (`:735`) and `vbatscan` (`:1183`), none of which appear in
+    it — so the line **under-reports by 3**. It confirms a binary was built
+    from a tree that contains that string; it does not enumerate what the
+    binary can do. Don't cite it as evidence of command coverage.
 - No item enters this plan without first checking whether it is already done.
 - No verdict without a measurement. That rule has now been paid for twice.

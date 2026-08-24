@@ -2561,10 +2561,35 @@ def cmd_status(args) -> int:
                          timeout=60).stdout
         except Exception:
             out = ""
+        # This reads the `# commands:` HELP STRING out of the ELF — it is not
+        # the dispatch table, and until 2026-08-23 it was labelled "commands in
+        # binary" anyway. Three shipped commands (pincensus, gyro, vbatscan)
+        # were absent from the help text, so the tool reported 18 where the
+        # firmware handled 21 — and `pincensus` is the instrument DECISION #38
+        # makes mandatory for any "this pin is stuck" claim. Anyone checking
+        # availability the documented way concluded it had never shipped.
+        # Audit F-25. The label now matches its evidence, and the gap against
+        # the dispatch table is reported rather than silently swallowed.
         line = next((l for l in out.splitlines() if l.startswith("# commands:")), None)
         if line:
             cmds = [c.strip() for c in line.split(":", 1)[1].split("|")]
-            print(f"  commands in binary ({len(cmds)}): {' '.join(cmds)}")
+            print(f"  commands advertised by help ({len(cmds)}): {' '.join(cmds)}")
+            main_cpp = REPO / "firmware/src/main.cpp"
+            try:
+                dispatched = sorted(set(re.findall(r'cmd == "([a-z0-9]+)"',
+                                                   main_cpp.read_text())))
+            except OSError as e:
+                # CLAUDE.md rule 3: the cross-check not running is itself the finding.
+                dispatched = []
+                print(f"  ⚠️  could not cross-check against the dispatch table "
+                      f"({main_cpp.name}: {e}) — the list above is the help "
+                      f"string only, and may be short")
+            undocumented = [c for c in dispatched if c not in cmds]
+            if undocumented:
+                print(f"  ⚠️  dispatched but NOT in help ({len(undocumented)}): "
+                      f"{' '.join(undocumented)}")
+                print( "      these work on the device and are invisible to `help` —"
+                       " add them to main.cpp's help string on the next flash batch")
         else:
             print("  ⚠️  could not read the command list out of the binary")
 

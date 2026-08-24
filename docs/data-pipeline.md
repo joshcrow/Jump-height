@@ -56,6 +56,21 @@ data/sessions/<id>/
   session.json   ← NEW: provenance + train/test split (schema below)
 ```
 
+**Nesting is allowed, and since 2026-08-23 it is actually found.** A session is
+any directory holding both `trace.csv` and `labels.csv`, at *any* depth —
+`jitter-check/20260815-190012/`, `walk-overnight/pull-a/<id>/` and the flat
+`<id>/` above are all discovered. The flat shape is the simple case, not the
+only one.
+
+> This is written down because the old scan was `root.glob("*")`, exactly one
+> level, and the repo's only `labels.csv` sat two levels down. `jump eval`
+> printed *"No labeled sessions found"* — which is the message for *"you have
+> not labeled anything yet"* — for the entire eight days that session existed.
+> A miss was indistinguishable from an absence (CLAUDE.md rule 3). The
+> evaluator now also reports directories that hold a `trace.csv` but no
+> `labels.csv`, by name, because *"14 traces, none labeled"* and *"nothing
+> here"* are different facts.
+
 ### labels.csv
 
 One row per ground-truth event, keyed to **trace time**. Header required.
@@ -133,6 +148,23 @@ to three of your brother's sessions. Missing file → split `unknown`.
 > would report a small, confident RMSE whether or not wings are ballistic,
 > which is the entire open question the water session exists to answer.
 > Rewritten 2026-08-15; `sim/evaluate.py` now enforces it via `height_src`.
+
+> **`jump x3` in your notes is a COUNT, not three timings — and the evaluator
+> now refuses it.** `tools/label.py:116` expands `jump xN` into N rows that
+> all carry the *same* `t_start_s`, deliberately: it means "roughly N jumps
+> happened around here", which is a useful note and is not per-jump ground
+> truth. It prints that caveat as it writes — to a terminal, on the day you
+> ran it, in scrollback nobody re-reads. So the disqualification now lives in
+> the file instead: `sim/evaluate.py` excludes any session whose `jump` rows
+> share a takeoff instant, names it, and says why.
+>
+> Why refusing beats scoring: two takeoffs cannot occur at the same instant,
+> so those rows can only ever produce `matched 0/N … spurious N` — and both
+> this document (below) and `docs/session-card.md` tell the reader that
+> signature means a video↔trace **sync** error and explicitly *not* a broken
+> detector. The tool would have handed over a confident wrong diagnosis and
+> sent someone to re-check a sync marker that was fine. Added 2026-08-23,
+> after this was found to be the state of the only labeled session in the repo.
 
 There are **two independent truth channels**, and they answer different
 questions. Record both; never let one masquerade as the other.

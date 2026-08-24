@@ -23,6 +23,21 @@ exactly what that means and asks the owner to decide whether public store
 listing is the right move *right now*, versus later, versus at all in this
 form. That is not this document's call — flagged, not decided, as instructed.
 
+> **CORRECTED 2026-08-23 — §8's decision framing below predates a finding
+> that removes one of its own options.** This draft (2026-08-21) still
+> treats the Store as one of two channels, with sideload + GitHub Release as
+> a standing fallback (§8 option 3). On 2026-08-22, file-copy sideloading to
+> the Instinct 3 Solar — the rider's actual watch — was confirmed
+> **architecturally impossible** on its firmware (`docs/STATUS.md:855-909`).
+> The Store is no longer optional distribution polish; it is **the only way
+> this app reaches the rider's watch at all**. §8 option 3 ("never list
+> publicly... let sideload cover it") cannot deliver the product to the
+> water day and should be read as foreclosed, not merely deprioritized. The
+> currently operative submission plan is
+> [store-submission-runbook.md](store-submission-runbook.md) (2026-08-22,
+> rebuilt 2026-08-23), which reflects this; this file's listing-copy draft
+> below is still the source text it points back to.
+
 ---
 
 ## 1. Listing text (draft)
@@ -244,7 +259,7 @@ items is not useful if every item was rubber-stamped.
 |---|---|---|---|
 | Content/subject matter | No sexual, illegal, gambling, or hazard content; no encouraging risky challenges; wing foiling is not on Garmin's listed prohibited-sport examples (scuba/free-diving/skydiving/BASE/extreme flight) | Clean — it's a measurement tool, makes no claims about safety or performance | None |
 | Device integrity / battery | "Apps should not cause Garmin's products to no longer meet their expected battery life" | Scan backoff caps at 15 s (`docs/garmin-datafield.md:240-241`); static footprint measured 12,417 B / 32,768 B budget, and today's simulator run found **no per-line memory leak** over ~1,200 lines (`docs/STATUS.md:743-761`, 2026-08-21) | Keep this evidence on hand in case a reviewer asks; no code change indicated |
-| Quality ("fully completed, tested, and ready for use") | Apps must be complete and stable, not "broken links or non-functional features" | **Gaps, stated plainly:** the Instinct 3 Solar — the *primary* listed device and the actual rider's watch — has **never been sideloaded to real hardware**, only simulator-tested (48/48 pass, `docs/STATUS.md:739-766`, 2026-08-21). Garmin Connect's rendering of the FIT developer fields (the per-jump chart, US4) has **never been visually confirmed** — verified only by offline-parsing the FIT file (`docs/STATUS.md:1545`, `docs/glue-and-forget.md:277-278`). No water session has ever happened (M6 not attempted). | **Do not file until at minimum the Instinct real-hardware sideload (execution-plan.md Phase C) has happened** — filing an app whose primary target device has never run the code on real silicon is filing an untested app, not a technicality |
+| Quality ("fully completed, tested, and ready for use") | Apps must be complete and stable, not "broken links or non-functional features" | **Gaps, stated plainly:** the Instinct 3 Solar — the *primary* listed device and the actual rider's watch — has **never been sideloaded to real hardware**, only simulator-tested (48/48 pass, `docs/STATUS.md:739-766`, 2026-08-21). Garmin Connect's rendering of the FIT developer fields (the per-jump chart, US4) has **never been visually confirmed** — verified only by offline-parsing the FIT file (`docs/STATUS.md:1545`, `docs/glue-and-forget.md:277-278`). No water session has ever happened (M6 not attempted). | **CORRECTED 2026-08-23 — this gate cannot be satisfied the way it's written.** File-copy sideloading to the Instinct 3 (fw 15.18) was attempted twice and is now confirmed **architecturally impossible** — the firmware deletes any `.prg` from `Garmin/Apps` on the next USB disconnect (`docs/STATUS.md:855` "BLOCKER...", `:905` "Verdict: file-copy sideloading is architecturally impossible on this firmware"). There is no pre-submission path to real-Instinct-hardware evidence; the store review *is* the only route onto that watch (`docs/store-submission-runbook.md`). The gate this row should now enforce: file only once simulator coverage (48/48, done) and Epix real-hardware coverage (done, but a different device) are both current, and treat the first post-approval install on the rider's Instinct as the still-outstanding real-hardware proof, not a pre-filing requirement. |
 | IP / branding | Cannot use Garmin's name/brand without permission; cannot claim partnership | Listing name doesn't start with "Garmin" (checked against `manifest.xml`) | None |
 | Third-party hardware disclosure | Must disclose third-party hardware/software dependencies; must accurately disclose supported devices and minimum requirements | The puck dependency is stated up front in this draft's description, not buried — see §0/§1 | Keep it prominent; do not soften it in the final copy |
 | ANT/ANT+ disclosure | "List all ANT/ANT+ profiles supported... pass ANT+ certification where applicable" | **N/A — this app registers zero ANT+ profiles** (confirmed: `manifest.xml` requests only `BluetoothLowEnergy` and `FitContributor`, no ANT module at all) | None; also relevant to §7 below |
@@ -315,10 +330,15 @@ been burned once by trusting a stale summary over a primary source
 - **Does not have a web flasher.** The one that existed was ESP32-specific
   and was removed 2026-08-18 (`README.md:43`). Flashing today is USB-only
   (`.uf2` drag-drop or a CLI tool).
-- **Has never been sideloaded to the Instinct 3 Solar** — the watch the
-  listing would name as a supported, primary device — on real hardware.
-  Only simulator coverage exists for it as of this writing
-  (`docs/STATUS.md:739-766`).
+- **CORRECTED 2026-08-23 — stronger than "has never been": sideloading to
+  the Instinct 3 Solar was tried twice (2026-08-22) and is now confirmed
+  architecturally impossible on its firmware (15.18)**, not merely
+  not-yet-attempted. The watch deletes any `.prg` copied to `Garmin/Apps`
+  on the next USB disconnect; Connect IQ apps there live only in an internal
+  registry a loose file never joins (`docs/STATUS.md:855-909`). Only
+  simulator coverage exists for this app on that device
+  (`docs/STATUS.md:739-766`), and it always will until this store submission
+  is approved — the store is the only install path left for it.
 - **Has never had its Garmin Connect chart rendering visually confirmed.**
   The FIT developer fields are proven correct by offline parsing of the
   downloaded FIT file; nobody has opened the activity on connect.garmin.com

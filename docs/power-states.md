@@ -183,7 +183,12 @@ either, so cutting the rail would cost the wake feature outright.
 **2. The advertising budget was off by an order of magnitude.**
 `jh_link.cpp` advertises at **152.5 ms**, not the 2 s §4 assumed. The
 advertiser alone blows the STANDBY budget. Slow-interval advertising has
-to be configured explicitly; it is not free.
+to be configured explicitly; it is not free. **FIXED 2026-08-14 (commit
+`216f75f`):** `Bluefruit.Advertising.setInterval(32, 1600)` — 20 ms fast
+for 30 s, then 1000 ms idle (`firmware/src/platform/nrf52/jh_link.cpp:557`).
+This is the advertising rate fix only; the STANDBY tier itself (the state
+machine in §4) is still not built — see the status banner at the top of
+this file.
 
 **3. There is no low-power idle to build STANDBY on.** `loop()` is a
 busy poll that returns early and is immediately re-entered — the CPU
@@ -201,18 +206,40 @@ addressed.
 **5. The blue LED blinks at ~50 % duty the whole time the puck
 advertises** — Bluefruit's `_led_conn`, and nothing ever calls
 `Bluefruit.autoConnLed(false)`. A constant drain today, and an absurd
-behavior for a sealed puck.
+behavior for a sealed puck. **FIXED 2026-08-14 (commit `216f75f`):**
+`Bluefruit.autoConnLed(false)` is called in `begin()`
+(`firmware/src/platform/nrf52/jh_link.cpp:552`).
 
 **6. The DC/DC converter is never enabled**, so session and advertising
-currents are both ~1.7× the figures quoted here.
+currents are both ~1.7× the figures quoted here. **FIXED 2026-08-22
+(audit F-05):** `jh_power::enable_dcdc()` now runs at every boot
+(`firmware/src/main.cpp:1252`, after `jh_power::init()`), not only via
+the manual `dcdc` console command — measured 1.39× endurance on a
+same-board A/B (STATUS.md 2026-08-20). Confirm with `info`'s `dcdc=`
+field before trusting a current figure on any given boot; it is volatile
+and a watchdog reset used to silently revert it before this fix.
 
 **7. Two shipped code paths violate THE RULE right now:**
 - `jh_power::system_off()` still cuts the rail — and does it with
-  `pinMode()`, the exact API DECISIONS #37 bans.
+  `pinMode()`, the exact API DECISIONS #37 bans. **HALF-FIXED, HALF
+  RECONSIDERED (2026-08-14, commit `859ad42`+):** the `pinMode()` half is
+  fixed — `system_off()` now uses `nrf_gpio_cfg(...H0H1...)`
+  (`firmware/src/platform/nrf52/jh_power.cpp:420`). The "stop cutting the
+  rail" half was NOT done, and the code now argues explicitly against
+  doing it: the same function's own comment calls this "the one
+  sanctioned exception" to THE RULE — deliberate, human-invoked, rare,
+  and safer than swapping a proven detach-then-cut sequence for a
+  register write with no verification that could leave the sensor
+  drawing ~0.9 mA indefinitely on a silent failure. Read that comment
+  before changing this path; THE RULE as stated in §3 no longer matches
+  what shipped.
 - `bus_release()` floats INT1, and `system_off()` calls it first, so the
   shutdown path **structurally cannot** have a motion wake. INT1 must be
   configured via GPIO SENSE/PORT (shared by the System ON and System OFF
-  paths), never `attachInterrupt()`.
+  paths), never `attachInterrupt()`. **Still open 2026-08-23** — no
+  wake-on-motion code exists yet (confirmed: no `STANDBY`/`SHELF`/
+  `WAKE_UP_SRC`/`INACT_EN` in `firmware/src/`), consistent with the
+  status banner at the top of this file.
 
 **8. `i2cdiag` committed the back-feed itself** — it enabled internal
 pull-ups on SDA/SCL while driving the rail LOW, pushing current into an
@@ -235,10 +262,13 @@ wake-up interrupt does not cause a boot loop.
 
 **What this means for sequencing:** STANDBY is *not* the cheap first
 increment it looked like. The cheap, safe, high-value first increments
-are (a) `autoConnLed(false)`, (b) slow advertising, (c) enabling DC/DC,
-(d) fixing `system_off()` to stop cutting the rail. Those four are small
-and independently verifiable. The sleep-tier work comes after, with
-current measured at every step.
+were (a) `autoConnLed(false)`, (b) slow advertising, (c) enabling DC/DC,
+(d) fixing `system_off()`'s drive strength. **UPDATE 2026-08-23: (a),
+(b), (c) and the drive-strength half of (d) are all shipped** (see the
+dated notes under findings 2/5/6/7 above); "stop cutting the rail"
+specifically was reconsidered, not done — see finding 7. The sleep-tier
+(STANDBY/SHELF state machine) work is what remains, and per the banner
+at the top of this file, none of it exists yet.
 
 ## 5b. The safety rules any power change must satisfy
 
@@ -283,9 +313,17 @@ measured on silicon, on-device and in params.json — the owner went
 ham drop-testing before the watch campaign). What has still never
 happened is a labeled WATER session. The sequence:
 
-1. Board #3 proven (soak ladder) — in progress. Re-run the drop
-   ritual on it once healthy: the 0.0257 offset was measured on
-   board #1 and is assumed transferable, not proven per-unit.
+1. Board #3 proven (soak ladder) — **UPDATED 2026-08-23:** the
+   `selftest ×5` / `revive ×5` legs are DONE, 5/5 PASS both
+   (`firmware/SENSE_FIRST_BOOT.md` §16i durability table); the `off`→wake
+   leg is still not run (bench can't automate it, see
+   hardware-protection.md §5 item 4c). Re-run the drop ritual on it: the
+   0.0257 offset was measured on board #1 (the OG) and is assumed
+   transferable, not proven per-unit — still genuinely open. **Also
+   note:** the OG's OWN drop calibration is no longer live either —
+   `CAL … source=defaults` as of the 2026-08-23 flash (STATUS.md
+   READ-THIS-FIRST table); the drop ritual needs re-running on the OG
+   too before any height number from either board is trusted.
 2. One labeled water session — the remaining real milestone.
 3. THEN the STANDBY tier, built to §5's rules, measured as built
    (items 25/25c on the way through).

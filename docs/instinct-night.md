@@ -1,5 +1,29 @@
 # Instinct night — runbook
 
+> **CORRECTED 2026-08-23 — Step 1 was run as written, and it is what
+> surfaced the discovery that makes this runbook's install path obsolete.**
+> The Instinct 3 (fw 15.18) was confirmed, in two separate trials, to delete
+> any `.prg` copied into `Garmin/Apps` on the next USB disconnect —
+> **file-copy sideloading is architecturally impossible on this firmware**,
+> not merely blocked (`docs/STATUS.md:855` "BLOCKER: the Instinct 3 (fw
+> 15.18) DELETES a sideloaded .prg on reboot", `:905` "Verdict: file-copy
+> sideloading is architecturally impossible on this firmware"). The rider's
+> watch has **no `.PRG` anywhere on the device**; Connect IQ apps live in an
+> internal registry (`OUT.BIN`) that a loose file never joins.
+>
+> **The Connect IQ Store is now the only way onto this watch**
+> (`docs/STATUS.md:893` "ROOT CAUSE FOUND, and the store path is PROVEN on
+> this watch" — confirmed by installing the store app "Climb" from the
+> rider's phone, which worked). Steps 2 onward below (setup, layout photos,
+> desk test, the two-central test, the FIT save) were **never reached** the
+> night this was tried, because there was no build on the watch to exercise.
+> They still describe the right sequence — just not starting from Step 1's
+> MTP push. The current, operative plan for actually getting `JumpField`
+> running on the Instinct is
+> [store-submission-runbook.md](store-submission-runbook.md); once that
+> install lands, this page's steps 2-8 are what to run, unchanged. Kept below
+> for that reason, not silently rewritten.
+
 Thursday evening, ~90 minutes, the brother and his Instinct 3 Solar. He is
 now the rider (owner decision 2026-08-20), so this watch is the product's
 only screen on the water and everything "proven" so far was proven on the
@@ -8,7 +32,8 @@ wrong watch.
 **The scarce resource is his time, not ours.** Everything below that could be
 done without him has been done: the suite runs 48/48 on his device target,
 memory is measured, the MTP sender is written and compiled, the builds exist.
-This page is execution only.
+This page is execution only. **(See the correction above: the MTP-sender
+premise in Step 1 did not survive contact with the rider's actual firmware.)**
 
 ---
 
@@ -34,6 +59,13 @@ This page is execution only.
 the cut is recoverable on the weekend; everything before it is not.
 
 ### 1. Identify and sideload (~15 min, the risky step)
+
+> **This step was run and confirmed to fail — see the correction at the top
+> of this file.** `mtp_send` pushed the file, the read-back matched exactly,
+> and the watch still deleted it on the next USB disconnect, twice
+> (`docs/STATUS.md:855-905`). Left here only so the identify-the-device
+> half (which did work and is reusable) isn't lost with the sideload half
+> (which categorically doesn't).
 
 ```bash
 mtp-detect | head -20                     # watch answers?
