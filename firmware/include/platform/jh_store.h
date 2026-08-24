@@ -142,7 +142,8 @@ void clear();
 // storage-lifecycle primitive: the trace fills in ~5 h and then records
 // nothing forever, while jumps (2048 records, ~100 sessions) are the user's
 // history and the watch's reconnect source. See the implementation comment
-// and docs/garmin-only.md §3. No-op when storage is not mounted.
+// and docs/watch.md#puck-identity--which-puck-is-mine. No-op when storage
+// is not mounted.
 void trace_clear();
 
 // F-07 (audit 2026-08-22): true when a trace_clear() erase FAILED and the

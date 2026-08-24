@@ -38,8 +38,8 @@ boards ×4 (headers unsoldered — see the soldering section), phone with
 | **Silica gel packet** (free in any shipment box) | Goes inside the case — hot beach → cold water means condensation fog on the electronics otherwise. |
 | **Jumper wires** (female-female) + a little solder | The MPU-6050 usually ships with its 4 header pins unsoldered. |
 | **Rubbing alcohol** | Surface prep for the adhesive mount. |
-| Multimeter *(~$10)* | **Required.** To confirm battery polarity: the Sense's JST pigtail is soldered by hand and JST polarity is not standardized ([`docs/solder.md`](docs/solder.md) §1). (It was optional on the retired FireBeetle, which is why older notes hedge.) |
-| Soldering iron, solder, flux | Headers on the GY-521s; the pigtail on the Sense. Procedure: [`docs/solder.md`](docs/solder.md). |
+| Multimeter *(~$10)* | **Required.** To confirm battery polarity: the Sense's JST pigtail is soldered by hand and JST polarity is not standardized (`docs/solder.md` §1). (It was optional on the retired FireBeetle, which is why older notes hedge.) |
+| Soldering iron, solder, flux | Headers on the GY-521s; the pigtail on the Sense. Procedure: `docs/solder.md`. |
 | Qi **wireless receiver, USB-C plug** *(optional, ~$10)* | Thin coil + captive USB-C tail ("wireless charging receiver USB C"; Nillkin or similar). Plugs into the board, coil taped to the capsule floor → charge the sealed capsule on a phone pad. Cheap receivers can be plug-orientation picky: no red LED, flip the plug. |
 | Flat Qi **charging pad** *(optional, ~$12)* | Any reputable flat pad (not a stand), 5–10 W. A sealed puck parked on the pad also never self-drains — the wireless version of "leave it on USB". Works only if the capsule wall is thin (~few mm): that's the experiment. |
 
@@ -101,15 +101,16 @@ simulated device, end to end:
 ```
 
 **Who does what — phone vs Mac:** once firmware is on the board, the phone
-(Bluefy → the web app) is daily life: self-test, toss test, drop calibration
-(saved into the device's own memory, surviving reboots *and* reflashes),
-live jumps, sync, export, clear — all under *Connect → Bench: test &
-calibrate* and *Sessions*. The Mac is the factory and the hospital: it
-**flashes firmware** (first install + upgrades — no iOS browser can do
-this), archives sessions as real files on disk, and produces the
-`./tools/jump report` diagnostic bundle when something's genuinely weird.
-If the firmware isn't changing, the puck can live for weeks without ever
-meeting the computer.
+(Bluefy → the web app) *used to be* daily life: self-test, toss test, drop
+calibration (saved into the device's own memory, surviving reboots *and*
+reflashes), live jumps, sync, export, clear — all under *Connect → Bench:
+test & calibrate* and *Sessions*. **Corrected 2026-08-23:** the browser app
+is retired — the product's only user interface is now the Garmin watch
+(owner decision) — so that phone-side workflow no longer exists; recoverable
+at tag `archive/web-app`. What's left is the Mac: it **flashes firmware**
+(first install + upgrades — no iOS browser could do this), archives
+sessions as real files on disk, and produces the `./tools/jump report`
+diagnostic bundle when something's genuinely weird.
 
 **If anything ever gets stuck:**
 
@@ -125,7 +126,7 @@ everything needed to troubleshoot remotely.
 ## The one manual skill: solder + wire (Day 1, before the wizard's flash step)
 
 > Iron technique, flux, temperatures, the multimeter checks, and the rework
-> table live in **[`docs/solder.md`](docs/solder.md)** — read it before the
+> table live in **`docs/solder.md`** — read it before the
 > first joint, and *especially* before soldering the JST pigtail onto the
 > Sense's bare BAT pads, where a bridge shorts a lithium cell.
 
@@ -262,58 +263,30 @@ to anyone skeptical of the number, plus a `.csv` of the same data.
 
 ---
 
-## Phase 3: live stats in a browser + zero-install flashing
+## Phase 3, retired: the browser app
 
-The device now speaks Bluetooth (same protocol as USB, wireless), and there's
-a browser app for it:
+This section used to document a browser app: connect over Bluetooth for live
+stats, sync sessions, and (until 2026-08-18) flash a brand-new board via ESP
+Web Tools. **Retired 2026-08-23** — the owner's decision made the Garmin watch
+the product's only user interface, and the app's original anchor was already
+gone anyway: ESP Web Tools cannot flash the nRF52 Sense, so the in-browser
+flasher went with the ESP32 v1 platform on 2026-08-18. The app (`web/`) and its
+test suite are deleted from the tree; the whole thing is recoverable at tag
+`archive/web-app` if it's ever needed again.
 
-```bash
-./tools/jump web      # serves the app at http://localhost:8765 — open in Chrome/Edge
-```
+What replaces it: `./tools/jump` from the Mac for self-test, toss test, drop
+calibration, sync and export (all documented above), and the Garmin watch for
+live jumps on the wrist (see `README.md`). Zero-install flashing still exists,
+just not through a browser — every CI run builds the firmware and publishes a
+drag-and-drop **`.uf2`** as a downloadable build artifact (no Pages, no
+hosted site); drop it onto the bootloader's double-tap-reset "XIAO-SENSE" USB
+drive. `./tools/jump flash` over USB and `tools/otadfu.py` over the air cover
+the rest.
 
-What the app does:
-
-- **Live** (Bluetooth): connect to `JumpHeight` and watch jumps pop up in real
-  time — big glare-readable numbers (feet first; one tap swaps to meters),
-  session best, count, and a growing bar strip. The screen stays awake while
-  connected. Built sunlight-first: high-contrast light theme by default, with
-  an Auto/Light/Dark toggle in the header. *Phones:* Android Chrome works out
-  of the box; **iPhone Safari has no Web Bluetooth — install the free
-  "Bluefy" browser and use that.** (And water blocks Bluetooth — live stats
-  are for on land, by physics.)
-- **Sync**: when a connected device is holding jumps, a banner offers one
-  button — **Sync**. It shows real progress, saves the session into the
-  browser, opens it immediately (stats + per-jump bar chart), and only after
-  a verified save offers to clear the device for the next session. USB syncs
-  fastest; Bluetooth works but is slow for big sessions.
-- **Sessions**: history with all-time best, per-jump charts, **Share** (a
-  clean share-card image of the session via your phone's share sheet), CSV
-  export per session, and **Back up all / Restore** (a JSON file) so browser
-  storage is never the only copy. The laptop's `./tools/jump sync` remains
-  the archival path into `data/sessions/`.
-- **New device** (**corrected 2026-08-23**: this row used to say "Install:
-  flash a brand-new board from the web page (ESP Web Tools)". That stopped
-  being true on **2026-08-18**, when the ESP32 v1 platform was retired —
-  ESP Web Tools cannot flash an nRF52, so the in-browser flasher was removed
-  along with it). The tab is now a signpost, not a flasher
-  (`web/index.html:170-179`; `web/app.js:1431-1444` `initInstallTab()`): it
-  reads *"Firmware ships from the bench: `./tools/jump flash` over USB, or
-  `tools/otadfu.py` over the air."* There is also a drag-and-drop `.uf2` the
-  same CI run publishes to Pages next to the app (onto the bootloader's
-  mounted "XIAO-SENSE" USB drive) — but the app's Install tab itself does not
-  surface that option; it only names the two bench paths above.
-
-**Hosted version (for sharing the project):** the GitHub Action builds the
-firmware and publishes the app + a `.uf2` to GitHub Pages. One-time setup:
-repo **Settings → Pages → Source: "GitHub Actions"**. After that, anyone can
-open your Pages URL to use the live/sync features against a board already
-flashed — **not** to flash a new one from the browser; see the correction
-above.
-
-**⚠️ Upgrading a device that has sessions on it:** Phase 3 changes the flash
-partition layout, which reformats stored data on first boot after the new
-firmware. Run `./tools/jump sync` (and confirm the report looks right)
-**before** flashing the upgrade.
+**⚠️ Upgrading a device that has sessions on it:** the Phase-3-era partition
+layout change reformats stored data on first boot after new firmware. Run
+`./tools/jump sync` (and confirm the report looks right) **before** flashing
+the upgrade.
 
 ---
 
@@ -333,7 +306,6 @@ firmware. Run `./tools/jump sync` (and confirm the report looks right)
 | `./tools/jump drop` | guided timing calibration from measured drops |
 | `./tools/jump sync` | download session → analyze → report.md |
 | `./tools/jump validate --pairs f` | video ground-truth check: compare stored jumps to filmed airtimes, recommend/apply calibration (see below) |
-| `./tools/jump web` | serve the browser app (live BLE stats, session sync/history) — **not** a firmware flasher; see the Phase 3 correction above |
 | `./tools/jump eval` | score the detector over labeled sessions ([docs/data-pipeline.md](docs/data-pipeline.md)) |
 | `./tools/jump replay --csv f` | re-run the detector over any saved capture |
 | `./tools/jump monitor` | raw serial console (type `help`) |
@@ -342,7 +314,9 @@ firmware. Run `./tools/jump sync` (and confirm the report looks right)
 (Command set verified against `tools/jump`'s subcommand registrations,
 2026-08-23: `boards`/`status`/`validate` were previously missing from this
 table — `boards` added `3f5522f`, `status` added `b5d2c06`, `validate` added
-`e2766b7`, none of which touched this table at the time.)
+`e2766b7`, none of which touched this table at the time. `web` removed the
+same day: the browser app it served is retired, see the "Phase 3, retired"
+section above.)
 
 Add `--fake` to selftest/desktest/drop/sync to rehearse without hardware, and
 `--port /dev/ttyUSB0` anywhere if auto-detection picks the wrong port.

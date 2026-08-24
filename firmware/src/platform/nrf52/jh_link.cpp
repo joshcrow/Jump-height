@@ -32,9 +32,9 @@
 //    conn_hdl always targets `Bluefruit.connHandle()` — i.e. whichever
 //    connection is "current" (BLEUart.cpp:230,240) — not a broadcast to
 //    every subscriber. With two independently-subscribed centrals (watch +
-//    phone, docs/garmin-datafield.md §7) that's wrong by construction: the
-//    same bytes need to reach BOTH, at each one's OWN MTU. The doc comment
-//    at BLEUart.cpp:259 references "the TXD timer handler" sending buffered
+//    phone; docs/watch.md#ble-link-dependability) that's wrong by
+//    construction: the same bytes need to reach BOTH, at each one's OWN MTU.
+//    The doc comment at BLEUart.cpp:259 references "the TXD timer handler" sending buffered
 //    data later, but no such timer exists anywhere in this library (grepped
 //    the whole Bluefruit52Lib tree) — so relying on it would risk data
 //    silently never flushing. We therefore re-implement the byte-queue +
@@ -408,7 +408,7 @@ static char s_adv_name[28] = "";
 const char* local_name() { return s_adv_name; }
 
 // ADVERTISED BATTERY + STATE — "puck 78%" on the watch WITHOUT connecting,
-// the cheapest UX win in ble-dependability.md §5 (layer 5: the user must be
+// the cheapest UX win in docs/watch.md#two-surfaces (the user must be
 // able to tell states apart). Manufacturer-specific data, company ID 0xFFFF
 // (the SIG's reserved-for-development ID — we have no assigned one, and an
 // invented real ID would be squatting).
@@ -428,9 +428,9 @@ const char* local_name() { return s_adv_name; }
 // Every disconnect and re-arm therefore republishes the latest CACHED reading
 // (<=60 s old, published by loop()). Stale by a minute is immaterial here —
 // the cell moves ~30 mV/h, so a percent changes on a ten-minute scale — and
-// the alternative was sampling the ADC from a preempting task. docs/
-// ble-dependability.md layer 5 only requires the percent be visible WITHOUT
-// connecting, which this still satisfies.
+// the alternative was sampling the ADC from a preempting task.
+// docs/watch.md#two-surfaces only requires the percent be visible
+// WITHOUT connecting, which this still satisfies.
 // Battery snapshot published by loop(), consumed by refreshAdvPayload().
 //
 // WHY THIS CACHE EXISTS (pre-flight review, 2026-08-20). refreshAdvPayload()

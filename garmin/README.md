@@ -1,17 +1,19 @@
 # Jump Height — Garmin Connect IQ data field
 
-The watch client (spec: [`docs/garmin-datafield.md`](../docs/garmin-datafield.md)).
+The watch client (spec: [`docs/watch.md`](../docs/watch.md)).
 A data field that finds the puck over BLE, shows the last jump HUGE within a
 couple seconds of landing, and writes jumps into the saved activity's FIT
-file — no phone, no taps, same protocol the CLI and web app already speak.
+file — no phone, no taps, same protocol the CLI speaks.
 
 Owns its own toolchain (a completely different SDK from the firmware's
-PlatformIO/nRF52 one), hence a separate top-level directory. Read
-[`FIRST_COMPILE.md`](FIRST_COMPILE.md) before your first build — this code
-was authored without access to the Connect IQ SDK (it's a login-gated
-download) or a simulator, so every API call was researched as carefully as
-possible but not compiler-checked. That file is the punch list for exactly
-where a guess might need a one-line fix.
+PlatformIO/nRF52 one), hence a separate top-level directory.
+
+This code was originally authored *without* the Connect IQ SDK — it is a
+login-gated download — so every API call was researched rather than
+compiler-checked. It has since compiled clean and the package builds 4/4
+device variants, so that caveat is history, not a live warning. The
+first-compile punch list was retired 2026-08-23:
+`git show archive/docs-2026-08-23:garmin/FIRST_COMPILE.md`.
 
 Status: **compiles clean and all 24 unit tests PASS in the simulator**
 (2026-08-04, SDK 9.2.0 — see FIRST_COMPILE.md's dated findings block for
@@ -98,8 +100,9 @@ to check first" below before anything else.
 > registry (`Garmin/Apps/OUT.BIN`, which grows when a store app installs),
 > not as loose `.prg` files, so a copied file is unreferenced and swept.
 > A store install on the same watch works. **The Connect IQ store is the only
-> install path to the Instinct 3** — see docs/store-submission.md. The
-> procedure below remains valid for the Epix Gen 2 (proven 2026-08-10).
+> install path to the Instinct 3** — see
+> [docs/watch.md](../docs/watch.md#connect-iq-store-submission--the-only-path-to-the-riders-watch).
+> The procedure below remains valid for the Epix Gen 2 (proven 2026-08-10).
 
 **Headless path — this is the one that works (proven 2026-08-10, Epix
 Gen 2).** No GUI, no drag-and-drop:

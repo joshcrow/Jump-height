@@ -17,10 +17,10 @@
 
 
 Every open question now converges on one dependency: **real labeled water data.**
-The arm-ceiling check ([wing-ballistic-sim.md](wing-ballistic-sim.md)), `height_scale`
+The arm-ceiling check (`wing-ballistic-sim.md`), `height_scale`
 calibration, landing-attitude direction, wing-rotation accuracy
-([gyro-sim-plan.md](gyro-sim-plan.md)), and the whole riding-dynamics half
-([riding-dynamics-map.md](riding-dynamics-map.md)) are all "needs real S0 traces."
+(`gyro-sim-plan.md`), and the whole riding-dynamics half
+(`riding-dynamics-map.md`) are all "needs real S0 traces."
 This doc is the loop that turns those traces into validated improvement.
 
 **You already have ~70% of it.** `./tools/jump sync` captures, `drop` calibrates,
@@ -282,9 +282,9 @@ seen corpus-wide without reflashing) and scores detection + height against
 - `airtime_offset_s` — `jump drop` (bench drop tests). Already wired.
 - `height_scale` — from the first video-labeled session (fit detected vs true height).
 - gyro bias — pre-takeoff stationary bias subtraction
-  ([gyro-sim-plan.md](gyro-sim-plan.md) §4).
+  (`gyro-sim-plan.md` §4).
 - gyro scale-factor — in-situ `mikoff/imu-calib` (MIT), cited in
-  [gyro-prior-art.md](gyro-prior-art.md) §2.
+  `gyro-prior-art.md` §2.
 - **mount lever-arm `r`** — from g4: the `ω²r` detector correction needs it, and a
   ±20% error reintroduces failures. A mount-position calibration step.
 

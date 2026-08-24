@@ -23,7 +23,6 @@ Individual steps, if you'd rather drive manually:
                                error-bar report (film jumps, --pairs a CSV
                                of jump_n,fps,frames)
     ./tools/jump replay      re-run the detector over a saved capture CSV
-    ./tools/jump web         serve the phone/laptop app locally (Web Bluetooth)
     ./tools/jump monitor     raw serial console
     ./tools/jump gen         regenerate firmware params from config/params.json
 
@@ -2643,7 +2642,7 @@ def cmd_status(args) -> int:
     else:
         try:
             newest = sp.run(["git", "log", "-1", "--format=%ct", "--",
-                             "firmware", "garmin", "tools", "web"],
+                             "firmware", "garmin", "tools"],
                             cwd=str(REPO), capture_output=True, text=True).stdout.strip()
             st = sp.run(["git", "log", "-1", "--format=%ct", "--", "docs/STATUS.md"],
                         cwd=str(REPO), capture_output=True, text=True).stdout.strip()
@@ -3210,65 +3209,6 @@ def cmd_eval(args) -> int:
     return subprocess.run(cmd, cwd=str(REPO)).returncode
 
 
-# ----------------------------------------------------------------------- web
-# Serve web/ (the browser app) on localhost. WHY a local server and not just
-# opening the file: browsers only expose Web Bluetooth / Web Serial to a
-# "secure context", and localhost qualifies while a file:// path does not — so
-# this is the way to run the app during development.
-
-
-# REMOVED 2026-08-18: stage_firmware(). It copied firmware/.pio/build/
-# firebeetle32/{bootloader,partitions,firmware}.bin into web/firmware/ for the
-# ESP Web Tools install button (DECISIONS #20/#21). Both ends are gone: the
-# firebeetle32 PlatformIO env was deleted with the ESP32 platform (commit
-# 12480c6), so the source path can never be populated, and web/app.js no longer
-# fetches or reads anything under web/firmware/. Flashing now goes through
-# ./tools/jump flash (USB) or tools/otadfu.py (BLE DFU).
-
-
-def cmd_web(args) -> int:
-    from functools import partial
-    from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
-
-    web_dir = REPO / "web"
-    if not (web_dir / "index.html").exists():
-        print(f"❌ no browser app found at {web_dir} — is the repo intact?")
-        return 1
-
-    port = args.port
-    url = f"http://localhost:{port}/"
-    handler = partial(SimpleHTTPRequestHandler, directory=str(web_dir))
-    try:
-        httpd = ThreadingHTTPServer(("127.0.0.1", port), handler)
-    except OSError as e:
-        print(f"❌ couldn't serve on port {port}: {e}")
-        print(f"   Port already in use? Try  ./tools/jump web --port {port + 1}")
-        return 1
-
-    print(f"Serving the Jump Height app at  {url}")
-    print("  • localhost is a secure context, so Web Bluetooth and Web Serial")
-    print("    both work here (they don't from a file:// path).")
-    print("  • Open it in Chrome or Edge on a desktop — those are the browsers")
-    print("    that support Web Bluetooth + Web Serial.")
-    print("  • Ctrl-C to stop.\n")
-
-    # macOS nicety: pop the default browser open. Best-effort — a Linux or
-    # headless box simply skips it.
-    if sys.platform == "darwin":
-        try:
-            subprocess.Popen(["open", url])
-        except Exception:
-            pass
-
-    try:
-        httpd.serve_forever()
-    except KeyboardInterrupt:
-        print("\n--- stopped ---")
-    finally:
-        httpd.server_close()
-    return 0
-
-
 # -------------------------------------------------------------------- wizard
 
 STATE_PATH_NAME = "wizard_state.json"
@@ -3662,7 +3602,7 @@ def main() -> int:
     p.add_argument("--plot", action="store_true")
 
     # eval scores over on-disk labeled sessions — no device, so register it
-    # directly (like web) to skip the serial --port that add() attaches.
+    # directly to skip the serial --port that add() attaches.
     p = sub.add_parser("eval", help="score detector over labeled sessions (docs/data-pipeline.md)")
     p.set_defaults(fn=cmd_eval)
     p.add_argument("--root", help="sessions root (default data/sessions)")
@@ -3671,12 +3611,6 @@ def main() -> int:
     p.add_argument("--verbose", "-v", action="store_true", help="per-session table")
     p.add_argument("--save", help="write summary metrics JSON (a regression baseline)")
     p.add_argument("--baseline", help="compare vs a saved baseline; nonzero exit on regression")
-
-    # web serves over HTTP, so its --port is the HTTP port — not the serial
-    # --port that add() attaches to every other command. Register it directly.
-    p = sub.add_parser("web", help="serve the browser app locally (localhost)")
-    p.set_defaults(fn=cmd_web)
-    p.add_argument("--port", type=int, default=8765, help="HTTP port (default 8765)")
 
     args = ap.parse_args()
     try:

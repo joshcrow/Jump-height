@@ -1,5 +1,5 @@
-"""Parity test for the binary trace v2 codec (docs/ota.md §4.5, docs/sense.md
-§3.2): encodes synthetic sample streams with the REAL firmware C++ encoder
+"""Parity test for the binary trace v2 codec (firmware/include/trace_codec.h,
+docs/sense.md §3.2): encodes synthetic sample streams with the REAL firmware C++ encoder
 (host-compiled, mirroring ./tools/jump simtest's C++/Python detector parity
 pattern — see firmware/test/host_test.cpp), decodes the resulting bytes with
 the Python mirror (sim/trace_codec.py), and diffs the result against a

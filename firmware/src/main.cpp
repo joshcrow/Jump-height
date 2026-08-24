@@ -31,8 +31,9 @@
 // BLE (added in v0.3.0): the SAME protocol is mirrored over a Nordic UART
 // Service so a phone/laptop can read jumps and send commands wirelessly. Since
 // v0.4.2, TWO BLE centrals can be connected and subscribed at once (e.g. a
-// Garmin watch on the rider + a phone on the beach, per
-// docs/garmin-datafield.md §7) — every line above goes out on BOTH USB serial
+// Garmin watch on the rider + a phone on the beach — see
+// docs/watch.md#ble-link-dependability for the standing one-central rule)
+// — every line above goes out on BOTH USB serial
 // and (when at least one BLE client is subscribed) the BLE TX characteristic,
 // via the emit layer below; a single notify() reaches every subscribed client,
 // so this file never has to loop over connections itself. The BLE stack lives
@@ -246,9 +247,9 @@ static void emitf(const char* fmt, ...) {                             // like pr
 // to every currently-subscribed connection (see jh_link.h), so if client A is
 // already live when client B subscribes, this second greet reaches BOTH — A
 // sees an extra "# JumpHeight..."/READY mid-stream. Both lines are designed to
-// be tolerated by a spec-compliant reader (`#` is chatter; docs/
-// garmin-datafield.md §5.2 requires clients to skip unknown lines/keys), so
-// this is treated as a harmless, acceptable side effect rather than a bug.
+// be tolerated by a spec-compliant reader (`#` is chatter; the watch client
+// skips unknown lines/keys per docs/watch.md#protocol-and-ble-architecture),
+// so this is treated as a harmless, acceptable side effect rather than a bug.
 static void bleGreet() {
   static const char banner[] = "# JumpHeight fw v" FW_VERSION " src=" JH_BUILD_SRC "\n";
   jh_link::write(banner, sizeof(banner) - 1);
@@ -1515,9 +1516,10 @@ void loop() {
     motion_seen    = true;
   }
   // ---- STORAGE LIFECYCLE: reclaim a dead trace at a session boundary ----
-  // The problem (docs/garmin-only.md §3): the trace region is append-only and
-  // holds ~5 h. Once full it records NOTHING, forever, with no symptom the
-  // watch can show — jumps keep flowing and jumps are all the watch sees. A
+  // The problem (docs/watch.md#puck-identity--which-puck-is-mine): the trace
+  // region is append-only and holds ~5 h. Once full it records NOTHING,
+  // forever, with no symptom the watch can show — jumps keep flowing and
+  // jumps are all the watch sees. A
   // user who never opens a laptop would silently stop keeping raw data.
   //
   // The rule is deliberately narrow, because auto-clearing is auto-DELETING.

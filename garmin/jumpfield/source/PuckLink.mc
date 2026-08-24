@@ -139,7 +139,7 @@ class PuckLink extends Ble.BleDelegate {
     // nothing. Meanwhile identity confusion has produced four wrong "dead
     // board" verdicts in this project, and a two-rider quiver makes
     // connecting to the wrong puck silently ruinous
-    // (docs/puck-identity.md).
+    // (docs/watch.md#puck-identity--which-puck-is-mine).
     //
     // Pucks advertise "JumpHeight-XXXX" where XXXX is derived from the chip's
     // own FICR DEVICEADDR — immutable, unique, and matching the label on the

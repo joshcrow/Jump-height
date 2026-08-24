@@ -220,7 +220,8 @@ class JumpFieldView extends WatchUi.DataField {
         // everywhere, hiding the half that identifies the board.
         //
         // Now: the four characters of the puck we are actually CONNECTED to
-        // (docs/puck-identity.md §3d). They match the label on the board's
+        // (docs/watch.md#puck-identity--which-puck-is-mine). They match the
+        // label on the board's
         // case, they are immutable (FICR-derived), and four characters fit
         // where fifteen never could. Falls back to the search name when not
         // connected, because "JumpHeight" is at least honest about what we

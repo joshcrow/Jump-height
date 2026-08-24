@@ -4,8 +4,8 @@
 // as the USB serial console over BLE, so a phone/laptop (Web Bluetooth) and
 // a Garmin watch (Connect IQ BLE central) can read jumps and send commands
 // wirelessly, the same way ./tools/jump does over USB — possibly with TWO
-// concurrently connected centrals at once (rider's watch + beach phone), per
-// docs/garmin-datafield.md §7.
+// concurrently connected centrals at once (rider's watch + beach phone) —
+// see docs/watch.md#ble-link-dependability for the standing one-central rule.
 //
 // THE RULE, WRITTEN IN BLOOD (see the ESP32 implementation's TX-queue
 // comments for the full reasoning this was learned from): nothing in this

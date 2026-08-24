@@ -22,8 +22,8 @@ pacing, which is why two centrals made it visible.
 The layer-1 fix (honor `write()`'s return, bounded per-connection retry,
 latched chunk length) shipped 2026-08-14 and was verified 2026-08-18: a
 240,506-byte `trace` export, 17,031 valid rows, `tx_drops` absent afterwards.
-**But that was ONE central.** `docs/ble-dependability.md` §5 asks for the
-induced-failure soak with a second central subscribed, and `docs/STATUS.md`
+**But that was ONE central.** `docs/watch.md#ble-link-dependability` asks
+for the induced-failure soak with a second central subscribed, and `docs/STATUS.md`
 says in as many words: "no bulk export has been run over two concurrent
 centrals ... until that measurement exists neither entry should be promoted."
 
@@ -633,7 +633,7 @@ def compare_mode(paths: list[str]) -> int:
 def main() -> int:
     p = argparse.ArgumentParser(
         description="Two-central concurrent BLE integrity test "
-                    "(ble-dependability.md §5).")
+                    "(docs/watch.md#ble-link-dependability).")
     p.add_argument("--name", default="JumpHeight",
                    help="advertised name PREFIX to match (default: JumpHeight)")
     p.add_argument("--addr", default=None,

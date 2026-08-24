@@ -1,4 +1,4 @@
-// trace_codec.h — binary trace v2 codec (docs/ota.md §4.5, docs/sense.md §3.2).
+// trace_codec.h — binary trace v2 codec (docs/watch.md#firmware-update-path-dfu, docs/sense.md §3.2).
 //
 // Dependency-free, like jump_detector.h: no Arduino/platform includes, so
 // this compiles equally well inside firmware/src/platform/nrf52/jh_store.cpp
@@ -41,7 +41,7 @@
 // config/params.json's firmware.log_hz) — pass it in explicitly rather than
 // hardcoding it here, so this header stays free of any project-specific
 // config include. This is why the format costs ~2 bytes/sample instead of
-// ~6+ (docs/ota.md §4.5's whole point): real per-sample jitter (microseconds
+// ~6+ (this format's whole point): real per-sample jitter (microseconds
 // of I2C transaction time) is deliberately NOT preserved, only a once-per-
 // block anchor. Documented trade-off, not a bug — nothing downstream (the
 // jump detector replays whatever samples it's given; a future carve-G/

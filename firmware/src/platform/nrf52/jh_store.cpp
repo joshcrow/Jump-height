@@ -40,9 +40,10 @@
 // full-ness CAP is NOT config/params.json's JH_TRACE_MAX_BYTES. That
 // constant (2,000,000) was sized for the ESP32's own ~2.4 MB CSV-on-flash
 // partition, where 1 CSV byte ~= 1 stored byte. Binary trace v2 exists
-// *because* it stores the same session in ~1/7th the bytes (docs/ota.md
-// §4.5) — gating fullness on the SAME small CSV-equivalent constant would
-// silently throw away 6 of the 7 hours docs/sense.md §3.2 promises. Instead,
+// *because* it stores the same session in ~1/7th the bytes
+// (firmware/include/trace_codec.h) — gating fullness on the SAME small
+// CSV-equivalent constant would silently throw away 6 of the 7 hours
+// docs/sense.md §3.2 promises. Instead,
 // trace_is_full() here means "the trace REGION's actual physical bytes are
 // exhausted" — a platform-appropriate reinterpretation of the same
 // contract (jh_store.h: "as long as the append/scan/read/clear semantics
@@ -1130,8 +1131,9 @@ void close_read() {
 }
 
 // ------------------------------------------------------------- housekeeping
-// TRACE-ONLY CLEAR — the storage-lifecycle primitive (docs/garmin-only.md §3,
-// owner go-ahead 2026-08-19 "as long as we're smart about it").
+// TRACE-ONLY CLEAR — the storage-lifecycle primitive
+// (docs/watch.md#puck-identity--which-puck-is-mine, owner go-ahead
+// 2026-08-19 "as long as we're smart about it").
 //
 // Why a separate function rather than reusing clear(): jumps are the USER'S
 // history — the watch reseeds its session from `stored_jumps` on every

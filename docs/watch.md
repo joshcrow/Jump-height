@@ -1,0 +1,248 @@
+# Watch, BLE link, and Connect IQ Store
+
+The rider's next glance at their wrist shows the last jump's height within
+seconds of landing, no taps, no phone. A Connect IQ **data field**
+(`JumpField`) that scans the puck over BLE, renders live, and writes jumps
+into the saved activity's FIT file.
+
+## Rider and bench
+
+**Rider: the owner's BROTHER, on a Garmin Instinct 3 Solar 45mm, fw 15.18**
+(API 5.1, 176×176 semi-octagon monochrome MIP, no dimming). The owner's
+Epix Gen 2 is the **dev bench** — where on-watch BLE/rendering/FIT evidence
+has actually been produced. Anything proven on the Epix is Epix-only
+evidence, not true of the Instinct until re-proven there. Declared/built
+devices: `instinct3solar45mm`, `epix2` (`manifest.xml`).
+
+## Connect IQ Store submission — the only path to the rider's watch
+
+**Confirmed twice on real hardware: Instinct 3 (fw 15.18) deletes a
+sideloaded `.prg` from `Garmin/Apps` on the next USB disconnect**, no reboot
+needed. Pushed via a custom MTP sender, read back byte-exact (17,996 B,
+correct parent); after unplug/replug the file is gone, `Restore` is empty,
+`Garmin/Apps` holds only `OUT.BIN`. Installing a real store app ("Climb")
+from the rider's phone grew `OUT.BIN` by 48 bytes and worked, with zero
+`.PRG` anywhere on the device — this firmware keeps Connect IQ apps in an
+internal registry, not loose files. **File-copy sideloading is
+architecturally impossible here, not merely blocked. Store approval is the
+only route onto the rider's watch.** (The MTP procedure, `tools/mtp_send` +
+OpenMTP fallback, still works for the Epix dev bench, proven 2026-08-10 —
+it just never reaches the Instinct.)
+
+**Artifact:** `garmin/jumpfield/bin/JumpField.iq` — **79,145 bytes, built
+2026-08-23, 4 of 4 device variants clean.** Gitignored, so file size + mtime
+is the only handle on which build is on disk. **Rebuild immediately before
+submitting, and after any change under `garmin/jumpfield/source/`** — review
+takes days and it's the rider's only way to get the app.
+
+```bash
+cd garmin/jumpfield
+export PATH="/opt/homebrew/opt/openjdk/bin:$PATH"
+"$SDK/bin/monkeyc" -f monkey.jungle -o bin/JumpField.iq \
+    -y ~/.garmin-ciq/developer_key.der -e -w -r
+```
+(`-e` packages every product in `manifest.xml` into one `.iq`; no `-d`.)
+**Back up `~/.garmin-ciq/developer_key.der`** — lose it and the listing can't
+be updated, only re-published as a new, orphaning app.
+
+**As of the last check: built, not submitted; no developer account yet.**
+To file:
+
+1. **Account** — sign in at developer.garmin.com with any Garmin account
+   (free); accept the developer agreement. **Upload an App** — Type: Data
+   Field, file `JumpField.iq`; compatible devices read from the package
+   (Instinct 3 Solar 45mm, Epix Gen 2).
+2. **Listing** — Name "Jump Height" (doesn't start with "Garmin"). **Lead
+   with the hardware requirement**: *"Requires a compatible custom sensor —
+   this app does nothing on its own."* Free. Support: repo GitHub Issues.
+   Privacy: no accounts, no network permission, nothing leaves the watch
+   except the rider's own saved FIT file.
+3. **Permissions** (exactly two): **BluetoothLowEnergy** — "Connects to a
+   custom board-mounted motion sensor over BLE to receive jump measurements
+   during the activity." **FitContributor** — "Writes jump count, best
+   height and best airtime into the FIT file as developer fields." Zero
+   ANT+ profiles registered — the ANT+ review-latency add-on doesn't apply.
+4. **Visibility** — check for a private/beta/unlisted channel first
+   (unconfirmed whether one exists); otherwise public with the hardware
+   requirement in the first sentence — a puck-less install seeing "finding
+   puck" forever is a predictable 1-star review, not a bug.
+5. **Submit.** The commonly-cited 72 h review window (+48 h ANT+, N/A here)
+   is **not independently confirmed** — Garmin's live guidelines page states
+   no committed SLA, and the FAQ page (where the number likely lives)
+   renders client-side and couldn't be fetched. Treat 72 h as a planning
+   assumption.
+6. **On approval** — install from the Connect IQ phone app on the rider's
+   watch; confirm "Jump Height" appears under Connect IQ Fields. Then run
+   the desk sequence below.
+
+**Desk sequence once installed, in priority order** (everything after a cut
+evening recovers on the weekend; everything before it doesn't):
+1. Setup on his watch: Activities & Apps → Windsurf → Data Screens → add →
+   Connect IQ → Jump Height. Let him drive it — a confusing setup is a
+   finding about the product.
+2. Layout, all three tiers, photographed — header shows the connected
+   puck's id (see Puck identity), expect `E2C4` with the OG.
+3. Desk test untethered: three real tosses; `fakejump` over BLE (`!N`
+   corruption marker); vibrate (never yet observed firing); `NO REC` if
+   reachable.
+4. **Monotonic-reseed fix** (mutation-proven, never run on hardware): get
+   the count non-zero, reboot the puck mid-activity, confirm the watch
+   count does NOT drop to 0, then confirm a further jump still advances it.
+5. **THE TWO-CENTRAL TEST** (highest-value item): Epix and Instinct both
+   subscribed to one puck, 20 `fakejump`s — both must show 20, neither `!`.
+   No bench work substitutes for this (see BLE link dependability).
+6. Save a real activity (start → tosses → stop → **save**); pull the FIT,
+   confirm developer fields present and units match his watch.
+7. Hand him the rider brief in person; walk the reboot ritual once, aloud.
+8. Stretch: new activity after the first — does the jump count restart
+   (`onTimerReset` on real silicon)? (Do not sideload a new build or flash
+   the OG the same evening; no third BLE central during the two-watch test.)
+
+## Protocol and BLE architecture
+
+One NUS (Nordic UART Service) profile: service
+`6E400001-B5A3-F393-E0A9-E50E24DCCA9E`; TX char `…0003` (puck notifies); RX
+char `…0002` (watch writes once per connect). ASCII lines, `\n`-terminated,
+reassembled from MTU-sized chunks — unknown lines/keys ignored:
+
+```
+JUMP n=4 airtime_raw_s=1.021 airtime_s=1.036 height_m=1.316 height_ft=4.3 best_m=1.316
+STATS session_jumps=4 session_best_m=1.316 stored_jumps=9 ... vbat_mv=3870 batt_pct=63 chg=0
+```
+
+The watch writes `stats\n` once per connect and **reconciles from it — it
+never resumes** — the puck's session totals are the source of truth, so a
+reconnect or late join is free (US6). **Scan match order matters:** the NUS service UUID is checked FIRST and
+matches ANY puck advertising it; the `puckName` setting (default
+`"JumpHeight"`) is only a fallback name-PREFIX match (startsWith) used when
+a scan result lacks the UUID (`PuckLink._matchesPuck`,
+`garmin/jumpfield/source/PuckLink.mc:377-394`). Since the UUID branch
+matches unconditionally first, that fallback almost never runs, and among
+UUID matches the field takes strongest RSSI — why per-rider puck pinning
+doesn't work today (see Puck identity).
+
+Four field states: SEARCHING (hollow dot, `--`), CONNECTED (solid, live),
+RECONNECTING (hollow, dimmed retained values), NO BLE (✕). A new jump
+inverts the last-jump number for ~5 s. Scan backoff: 5 s → 15 s cap, reset
+to the 5 s floor only on a confirmed LIVE. **Memory:** static footprint
+measured **12,417 B of the 32,768 B** budget (`monkeyc --build-stats`), no
+per-line leak over ~1,200 simulated lines. **RETRACTED:** an earlier
+"124 KB vs 32 KB" fear was `.prg` file size, not runtime memory.
+
+## FIT developer fields
+
+`FitOut.mc` writes RECORD `jump_height` (float32, sparse, per JUMP → per-jump
+chart) and SESSION `jumps`/`best_jump`/`best_airtime`, written continuously
+so the summary is right on an early save. Written in the **rider's display
+unit** (ft or m) with a matching FIT units string — Garmin Connect does not
+convert developer fields; the device's own CSVs remain canonical. Its
+`DEVELOPER_DATA_ID` constant is **not wired to anything** —
+`createField(name, fieldId, type, options)` takes no UUID argument; Connect
+IQ ties developer fields to the app's manifest identity automatically. Kept
+only as a literal cross-check against `manifest.xml`'s app id.
+
+Verified correct in a real saved activity 2026-08-18 — **on the Epix, not
+the Instinct.** **Garmin Connect's own chart rendering has never been
+visually confirmed**, only offline-parsed from the FIT file. **Strava does
+NOT render Connect IQ developer fields at all** — cross-posted rides show
+nothing there; Garmin Connect is the archive of record, say so in listings.
+**The FIT "32 B/message" developer-field budget is PROVISIONAL** — quoted
+from the installed SDK's local docs, absent from Garmin's live docs, never
+independently corroborated; don't architect against the exact number until
+one write-and-inspect test settles it. `best_airtime` also cannot be
+reseeded on reconnect: `STATS` carries `stored_best_m` but no
+stored-best-airtime key — found by parsing a FIT file, filed, not fixed.
+
+## BLE link dependability
+
+The 2026-08-11 corruption (watch showed count 64 against the puck's own
+`session_jumps=1`, airtime zeroed) was root-caused: `jh_link.cpp` advanced
+the TX queue tail even when `BLEUart::write()` returned 0 (notify rejected,
+no free SoftDevice TX buffer) — a chunk silently discarded, per-connection.
+
+**Fixed the same day, verified under the load that broke it:**
+per-connection retry, bounded, forced drops counted as `tx_drops`
+(`jh_link.cpp:323-359`) — a 240 KB single-central export and 150 KB/300 KB
+two-central exports all came back byte-identical, zero `tx_drops`. A
+watch-side corruption gate also shipped, hardware-validated: `Model.mc`
+rejects a `JUMP` missing `airtime_s`/`best_m`, an `n` advancing by more than
+1, or best < height — dropped, never rendered.
+
+**Two-central policy:** the bulk-export integrity test (`tools/dualcentral.py`)
+**PASSED** on two boards (byte-identical, `tx_drops` 0). The
+**JUMP-line-specific** test (`dualjump.py`) — the traffic shape that
+actually corrupted on 08-11 — is **INCONCLUSIVE, not passed**: macOS/
+CoreBluetooth multiplexes one physical BLE link per process, so two
+genuinely separate hosts have never been proven against sparse JUMP lines.
+**Standing rule: no second BLE central while the rider is on the water** —
+a `dump` mid-session blocks recording outright, and a second central
+riding alongside is precisely the 2026-08-11 corruption configuration —
+until the JUMP-line pattern passes on two real hosts. `dfu` over BLE is
+also **UNAUTHENTICATED** — see Firmware update path, below.
+
+## Puck identity — which puck is mine
+
+Every puck advertises a unique name, `JumpHeight-XXXX` (suffix from the
+chip's immutable FICR address, matching the label painted on the board's
+case) — shipped 2026-08-18 after a real cross-board mixup logged one
+board's floating-battery reading into another's record. **The field header
+shows the CONNECTED puck's 4 characters** (`PuckLink.connectedId()`,
+`PuckLink.mc:148-162`) — shipped 2026-08-21, live since. Ambient, ignored
+99% of the time; catches a wrong-puck connection at a glance.
+
+**Two riders with two pucks is NOT supported today.** The service-UUID scan
+match wins unconditionally over the name-prefix fallback (above), so
+`puckName` can't pin a rider to a specific puck — among matches, strongest
+RSSI wins, exactly wrong when both riders and boards are together at
+rigging. Designed, not built: bind-on-first-connect keyed to the puck's BLE
+address, the name-beats-UUID match-order fix, and `kMaxPrphConnections = 1`
+for a rider build (still `2`, `jh_link.cpp:170`). A data field has no input
+and can't present a pairing UI, and `Application.Storage` is per-app
+isolated, so any fix must be automatic and silent, never a settings screen
+(blocked on the store anyway — sideloads receive no settings). Until built:
+one puck, one watch — not blocking, since shore admin during a ride is out
+of range regardless.
+
+**Storage lifecycle:** the trace region holds ~5 h of recording and stops
+writing — silently, no watch symptom — once full; jumps (2048 records) are
+separately append-only. `jh_store::trace_clear()` (shipped 2026-08-20)
+auto-clears the trace **only** (jumps always preserved), and only when
+trace is already full, board has been still ≥1 h, and motion has just
+resumed — never on a timer, on boot, or "merely getting full," any of which
+could delete a trace still doing its job.
+
+## Firmware update path (DFU)
+
+Once sealed, the puck updates via **Nordic legacy OTA DFU** through the
+stock Adafruit bootloader, driven from the free **nRF Connect** phone app —
+no cable; UF2 drag-drop over USB is the alternative. **No browser DFU
+exists or is planned: Web Bluetooth blocklists the legacy DFU service
+outright.**
+
+**RETRACTED: "OTA on a glued device is proven."** OTA is proven only on a
+bench board with a physical reset button at hand. A transfer that dies
+mid-way (observed twice) leaves the puck sitting in its bootloader — no
+advertisement, no connection, recoverable only by physical reset — a dead
+puck if it's sealed. Compounding it: **`dfu` is UNAUTHENTICATED**, any BLE
+peer in range can command a sealed puck into its bootloader with nothing
+more than nRF Connect. Accepted for a personal device; needs gating (a
+required argument, or disabled outside a bench build) before this is ever
+handed to anyone else. (Binary trace v2 wire format — firmware storage, not
+a watch/BLE concern — is specified in `firmware/include/trace_codec.h`.)
+
+## Two surfaces
+
+**The Garmin watch is the product's only user-facing interface** (owner
+decision, 2026-08-23 — the web app is retired, `archive/web-app` tag).
+Glanceable state during a session, writes the FIT activity; read-only by
+design, sends exactly one command, `stats`, per connect. `tools/jump` (Mac)
+is the only other surface: development bench AND field admin — `dump`,
+`clear`, `selftest`, `format`, `mount`, `off`, `dfu` all require it, and
+therefore a laptop; nothing still runs a no-laptop admin path.
+
+## Out of scope
+
+Calibration/commands from the watch (phone/CLI own that). Watch-side
+session history (Garmin Connect is the archive). Apple Watch (different
+platform). Live 50 Hz trace streaming to the watch (bandwidth/battery cost,
+no use case).

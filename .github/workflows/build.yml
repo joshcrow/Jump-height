@@ -1,17 +1,15 @@
-# Builds the firmware and publishes the web app to GitHub Pages.
+# Builds the firmware and publishes the drag-and-drop .uf2 as a CI artifact.
 #
 # The Sense (nRF52) is the only firmware target since the ESP32 v1 platform was
 # retired on 2026-08-18 (commit 12480c6) — which also removed the in-browser
-# flasher, because ESP Web Tools cannot flash that board. What survives of the
-# zero-install story is the drag-and-drop `.uf2` published here next to the web
-# app (docs/sense.md §3.3/§3.9): that file plus the bootloader's own
-# double-tap-reset "XIAO-SENSE" USB drive is the whole browser-free flashing
-# path. Everything else flashes from the bench — `./tools/jump flash` over USB,
-# `tools/otadfu.py` over the air.
-#
-# One-time repo setup for the Pages half: Settings → Pages → Source: "GitHub
-# Actions". Until then, the pages job fails harmlessly and the firmware
-# artifact is still produced.
+# flasher, because ESP Web Tools cannot flash that board. The owner's
+# watch-only direction (2026-08-23) then retired the browser app itself
+# (recoverable at tag archive/web-app), so the GitHub Pages publish that used
+# to sit next to it went too. What's left of the zero-install story is this
+# workflow's `.uf2` artifact (docs/sense.md §3.3/§3.9) plus the bootloader's
+# own double-tap-reset "XIAO-SENSE" USB drive — download the artifact from the
+# Actions run, drop it on that drive. Everything else flashes from the bench —
+# `./tools/jump flash` over USB, `tools/otadfu.py` over the air.
 
 name: build
 
@@ -23,24 +21,18 @@ on:
   # the branch carrying the 2026-08-22 audit's own build and test gates, which
   # sat in a PR with zero checks on it. F-03 and F-04 were both "the gate did
   # not actually run"; a gate that only runs after the merge is the same shape.
-  #
-  # Safe for the Pages half: the `pages` job is already gated on
-  # `github.ref == 'refs/heads/main'`, so a PR builds and tests but publishes
-  # nothing.
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 jobs:
-  # The full software test suite: CLI + fake-device integration, web app
-  # (Playwright vs the mock device), trace-codec C++/Python parity, and
-  # simtest (detector parity + firmware-core host compile). Until 2026-07
-  # these only ever ran on a developer machine — CI compiled the firmware
-  # but never tested the software. Runs in parallel with the firmware job.
+  # The full software test suite: CLI + fake-device integration, trace-codec
+  # C++/Python parity, and simtest (detector parity + firmware-core host
+  # compile). Until 2026-07 these only ever ran on a developer machine — CI
+  # compiled the firmware but never tested the software. Runs in parallel with
+  # the firmware job.
   test:
     runs-on: ubuntu-latest
     steps:
@@ -59,8 +51,7 @@ jobs:
           # infrastructure skip is a failure — skipping here would leave F-14's
           # refuse-on-ambiguity rule, the one guarding against flashing the
           # wrong board, unverified in CI while the suite stayed green.
-          pip install pytest pyserial playwright platformio bleak
-          python -m playwright install --with-deps chromium
+          pip install pytest pyserial platformio bleak
 
       # F-03 (audit 2026-08-22). PlatformIO belongs in THIS job, not only in
       # the firmware job. tools/tests/test_hostdev.py drives the real firmware
@@ -132,11 +123,10 @@ jobs:
         # The only firmware target: the firebeetle32 (ESP32 v1) env this step
         # used to run alongside was deleted with the platform on 2026-08-18
         # (commit 12480c6), and firmware/platformio.ini no longer defines it.
-        # continue-on-error: the web app is a plain static page that does not
-        # depend on any firmware binary, so a firmware regression must not
-        # block the web/Pages publish below (uploads still happen further down
-        # this same job) — the "Enforce Sense build result" step at the end
-        # turns this loud again once they have.
+        # continue-on-error: lets the upload/enforce steps below still run on
+        # a build failure, so the job ends with the explicit ::error:: message
+        # further down (naming the exact failing step) instead of stopping
+        # cold here.
         id: build_sense
         continue-on-error: true
         run: |
@@ -146,10 +136,10 @@ jobs:
       - name: Convert Sense firmware to .uf2
         # Only attempted if the Sense build actually produced a .hex, and
         # itself continue-on-error, so a conversion regression can't block the
-        # web/Pages publish either — same reasoning as the build step above.
-        # This step both converts AND stages the result into web/firmware/,
-        # so gating it on build_sense having succeeded is what keeps a
-        # half-built/missing .uf2 out of web/ when Sense regresses.
+        # artifact upload below either — same reasoning as the build step
+        # above. This step both converts AND stages the result into dist/, so
+        # gating it on build_sense having succeeded is what keeps a
+        # half-built/missing .uf2 out of dist/ when Sense regresses.
         if: steps.build_sense.outcome == 'success'
         id: convert_sense
         continue-on-error: true
@@ -158,51 +148,31 @@ jobs:
         # passed as a raw hex literal since we don't vendor the companion
         # uf2families.json name table (see uf2conv.py's own comment on why).
         run: |
-          # web/firmware/ is gitignored and was previously created by the
-          # (now-removed) ESP32 staging step, so create it here.
-          mkdir -p web/firmware
+          # dist/ is a plain CI-local build directory — created fresh here
+          # each run and never committed, like firmware/.pio/ (see
+          # .gitignore's "PlatformIO / firmware build output" section).
+          mkdir -p dist
           FW_VERSION=$(grep -oP '#define\s+FW_VERSION\s+"\K[^"]+' firmware/src/main.cpp)
           python3 tools/uf2conv.py \
             firmware/.pio/build/xiaoblesense_adafruit/firmware.hex \
-            -f 0xADA52840 -c -o "web/firmware/jumpheight-sense-${FW_VERSION}.uf2"
-          ls -la web/firmware/
+            -f 0xADA52840 -c -o "dist/jumpheight-sense-${FW_VERSION}.uf2"
+          ls -la dist/
 
       - name: Upload firmware binaries (artifact)
         uses: actions/upload-artifact@v4
         with:
           name: firmware-binaries
-          path: web/firmware/
+          path: dist/
           if-no-files-found: warn  # explicit: Sense-build failure leaves no dir; the enforce step still fails the run
-
-      - name: Upload Pages artifact (web app + .uf2)
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: web/
 
       - name: Enforce Sense build result
         # The Sense/.uf2 steps above are continue-on-error so a firmware
-        # regression can never block the web/Pages publish (already uploaded
-        # above, unaffected) — but a real regression must still fail this
+        # regression can never block the artifact upload above (already
+        # uploaded, unaffected) — but a real regression must still fail this
         # workflow loudly rather than go silently green forever.
         # steps.*.outcome (unlike .conclusion) reflects the step's real
         # pass/fail, ignoring continue-on-error.
         if: steps.build_sense.outcome == 'failure' || steps.convert_sense.outcome == 'failure'
         run: |
-          echo "::error::Sense (nRF52) build or .uf2 conversion failed — see the 'Build firmware (Sense / nRF52)' / 'Convert Sense firmware to .uf2' steps above. The web/Pages artifact was still published, without a .uf2."
+          echo "::error::Sense (nRF52) build or .uf2 conversion failed — see the 'Build firmware (Sense / nRF52)' / 'Convert Sense firmware to .uf2' steps above. No .uf2 was produced this run."
           exit 1
-
-  pages:
-    needs: firmware
-    # A firmware regression makes the firmware job's own conclusion `failure`
-    # (its last step turns that loud on purpose — see above), but the web/Pages
-    # artifact was already uploaded earlier in that same job, so publishing it
-    # must not be skipped just because of it.
-    if: (success() || failure()) && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4

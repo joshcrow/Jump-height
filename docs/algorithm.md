@@ -76,7 +76,7 @@ unless `config/params.json` is reset first.
   hit this exact ambiguity and resolved it the same way (ITTC "relative wave
   elevation" — height against the local, instantaneous water surface): our
   number is honestly *flight height above the takeoff point*. See
-  [research.md §4](research.md).
+  `research.md §4`.
 - **Ballistic flight — verified for free-fall, sim-answered near-ballistic for a
   flown wing.** The method is peer-validated where flight is truly ballistic (ICC
   up to 0.997 vs force plates), and kite jumps are the proven exception (sustained
@@ -85,8 +85,8 @@ unless `config/params.json` is reset first.
   the arm-force ceiling caps any mid-air lift, so airtime `h = g·T²/8` overshoots
   by only 1.00–1.07× (vs the kite's 2.31×), with a Monte-Carlo physics-floor RMSE
   of ~4.2 cm. Pending real-water confirmation (the Phase 2 video calibration), but
-  de-risked from simulation. See [wing-ballistic-sim.md](wing-ballistic-sim.md);
-  full citations and the design-verdicts table: [research.md §2](research.md).
+  de-risked from simulation. See `wing-ballistic-sim.md`;
+  full citations and the design-verdicts table: `research.md §2`.
 
 ## The signal
 
@@ -169,7 +169,7 @@ error (`dh/dT = g·T/4`). 100–200 Hz is plenty.
   and fakes a 2.5 g "landing" spike mid-air. The fix — validated in simulation — is
   to subtract per-sample `ω²r` from `|a|` before the state machine, which makes the
   gyro a **detector hot-path input** (not an optional extra) and requires a
-  mount/lever-arm calibration for `r`. See [gyro-sim-plan.md](gyro-sim-plan.md) (g4).
+  mount/lever-arm calibration for `r`. See `gyro-sim-plan.md` (g4).
 - **Sustained lift makes a jump invisible (silent miss).** If mid-flight specific
   force never drops below `freefall_enter_g` (0.35 g), takeoff is never detected
   and the jump is never reported — nothing on the watch, nothing in the log, no
@@ -188,7 +188,7 @@ error (`dh/dT = g·T/4`). 100–200 Hz is plenty.
 - **Self-diagnosis:** the median airborne `|a|` should sit near 0 g for a truly
   ballistic flight; a median `> 0.12 g` flags a non-ballistic (or badly-mounted)
   jump. Without spin this separates ballistic from non-ballistic at AUC 1.0; under
-  spin it needs the gyro. See [gyro-sim-plan.md](gyro-sim-plan.md).
+  spin it needs the gyro. See `gyro-sim-plan.md`.
 - **Beyond the hot-path:** a gyro-aided complementary/AHRS filter can also rotate
   acceleration into the world frame and cross-check takeoff via vertical velocity.
   Airtime stays the robust primary; that world-frame cross-check is a refinement.

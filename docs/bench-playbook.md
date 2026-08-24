@@ -261,7 +261,7 @@ flashes per replug; spend it once, deliberately.
 
 > The full standing plan — mechanism, shipped code defenses, the meter
 > decision tree, and the unseal gate for the sealed spare board — lives in
-> [hardware-protection.md](hardware-protection.md). This section is the
+> `hardware-protection.md`. This section is the
 > five rules; that document is the law they come from.
 
 1. **No MCU line into a peripheral's power domain may be energized while

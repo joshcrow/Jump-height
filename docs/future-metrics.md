@@ -110,7 +110,7 @@ to forbid, for a metric nobody has requested yet.
 
 **Do, before the session (all free):**
 1. **Make sure the whole session is recorded.** ~2 h fits in the ~5 h region,
-   and the storage-lifecycle decision (`garmin-only.md` §3) must not auto-wipe
+   and the storage-lifecycle decision (`docs/watch.md#puck-identity--which-puck-is-mine`) must not auto-wipe
    mid-session. This is the one way to lose everything.
    - **RESOLVED 2026-08-23 — the auto-clear shipped, and its policy is
      narrow enough to satisfy this.** `firmware/src/main.cpp:1540-1545`

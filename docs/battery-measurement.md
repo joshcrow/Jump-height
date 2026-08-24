@@ -5,7 +5,7 @@ review** (4 attackers on independent dimensions, one skeptic per surviving
 finding). 6 findings survived verification and are folded in below; 2 were
 refuted, and §9 records why, because both refutations corrected the reviewers'
 model of the project rather than the plan. Supersedes the measurement protocol
-in [power-optimisation.md](power-optimisation.md) §0.
+in `power-optimisation.md` §0.
 
 The original problem stands: two overnight runs produced two mutually
 contradictory currents (11.6 mA, 16.3 mA) for a device whose idle draw cannot
