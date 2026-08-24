@@ -84,7 +84,7 @@ Ordered by what blocks what.
 | **F-22** | minor | `trace_bytes()` over-reports once the region fills; self-corrects at the next boot |
 | **F-23** | minor | Full-chip mount is ~80× empty (74 ms vs 0.93 ms). The walk is the floor; no counter scheme fixes it |
 | **F-24** | minor | Self-arm cannot bootstrap at a small lever arm. **Not reachable** — `JH_SPIN_SELFARM_ENABLED = 0` |
-| **F-25** | minor | `jump status` reported the help *string* as "commands in binary", hiding `gyro`/`pincensus`/`vbatscan`. Label fixed 08-23; the help string itself rides the next flash batch |
+| ~~F-25~~ | closed | `jump status` reported the help *string* as "commands in binary", hiding `gyro`/`pincensus`/`vbatscan`. Tool label fixed 08-23; help string shipped in the 08-24 flash (`42dbd59`, on-device at `src=76df4a83`) — `jump status` now shows 21 with no gap |
 
 ## Closed recently — do not re-open
 
