@@ -12,8 +12,12 @@ jumps.csv: so you can change config/params.json (or the detector) and see the
 effect on the WHOLE corpus at once, without reflashing. The device's jumps.csv
 is still reported alongside as "what the firmware actually did".
 
-Session layout (as ./tools/jump sync writes it):
-  data/sessions/<id>/
+Session layout (as ./tools/jump sync writes it). Sessions are discovered
+RECURSIVELY under the root — a session is any directory holding both trace.csv
+and labels.csv, at any depth — because captures get grouped by experiment
+(jitter-check/<id>/, walk-overnight/pull-a/<id>/) and a one-level scan found
+none of them:
+  data/sessions/[<group>/…]<id>/
     trace.csv     t,mag                                          — |a| in g, ~50 Hz
     jumps.csv     n,takeoff_s,airtime_raw_s,airtime_s,height_m   — device's detections
     labels.csv    (NEW, this file's ground truth — see below)
@@ -43,6 +47,8 @@ import csv
 import json
 import math
 import os
+import textwrap
+from collections import Counter
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -117,6 +123,58 @@ def load_labels(path: Path) -> List[dict]:
     return rows
 
 
+def find_sessions(root: Path) -> Tuple[List[Path], List[Path]]:
+    """Walk `root` for session dirs. Returns (labeled, trace_only).
+
+    RECURSIVE since 2026-08-23. This was `root.glob("*")` — exactly one level
+    deep — while the repo's only labels.csv sits two levels down, at
+    data/sessions/jitter-check/20260815-190012/. So `jump eval` printed "No
+    labeled sessions found", which is the message for "you have not labeled
+    anything yet". The one labeled session in the repo was invisible for as
+    long as it existed, and a MISS was indistinguishable from an ABSENCE
+    (CLAUDE.md rule 3). Nesting is not exotic here: captures get grouped into
+    a named folder per experiment (jitter-check/, walk-overnight/pull-a/), and
+    docs/data-pipeline.md's flat `data/sessions/<id>/` is the simple case, not
+    the only one.
+
+    A matched session is NOT descended into. Its subdirectories are its own
+    artefacts, and re-matching inside one would double-count its jumps.
+
+    `trace_only` is returned rather than discarded because "14 traces, none
+    labeled" and "nothing here at all" are different facts and the caller has
+    to be able to tell the user which one it is.
+    """
+    labeled: List[Path] = []
+    trace_only: List[Path] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        d = Path(dirpath)
+        names = set(filenames)
+        if "trace.csv" in names and "labels.csv" in names:
+            labeled.append(d)
+            dirnames[:] = []          # a session is a leaf — stop here
+            continue
+        if "trace.csv" in names:
+            trace_only.append(d)
+        dirnames.sort()               # deterministic walk order
+    return sorted(labeled), sorted(trace_only)
+
+
+def display_name(sess: Path, root: Path) -> str:
+    """Session name for the report, relative to `root`.
+
+    Not `sess.name`: two sessions at different depths can share a leaf name
+    (every `jump sync` dir is a timestamp, so `a/20260815-190012` and
+    `b/20260815-190012` are entirely possible), and two identical rows in the
+    per-session table would be unattributable. A depth-1 session's relative
+    path IS its leaf name, so the existing flat output is unchanged.
+    """
+    try:
+        rel = sess.relative_to(root).as_posix()
+    except ValueError:
+        return sess.name
+    return sess.name if rel == "." else rel
+
+
 def load_session_meta(sess: Path) -> dict:
     p = sess / "session.json"
     if p.exists():
@@ -157,9 +215,93 @@ def _match(detected_takeoffs: List[float], true_t: float) -> Optional[int]:
     return best
 
 
-def eval_session(sess: Path, params: Params) -> Optional[dict]:
+def inadmissible_reasons(jump_truth: List[dict], times: List[float]) -> List[str]:
+    """Why this session's ground truth cannot be scored. [] means it can.
+
+    Added 2026-08-23, because scoring bad labels is worse than scoring none.
+    data/sessions/jitter-check/20260815-190012 carries three `jump` rows all
+    stamped t_start_s=15619.172, and the evaluator dutifully reported
+    "matched 0/3, missed 3, spurious 3". docs/data-pipeline.md §"THE
+    DIAGNOSTIC THAT MATTERS" and docs/session-card.md's troubleshooting table
+    both tell the reader that missed ≈ spurious means a video↔trace SYNC
+    error, explicitly NOT a broken detector. So the tool was emitting the
+    signature for one fault while suffering a different one, and the docs
+    would have sent whoever read it off to re-check a sync marker that was
+    fine. A confident wrong diagnosis costs more than a blank.
+
+    Each check below has to name a failure it actually prevents; a check that
+    only expresses taste would refuse real data on water-day evening, which is
+    the one moment there is no time to argue with a tool.
+    """
+    reasons: List[str] = []
+
+    # (a) No time span. A truncated or empty trace.csv (an interrupted `jump
+    #     sync`) scores every label as missed, i.e. "matched 0/N" — again the
+    #     detector takes the blame for a file-transfer failure.
+    if len(times) < 2:
+        reasons.append(f"trace.csv holds {len(times)} sample(s) — there is no "
+                       f"time span to score anything against")
+
+    if not jump_truth:
+        return reasons
+
+    ts = [j["t_start_s"] for j in jump_truth]
+
+    # (b) Duplicate takeoff timestamps — the jitter-check case, and NOT a
+    #     one-off: tools/label.py turns the note "15:05  jump x3" into three
+    #     rows at one instant BY DESIGN, and prints "Treat jump rows here as
+    #     'roughly N jumps happened around here'" as it writes them. That
+    #     warning is true and it is also on a different day, in a different
+    #     terminal, in scrollback nobody re-reads — so the file itself has to
+    #     carry the disqualification. Two takeoffs cannot share an instant;
+    #     N rows at one time are a COUNT, not N timings.
+    #
+    #     Exact equality only, deliberately. A window-based rule (say, "within
+    #     MATCH_WINDOW_S") is a judgement call that could refuse two genuinely
+    #     close real jumps, and it is not needed: the failure being prevented
+    #     produces byte-identical timestamps.
+    counts = Counter(ts)
+    dups = sorted(t for t, n in counts.items() if n > 1)
+    if dups:
+        n_rows = sum(n for t, n in counts.items() if n > 1)
+        shown = ", ".join(f"{t:.3f}" for t in dups[:3]) + ("…" if len(dups) > 3 else "")
+        reasons.append(
+            f"{n_rows} of {len(ts)} jump row(s) share a t_start_s ({shown} s) — "
+            f"two takeoffs cannot occur at the same instant, so these are a "
+            f"count of jumps, not per-jump timings")
+
+    # (c) Every label outside the trace. Trace time is seconds-since-boot (the
+    #     puck has no RTC), so labels keyed to wall-clock or to video-relative
+    #     time land nowhere near it — and tools/label.py does that conversion
+    #     from session.json's trace_epoch_utc, which is exactly the step that
+    #     can be wrong. Nothing is matchable, so "matched 0/N" would once more
+    #     accuse the detector of a clock error.
+    #
+    #     ALL, not ANY: one stray row past the end is still a session with
+    #     scoreable jumps in it, and refusing the other seven would throw away
+    #     good data. The partial case is reported instead (see out_of_range
+    #     in eval_session) so a `missed` count is never silently a labeling
+    #     error. MATCH_WINDOW_S of slack because a takeoff that close to the
+    #     edge could legitimately match.
+    if len(times) >= 2:
+        lo, hi = min(times) - MATCH_WINDOW_S, max(times) + MATCH_WINDOW_S
+        if all(t < lo or t > hi for t in ts):
+            reasons.append(
+                f"all {len(ts)} jump label(s) fall outside the trace's time range "
+                f"{min(times):.1f}–{max(times):.1f} s (labels span "
+                f"{min(ts):.1f}–{max(ts):.1f} s) — they are keyed to a different clock")
+    return reasons
+
+
+def eval_session(sess: Path, params: Params, name: Optional[str] = None) -> Optional[dict]:
     """Score one session's re-run detections against its labels. Returns None if
-    the session has no labels.csv (nothing to score against)."""
+    the session has no labels.csv (nothing to score against).
+
+    A session whose labels are inadmissible comes back with a non-empty
+    `excluded` list and no scores — present in the results, refusing to
+    produce a number. It is never dropped: dropping it would restore the
+    miss-looks-like-absence bug this function was fixed for.
+    """
     labels_path = sess / "labels.csv"
     trace_path = sess / "trace.csv"
     if not labels_path.exists() or not trace_path.exists():
@@ -169,6 +311,31 @@ def eval_session(sess: Path, params: Params) -> Optional[dict]:
     jump_truth = [l for l in labels if l["event"] == "jump" and l["t_start_s"] is not None]
 
     times, mag = load_csv(str(trace_path))
+
+    meta = load_session_meta(sess)
+    disp = name if name is not None else sess.name
+    other_labels = sorted({l["event"] for l in labels if l["event"] != "jump"})
+
+    bad = inadmissible_reasons(jump_truth, times)
+    if bad:
+        return {
+            "session": disp,
+            "split": meta.get("split", "unknown"),
+            "meta": meta,
+            "excluded": bad,
+            "n_true": len(jump_truth),
+            # None, not 0. A zero here would aggregate into the corpus totals
+            # as a real, passing measurement of nothing.
+            "matched": None,
+            "missed": None,
+            "spurious": None,
+            "height_errors": [],
+            "circular_heights": 0,
+            "out_of_range": 0,
+            "device_jumps": len(load_device_jumps(sess)),
+            "other_labels": other_labels,
+            "pairs": [],
+        }
     detected = run_detector(times, mag, params)
     det_takeoffs = [d.takeoff_time_s for d in detected]
 
@@ -206,19 +373,29 @@ def eval_session(sess: Path, params: Params) -> Optional[dict]:
                    if p["det"] is not None and p["true"]["height_m"] is not None
                    and not _independent(p["true"]))
 
-    meta = load_session_meta(sess)
+    # Labels that lie outside the trace entirely, in a session where OTHERS do
+    # not (the all-outside case was refused above). Each one is unmatchable and
+    # so lands in `missed`, where it is indistinguishable from a jump the
+    # detector failed to find. Counted so the report can name it: this is
+    # docs/data-pipeline.md's "partial case is the trap" — a plausible rate
+    # computed from a silent subset.
+    _lo, _hi = min(times) - MATCH_WINDOW_S, max(times) + MATCH_WINDOW_S
+    out_of_range = sum(1 for j in jump_truth if j["t_start_s"] < _lo or j["t_start_s"] > _hi)
+
     return {
-        "session": sess.name,
+        "session": disp,
         "split": meta.get("split", "unknown"),
         "meta": meta,
+        "excluded": [],
         "n_true": len(jump_truth),
         "matched": len(used),
         "missed": missed,
         "spurious": spurious,
         "height_errors": herr,
         "circular_heights": circular,
+        "out_of_range": out_of_range,
         "device_jumps": len(load_device_jumps(sess)),
-        "other_labels": sorted({l["event"] for l in labels if l["event"] != "jump"}),
+        "other_labels": other_labels,
         "pairs": pairs,
     }
 
@@ -237,24 +414,33 @@ def _agg_height(errs: List[float]) -> dict:
 
 
 def eval_corpus(root: Path, params: Params, split: str = "all") -> dict:
-    sessions = sorted(p for p in root.glob("*") if p.is_dir())
+    labeled, trace_only = find_sessions(root)
     results = []
-    for s in sessions:
-        r = eval_session(s, params)
+    split_filtered = 0
+    for s in labeled:
+        r = eval_session(s, params, name=display_name(s, root))
         if r is None:
             continue
         if split != "all" and r["split"] != split:
+            split_filtered += 1
             continue
         results.append(r)
 
-    all_err = [e for r in results for e in r["height_errors"]]
-    tot_circular = sum(r.get("circular_heights", 0) for r in results)
-    tot_true = sum(r["n_true"] for r in results)
-    tot_match = sum(r["matched"] for r in results)
-    tot_missed = sum(r["missed"] for r in results)
-    tot_spur = sum(r["spurious"] for r in results)
+    # Excluded sessions stay in `sessions` (the report must show them) but
+    # contribute to NO total. Folding their zeros into the corpus would let
+    # inadmissible labels quietly drag the detection rate down, which is the
+    # same lie in aggregate form.
+    scored = [r for r in results if not r.get("excluded")]
+
+    all_err = [e for r in scored for e in r["height_errors"]]
+    tot_circular = sum(r.get("circular_heights", 0) for r in scored)
+    tot_oor = sum(r.get("out_of_range", 0) for r in scored)
+    tot_true = sum(r["n_true"] for r in scored)
+    tot_match = sum(r["matched"] for r in scored)
+    tot_missed = sum(r["missed"] for r in scored)
+    tot_spur = sum(r["spurious"] for r in scored)
     return {
-        "n_sessions": len(results),
+        "n_sessions": len(scored),
         "n_true": tot_true,
         "matched": tot_match,
         "missed": tot_missed,
@@ -262,6 +448,13 @@ def eval_corpus(root: Path, params: Params, split: str = "all") -> dict:
         "detection_rate": (tot_match / tot_true) if tot_true else None,
         "height": _agg_height(all_err),
         "circular_heights": tot_circular,
+        "out_of_range": tot_oor,
+        "n_excluded": len(results) - len(scored),
+        # Discovery bookkeeping, so "no labeled sessions" can say which kind of
+        # nothing it found (2026-08-23).
+        "root": str(root),
+        "unlabeled_traces": [display_name(p, root) for p in trace_only],
+        "split_filtered": split_filtered,
         "sessions": results,
     }
 
@@ -272,20 +465,99 @@ def _fmt(x, unit="", nd=3):
     return "—" if x is None else f"{x:.{nd}f}{unit}"
 
 
-def print_report(agg: dict, verbose: bool = False) -> None:
-    if agg["n_sessions"] == 0:
-        print("No labeled sessions found (need a labels.csv beside trace.csv).")
-        print(f"See docs/data-pipeline.md for the labels.csv schema.")
+def _int(x):
+    """Counts an excluded session does not have. A dash, never a 0 — a 0 in the
+    `match` column is a claim that the detector found nothing."""
+    return "—" if x is None else str(x)
+
+
+def _print_nothing_found(agg: dict) -> None:
+    """The empty-corpus message.
+
+    It used to be one line — "No labeled sessions found" — which conflated
+    "you have not labeled anything yet" with "the search never reached your
+    labels" (it was one level deep) and with "your --split dropped them all".
+    Three different problems, three different fixes, one indistinguishable
+    message. CLAUDE.md rule 3: a reading that did not happen is a finding.
+    """
+    print("No labeled sessions found (need a labels.csv beside trace.csv).")
+    print(f"  searched (recursively): {agg.get('root', '?')}")
+
+    unlabeled = agg.get("unlabeled_traces") or []
+    if unlabeled:
+        shown = ", ".join(unlabeled[:5])
+        more = f" (+{len(unlabeled) - 5} more)" if len(unlabeled) > 5 else ""
+        print(f"  {len(unlabeled)} director(ies) DO hold a trace.csv but no labels.csv:")
+        print(f"    {shown}{more}")
+        print("  So: traces exist and none of them are labeled. That is a different")
+        print("  fact from an empty corpus, and it has a different fix.")
+
+    nf = agg.get("split_filtered", 0)
+    if nf:
+        print(f"  {nf} labeled session(s) WERE found, then dropped by the --split")
+        print("  filter. Re-run with --split all to see them.")
+
+    print("See docs/data-pipeline.md for the labels.csv schema.")
+
+
+def _print_table(sessions: List[dict]) -> None:
+    # Width follows the longest name instead of a fixed 20, because names are
+    # now paths relative to the root and a nested one overflows the column and
+    # shears the whole row. All-flat corpora still render at 20, unchanged.
+    w = max(20, max(len(r["session"]) for r in sessions))
+    print(f"{'session':>{w}} {'split':>7} {'true':>5} {'match':>6} {'miss':>5} "
+          f"{'spur':>5} {'rmse':>7} {'bias':>7}")
+    for r in sessions:
+        h = _agg_height(r["height_errors"])
+        mark = "  ← EXCLUDED, not scored (see below)" if r.get("excluded") else ""
+        print(f"{r['session']:>{w}} {r['split']:>7} {r['n_true']:>5} "
+              f"{_int(r['matched']):>6} {_int(r['missed']):>5} {_int(r['spurious']):>5} "
+              f"{_fmt(h['rmse'],'m'):>7} {_fmt(h['bias'],'m'):>7}{mark}")
+    print()
+
+
+def _print_excluded(excluded: List[dict]) -> None:
+    """Say WHY a session was refused, in the same shape as the height_src block
+    below: the labels are there, and they are not admissible."""
+    if not excluded:
         return
-    if verbose:
-        print(f"{'session':>20} {'split':>7} {'true':>5} {'match':>6} {'miss':>5} "
-              f"{'spur':>5} {'rmse':>7} {'bias':>7}")
-        for r in agg["sessions"]:
-            h = _agg_height(r["height_errors"])
-            print(f"{r['session']:>20} {r['split']:>7} {r['n_true']:>5} {r['matched']:>6} "
-                  f"{r['missed']:>5} {r['spurious']:>5} "
-                  f"{_fmt(h['rmse'],'m'):>7} {_fmt(h['bias'],'m'):>7}")
-        print()
+    print()
+    print(f"  ⚠️  {len(excluded)} session(s) EXCLUDED: the labels are there and are")
+    print( "      NOT admissible, so no score was computed from them. Refusing is the")
+    print( "      point: scoring them emits 'matched 0/N … spurious N', and both")
+    print( "      docs/data-pipeline.md and docs/session-card.md tell the reader that")
+    print( "      signature means a video↔trace SYNC error and NOT a broken detector.")
+    print( "      The tool would have been handing over a confident wrong diagnosis.")
+    for r in excluded:
+        print(f"      • {r['session']}  ({r['n_true']} jump row(s))")
+        for why in r["excluded"]:
+            for i, line in enumerate(textwrap.wrap(why, width=68)):
+                print(f"          {'–' if i == 0 else ' '} {line}")
+    print( "      Fix: per-jump takeoff times from video (docs/data-pipeline.md")
+    print( "      'Labeling'). tools/label.py's `jump xN` writes N rows at ONE")
+    print( "      timestamp on purpose — those are 'roughly N jumps happened around")
+    print( "      here', which is a useful note and is not per-jump ground truth.")
+
+
+def print_report(agg: dict, verbose: bool = False) -> None:
+    sessions = agg.get("sessions", [])
+    excluded = [r for r in sessions if r.get("excluded")]
+
+    if not sessions:
+        _print_nothing_found(agg)
+        return
+
+    # The per-session table is normally a --verbose extra. An EXCLUDED session
+    # forces it on: leaving that row out of the default view would hide the
+    # refusal, which is this same silent-failure bug wearing a new hat.
+    if verbose or excluded:
+        _print_table(sessions)
+
+    if agg["n_sessions"] == 0:
+        print("CORPUS: nothing scored — every labeled session found was excluded.")
+        _print_excluded(excluded)
+        return
+
     h = agg["height"]
     print(f"CORPUS: {agg['n_sessions']} session(s), {agg['n_true']} labeled jump(s)")
     print(f"  detection : matched {agg['matched']}/{agg['n_true']} "
@@ -293,6 +565,18 @@ def print_report(agg: dict, verbose: bool = False) -> None:
     print(f"  height    : n={h['n']}  RMSE {_fmt(h['rmse'],'m')}  bias {_fmt(h['bias'],'m')}  "
           f"MAE {_fmt(h['mae'],'m')}  max|err| {_fmt(h['max_abs'],'m')}")
     print(f"  benchmark : Marčiš'21 video-validated — Surfr 0.51 m, WOO3 0.70 m RMSE (kite big-air)")
+    _print_excluded(excluded)
+
+    # Labels outside the trace in an otherwise-scoreable session. They land in
+    # `missed` and look exactly like detector failures.
+    noor = agg.get("out_of_range", 0)
+    if noor:
+        print()
+        print(f"  ⚠️  {noor} jump label(s) lie outside their trace's time range and are")
+        print( "      therefore counted as MISSED, though nothing could have matched")
+        print( "      them. The detection rate above is understated by that much — do")
+        print( "      not read it as a detector fault (docs/data-pipeline.md, 'the")
+        print( "      partial case is the trap').")
     # Say WHY there is no RMSE. A bare dash reads as "you forgot to label";
     # this case is the opposite — the labels are there and are not admissible.
     nc = agg.get("circular_heights", 0)
@@ -312,6 +596,9 @@ def summary_metrics(agg: dict) -> dict:
     """The flat metric dict saved as a baseline / compared for regressions."""
     return {
         "n_sessions": agg["n_sessions"], "n_true": agg["n_true"],
+        # Recorded so a frozen baseline shows that a session was REFUSED rather
+        # than just appearing to have fewer sessions than the corpus on disk.
+        "n_excluded": agg.get("n_excluded", 0),
         "detection_rate": agg["detection_rate"],
         "rmse": agg["height"]["rmse"], "bias": agg["height"]["bias"],
         "mae": agg["height"]["mae"], "missed": agg["missed"], "spurious": agg["spurious"],

@@ -14,7 +14,9 @@ Run via ./tools/jump simtest, or directly:
 
 from __future__ import annotations
 
+import contextlib
 import csv
+import io
 import json
 import sys
 import tempfile
@@ -155,6 +157,219 @@ class EvaluatorTest(unittest.TestCase):
         self.assertFalse(ok_worse)               # worse-than-baseline must FAIL
         ok_better, _ = evaluate.regression_check(better, good)
         self.assertTrue(ok_better)               # improvement passes
+
+
+def _relabel(sess: Path, jump_times, height_src="sim", height="1.000"):
+    """Rewrite a session's labels.csv with explicit jump takeoff times.
+    Used to build the degenerate label files the evaluator must refuse."""
+    with open(sess / "labels.csv", "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["event", "t_start_s", "t_end_s", "height_m", "height_src",
+                    "rotation_deg", "landing", "notes"])
+        for t in jump_times:
+            w.writerow(["jump", f"{t:.3f}", "", height, height_src, "", "flat", "x"])
+
+
+def _trace_span(sess: Path):
+    ts = [float(r["t"]) for r in csv.DictReader(open(sess / "trace.csv"))]
+    return min(ts), max(ts)
+
+
+def _report(agg, verbose=False) -> str:
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        evaluate.print_report(agg, verbose=verbose)
+    return buf.getvalue()
+
+
+class SessionDiscoveryTest(unittest.TestCase):
+    """Sessions must be found at ANY depth, and a miss must not read as an absence.
+
+    Discovery was `root.glob("*")` — one level. The repo's only labeled session
+    sat at data/sessions/jitter-check/<id>/, two levels down, so `jump eval`
+    reported 'No labeled sessions found' — the message for 'you have not
+    labeled anything yet'. The one piece of ground truth in the project was
+    invisible, and nothing on screen could tell the two cases apart
+    (CLAUDE.md rule 3)."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp()) / "sessions"
+        self.jumps = generate.DEMO_JUMPS
+        self.params = load_params()
+
+    def test_nested_session_is_found(self):
+        _write_session(self.root, "jitter-check/20260815-190012", self.jumps)
+        agg = evaluate.eval_corpus(self.root, self.params, split="all")
+        self.assertEqual(agg["n_sessions"], 1)
+        self.assertEqual(agg["matched"], len(self.jumps))
+
+    def test_depth_one_name_is_still_the_bare_leaf(self):
+        """The flat case must render exactly as it always did."""
+        _write_session(self.root, "20260805-a", self.jumps)
+        agg = evaluate.eval_corpus(self.root, self.params, split="all")
+        self.assertEqual(agg["sessions"][0]["session"], "20260805-a")
+
+    def test_same_leaf_name_at_two_depths_stays_distinguishable(self):
+        """Every `jump sync` dir is a bare timestamp, so two groups can easily
+        hold the same leaf name. Reported as `sess.name` they would be two
+        identical, unattributable rows in the table."""
+        _write_session(self.root, "pull-a/20260815-115418", self.jumps)
+        _write_session(self.root, "pull-b/20260815-115418", self.jumps, seed=2)
+        agg = evaluate.eval_corpus(self.root, self.params, split="all")
+        names = sorted(r["session"] for r in agg["sessions"])
+        self.assertEqual(names, ["pull-a/20260815-115418", "pull-b/20260815-115418"])
+
+    def test_a_matched_session_is_not_descended_into(self):
+        """A session's own subdirectories are its artefacts. Recursing into a
+        matched session would score a copy of its trace a second time and
+        double the corpus's jump count."""
+        sess = _write_session(self.root, "20260805-a", self.jumps)
+        backup = sess / "backup"
+        backup.mkdir()
+        for f in ("trace.csv", "labels.csv"):
+            (backup / f).write_text((sess / f).read_text())
+        agg = evaluate.eval_corpus(self.root, self.params, split="all")
+        self.assertEqual(agg["n_sessions"], 1)
+        self.assertEqual(agg["n_true"], len(self.jumps))
+
+    def test_traces_without_labels_are_counted_and_named(self):
+        """'I found 14 traces, none labeled' is a different fact from 'I found
+        nothing', and only one of them is the user's own doing."""
+        for n in ("20260731-092453", "grp/20260731-094036"):
+            d = self.root / n
+            d.mkdir(parents=True)
+            (d / "trace.csv").write_text("t,mag\n0.0,1.0\n0.02,1.0\n")
+        agg = evaluate.eval_corpus(self.root, self.params, split="all")
+        self.assertEqual(agg["n_sessions"], 0)
+        self.assertEqual(sorted(agg["unlabeled_traces"]),
+                         ["20260731-092453", "grp/20260731-094036"])
+        out = _report(agg)
+        self.assertIn("2 director(ies) DO hold a trace.csv but no labels.csv", out)
+        self.assertIn("grp/20260731-094036", out)
+
+    def test_empty_root_says_nothing_at_all_was_there(self):
+        self.root.mkdir(parents=True)
+        agg = evaluate.eval_corpus(self.root, self.params, split="all")
+        out = _report(agg)
+        self.assertIn("No labeled sessions found", out)
+        self.assertNotIn("DO hold a trace.csv", out)
+
+
+class LabelAdmissibilityTest(unittest.TestCase):
+    """Degenerate ground truth must be REFUSED, not scored.
+
+    Scoring three placeholder rows stamped with one timestamp returned
+    'matched 0/3, missed 3, spurious 3'. docs/data-pipeline.md ('THE
+    DIAGNOSTIC THAT MATTERS') and docs/session-card.md both instruct the
+    reader that missed ≈ spurious means a video↔trace SYNC error and NOT a
+    broken detector — so the tool emitted the signature of a fault it did not
+    have, and the docs would have sent the reader to re-check a sync marker
+    that was fine."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp()) / "sessions"
+        self.jumps = generate.DEMO_JUMPS
+        self.params = load_params()
+
+    def test_duplicate_takeoff_times_are_refused(self):
+        sess = _write_session(self.root, "20260815-190012", self.jumps)
+        t0 = self.jumps[0][0]
+        _relabel(sess, [t0, t0, t0])          # the jitter-check signature
+        agg = evaluate.eval_corpus(self.root, self.params, split="all")
+
+        self.assertEqual(agg["n_sessions"], 0, "must not be scored")
+        self.assertEqual(agg["n_excluded"], 1)
+        # None, never 0: a 0 in the match column is a claim about the detector.
+        r = agg["sessions"][0]
+        self.assertIsNone(r["matched"])
+        self.assertIsNone(r["spurious"])
+        self.assertTrue(r["excluded"])
+        self.assertIn("same instant", " ".join(r["excluded"]))
+
+    def test_refused_session_is_never_silently_dropped(self):
+        """Dropping it would BE the bug: the report would show a clean empty
+        corpus while a labeled session sat on disk unexplained."""
+        sess = _write_session(self.root, "20260815-190012", self.jumps)
+        t0 = self.jumps[0][0]
+        _relabel(sess, [t0, t0, t0])
+        agg = evaluate.eval_corpus(self.root, self.params, split="all")
+        self.assertEqual(len(agg["sessions"]), 1)
+
+        # ...and it must reach the PER-SESSION TABLE without --verbose, where
+        # there is normally no table at all. Asserting only that the word
+        # EXCLUDED appears somewhere is not enough: the warning paragraph
+        # prints it too, so such a test survives deleting the table entirely
+        # (caught by mutation-testing this very test). The row marker is
+        # produced by _print_table and nothing else.
+        out = _report(agg, verbose=False)
+        self.assertIn("← EXCLUDED, not scored", out)
+        self.assertIn("20260815-190012", out)
+        self.assertIn("same instant", out)
+        self.assertNotIn("matched 0/3", out)
+
+    def test_refusal_does_not_contaminate_corpus_totals(self):
+        """A refused session must contribute no zeros. Folding them in would
+        drag the corpus detection rate down with inadmissible data."""
+        _write_session(self.root, "good", self.jumps, seed=1)
+        bad = _write_session(self.root, "bad", self.jumps, seed=2)
+        t0 = self.jumps[0][0]
+        _relabel(bad, [t0, t0, t0])
+
+        agg = evaluate.eval_corpus(self.root, self.params, split="all")
+        self.assertEqual(agg["n_sessions"], 1)
+        self.assertEqual(agg["n_true"], len(self.jumps))
+        self.assertEqual(agg["matched"], len(self.jumps))
+        self.assertEqual(agg["detection_rate"], 1.0)
+        self.assertEqual(evaluate.summary_metrics(agg)["n_excluded"], 1)
+
+    def test_labels_keyed_to_another_clock_are_refused(self):
+        """Trace time is seconds-since-boot; labels converted from wall clock
+        with the wrong anchor land nowhere near it. Every one is unmatchable,
+        so scoring produces 'matched 0/N' and blames the detector for what is
+        a clock error."""
+        sess = _write_session(self.root, "20260815-190012", self.jumps)
+        lo, hi = _trace_span(sess)
+        _relabel(sess, [hi + 5000.0, hi + 5100.0, hi + 5200.0])
+        agg = evaluate.eval_corpus(self.root, self.params, split="all")
+        self.assertEqual(agg["n_sessions"], 0)
+        self.assertIn("different clock", " ".join(agg["sessions"][0]["excluded"]))
+
+    def test_one_stray_label_is_scored_but_reported(self):
+        """ALL-outside is a clock error; ONE outside is a session with good
+        jumps in it. Refusing the whole session would throw those away — but
+        the stray lands in `missed` where it is indistinguishable from a
+        detector failure, so it has to be named."""
+        sess = _write_session(self.root, "20260815-190012", self.jumps)
+        lo, hi = _trace_span(sess)
+        _relabel(sess, [t0 for (t0, _) in self.jumps] + [hi + 5000.0])
+
+        agg = evaluate.eval_corpus(self.root, self.params, split="all")
+        self.assertEqual(agg["n_sessions"], 1, "must still be scored")
+        self.assertEqual(agg["out_of_range"], 1)
+        self.assertEqual(agg["matched"], len(self.jumps))
+        self.assertEqual(agg["missed"], 1)
+        self.assertIn("outside their trace's time range", _report(agg))
+
+    def test_trace_with_no_time_span_is_refused(self):
+        """An interrupted `jump sync` leaves a truncated trace. Every label
+        then scores as missed and the detector takes the blame for a
+        file-transfer failure."""
+        sess = _write_session(self.root, "20260815-190012", self.jumps)
+        (sess / "trace.csv").write_text("t,mag\n0.0,1.0\n")
+        _relabel(sess, [1.0, 2.0, 3.0])
+        agg = evaluate.eval_corpus(self.root, self.params, split="all")
+        self.assertEqual(agg["n_sessions"], 0)
+        self.assertIn("no time span", " ".join(agg["sessions"][0]["excluded"]))
+
+    def test_clean_labels_are_still_admitted(self):
+        """The guard must not refuse good data — that would be a new silent
+        failure pointing the other way."""
+        _write_session(self.root, "20260805-a", self.jumps)
+        agg = evaluate.eval_corpus(self.root, self.params, split="all")
+        self.assertEqual(agg["n_excluded"], 0)
+        self.assertEqual(agg["n_sessions"], 1)
+        self.assertEqual(agg["matched"], len(self.jumps))
+        self.assertNotIn("EXCLUDED", _report(agg, verbose=True))
 
 
 if __name__ == "__main__":

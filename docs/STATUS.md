@@ -2125,8 +2125,9 @@ is the delta since.
 - **Gap:** This branch cannot run on real hardware by construction (tools/jump:878-882), so passing it proves nothing about the device.
 
 ### jump eval + sim/evaluate.py (labeled-corpus scorer)
-- **Evidence:** tools/tests/test_evaluate.py — 5 tests pass on synthetic labeled sessions. Running `./tools/jump eval --verbose` today prints 'No labeled sessions found (need a labels.csv beside trace.csv).' `find . -name labels.csv` → zero results; `find . -name session.json` → zero results.
-- **Gap:** The machinery works; the corpus is empty. Needs the first labeled session.
+- **Evidence:** tools/tests/test_evaluate.py — 20 tests pass on synthetic labeled sessions; all 14 mutants killed (2026-08-23). Session discovery is recursive, and inadmissible ground truth is refused rather than scored.
+- **Gap:** The machinery works; the corpus is still empty *of admissible labels*. `find . -name labels.csv` → exactly one (data/sessions/jitter-check/20260815-190012/), and `./tools/jump eval --verbose` now reports it **EXCLUDED**: its three `jump` rows all carry t_start_s=15619.172, which is a `label.py jump x3` count and not per-jump truth. **Zero scoreable labeled sessions.** Needs the first video-labeled one.
+- **Corrected 2026-08-23:** this entry previously claimed `find . -name labels.csv` → zero results and that eval printed 'No labeled sessions found'. Both were stale: the labels.csv above has existed since 08-15, and eval only said "none" because discovery was one level deep and never reached it. Two defects fixed together — see the commit for `sim/evaluate.py`.
 
 ### jump gen / gen_params --check (params single source of truth)
 - **Evidence:** `python3 tools/gen_params.py --check` → 'params.gen.h is up to date', rc=0. Enforced in CI (build.yml 'Check generated params header is fresh') and in simtest step 2.
