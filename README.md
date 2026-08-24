@@ -244,8 +244,9 @@ This is the rig the algorithm was actually proven on. It was feature-frozen on
 seams, the MPU-6050 driver, the `firebeetle32` PlatformIO envs, the partition map
 and the browser flasher were all deleted, so this build can no longer be compiled
 or flashed. It never took water-day duty: the Sense carries that. Accel-only,
-±8 g, and it does not drive the watch. Git history keeps every line of it, and
-the reasoning is in [`docs/STATUS.md`](docs/STATUS.md) → *HARDWARE DEPRECATION*.
+±8 g, and it does not drive the watch. Git history keeps every line of it; the
+retirement reasoning is DECISIONS #27/#40 and the full account is at tag
+`archive/docs-2026-08-23`.
 
 </details>
 
