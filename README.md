@@ -35,15 +35,14 @@ exists yet — **[`docs/STATUS.md`](docs/STATUS.md)** is the current reference.
 | Piece | State |
 |---|---|
 | **Detection algorithm** | ✅ Proven in sim and on the bench. Shared C++ core, mirrored in Python. |
-| **The puck** — XIAO nRF52840 Sense | ✅ On silicon, **three healthy units**, each advertising a unique name (`JumpHeight-XXXX`) since 2026-08-18. There was never an IMU-bus fault: two "dead board" verdicts were both wrong, and the cause was GPIO drive strength — `pinMode()` silently selects a 0.5 mA driver for a pin that IS the sensor's power supply. **Nothing was ever damaged** (DECISIONS #37 keeps the wrong turns on record). Fully wireless firmware pipeline: OTA gate passed twice back-to-back, bootloader upgraded over the air. |
-
-> **Which board is which?** Only the OG (`JumpHeight-E2C4`) has a battery; the spare (`JumpHeight-45ED`) is USB-only. Identity, batteries and the BLE-pinning rule live in [`docs/bench-playbook.md` §1](docs/bench-playbook.md).
-
-| **v1 prototype** — FireBeetle ESP32 | 🪦 **Retired 2026-08-18** (owner decision), not merely frozen. It is the rig the algorithm was proven on and it stays listed as history — but the platform code, its PlatformIO envs, its partition map and the browser flasher are all deleted, so it cannot be built, flashed or flown any more. The Sense carries the water day. See [`docs/STATUS.md`](docs/STATUS.md) → *HARDWARE DEPRECATION*. |
+| **The puck** — XIAO nRF52840 Sense | ✅ On silicon, **three healthy units**, each advertising a unique name (`JumpHeight-XXXX`) since 2026-08-18. **Four "dead board" verdicts in this project have been wrong; nothing was ever damaged.** The IMU-bus pair traced to GPIO drive strength — `pinMode()` silently selects a 0.5 mA driver for a pin that IS the sensor's power supply (DECISIONS #37 keeps the wrong turns on record). Fully wireless firmware pipeline: OTA gate passed twice back-to-back, bootloader upgraded over the air. |
+| **v1 prototype** — FireBeetle ESP32 | 🪦 **Retired 2026-08-18** (owner decision), not merely frozen. It is the rig the algorithm was proven on and it stays listed as history — but the platform code, its PlatformIO envs, its partition map and the browser flasher are all deleted, so it cannot be built, flashed or flown any more. The Sense carries the water day. |
 | **User interface** | ✅ **The watch is the only interface (owner decision, 2026-08-23).** The browser app is retired; its original anchor, in-browser ESP Web Tools flashing, already went with the ESP32 platform on 2026-08-18 — recoverable at tag `archive/web-app`. The Sense flashes by `.uf2` drag-drop (built by CI, downloaded as a build artifact) or `./tools/jump flash` over USB, and updates over the air via `tools/otadfu.py`. |
-| **Garmin watch field** | ✅ **M2 closed 2026-08-18** — jumps rendered on a real wrist (Epix Gen 2): 3 stored desk tosses reconciled on connect, then 10 live `fakejump`s one by one, and the saved activity's FIT carries the developer fields. |
-| **Battery & power** | ✅ **Measured, not estimated (2026-08-18).** ≥25.7 h idle on one charge — the death run walked past the gauge's "empty" and kept going. Cell is LP502030+PCM, 250 mAh, 3.0 V cut-off. Idle draw **≤10 mA by conservation of charge**, which refutes the 16 mA the voltage gauge produced. The internal DC/DC regulator was confirmed usable on hardware — the largest remaining power win, still one line of existing code. |
+| **Garmin watch field** | ✅ **M2 closed 2026-08-18** — jumps rendered on a real wrist (Epix Gen 2): 3 stored desk tosses reconciled on connect, then 10 live `fakejump`s one by one, and the saved activity's FIT carries the developer fields. ⚠️ The *rider's* watch (Instinct 3) can only be reached via **Connect IQ store approval** — sideloading is impossible there; see [`docs/watch.md`](docs/watch.md). |
+| **Battery & power** | ✅ **Measured, not estimated (2026-08-18).** ≥25.7 h idle on one charge — the death run walked past the gauge's "empty" and kept going. Cell is LP502030+PCM, 250 mAh, 3.0 V cut-off. Idle draw **≤10 mA by conservation of charge**, which refutes the 16 mA the voltage gauge produced. The internal DC/DC regulator is **enabled at every boot** since audit F-05 (`dcdc=1` confirmed live 2026-08-23); post-DC/DC draw is pending re-measurement. |
 | **Phase 2 — the water day** | 🌊 **Next.** Nothing here has been in the ocean yet. |
+
+> **Which board is which?** Only the OG (`JumpHeight-E2C4`) has a battery; the spare (`JumpHeight-45ED`) and the Puck (`JumpHeight-8673`) are USB-only — their battery readings are floating noise. Identity, batteries and the BLE-pinning rule live in [`docs/bench-playbook.md` §1](docs/bench-playbook.md).
 
 **Watch-numbers bug, root-caused and now closed on the wrist (2026-08-18).**
 Connect IQ negotiates the minimum BLE packet size, so jump lines fragmented five
@@ -53,11 +52,10 @@ rejects lines that fail protocol invariants instead of displaying them). On the
 closing run the field found and paired a puck by itself, reconciled the 3 stored
 desk tosses on connect, then rendered 10 live `fakejump`s one by one, and the
 saved activity's FIT carried `jumps=13` / `best_jump=4.216 ft` — the 1.285 m desk
-toss, in the owner's units. Full account and the remaining watch work (Instinct
-field sizes, the background-page test, watch self-health) are in
-[`docs/STATUS.md`](docs/STATUS.md); the two confidently-wrong diagnoses along the
-way are kept as dead ends in the retired Connect IQ doubt list (recoverable at
-tag `archive/docs-2026-08-23`).
+toss, in the owner's units. The remaining watch work (Instinct rendering, the
+store path, link hardening) is in [`docs/watch.md`](docs/watch.md); the two
+confidently-wrong diagnoses along the way are kept as dead ends in the retired
+Connect IQ doubt list (recoverable at tag `archive/docs-2026-08-23`).
 
 ---
 
@@ -343,8 +341,9 @@ Jump-height/
   ocean yet — every accuracy number so far is bench or simulation.*
 - **Phase 3 — App.** ✅ complete, hardware-validated
 - **Phase 4 — The Sense puck.** 🚧 Where the work is. Bring-up S0 done on silicon;
-  the Garmin field is live on the wrist. It takes over water duty once it clears the
-  same bench → drop-cal → bucket → water gauntlet the v1 rig already survived.
+  the Garmin field is live on the wrist. Before water duty it still needs the
+  drop re-calibration (`CAL source=defaults` today) and the bucket test — the
+  water gauntlet itself *is* Phase 2, and nothing has run it.
 
 The phased acceptance-criteria doc this used to cite (`docs/roadmap.md`) was
 retired 2026-08-23 along with the rest of the planning-doc set (recoverable at
