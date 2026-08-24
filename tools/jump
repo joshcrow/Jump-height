@@ -569,7 +569,7 @@ def _print_config_diffs(kind: str, diffs: list[str]) -> None:
 def _cal_provenance_verdict(cal_kv: dict) -> tuple:
     """Judge calibration provenance from a parsed CAL line.
 
-    Returns (level, message) where level is "ok" | "warn" | "unknown".
+    Returns (level, message) where level is "ok" | "info" | "warn" | "unknown".
 
     WHY THE POLICY LIVES HERE AND NOT ON THE DEVICE (2026-08-21). The OG's
     measured drop calibration was silently replaced by compiled defaults —
@@ -596,15 +596,35 @@ def _cal_provenance_verdict(cal_kv: dict) -> tuple:
                           "needs newer firmware)")
         return ("warn", "calibration is COMPILED DEFAULTS, not this board's "
                         "own measurement")
-    bad = [k.replace("_src", "") for k in ("off_src", "scale_src", "vbat_src")
-           if cal_kv.get(k) == "defaults"]
-    if not bad:
-        return ("ok", "all calibration keys from device memory")
-    return ("warn", f"calibration key(s) fell back to compiled defaults: "
-                    f"{', '.join(bad)} — if this board was ever drop-"
-                    f"calibrated, that measurement is GONE (a battery death "
-                    f"can erase it). Re-run the drop ritual before trusting "
-                    f"heights.")
+    # Per-key severity, because the keys have different rituals and different
+    # stakes (2026-08-24, found the night the first real drop calibration
+    # landed and the warning kept firing anyway):
+    #   off   — the DROP ritual's output. defaults => that measurement is
+    #           missing or lost. This is the dire case; heights are wrong.
+    #   scale — the ON-WATER calibration (video ground truth, DECISIONS #16).
+    #           No bench ritual can ever produce it, so before the first
+    #           water session "defaults" is its only honest state. Warning
+    #           on it made the session card's "no provenance warning" gate
+    #           unsatisfiable — a warning that always fires is noise the
+    #           eye learns to skip, which is how the 08-19 loss went unread.
+    #   vbat  — bench-measurable but optional; the percentage gauge it feeds
+    #           was retired outright (docs/battery-measurement.md).
+    if cal_kv.get("off_src") == "defaults":
+        return ("warn", "airtime_offset_s is COMPILED DEFAULTS — the drop "
+                        "calibration is missing or was lost (a battery death "
+                        "can erase it; it happened to the OG on 2026-08-19). "
+                        "Re-run the drop ritual before trusting heights.")
+    notes = []
+    if cal_kv.get("scale_src") == "defaults":
+        notes.append("height_scale=defaults (expected: it is calibrated on "
+                     "the water, not at a bench)")
+    if cal_kv.get("vbat_src") == "defaults":
+        notes.append("vbat_scale=defaults (optional bench ritual; the % "
+                     "gauge it feeds is retired)")
+    if notes:
+        return ("info", "drop calibration present (off_src=device); " +
+                        "; ".join(notes))
+    return ("ok", "all calibration keys from device memory")
 
 
 def check_device_params(dev: Device) -> bool:
@@ -622,7 +642,10 @@ def check_device_params(dev: Device) -> bool:
     lvl, msg = _cal_provenance_verdict(cal_kv)
     if lvl == "warn":
         print(f"  ⚠️  CALIBRATION PROVENANCE: {msg}")
-    elif lvl == "unknown":
+    elif lvl in ("info", "unknown"):
+        # "info" must still PRINT — a defaults key that is expected (scale
+        # before the first water day) is a fact worth one line, not a silent
+        # fall-through (CLAUDE.md rule 3).
         print(f"  ℹ️  {msg}")
     info_kv = {k: v for k, v in _last_tagged(lines, "INFO ").items() if k != "_tag"}
     if not device_kv:
@@ -907,22 +930,47 @@ def _wait_for_port_return(prev_port: str | None, baseline: set[str],
     return None
 
 
-def _replug_pause() -> None:
-    """Block until the human confirms the cable is back — TTY-safe."""
-    if sys.stdin.isatty():
-        input("\n>> Press Enter AFTER the cable is back in... ")
-    else:
-        print("\n>> (non-interactive: continuing)")
+def _wait_for_unplug(prev_port: str, timeout: float = 180.0) -> bool:
+    """Block until OUR port disappears — the physical unplug event."""
+    print("\n>> Waiting for you to UNPLUG the cable", end="", flush=True)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if prev_port not in scan_ports():
+            print(" — unplugged.")
+            return True
+        print(".", end="", flush=True)
+        time.sleep(1.0)
+    print(" — never happened.")
+    return False
 
 
 def _reopen_after_replug(dev: "Device") -> "Device | None":
     """Close `dev`, wait through the human's unplug/replug, and reopen it on
     whatever port returns — shared by both untethered flows. None if it
-    never came back (the caller reports and bails)."""
+    never came back (the caller reports and bails).
+
+    Two pause mechanisms, chosen by whether a human can type at us:
+    - TTY: block on Enter, then watch for the port (the original flow).
+    - No TTY (run from an agent or background shell): the pause's real-world
+      signal IS the cable. Wait for the port to VANISH (the unplug), then
+      for it to return. 2026-08-24: without this, a no-TTY run "continued"
+      instantly, found the board still plugged, and reported "0 good drops"
+      — a measurement that never happened, dressed as a result (CLAUDE.md
+      rule 3). Twice, before the cause was read out of _replug_pause."""
     prev_port, baseline = dev.sp.path, set(scan_ports())
     dev.close()
-    _replug_pause()
-    port = _wait_for_port_return(prev_port, baseline)
+    if sys.stdin.isatty():
+        input("\n>> Press Enter AFTER the cable is back in... ")
+        port = _wait_for_port_return(prev_port, baseline)
+    else:
+        if not _wait_for_unplug(prev_port):
+            print("❌ Never saw the unplug — nothing was measured. Re-run when ready.")
+            return None
+        print("  Do the drops now. Plug the cable back in when done.")
+        # Five careful drops with a still second between each take a while;
+        # 90 s (the TTY default, where Enter already gated the wait) is not
+        # enough headroom when the watch starts at the unplug.
+        port = _wait_for_port_return(prev_port, baseline, timeout=300.0)
     if port is None:
         print("❌ The board never came back on USB. Check the cable, re-run.")
         return None

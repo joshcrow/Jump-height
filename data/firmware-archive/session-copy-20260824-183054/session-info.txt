@@ -1,0 +1,3 @@
+fw=0.4.3
+build_src=6e03d564
+CAL airtime_offset_s=0.0257 height_scale=1.000 source=defaults off_src=defaults scale_src=defaults vbat_src=defaults

@@ -81,6 +81,33 @@ class TestCalProvenance(unittest.TestCase):
         lvl, _ = self.v({})
         self.assertEqual(lvl, "unknown")
 
+    def test_scale_defaults_alone_is_info_not_warn(self):
+        """height_scale is the ON-WATER calibration (DECISIONS #16) — no bench
+        ritual can produce it, so before the first water session "defaults" is
+        its only honest state. Warning on it made the session card's "no
+        provenance warning" gate unsatisfiable, and a warning that always
+        fires is noise the eye skips (2026-08-24, the night the first real
+        drop calibration landed and the warning kept firing anyway)."""
+        lvl, msg = self.v({"off_src": "device", "scale_src": "defaults",
+                           "vbat_src": "device"})
+        self.assertEqual(lvl, "info")
+        self.assertIn("height_scale", msg)
+        self.assertIn("water", msg)
+
+    def test_vbat_defaults_alone_is_info(self):
+        lvl, msg = self.v({"off_src": "device", "scale_src": "device",
+                           "vbat_src": "defaults"})
+        self.assertEqual(lvl, "info")
+        self.assertIn("vbat_scale", msg)
+
+    def test_off_defaults_dominates_regardless_of_other_keys(self):
+        """The drop ritual's own key missing is the dire case; it must warn
+        even when the expected-defaults keys would otherwise soften it."""
+        lvl, msg = self.v({"off_src": "defaults", "scale_src": "defaults",
+                           "vbat_src": "defaults"})
+        self.assertEqual(lvl, "warn")
+        self.assertIn("drop", msg.lower())
+
 
 class TestDownloadVerification(unittest.TestCase):
     """A download is only 'verified' if BOTH files arrived and the device did
@@ -319,6 +346,38 @@ class TestUntetheredHelpers(unittest.TestCase):
                 self.assertGreater(r["h"], 0.0)
         finally:
             proc.terminate()
+
+
+    def test_wait_for_unplug_returns_when_port_vanishes(self):
+        """The no-TTY untethered pause: the cable IS the signal. Without
+        this, a no-TTY `jump drop` run "continued" instantly, found the
+        board still plugged, and reported "0 good drops" — a measurement
+        that never happened, dressed as a result (2026-08-24, twice)."""
+        mod = _load_jump_module()
+        calls = {"n": 0}
+        def fake_scan():
+            calls["n"] += 1
+            return ["/dev/cu.usbmodem101"] if calls["n"] < 3 else []
+        orig = mod.scan_ports
+        mod.scan_ports = fake_scan
+        try:
+            self.assertTrue(mod._wait_for_unplug("/dev/cu.usbmodem101",
+                                                 timeout=10.0))
+            self.assertGreaterEqual(calls["n"], 3)
+        finally:
+            mod.scan_ports = orig
+
+    def test_wait_for_unplug_times_out_when_port_stays(self):
+        """Never-unplugged must be reported as a failure, not waited on
+        forever and not silently passed."""
+        mod = _load_jump_module()
+        orig = mod.scan_ports
+        mod.scan_ports = lambda: ["/dev/cu.usbmodem101"]
+        try:
+            self.assertFalse(mod._wait_for_unplug("/dev/cu.usbmodem101",
+                                                  timeout=0.1))
+        finally:
+            mod.scan_ports = orig
 
     def test_wait_for_port_return_ignores_stranger_ports(self):
         mod = self._mod()

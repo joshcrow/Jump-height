@@ -24,25 +24,29 @@ another document. Docs are the thing under suspicion.
 | Which board can measure power or run untethered? | **The OG only.** Drain, endurance and DC/DC numbers are meaningless elsewhere. | same |
 | Why did my BLE reading change between calls? | **Three boards can advertise.** Unpinned tools answer from whichever replies first. Always `--name`. | `tools/blepin.py` |
 | Can I trust a "dead board" verdict? | **No — four have been wrong.** Nothing was ever damaged. Establish the board's *configuration* first. | `docs/xiao-hardware-truth.md` |
-| What firmware is on the OG? | **`src=e83f6395`.** Confirm with `stats`; never infer from a commit date. | live read, 2026-08-23 |
-| Are the OG's heights trustworthy today? | **No.** `CAL source=defaults` — the drop calibration is gone. Re-run the drop ritual. | live read, below |
+| What firmware is on the OG? | **`src=76df4a83`.** Confirm with `stats`; never infer from a commit date. | live read, 2026-08-24 |
+| Are the OG's heights trustworthy today? | **Bench-calibrated, yes** — drop ritual re-run 2026-08-24: 8 drops from 101.6 cm, bias −19 ms ±9, `airtime_offset_s=0.0192`, `off_src=device`, survived a reflash. `height_scale` remains defaults *by design* until the on-water video calibration. | live read, below |
 | How does the app reach the rider's watch? | **Connect IQ store approval only.** Sideloading is impossible on the Instinct 3. | `docs/watch.md` |
 | When is the water day? | **No date exists anywhere in this repo.** The freeze is *defined* as ≥4 days before it, so there is no freeze window. | — |
 
 ---
 
-## The OG, read over USB on 2026-08-23
+## The OG, read over USB on 2026-08-24
 
 ```
 INFO fw=0.4.3 sample_hz=200 log_hz=50 motion_thresh_g=0.12 idle_timeout_s=20
-     ble=1 vbat_mv=4085 batt_pct=92 chg=0 src=e83f6395
-CAL  airtime_offset_s=0.0257 height_scale=1.000
-     source=defaults off_src=defaults scale_src=defaults vbat_src=defaults
+     ble=1 vbat_mv=4094 batt_pct=93 chg=1 src=76df4a83
+CAL  airtime_offset_s=0.0192 height_scale=1.000
+     source=device off_src=device scale_src=defaults vbat_src=defaults
 SELFTEST i2c / whoami / accel / noise / ble / flash — 6/6 PASS
-STATS stored_jumps=18   best 1.536 m   trace_bytes ≈ 1,583,181
+STATS stored_jumps=0 (session synced to two copies, then cleared)
 ```
 
-`dcdc=1` at every boot (audit F-05). Storage survived the flash byte-identical.
+`dcdc=1` at every boot (audit F-05). The drop calibration was applied live,
+then **baked and reflashed the same night, and survived the reflash in NVS**
+— the flashed build and the tree agree at `src=76df4a83`. The pre-audit
+session (18 jumps, 1.58 MB trace) is in `data/sessions/20260824-183054` and
+a verified second copy.
 
 ---
 
@@ -57,12 +61,11 @@ Ordered by what blocks what.
    current: `garmin/jumpfield/bin/JumpField.iq`, **79,145 bytes**, 2026-08-23,
    4/4 variants clean. The `.iq` is gitignored, so **size and mtime are the
    only handle on which build is on disk — rebuild before submitting.**
-3. **Re-run the drop calibration on the OG.** `CAL source=defaults` today, and
-   the session card lists this as a leave-the-house blocker. Do it *after* the
-   last flash, never before. **A flash batch is pending**: F-25's help-string
-   fix plus 2026-08-23 comment updates moved the tree hash to `4945fda4`, so
-   `selftest` will name two hashes until that batch lands — the loud-but-normal
-   "not flashed yet" state, not a defect.
+3. ~~Re-run the drop calibration on the OG.~~ **DONE 2026-08-24** — 8 drops,
+   101.6 cm, bias −19 ms ±9, saved to device NVS and `config/params.json`,
+   baked into `src=76df4a83`, survived the reflash. The pending flash batch
+   (F-25 help string + comment updates) landed in the same evening; tree and
+   device agree and the session card's provenance gate is green.
 4. **Week-0 items: four of five have not started.** Named 2026-08-20 as
    "latency-gated, begin regardless of era" — the saltwater adhesive coupon (a
    six-month soak needs six months of calendar), a temperature logger, and the
