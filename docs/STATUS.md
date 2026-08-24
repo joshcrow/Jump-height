@@ -56,11 +56,13 @@ Ordered by what blocks what.
 
 1. **Set the date.** Everything sequences off it, and no freeze window can
    begin without it.
-2. **Connect IQ store submission** — *the only route onto the rider's watch*,
-   gated by an external review queue you do not control. Package is built and
-   current: `garmin/jumpfield/bin/JumpField.iq`, **79,145 bytes**, 2026-08-23,
-   4/4 variants clean. The `.iq` is gitignored, so **size and mtime are the
-   only handle on which build is on disk — rebuild before submitting.**
+2. **Connect IQ store: SUBMITTED 2026-08-24**, from a same-night rebuild
+   (79,136 B, 4/4 variants). In review — Garmin's banner says up to 3 days.
+   On approval: install via the Connect IQ phone app on the rider's watch,
+   then the desk sequence in `docs/watch.md` (two-central test is the
+   highest-value item). The `.iq` stays gitignored — **rebuild before any
+   resubmission; size and mtime are the only handle on which build is on
+   disk.**
 3. ~~Re-run the drop calibration on the OG.~~ **DONE 2026-08-24** — 8 drops,
    101.6 cm, bias −19 ms ±9, saved to device NVS and `config/params.json`,
    baked into `src=76df4a83`, survived the reflash. The pending flash batch
