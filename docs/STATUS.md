@@ -26,7 +26,7 @@ another document. Docs are the thing under suspicion.
 | Can I trust a "dead board" verdict? | **No — four have been wrong.** Nothing was ever damaged. Establish the board's *configuration* first. | `docs/xiao-hardware-truth.md` |
 | What firmware is on the OG? | **`src=76df4a83`.** Confirm with `stats`; never infer from a commit date. | live read, 2026-08-24 |
 | Are the OG's heights trustworthy today? | **Bench-calibrated, yes** — drop ritual re-run 2026-08-24: 8 drops from 101.6 cm, bias −19 ms ±9, `airtime_offset_s=0.0192`, `off_src=device`, survived a reflash. `height_scale` remains defaults *by design* until the on-water video calibration. | live read, below |
-| How does the app reach the rider's watch? | **Connect IQ store approval only.** Sideloading is impossible on the Instinct 3. | `docs/watch.md` |
+| How does the app reach the rider's watch? | **Connect IQ store, and it is APPROVED (2026-08-25).** Install from the Connect IQ phone app; sideloading is impossible on the Instinct 3. | `docs/watch.md` |
 | When is the water day? | **No date exists anywhere in this repo.** The freeze is *defined* as ≥4 days before it, so there is no freeze window. | — |
 
 ---
@@ -56,11 +56,15 @@ Ordered by what blocks what.
 
 1. **Set the date.** Everything sequences off it, and no freeze window can
    begin without it.
-2. **Connect IQ store: SUBMITTED 2026-08-24**, from a same-night rebuild
-   (79,136 B, 4/4 variants). In review — Garmin's banner says up to 3 days.
-   On approval: install via the Connect IQ phone app on the rider's watch,
-   then the desk sequence in `docs/watch.md` (two-central test is the
-   highest-value item). The `.iq` stays gitignored — **rebuild before any
+2. ~~Connect IQ store submission.~~ **APPROVED 2026-08-25, ~18 h after
+   filing** (submitted 08-24 ~18:30, approval email 12:18 PM). Live at
+   `apps.garmin.com/en-US/apps/7d0edbd4-24a7-45c2-a6b8-c0886ba34172`;
+   Garmin says up to 24 h to appear for download. The approved build is the
+   08-24 rebuild, 79,136 B, 4/4 variants. **This was the only route onto the
+   rider's watch** — sideloading is architecturally impossible on the
+   Instinct 3 — so the path now exists where none did. Next: install from
+   the Connect IQ phone app on HIS watch, then the desk sequence in
+   `docs/watch.md`. The `.iq` stays gitignored — **rebuild before any
    resubmission; size and mtime are the only handle on which build is on
    disk.**
 3. ~~Re-run the drop calibration on the OG.~~ **DONE 2026-08-24** — 8 drops,
