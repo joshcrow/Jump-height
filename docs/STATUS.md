@@ -84,6 +84,8 @@ Ordered by what blocks what.
 | **F-22** | minor | `trace_bytes()` over-reports once the region fills; self-corrects at the next boot |
 | **F-23** | minor | Full-chip mount is ~80× empty (74 ms vs 0.93 ms). The walk is the floor; no counter scheme fixes it |
 | **F-24** | minor | Self-arm cannot bootstrap at a small lever arm. **Not reachable** — `JH_SPIN_SELFARM_ENABLED = 0` |
+| ~~F-26~~ | closed | `sim/selfdiag.py` had no test at all — 11/11 mutants survived a 223-test run. Now 17 tests, 10/11 mutants killed |
+| ~~F-27~~ | closed | `jump eval --split` was unguarded; inverting the filter passed the suite. Now killed by a partition property test |
 | ~~F-25~~ | closed | `jump status` reported the help *string* as "commands in binary", hiding `gyro`/`pincensus`/`vbatscan`. Tool label fixed 08-23; help string shipped in the 08-24 flash (`42dbd59`, on-device at `src=76df4a83`) — `jump status` now shows 21 with no gap |
 
 ## Closed recently — do not re-open
@@ -99,6 +101,12 @@ Ordered by what blocks what.
   labels were scored as truth. Fixed in `e9fa917`: discovery is recursive, and
   inadmissible ground truth is refused with a stated reason.
 - **Cold-boot selftest false FAIL** — `main.cpp:494-516`, DECISION #35.
+- **The detector gate question, open since 2026-08-15, is CLOSED** — DECISION
+  #41. E7/E8 recommended `freefall_enter_g` 0.26; E11 measured what nobody
+  had, at 400,000 paired jumps: the recommendation misses **48** where the
+  shipped gate misses **3**, 45 of them missed by it alone. It stays at
+  **0.35 / 0.25**, and the 2026-08-24 drop calibration measured at those
+  gates therefore stands — no re-drop.
 
 ## Retracted — do not resurrect
 

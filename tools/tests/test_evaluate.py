@@ -255,6 +255,59 @@ class SessionDiscoveryTest(unittest.TestCase):
         self.assertNotIn("DO hold a trace.csv", out)
 
 
+class SplitFilterTest(unittest.TestCase):
+    """`--split` must select exactly its own sessions, and nothing else.
+
+    Audit F-27 (2026-08-24): the mutation campaign inverted the split
+    comparison at `sim/evaluate.py:424` — making it keep precisely the
+    sessions it should drop — and the full suite still passed. Nothing
+    tested this path. It is inert today because no session in the corpus
+    carries a split, and it stops being inert the moment held-out
+    evaluation starts, which is exactly when a silently-inverted filter
+    would train and validate on the same sessions — the one thing the
+    split exists to prevent (docs/data-pipeline.md)."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp()) / "sessions"
+        self.jumps = generate.DEMO_JUMPS
+        self.params = load_params()
+        _write_session(self.root, "tr", self.jumps, seed=1, split="train")
+        _write_session(self.root, "te", self.jumps, seed=2, split="test")
+
+    def _names(self, split):
+        agg = evaluate.eval_corpus(self.root, self.params, split=split)
+        return sorted(r["session"] for r in agg["sessions"]
+                      if r.get("split") == split or split == "all")
+
+    def test_train_selects_only_train(self):
+        agg = evaluate.eval_corpus(self.root, self.params, split="train")
+        self.assertEqual(agg["n_sessions"], 1)
+        self.assertEqual(
+            [r["split"] for r in agg["sessions"] if r["split"] == "train"],
+            ["train"])
+
+    def test_test_selects_only_test(self):
+        agg = evaluate.eval_corpus(self.root, self.params, split="test")
+        self.assertEqual(agg["n_sessions"], 1)
+
+    def test_all_selects_both(self):
+        agg = evaluate.eval_corpus(self.root, self.params, split="all")
+        self.assertEqual(agg["n_sessions"], 2)
+
+    def test_the_two_splits_are_disjoint_and_cover_the_corpus(self):
+        """The property that actually matters: train and test must partition
+        the corpus. An inverted comparison breaks this even when each
+        individual count still looks plausible."""
+        tr = evaluate.eval_corpus(self.root, self.params, split="train")
+        te = evaluate.eval_corpus(self.root, self.params, split="test")
+        al = evaluate.eval_corpus(self.root, self.params, split="all")
+        tr_names = {r["session"] for r in tr["sessions"]}
+        te_names = {r["session"] for r in te["sessions"]}
+        self.assertEqual(tr_names & te_names, set(), "splits overlap")
+        self.assertEqual(tr["n_sessions"] + te["n_sessions"],
+                         al["n_sessions"])
+
+
 class LabelAdmissibilityTest(unittest.TestCase):
     """Degenerate ground truth must be REFUSED, not scored.
 
