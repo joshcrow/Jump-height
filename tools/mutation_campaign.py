@@ -122,10 +122,23 @@ def run_suite(repo: Path, timeout: int) -> tuple[bool, str]:
         # but it is not a clean kill — call it out rather than bank it.
         return (True, "TIMEOUT")
     out = (r.stdout or "") + (r.stderr or "")
-    if "failed" in out or "error" in out.lower():
-        return (True, "failed")
+    # Use pytest's EXIT CODE, not a substring search of its prose.
+    # The first draft of this function did `if "failed" in out` — which
+    # matches the "failed" inside "1 xfailed", so a fully green suite
+    # (223 passed, 1 xfailed) read as a failure and the baseline guard
+    # aborted the whole campaign. The instrument had the exact defect it
+    # exists to hunt: a green run reported as a catch. Caught 2026-08-24
+    # only because the baseline check ran first.
+    #   0 = all passed (xfail/xpass included)   1 = tests failed
+    #   2 = interrupted   3 = internal error   4 = usage   5 = none collected
     if r.returncode == 0:
         return (False, "all passed")
+    if r.returncode == 5:
+        # No tests collected usually means the mutant broke an import. That
+        # is the mutant erroring, NOT the suite catching it.
+        return (False, "NO TESTS COLLECTED (mutant likely broke import)")
+    if r.returncode == 1:
+        return (True, "tests failed")
     return (True, f"rc={r.returncode}")
 
 
