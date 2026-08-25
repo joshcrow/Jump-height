@@ -271,3 +271,53 @@ false positives on every noise family we can synthesize. **Shipping it is
 the owner's call, and it re-opens the drop ritual** — tonight's
 airtime_offset_s was measured AT the shipped gates, and E9 fact 2 is direct
 evidence the pin moves with the gate.
+
+---
+
+## E11 — the miss-cost of lowering the gate (2026-08-24/25)
+
+400,000 jumps, E2's physics unchanged (dt=2e-5), each rendered signal judged
+by BOTH operating points so every disagreement is a named jump. 10 h runtime.
+
+| config | silent misses | rate (95% CI) | height RMSE | bias |
+|---|---|---|---|---|
+| **shipped** 0.35 / 0.25 | **3 / 400,000** | 7.5e-6 (2.6e-6…2.2e-5) | 8.8 cm | +7.5 cm |
+| **e8_rec** 0.26 / 0.30 | **48 / 400,000** | 1.2e-4 (9.1e-5…1.6e-4) | 10.1 cm | +6.1 cm |
+
+Paired: **45 jumps missed ONLY by the recommendation, 0 missed only by
+shipped.** The recommendation is 16x worse in the worst failure class.
+
+The 45 are not exotic: 44 of 45 are `constant` (never-depower) technique at
+median 18.7 m/s wind, median apex **1.35 m**, and **22 of them clear 1.5 m** —
+jumps a rider would certainly notice were missing. Their mid-flight spec_g
+spans 0.058–0.320, i.e. exactly the 0.26–0.35 band the lower gate stops
+admitting. The band's population was a guess before this run; it is now
+measured.
+
+The 3 both-missed (spec_g 0.335–0.367, all `constant`, ~20 m/s) are DECISION
+#30's documented class, independently reproduced at a fresh seed: 7.5e-6 here
+against #30's 2.5e-5 from 200k — same order, and #30's verdict stands.
+
+### The decision this settles, opposite to the way it was leaning
+
+E8/E9/E10 built a one-sided case for shipping 0.26/0.30: robust in 12/12
+perturbed worlds, no corpus counterexample, zero phantoms in 660 h/config.
+E11 was written to test its one unmeasured flank, and **the flank is real**.
+The full trade, all four experiments together:
+
+- **Cost of the recommendation:** 16x the silent misses — invisible, no log,
+  no watch symptom, half of them on 1.5 m+ jumps.
+- **Benefit of the recommendation:** rejects one 1.393 g slap in ~151 h of
+  land motion (E9) — a false positive that is *visible*, reads 1.162 g median
+  airborne, and is filterable in post; plus E8 robustness under perturbation.
+
+Trading a visible, correctable false positive for 16x more invisible misses
+is the wrong direction for this project, whose own DECISION #30 already ruled
+that a silent miss is the worse failure. **Recommendation: HOLD the shipped
+gate.** The drop calibration measured at those gates therefore stands, and no
+re-drop is needed.
+
+Open question this leaves, worth one more run: the gate was tested at two
+points, 0.26 and 0.35. An intermediate gate might reject the slap without
+buying the misses — E9 showed 0.28 and 0.30 behave like the recommendation on
+land, but nothing has measured their miss rate. That is E12.
