@@ -217,3 +217,57 @@ E8 shows the recommendation is not an artefact of one clean recording. It does
 not show it is right for the water.
 
 Reproduce: `python3 sim/experiments/e8_robustness.py` (~1 min).
+
+---
+
+## E9 — the E7/E8 question, asked of every recording (2026-08-24)
+
+Replayed all 16 unique trace files under `data/` through an 84-point
+threshold grid centred on E7's plateaus. Nominal exposure 151 h, **but a
+dedup caveat found during the mechanism check applies**: content-hash dedup
+does not catch a stored session synced repeatedly as it GREW, so one desk
+session's events appear in six traces. Per-config comparisons are unaffected
+(every config replayed identical material); absolute hours and event counts
+overstate unique exposure. Stated here so nobody quotes "76 events / 151 h"
+as corpus truth.
+
+On unique content, three facts, each verified event-by-event:
+
+1. **The only event unique to the shipped config is E7's 1.393 g slap**
+   (walk trace, t=4650, median-|a| 1.162 g — not a jump). The E8
+   recommendation finds everything else shipped finds, and misses nothing.
+2. **The shipped gate pins soft-entry takeoffs early.** One lobbed desk toss
+   reads air 0.899 s under shipped vs 0.699 s under the recommendation —
+   the 0.35 g gate triggers ~0.2 s up the entry slope, inflating that
+   event's implied height ~65%. The drop ritual cannot see this (drops have
+   crisp entries; its −19 ms bias is real but motion-shape-specific).
+3. **The grid is a plateau, not a needle**: 73–78 events across all 84
+   configs; no cliff anywhere in the region.
+
+## E10 — the false-positive budget's first exposure hours (2026-08-24)
+
+The proposed <1 phantom/hour budget, measured for the first time: 11
+seastate regimes (chop to H=1.2 m, slap to 8/min at 4 g, chatter, mixes) ×
+60 seeded 1-hour streams × 4 operating points = 660 exposure-hours per
+config. **Zero phantoms, every cell** — rate < 0.05/h at 95% for every
+regime × config, twenty times inside the budget. The harness was proven
+able to phantom first (hair-trigger config: 303 in 10 min), so the zeros
+are measurements, not silence.
+
+Two corollaries: DECISION #30's stated fear for lowering the gate ("common
+false takeoffs on chop") does not bind anywhere down to enter 0.24 **on
+this noise family** — the recommendation's raised min_airtime does the
+compensating work. And the budget itself is now a measured bench bound, not
+a bare proposal. Honesty: seastate.py is a bench stand-in by its own
+header; the water day measures the real family.
+
+### The open decision these two leave on the table
+
+`config/params.json` still ships E7/E8's 0-of-12-worlds point, nine days
+after the 12-of-12 recommendation. E9 adds: the corpus contains no
+counterexample to the recommendation, and one concrete case where the
+shipped gate corrupts an airtime. E10 adds: the change costs nothing in
+false positives on every noise family we can synthesize. **Shipping it is
+the owner's call, and it re-opens the drop ritual** — tonight's
+airtime_offset_s was measured AT the shipped gates, and E9 fact 2 is direct
+evidence the pin moves with the gate.
