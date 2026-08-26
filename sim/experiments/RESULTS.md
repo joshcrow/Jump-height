@@ -321,3 +321,87 @@ Open question this leaves, worth one more run: the gate was tested at two
 points, 0.26 and 0.35. An intermediate gate might reject the slap without
 buying the misses — E9 showed 0.28 and 0.30 behave like the recommendation on
 land, but nothing has measured their miss rate. That is E12.
+
+---
+
+## E12 — the gate curve between E11's two endpoints (2026-08-25)
+
+E11 measured 0.26 and 0.35 and left the shape between them unknown. Five
+gates, 200,000 jumps, judged on identical rendered flights (`min_airtime_s`
+held at 0.30 throughout — E11 showed the gate, not min_airtime, drives the
+miss rate).
+
+| `freefall_enter_g` | misses / 200k | rate | height RMSE | bias |
+|---|---|---|---|---|
+| 0.26 | 24 | 1.20e-4 | 10.1 cm | +6.1 cm |
+| 0.28 | 17 | 8.50e-5 | 9.5 cm | +6.5 cm |
+| 0.30 | 11 | 5.50e-5 | 9.1 cm | +6.9 cm |
+| 0.32 | 5 | 2.50e-5 | 8.9 cm | +7.2 cm |
+| **0.35 (shipped)** | **3** | 1.50e-5 | 8.8 cm | +7.5 cm |
+
+**Strictly monotonic in every column.** There is no intermediate gate that
+rejects E7's 1.393 g slap without buying misses — the hoped-for free lunch
+does not exist. DECISION #41 stands on a curve now, not two points.
+
+The bias column moves the opposite way to the miss column (+6.1 at 0.26 vs
++7.5 at 0.35), which is the pin-timing effect E9 caught on land: a higher
+gate triggers earlier up the entry slope and inflates airtime slightly. That
+trade is worth ~1.4 cm of bias against 8x the misses, and E13 then showed the
+bias is not the gate's to fix anyway.
+
+## E13 — is the calibration model right? (2026-08-25/26)
+
+DECISION #16 chose the bench drop ritual on a claim never tested: *"detection
+latency is constant in TIME, so an additive correction generalizes across jump
+sizes better than a height multiplier."* The ritual measures at ONE point (a
+1 m drop, 0.455 s) and is applied to real jumps of 0.6–2.2 s. E12's +7.5 cm
+residual, present at every gate, was the motive.
+
+300,000 jumps. The offset is applied *after* the `min_airtime_s` gate
+(`detector.py:175` tests the RAW value), so it cannot change whether a jump is
+detected — physics ran once and every model was fitted analytically over the
+fixed sample.
+
+| model | RMSE | bias |
+|---|---|---|
+| shipped (a = 0.0192) | 8.77 cm | +7.54 cm |
+| additive, fitted (a = −0.0071) | **3.93 cm** | −0.02 cm |
+| multiplicative, fitted (s = 0.9903) | 3.97 cm | +0.25 cm |
+
+### Which error is it? — the diagnostic that decides
+
+| apex bin | Δairtime | height from **TRUE** airtime |
+|---|---|---|
+| 0.00–0.75 m | +2.3 ms | +0.63 cm |
+| 0.75–1.25 | +2.1 ms | +0.98 cm |
+| 1.25–1.75 | +2.0 ms | +1.39 cm |
+| 1.75–2.50 | +1.6 ms | +1.92 cm |
+| 2.50–3.50 | +0.7 ms | +2.69 cm |
+| 3.50+ | −3.8 ms | +4.55 cm |
+
+**Detection timing is not the problem** — under 2.5 ms at every size. Height
+computed from the *true* airtime is still biased, and the bias grows with the
+jump. So the residual belongs to `h = g·T²/8` itself: the wing is slightly
+non-ballistic, which is DECISION #28's overshoot, arriving here by a different
+route.
+
+### Verdict: #16 is confirmed, not refuted
+
+The two calibration terms are complementary, not alternatives, exactly as #16
+frames them — additive offset for detection latency (bench-measurable by
+drops), multiplicative `height_scale` for the physics (water-measurable by
+video). The fitted `height_scale` of **0.9903** independently reproduces #28's
+1.0128x overshoot. Either model takes RMSE from 8.8 cm to ~3.9 cm, close to
+the 4.6 cm physics floor.
+
+**The actionable output is a PRIOR for the water day: expect `height_scale`
+≈ 0.99.** Landing near it confirms the model end to end. Landing far from it —
+0.85, say — means something real is wrong that no bench test can see, and that
+is worth knowing on the day rather than months later.
+
+**The limit, stated where the number is made:** the sim's detector times
+flights to ~2 ms; the real OG measured a genuine −19 ms latency across 8 real
+drops. The sim does not model whatever causes that — mount compliance,
+filtering, the real landing impulse. So E13 says **nothing** about whether
+`airtime_offset_s = 0.0192` is right. It says the error *remaining after*
+timing is proportional, and belongs to `height_scale`.

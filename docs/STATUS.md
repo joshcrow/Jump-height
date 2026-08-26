@@ -108,7 +108,9 @@ Ordered by what blocks what.
 - **The detector gate question, open since 2026-08-15, is CLOSED** — DECISION
   #41. E7/E8 recommended `freefall_enter_g` 0.26; E11 measured what nobody
   had, at 400,000 paired jumps: the recommendation misses **48** where the
-  shipped gate misses **3**, 45 of them missed by it alone. It stays at
+  shipped gate misses **3**, 45 of them missed by it alone. E12 then swept
+  five gates over 200,000 jumps and found the curve **strictly monotonic** —
+  no intermediate value rejects E7's slap without buying misses. It stays at
   **0.35 / 0.25**, and the 2026-08-24 drop calibration measured at those
   gates therefore stands — no re-drop.
 
@@ -134,7 +136,13 @@ A number nobody measured is not a number. These were published, then withdrawn:
 Stated plainly so an absence is never mistaken for a pass:
 
 - The detector has **never seen water.** Every number is bench or simulator.
-- **Nothing has tested whether a 1.5 m reading means 1.5 m.**
+- **Nothing has tested whether a 1.5 m reading means 1.5 m.** Only the water
+  day can. **E13 supplies a prior: expect `height_scale` ≈ 0.99** (300,000
+  jumps; fitted 0.9903, which independently reproduces DECISION #28's 1.0128x
+  overshoot). Landing near it confirms the measurement chain end to end;
+  landing far from it — 0.85, say — means something real is wrong that no
+  bench test can see. `height_scale` is **1.000** today, by design, because
+  it is calibrated on the water and nowhere else.
 - Off-current has never been measured and is **unmeasurable** with the
   instruments this project owns — cell self-discharge is the same order as the
   signal.
