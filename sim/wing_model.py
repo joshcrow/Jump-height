@@ -160,9 +160,20 @@ def integrate_flight(
     body_cd_a: float = 0.5,
     dt: float = 1e-4,
     max_t: float = 6.0,
+    land_z: float = 0.0,
 ) -> Flight:
     """Integrate a single jump from takeoff (z=0, vz=vz0>0) until it lands
-    (z back to 0), via RK4. Returns the ground-truth trajectory plus the
+    (z back down through `land_z`), via RK4.
+
+    `land_z` exists for E14 (asymmetric water surface). Takeoff is always the
+    origin, so `land_z` is the landing surface height RELATIVE TO the takeoff
+    point: negative = landing in a trough below where you left the water,
+    positive = landing on a crest above it. It defaults to 0.0, which is the
+    flat-water assumption every experiment before E14 ran under
+    (docs/algorithm.md: "symmetric parabola / takeoff ~ landing height").
+    `true_apex_m` remains apex above the TAKEOFF point regardless, because
+    that is the ground truth the session card defines for video labelling
+    ("the board's position at takeoff as zero, not the horizon"). Returns the ground-truth trajectory plus the
     specific-force magnitude at the centre of mass (what an ideal accelerometer
     at the CoM would read, in g).
 
@@ -203,10 +214,11 @@ def integrate_flight(
         f.vz.append(vz)
         f.spec_g.append(spec_g)
 
-        # Landing: z crosses back down through 0 after having gone up.
-        if t > 0.0 and prev_z > 0.0 and z <= 0.0:
+        # Landing: z crosses back down through `land_z` after having gone up.
+        if t > 0.0 and prev_z > land_z and z <= land_z:
             # Linear-interpolate the exact landing time for a clean airtime.
-            frac = prev_z / (prev_z - z) if (prev_z - z) != 0 else 1.0
+            denom = prev_z - z
+            frac = (prev_z - land_z) / denom if denom != 0 else 1.0
             f.true_airtime_s = (t - dt) + frac * dt
             break
         prev_z = z
