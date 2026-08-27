@@ -1,0 +1,3 @@
+last successful poll: 2026-08-27T04:27:52
+declared dead after 6 consecutive misses (2.0 h of silence)
+NOTE: endurance is measured from the UNPLUG (chg 1->0 with vbat falling in this log), not from the first row.

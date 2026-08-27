@@ -405,3 +405,62 @@ drops. The sim does not model whatever causes that — mount compliance,
 filtering, the real landing impulse. So E13 says **nothing** about whether
 `airtime_offset_s = 0.0192` is right. It says the error *remaining after*
 timing is proportional, and belongs to `height_scale`.
+
+---
+
+## E14 — the flat-water assumption, quantified (2026-08-26/27)
+
+240,000 jumps (40,000 per sea state), linear Airy waves with real deep-water
+dispersion and a MOVING surface (at T=5 s the celerity is 7.8 m/s against
+8 m/s of board speed, so a frozen surface would be wrong in exactly the
+regime that matters). Takeoff phase uniform — the rider is not assumed to
+time the swell. `h` is the raw `g·T²/8`, calibration set aside, against true
+apex above the TAKEOFF point (the session card's video ground truth).
+
+| sea state | bias | sd | RMSE | bias vs flat |
+|---|---|---|---|---|
+| flat (control) | +1.98 cm | 4.17 | 4.62 | — |
+| ripple 0.15 m / 2 s | +1.94 | 5.41 | 5.74 | −0.04 |
+| chop 0.3 m / 3 s | +1.89 | 9.20 | 9.40 | −0.09 |
+| chop 0.6 m / 4 s | +1.92 | 7.24 | 7.49 | −0.07 |
+| swell 1.0 m / 6 s | +1.96 | 5.26 | 5.61 | −0.03 |
+| swell 1.5 m / 8 s | +1.84 | 10.04 | 10.21 | −0.15 |
+
+**Q1 — does it average out? YES.** Every sea state lands within **0.15 cm** of
+the flat-water control. `docs/algorithm.md`'s "averages out in practice" is
+correct, and now has 240,000 jumps behind it instead of an assertion.
+
+**Q2 — the spread more than doubles.** RMSE 4.6 cm flat → **10.2 cm** in
+1.5 m swell. The *average* is honest; any *individual* jump is far less
+certain. **An accuracy figure from a water session is uninterpretable unless
+the sea state is recorded alongside it** — which the session card did not ask
+for until this result (now added).
+
+Mechanism check, which is what says the model is physics and not shuffled
+noise: troughs inflate the reading (+5.2 to +10.3 cm), crests shrink it
+(−1.3 to −6.5 cm), consistently across all five sea states, split by whether
+the landing surface was below or above the takeoff point.
+
+### The finding that is NOT about waves
+
+| sea state | true session best | reported | inflation |
+|---|---|---|---|
+| flat | 4.369 m | 4.396 | **+2.72 cm** |
+| chop 0.6 / 4 s | 4.416 | 4.448 | +3.27 |
+| swell 1.5 / 8 s | 4.382 | 4.414 | +3.16 |
+
+**Session best is inflated by ~3 cm in EVERY sea state, including flat
+water.** It is not a wave effect. A *maximum* over jumps each carrying
+zero-mean noise is not itself zero-mean: the max selects whichever jump the
+noise flattered most. So the single number the rider actually reads off the
+watch is systematically optimistic, by a mechanism no calibration can remove
+— only a smaller per-jump sd shrinks it.
+
+Deliberately NOT corrected in firmware. Subtracting a bootstrap constant from
+the number a rider is proud of, on the strength of a bench model of the sea,
+is not a trade this project should make. It is documented so the water day's
+"best jump" is read with the right expectation.
+
+**Honesty:** `seastate.py`'s header applies here too — this is linear wave
+theory, not a measurement of a real break. It settles whether "averages out
+in practice" was safe to write down. It does not replace the water day.

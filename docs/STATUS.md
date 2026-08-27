@@ -128,8 +128,34 @@ A number nobody measured is not a number. These were published, then withdrawn:
   puck into its bootloader.
 - **The "124 KB vs 32 KB" watch-memory fear** — that was PRG *file size*.
   Measured static memory is 12,417 B of 32,768 B.
-- **The ~7–11 mA / 25.7–34 h power figures** are *pending*, not corrected.
-  DC/DC changes the regime and nobody has re-measured.
+- **The old ~7–11 mA / 25.7–34 h power figures** are superseded, not merely
+  pending: see the measured 57.1 h below.
+
+## Measured 2026-08-27 — endurance, and the gauge convicted
+
+**57.1 h idle on one charge, DC/DC enabled** (`data/soaks/dcdc-deathrun-
+20260824-192240/`). This is a real death, not a stopped run: the puck fell
+from 3179 mV to 2617 mV in the final 90 minutes and stopped advertising. The
+old ≥25.7 h figure was a *floor* — that run was ended by hand — so the honest
+comparison is **2.2× the endurance**, same board, same method.
+
+The curve is flat then cliffs: ~10–15 mV/h for fifty hours, then gone in
+three polls. **Do not extrapolate a remaining-time estimate from the flat
+middle** — that is precisely what makes voltage-percentage gauges lie.
+
+**The battery percentage gauge is now conclusively broken, with numbers:**
+
+| gauge read | vbat | puck then ran |
+|---|---|---|
+| ≤20 % | 3733 mV | **38.9 more hours** |
+| ≤5 % | 3564 mV | **28.1 more hours** |
+| 0 % | 3307 mV | 5 more hours |
+
+It sat at 0 % for the last five hours while answering every poll. **This
+number is shown to the rider on the watch** (`docs/rider-brief.md` item 1),
+so today the product displays a figure that was wrong by 39 hours. Committed
+curve: `curve.csv` in the soak directory — this is the dataset the gauge
+re-anchor needs.
 
 ## Known-unmeasured
 
