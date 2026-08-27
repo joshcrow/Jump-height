@@ -88,6 +88,16 @@ SOUND_BANDS = [
     ("sound_35kt_est",  (0.40, 0.75), (2.0, 3.6), (1.2, 2.0)),
 ]
 
+# Takeoff speed sampled from the RIDER'S OWN riding, not assumed. 21-point
+# quantile grid of his fast-reach band (>= p75 of foiling speed, 8 sessions,
+# ~5,200 samples; derivation in data/nick-sessions/analysis.md — the raw GPS
+# never leaves that gitignored directory, only these de-identified quantiles
+# do). Median 6.5 m/s; the old assumption vx0=8.0 was his p95. Wave error
+# scales with vx0 x airtime, so the fixed 8.0 overstated venue spreads ~15%.
+VX0_QUANTILES = [6.01, 6.06, 6.1, 6.14, 6.19, 6.23, 6.29, 6.34, 6.39, 6.46,
+                 6.52, 6.61, 6.68, 6.77, 6.88, 7.01, 7.16, 7.33, 7.55, 7.88,
+                 12.05]
+
 OCEAN_DEPTH = 4.0        # rider just outside the break — modeling choice
 OCEAN_BREAK_CAP = 0.6    # H capped at this fraction of depth (pre-breaking)
 
@@ -112,7 +122,7 @@ def load_ocean_climatology() -> list[tuple[float, float]]:
 
 
 def run_one(args):
-    (row, label, amp, period, depth, phi) = args
+    (row, label, amp, period, depth, phi, vx0) = args
     i, wind, c_max, technique, arm, mass, target_apex = row
     wing = wm.aero_model(wm.WingParams(
         mass_kg=mass, wing_area_m2=5.0, wind_mps=wind, c_max=c_max,
@@ -135,7 +145,7 @@ def run_one(args):
     flight = None
     for _ in range(2):
         flight = wm.integrate_flight(
-            vz0, wing, vx0=8.0, mass_kg=mass, body_cd_a=0.5, dt=DT,
+            vz0, wing, vx0=vx0, mass_kg=mass, body_cd_a=0.5, dt=DT,
             max_t=6.0, land_z=land_z)
         if flight.true_airtime_s <= 0.0:
             return None
@@ -181,15 +191,25 @@ def main() -> int:
           f"{len(SOUND_BANDS) + 4} cells x {args.n} jumps "
           f"on {cpu_count()} cores", flush=True)
 
+    def vx0():
+        # inverse-CDF draw on the quantile grid, linear between knots
+        u = rng.random() * 20
+        i = int(u)
+        f = u - i
+        lo = VX0_QUANTILES[i]
+        hi = VX0_QUANTILES[min(20, i + 1)]
+        return lo + f * (hi - lo)
+
     jobs = []
     # flat control — must reproduce E14's flat row or the harness drifted
     for row in base:
-        jobs.append((row, "flat_control", 0.0, 0.0, 99.0, 0.0))
+        jobs.append((row, "flat_control", 0.0, 0.0, 99.0, 0.0, vx0()))
     for label, (h0, h1), (t0_, t1), (d0, d1) in SOUND_BANDS:
         for row in base:
             hs = rng.uniform(h0, h1)
             jobs.append((row, label, hs / 2.0, rng.uniform(t0_, t1),
-                         rng.uniform(d0, d1), rng.uniform(0, 2 * math.pi)))
+                         rng.uniform(d0, d1), rng.uniform(0, 2 * math.pi),
+                         vx0()))
     # ocean: sample MEASURED (Hs, DPD) hours; cap pre-breaking at the
     # rider's depth; sensitivity rows at +-30% Hs
     for label, scale in (("ocean_measured", 1.0),
@@ -198,11 +218,11 @@ def main() -> int:
             hs, dpd = clim[rng.randrange(len(clim))]
             hs = min(hs * scale, OCEAN_BREAK_CAP * OCEAN_DEPTH)
             jobs.append((row, label, hs / 2.0, dpd, OCEAN_DEPTH,
-                         rng.uniform(0, 2 * math.pi)))
+                         rng.uniform(0, 2 * math.pi), vx0()))
 
     per: dict = {}
     done = 0
-    with Pool(max(1, cpu_count() - 2)) as pool:
+    with Pool(max(1, cpu_count() - 2), maxtasksperchild=2000) as pool:
         for r in pool.imap_unordered(run_one, jobs, chunksize=32):
             done += 1
             if r is None:
