@@ -53,3 +53,6 @@ garmin/puckglance/bin/
 !garmin/jumpfield/resources/drawables/launcher_icon.png
 !garmin/puckglance/resources/drawables/launcher_icon.png
 tools/mtp_send
+# Nick's exported activities: GPS tracks + personal texts. Never leaves this
+# machine. The derived, de-identified statistics go in the analysis doc.
+data/nick-sessions/
