@@ -157,6 +157,33 @@ so today the product displays a figure that was wrong by 39 hours. Committed
 curve: `curve.csv` in the soak directory — this is the dataset the gauge
 re-anchor needs.
 
+## After a deep discharge, the flash does not mount on the recovery boot
+
+Observed 2026-08-27, immediately after the 57.1 h run-to-death. Plugged in at
+**3102 mV** (right at the cell's cutoff), the OG booted and reported
+**`fs=down`** — the QSPI flash had not initialised. A single non-destructive
+`mount` at 3191 mV brought it straight back with **everything intact**: 8
+stored jumps, 812 KB of trace, and the drop calibration still `off_src=device`.
+
+**Nothing was damaged and nothing was lost.** The flash simply does not come
+up at ~3.1 V. But the failure mode matters more than the cause:
+
+- The puck boots, advertises, answers BLE, and passes for healthy.
+- `fs=down` means **it is not recording.** A rider would see a connected puck
+  on the watch and get nothing stored.
+- The recovery is one command and it is already in the firmware's own error
+  text (`mount` retries, `format` rebuilds).
+
+**Water-day consequence:** if the puck is ever run flat and then charged, do
+not trust "it powered on". Check `stats` for `fs=down` before the session, and
+`mount` if you see it. Do **NOT** `format` — DECISION #31 exists precisely
+because an unreadable superblock is not an invitation to destroy the data
+underneath, and here the data was perfectly fine.
+
+Not yet established: whether this is purely voltage (likely — it mounted 89 mV
+higher) or something about the deep-discharge recovery specifically. One
+repeat at the next flat battery would settle it.
+
 ## Known-unmeasured
 
 Stated plainly so an absence is never mistaken for a pass:

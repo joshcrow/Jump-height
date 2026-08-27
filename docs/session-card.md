@@ -19,6 +19,12 @@ Full registry: [bench-playbook.md §1](bench-playbook.md).
 - [ ] `./tools/jump selftest` — every row PASS, **and** it says
       `✅ device is running THIS source tree`. If it names two different
       hashes, you are about to measure a build you did not intend to.
+- [ ] **`stats` does NOT say `fs=down`.** If it does, the flash did not mount
+      and **the puck is not recording** — it will still power on, advertise
+      and show connected on the watch. Send it `mount` (non-destructive, and
+      it works: proven 2026-08-27 after a full battery death, all data
+      intact). **Never `format` to fix this** — that destroys data that is
+      almost certainly fine.
 - [ ] **No `⚠️ CALIBRATION PROVENANCE` warning.** If it appears, this board's
       measured drop calibration has been replaced by compiled defaults (a
       battery death can do this silently — it happened to the OG on
