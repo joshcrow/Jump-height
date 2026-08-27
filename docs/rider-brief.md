@@ -15,17 +15,21 @@ board. Here's everything you need to know. One page.
    step that actually matters.
 4. **Screen says "finding puck" or "reconnecting," or just looks
    frozen?** Totally normal. It reconnects itself. Just keep riding.
-5. **See a small "!" with a number, or the words "NO REC"?** Not a
-   problem, and nothing to fix out there. Just mention it to us
-   afterward. Keep riding either way.
-6. **Never stop or discard the activity while you're out, no matter what
+5. **See a small "!" with a number?** Not a problem. Keep riding, just
+   mention it afterwards.
+6. **See the words "NO REC"? Come in and tell us.** This one is worth
+   interrupting your session for. It means the puck is powered and talking
+   to your watch but **not saving anything** — so everything from that
+   point on is lost. It takes us about a minute to fix on the beach, and
+   there is nothing you can do about it on the water.
+7. **Never stop or discard the activity while you're out, no matter what
    the screen shows.** Only end and save it once you're completely done
    for the day.
-7. **The numbers update live as you go**; don't worry if they look
+8. **The numbers update live as you go**; don't worry if they look
    slightly different once you save — that's normal.
-8. **Feet or meters — whatever your watch is already set to.** Nothing
+9. **Feet or meters — whatever your watch is already set to.** Nothing
    for you to change.
-9. **If the whole thing looks dead — blank screen, nothing showing —
+10. **If the whole thing looks dead — blank screen, nothing showing —
    there's nothing to do about it on the water.** Just tell us when
    you're back. We sort it out at home, never at the beach.
 

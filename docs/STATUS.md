@@ -165,14 +165,24 @@ Observed 2026-08-27, immediately after the 57.1 h run-to-death. Plugged in at
 `mount` at 3191 mV brought it straight back with **everything intact**: 8
 stored jumps, 812 KB of trace, and the drop calibration still `off_src=device`.
 
-**Nothing was damaged and nothing was lost.** The flash simply does not come
-up at ~3.1 V. But the failure mode matters more than the cause:
+**Nothing was damaged and nothing was lost**, and — corrected 2026-08-27
+after checking rather than assuming — **this is the firmware working as
+designed, not a gap:**
 
-- The puck boots, advertises, answers BLE, and passes for healthy.
-- `fs=down` means **it is not recording.** A rider would see a connected puck
-  on the watch and get nothing stored.
-- The recovery is one command and it is already in the firmware's own error
-  text (`mount` retries, `format` rebuilds).
+- `main.cpp:1279` deliberately does NOT auto-remount when the StoreGuard was
+  found latched, because the previous mount never returned. Retrying it is
+  how "a wedged chip turns into a reset every ~33 s for the whole session."
+  A 30 s auto-remount does exist (`main.cpp:1380`) for the un-latched case.
+- It is **not** a silent failure either. `fs=down` ships as a STATS adder key
+  (`main.cpp:656`), `Model.mc:342` parses it, and `JumpFieldView.mc:210`
+  renders **`NO REC`** on the watch. The rider is told.
+- The deliberate human retry is `mount`, exactly as the firmware's own error
+  text says.
+
+What WAS wrong was the rider brief, which lumped `NO REC` in with the
+cosmetic `!` marker and told the rider both were "not a problem — keep
+riding either way." `NO REC` means the session is recording nothing. Fixed:
+it is now the one thing worth coming in for.
 
 **Water-day consequence:** if the puck is ever run flat and then charged, do
 not trust "it powered on". Check `stats` for `fs=down` before the session, and
