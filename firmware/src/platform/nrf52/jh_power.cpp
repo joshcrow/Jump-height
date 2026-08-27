@@ -83,22 +83,43 @@ const uint32_t PIN_HICHG      = 22;  // D22 / P0.13, LOW = 100 mA charge
 // answer, which is the right way to treat an unverified datasheet detail.
 bool s_fast_charge_on = false;
 
-// Resting-voltage → percent, single-cell LiPo, small piecewise-linear
-// table (interpolated). Coarse on purpose: the product question is
-// "charge before this session?", not coulomb counting.
+// Resting-voltage → percent, single-cell LiPo, piecewise-linear and
+// interpolated. The product question is "charge before this session?", not
+// coulomb counting.
 //
-// TOP ANCHOR 4160, NOT 4200 (SENSE_FIRST_BOOT.md item 24). 4200 mV is the
-// CHARGING voltage (the BQ25101's regulated float), never what a rested
-// cell reads — the item's own 08-11 meter point put a rested-full cell at
-// 4160 mV. Anchoring 100% at 4200 meant even a perfect ADC topped out
-// ~98%, on top of the acquisition-time error item 24 already fixed
-// (SAADC TACQ 15 µs, see the file header). With that measurement fix in,
-// the remaining "never quite full" gap was the anchor, not the sensor —
-// this is the anchor move item 24 called for.
+// RE-ANCHORED 2026-08-27 FROM A MEASURED FULL DISCHARGE, replacing a generic
+// LiPo table that was wrong by up to 27.9 HOURS.
+//
+// The old table was a datasheet-shaped guess. Measured against a real
+// run-to-death on the OG (57.1 h idle, DC/DC on, DIED — not a stopped run;
+// data/soaks/dcdc-deathrun-20260824-192240/curve.csv) it read <=20% with 38.9
+// hours of life left, <=5% with 28.1 hours left, and 0% for the final five
+// while the puck answered every BLE poll. Always pessimistic, never
+// optimistic — the safe direction, but so wrong it is what powered this
+// project's recurring "the battery died" scares.
+//
+// This table is fitted to that discharge: worst error 2.0 h of 57.1.
+// tools/tests/test_batt_curve.py parses THIS ARRAY and re-checks it against
+// the committed curve, so it cannot rot silently.
+//
+// TWO LIMITS, stated where the numbers are:
+//  1. RESOLUTION. Between ~3550 and ~3515 mV the cell spends 15% of its life
+//     inside 35 mV. No voltage gauge resolves that against ADC noise. The
+//     percentage is honest at the ends and coarse in the middle, and that is
+//     physics, not a fixable defect.
+//  2. LOAD. Calibrated at IDLE (advertising, not recording). Under the higher
+//     recording current the cell sags, so the reading runs pessimistic —
+//     again the safe direction, and worth remembering before treating a
+//     mid-session number as gospel.
+//
+// TOP ANCHOR 4090, not 4200: 4200 mV is the BQ25101's CHARGING float, never
+// what a rested cell reads. The prior anchor move to 4160 (SENSE_FIRST_BOOT
+// item 24) was right in kind; the measured rested-full start was 4091 mV.
 struct CurvePoint { uint16_t mv; uint8_t pct; };
 const CurvePoint kCurve[] = {
-    {4160, 100}, {4060, 90}, {3980, 80}, {3900, 65},
-    {3820, 45},  {3770, 30}, {3700, 15}, {3550, 5}, {3300, 0},
+    {4090, 100}, {3990, 92}, {3900, 81}, {3810, 74}, {3700, 65},
+    {3600, 55},  {3550, 46}, {3515, 30}, {3480, 24}, {3430, 17},
+    {3390, 13},  {3300, 5},  {3000, 0},
 };
 const int kCurveLen = (int)(sizeof(kCurve) / sizeof(kCurve[0]));
 

@@ -99,6 +99,15 @@ Write segments: `14:32-14:51 riding`, `15:05-15:12 nothing, sat on the board`,
 The hands-free way to do this: **message Claude** as events happen — messages
 are timestamped, and `tools/label.py` converts them into labels the same way.
 
+- **Write down the SEA STATE, once per session, in plain words.** Rough
+  wave height and whether it is short chop or long swell — "flat, glassy",
+  "1 ft chop", "waist-high swell, long period". Guessing is fine; the point
+  is that it is recorded at all.
+  E14 (240,000 simulated jumps) is why: chop does **not** bias the average —
+  that assumption held — but it more than doubles the per-jump spread, from
+  4.6 cm RMSE on flat water to 10.2 cm in 1.5 m swell. **So an accuracy
+  number from this session is uninterpretable without knowing what the water
+  was doing**, and this line costs ten seconds and cannot be recovered later.
 - **"Nothing happened here" is as valuable as "3 jumps here."** It is the
   false-positive rate, and there is no other way to get it.
 - **Note when you were ON THE FOIL vs not** — `14:00-14:20 foiling`,
@@ -139,6 +148,13 @@ are timestamped, and `tools/label.py` converts them into labels the same way.
 - Set `height_src=ruler` on those rows. Anything else is excluded from
   accuracy on purpose.
 - `./tools/jump eval --verbose`.
+
+**Read "session best" with a pinch of salt.** It is a *maximum* over jumps
+that each carry measurement noise, and a max over noisy readings lands on
+whichever jump the noise flattered most — E14 puts that at **~3 cm of
+inflation in every sea state, including flat water.** It is not a bug and no
+calibration removes it; it is what taking a maximum does. The median and the
+per-jump list are the honest numbers.
 
 **The one number this session exists to produce needs no video at all:**
 median airborne |a| per jump, straight from the trace. If the filming is a
