@@ -34,6 +34,11 @@ Full registry: [bench-playbook.md §1](bench-playbook.md).
       2026-08-19). Re-run the drop ritual before trusting a single height.
 - [ ] `./tools/jump sync` the previous session, **copy it twice**, then
       `clear`. Never clear anything that exists in only one place.
+      (Capacity from a cleared start: ~5 h of *moving* time — covers every
+      session on record. **Two outings in one day with a >1 h break:** the
+      puck auto-clears the morning's raw trace when the afternoon starts, to
+      make room — jumps are never touched. If the morning's raw trace
+      matters, sync during the break.)
 - [ ] Battery ~100 %. Budget ~21 h of recording; a session is ~2 h.
 - [ ] Puck mounted **≥24 h ago** (the mount needs a full cure).
 - [ ] **With the puck mounted, check you can still reach the reset

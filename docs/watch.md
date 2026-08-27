@@ -235,6 +235,29 @@ required argument, or disabled outside a bench build) before this is ever
 handed to anyone else. (Binary trace v2 wire format — firmware storage, not
 a watch/BLE concern — is specified in `firmware/include/trace_codec.h`.)
 
+## Surfr — the reference device on the rider's own wrist
+
+Researched 2026-08-27 (thesurfr.app, /garmin). Surfr is a Connect IQ WATCH
+APP (its own activity, not a data field): kite/windsurf/wing, ~125 Garmin
+models, Instinct 3 Solar fully supported. Jump detection is **wrist motion
+sensors**, live on the watch, with optional post-hoc "Surfr.AI" recalculation
+from raw data; their own docs say rotations confuse the live detection. Full
+jump tracking needs a paid tier. Marčiš '21 benchmarked Surfr at 0.51 m RMSE
+(kite, video-validated) — the repo's standing benchmark line.
+
+The rider already uses it: his two biggest jumps (8.1 ft and 7.5 ft) are
+Surfr numbers. **Open question for him: does his Surfr run on the phone or
+the watch?** It matters for the water day: a Garmin records ONE activity at
+a time, so watch-Surfr cannot run alongside the Wing Foil activity carrying
+this data field — phone-Surfr can. Whatever coexisted with his recorded
+activities on 08-08/08-16 already works; replicate that setup on the water
+day and every jump becomes a puck-vs-Surfr-vs-video three-way.
+
+Differentiation, stated once: Surfr measures the WRIST (arm swing included,
+rotation-confused, AI-corrected after the fact); the puck measures the BOARD
+with the gyro on the detector hot path (DECISION #29). Same jump, different
+instrument class.
+
 ## Two surfaces
 
 **The Garmin watch is the product's only user-facing interface** (owner
