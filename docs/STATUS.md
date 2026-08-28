@@ -206,6 +206,12 @@ Stated plainly so an absence is never mistaken for a pass:
   landing far from it — 0.85, say — means something real is wrong that no
   bench test can see. `height_scale` is **1.000** today, by design, because
   it is calibrated on the water and nowhere else.
+- **Per-jump accuracy expectations by venue are now simulated on his actual
+  water** (E15, 200k jumps, his GPS speeds): flat ±6.5 cm, light sound ±8,
+  measured-ocean ±8.6, 18 kt sound ±10.3, 25 kt sound ±13.7. Short chop
+  hurts more than tall swell — wavelength vs jump-travel, not height, is
+  the mechanism. Estimates for the sound (no buoy exists there); measured
+  climatology for the ocean.
 - Off-current has never been measured and is **unmeasurable** with the
   instruments this project owns — cell self-discharge is the same order as the
   signal.

@@ -95,7 +95,11 @@ Full registry: [bench-playbook.md §1](bench-playbook.md).
 
 ## In the water — the two things that decide whether this works
 
-**1. Camera roughly ABEAM of the jump line.** Not behind, not head-on. The
+**1. Camera roughly ABEAM of the jump line** — and mind the RANGE: his
+usual sound riding box starts ~325 m off the Manteo waterfront, beyond
+phone-camera reach (~250–300 m for full-height ID at 1080p/120). Either
+brief the rider to send jumps on the west edge near the waterfront, bring a
+real zoom, or put the camera on a kayak/SUP ~100–200 m abeam. Not behind, not head-on. The
 height measurement is a comparison against the rider's own height in frame,
 so the rider has to be side-on and full-height at apex.
 
@@ -113,6 +117,13 @@ Write segments: `14:32-14:51 riding`, `15:05-15:12 nothing, sat on the board`,
 The hands-free way to do this: **message Claude** as events happen — messages
 are timestamped, and `tools/label.py` converts them into labels the same way.
 
+- **Know what accuracy to expect from the water you picked** (E15, 200k
+  jumps on these exact venues, the rider's own speeds): flat ±6.5 cm ·
+  light-wind sound ±8 · typical ocean ±9 · 18 kt sound ±10 · 25 kt sound
+  ±14. **Short chop is the enemy, long swell is nearly benign** — so a windy
+  sound day is the worst calibration water, not the ocean. Watch
+  "session best" reads ~1–2 cm generous everywhere; median is the honest
+  number.
 - **Write down the SEA STATE, once per session, in plain words.** Rough
   wave height and whether it is short chop or long swell — "flat, glassy",
   "1 ft chop", "waist-high swell, long period". Guessing is fine; the point
