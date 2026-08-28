@@ -464,3 +464,55 @@ is not a trade this project should make. It is documented so the water day's
 **Honesty:** `seastate.py`'s header applies here too — this is linear wave
 theory, not a measurement of a real break. It settles whether "averages out
 in practice" was safe to write down. It does not replace the water day.
+
+---
+
+## E15 — measurement error on the rider's own venues (2026-08-27/28)
+
+200,000 jumps: finite-depth Airy for the sound (0.5–2 m deep — deep-water
+math is wrong there), the ocean sampled from 52,230 MEASURED hours at NDBC
+44086, and takeoff speed drawn from the rider's own GPS quantile grid
+(median 6.5 m/s; the old fixed 8.0 was his p95). Sound wave inputs remain
+fetch-formula ESTIMATES — no buoy has ever measured Roanoke Sound chop.
+
+| cell | bias | sd | RMSE | best-inflation (20-jump session) |
+|---|---|---|---|---|
+| flat control | +1.97 cm | 6.19 | 6.50 | +0.92 |
+| sound 12 kt | +1.90 | 7.79 | 8.02 | +1.24 |
+| sound 18 kt | +1.87 | 10.08 | 10.25 | +1.12 |
+| sound 25 kt | +1.62 | 13.63 | 13.73 | +1.11 |
+| sound 35 kt (extrapolated) | +1.45 | 18.83 | 18.89 | +2.34 |
+| **ocean, measured climatology** | +1.97 | 8.38 | **8.61** | +1.21 |
+| ocean −30% Hs | +1.95 | 7.39 | 7.64 | +1.27 |
+| ocean +30% Hs | +1.90 | 9.29 | 9.48 | +2.30 |
+
+**The headline reverses the intuitive venue story.** At typical riding winds
+the ESTIMATED sound chop (10–14 cm RMSE at 18–25 kt) is WORSE for
+measurement than the MEASURED ocean swell (8.6 cm) despite the ocean's waves
+being 2–4x taller. The mechanism is wavelength, not height: sound chop at
+Tp 1.5–3 s in shallow water is 4–10 m long — comparable to the ~6 m a rider
+travels during a jump — so the landing surface is nearly uncorrelated with
+takeoff and the full wave amplitude enters the error. Ocean swell at 8–9 s
+is ~50 m long even at rider depth; a jump crosses ~13% of a wavelength, so
+takeoff and landing heights stay correlated and the tall swell mostly
+cancels. Short chop is the enemy; long swell is nearly benign.
+
+**Two corrections to previously stated numbers, owed and paid:**
+1. "The sound is the accurate venue" (2026-08-27, from the v1 smoke test)
+   was premature. It holds only below ~12 kt. On a windy sound day the chop
+   is the worst measurement environment short of the extrapolated 35 kt band.
+2. Baseline per-jump RMSE with REAL rider speeds is ~6.5 cm, not E14's
+   4.6 cm: sampling the rider's speed distribution (6.0–12 m/s) adds spread
+   that every fixed-speed run understated. The physics floor was a floor for
+   one speed, not for a rider.
+
+Practical read for the water day, in one line each:
+- Light-wind sound day (his 7.5 ft session's conditions): ~±8 cm per jump —
+  the best real-water case, and video calibration should happen there.
+- Typical ocean day (his 8.1 ft PR conditions): ~±9 cm; fine.
+- Windy sound day: ~±14 cm — quote heights with humility.
+- Session best on the watch: read it ~1–2 cm generous, all venues.
+
+Caveats, same as ever: sound rows are engineering estimates awaiting the
+first real sound trace; ocean rows inherit the d=4 m rider-depth modeling
+choice (the ±30% rows bracket it); none of this is water-day truth.
