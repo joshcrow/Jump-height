@@ -516,3 +516,41 @@ Practical read for the water day, in one line each:
 Caveats, same as ever: sound rows are engineering estimates awaiting the
 first real sound trace; ocean rows inherit the d=4 m rider-depth modeling
 choice (the ±30% rows bracket it); none of this is water-day truth.
+
+---
+
+## E16 — the −19 ms mystery: solved, and it points at the water (2026-08-27/28)
+
+6,080 edge-shape cells × 600 seeds (~3.6M detector runs): takeoff-unload
+constant × landing rise × IMU LPF × true airtime, 2 kHz truth → 200 Hz →
+the real detector.
+
+**1. The bench bias is explained.** 51 shapes reproduce the drop ritual's
+−19 ± 9 ms, all clustered at unload τ ≈ 10–40 ms with plausible rises and
+filters — exactly what a hand releasing a board looks like. The mechanism:
+the 0.35 g gate is crossed partway down the unload ramp, pinning takeoff
+late by ≈ 1.15·τ. The sim's +2 ms (E13) was a step-edge artifact; real
+edges have shape, and the shape is the latency.
+
+**2. DECISION #16's premise is CONFIRMED, strongly.** For every
+bench-matching shape, bias across T = 0.35–2.0 s varies by ≤ 0.5 ms.
+Detection latency really is constant in time for a given edge shape — an
+additive offset is exactly the right correction. The premise was asserted
+in #16, tested nowhere, and is now measured across 51 shapes.
+
+**3. The offset VALUE is venue-dependent, and water is the open risk.**
+The latency is set by the edge shape, and a foil leaving water is a
+different edge than fingers leaving a board. IF foil exit unloads over
+50–150 ms (a chord/exit-speed dimensional estimate — a GUESS, flagged as
+one), the water bias is −55…−185 ms, leaving ≈ −100 ms after the +19.2 ms
+cushion-derived correction: **heights would read ~25 cm LOW on a 1 s jump.**
+If the rider pops hard and the foil unloads fast, the residual is small.
+Nothing on a bench can tell these apart.
+
+**What decides it: the water day already contains the measurement.**
+data-pipeline.md's Channel A — frame-counted airtime vs device raw airtime —
+is precisely the water-offset measurement. E16 upgrades it from "useful
+check" to **the single most important video-derived number of the day**:
+it directly measures the water edge shape, and the fix (if needed) is a
+venue value for `airtime_offset_s`, no code change. The architecture
+survives either way; only the constant is in question.

@@ -142,6 +142,11 @@ are timestamped, and `tools/label.py` converts them into labels the same way.
   amount of offline cleverness reconstructs what you were doing at 14:07.
   `tools/label.py` understands `foiling` / `notfoiling` / `riding` / `crash`.
 - Note anything odd: a crash, a dropped board, a swim, a knock on the rocks.
+- **Frame-count airtime for every filmed jump (Channel A) — this is not
+  optional.** E16: the bench-measured timing correction may be wrong on
+  water by up to ~100 ms (foil-exit edge shape), which is ~25 cm on a big
+  jump. Frame-counted airtime vs the device's raw airtime measures the water
+  offset directly; one session of it settles the question forever.
 - Don't try to time individual jumps by hand — you cannot get within the 1 s
   matching window from a phone screen, and video is what supplies per-jump
   timing anyway.

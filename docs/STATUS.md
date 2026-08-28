@@ -199,6 +199,14 @@ repeat at the next flat battery would settle it.
 Stated plainly so an absence is never mistaken for a pass:
 
 - The detector has **never seen water.** Every number is bench or simulator.
+- **The water takeoff-edge offset is a NAMED unmeasured risk (E16).** The
+  −19 ms drop-ritual latency is edge-shape latency; a foil leaving water is
+  a different edge. If it unloads slowly, heights read up to ~25 cm low on a
+  1 s jump even after correction. **Video Channel A (frame-counted airtime
+  vs device airtime) measures it directly and is the day's most important
+  video-derived number.** The additive-offset architecture is confirmed
+  right (bias constant in T to ≤0.5 ms across 51 bench-matching shapes) —
+  only the venue constant is in question.
 - **Nothing has tested whether a 1.5 m reading means 1.5 m.** Only the water
   day can. **E13 supplies a prior: expect `height_scale` ≈ 0.99** (300,000
   jumps; fitted 0.9903, which independently reproduces DECISION #28's 1.0128x
