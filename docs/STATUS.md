@@ -194,6 +194,26 @@ Not yet established: whether this is purely voltage (likely — it mounted 89 mV
 higher) or something about the deep-discharge recovery specifically. One
 repeat at the next flat battery would settle it.
 
+## Field-measured 2026-08-29 — the pocket-carry protocol (49 h, one run)
+
+First real-motion exposure, deliberately bracketed by two toss-triplets:
+
+- **Detection: 6/6 deliberate tosses found, 0 missed** — and today's triplet
+  timestamped within 2 min of the user's stated wall clock.
+- **False positives: 0.9/h of motion** (4 phantoms in ~4.4 h incl. a 5-mile
+  run — adversarial motion). Budget (<1/h) met, barely. All 4 phantoms
+  self-identify at `med_a` ≥ 0.64 g vs tosses ≤ 0.26 → F-28 filed. Zero
+  phantoms overnight on the shelf.
+- **Recording draw ≈ idle draw** (~1.5 %/h mixed vs 1.75 %/h idle) — the
+  57 h endurance figure appears to hold for recording too. Estimate only:
+  the endpoint was read after charging began.
+- **Trace capacity field-confirmed:** 12.6 of 14.4 MB used (~87%) — the
+  ~5 h moving-time figure is real, and the session card's two-outing note
+  earned its place.
+- **The eval pipeline scored its first real, admissible labeled session**
+  end-to-end: `matched 6/6, spurious 6` with the placeholder session still
+  correctly refused alongside. The grading path is no longer unrehearsed.
+
 ## Known-unmeasured
 
 Stated plainly so an absence is never mistaken for a pass:
@@ -224,8 +244,8 @@ Stated plainly so an absence is never mistaken for a pass:
   instruments this project owns — cell self-discharge is the same order as the
   signal.
 - The Instinct has never rendered a jump. All watch evidence is Epix.
-- `jump drop` has 0 non-fake runs; `jump monitor` and `setup` have no test
-  coverage.
+- `jump monitor` and `setup` have no test coverage. (`jump drop` got its
+  first real runs 2026-08-24.)
 
 ---
 
