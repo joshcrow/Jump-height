@@ -19,3 +19,4 @@
 13:45         crash     fell on entry, never got on foil, wavy shore break
 13:46         notfoiling  paddling out deeper through the shore break
 13:47         crash     ferrying out, fell in big shore break
+13:48         crash     attending to foil on knees, fell again
