@@ -63,3 +63,12 @@
 # in this FIT is NOT wrist HR (watch was inside the vest): 35-140 bpm of
 # optical noise, ignore. Elevation gain is GPS noise over water, ignore.
 # Strava does not render CIQ developer fields — jump count needs the FIT.
+#
+# 15:02 Garmin Connect app, activity Stats tab scrolled to Nutrition: NO
+# Connect IQ / Jump Height section visible. Inconclusive on its own —
+# per docs/watch.md the app's rendering of these fields has never been
+# visually confirmed, and FitOut only writes SESSION values after the field
+# has received data from the puck (Model.hasData()). Two ways to read it:
+# the app doesn't show it, or the link never came up inside the vest.
+# The FIT file decides. Whether the field showed CONNECTED/E2C4 at activity
+# start is not recorded.
