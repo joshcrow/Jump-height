@@ -72,10 +72,13 @@
 # STRAVA CROSS-CHECK (activity 20065609532, "Nicks ride my watch.", Windsurf,
 # Nags Head): Epix activity ran 13:33:59 -> 14:31:44 local (3465 s elapsed,
 # 2526 s moving, 2.1 km). So the beach sync marker is bounded: AFTER 13:34,
-# BEFORE 13:38. Speed peak 5.9-6.6 m/s (~12 kt) at t=2143 s = 14:09:42,
-# one sample wide at ~11 s resolution — matches the 14:09 "on foil" line.
-# Total time on foil today is on the order of 10-30 s. A 2.9 m/s blip at
-# t=1740 (14:03) and 2.2 m/s at 14:15 are the only other lifts. Heart rate
+# BEFORE 13:38. SPEED CORRECTED 19:50 from the FIT itself — Strava's smoothed
+# stream put the peak ~45 s late. enhanced_speed > 2.5 m/s spans 14:08:49 to
+# 14:09:13: 24 CONTIGUOUS SECONDS, peak 6.17 m/s (12 kt) at 14:09:07, and the
+# ONLY window above 2.5 m/s in the whole 47 min. Time on foil = 24 s = 0.84 %
+# of water time. The 14:14 "on foil" call Josh retracted is corroborated by
+# GPS: 2.0-2.3 m/s only, too slow for a big wing. The retraction was right.
+# Heart rate
 # in this FIT is NOT wrist HR (watch was inside the vest): 35-140 bpm of
 # optical noise, ignore. Elevation gain is GPS noise over water, ignore.
 # Strava does not render CIQ developer fields — jump count needs the FIT.
@@ -98,8 +101,8 @@
 #     13:44:08 0.10 m   water entry
 #     13:44:11 0.75 m   water entry / first fall
 #     13:47:18 0.31 m   fall in shore break (labelled 13:47 crash)
-#     14:08:51 0.11 m   pumping up, just before the 14:09 flight
-#     14:08:56 0.15 m   same
+#     14:08:51 0.11 m   DURING the takeoff onto foil (GPS 2.85 m/s, rising)
+#     14:08:56 0.15 m   same — the most product-relevant phantom class there is
 #     14:31:34 0.58 m   END SYNC TOSSES (real, deliberate)
 #     14:31:40 0.73 m   same
 #   Count 16 vs 7 live: STATS reconcile raises the count without a record
@@ -124,3 +127,31 @@
 #   eval: matched 9/9, missed 0, spurious 3 (offline), labels admissible
 # Puck NOT cleared. Next: `./tools/jump sync --clear` only after confirming
 # both copies open, then reboot the puck before the next session.
+#
+# OFFLINE ANALYSIS 19:50 (all read-only; the puck was not touched and is still
+# uncleared):
+#  - F-30 REFUTED, same day it was filed: no jump was lost. session_jumps is
+#    boot-scoped with no reset anywhere (main.cpp:134 is its only assignment);
+#    clear zeroes only stored_jumps (main.cpp:736). The 09-05 and 09-06 sessions
+#    share a boot (epochs 2.7 s apart) and a clear ran 76 s after the 09-05
+#    sync, so 1 pre-clear + 15 post-clear = 16. Store indices contiguous 1..15.
+#    What survives: the rider's count is scoped to the last PUCK REBOOT.
+#  - F-29 CONFIRMED: the only assignment to session_best_airtime is
+#    main.cpp:1148, inside the fakejump handler. The watch's 0.78 s came from
+#    its own live max, which is phantom #9 exactly.
+#  - tx_drops=20 is 20 BYTES (jh_link.cpp:360 adds the chunk length): one chunk
+#    abandoned after 8 retries in 2.5 days of uptime, not 20 events.
+#  - THE FLIGHT IS IN THE GPS, NOT THE ACCELEROMETER. 258 of 1418 ten-second
+#    accel windows are quieter than the flight; the quietest in the session is
+#    14:28, walking up the beach. Accel variance cannot classify foiling.
+#    GPS speed does it trivially. For time-on-foil the watch is the sensor.
+#  - Water logs at a continuous 50.00 Hz, no gate closure (transport averaged
+#    27 Hz with 405 s gaps). 16.97 B/sample = 3.05 MB/h, so the 14.4 MB region
+#    holds 4.7 h of water.
+#  - Pooled gate sweep across 08-29/09-05/09-06: 16 tosses 0.036-0.255 g vs
+#    11 phantoms 0.502-1.533 g; any gate in 0.30-0.50 g kills 11/11 phantoms
+#    and eats 0/16 tosses. STILL DO NOT SHIP: omega^2*r for a sensor 0.5 m from
+#    the rotation axis at 180 dps is 0.50 g, exactly the gate, and the
+#    correction is inert (spin_lever_m=0.0, selfarm disabled). The tosses
+#    tumble fast on a tiny lever arm, so this corpus is the configuration in
+#    which spin contamination is smallest — it cannot bound the real risk.
