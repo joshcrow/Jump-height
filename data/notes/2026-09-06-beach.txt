@@ -1,7 +1,7 @@
 # Water session 2026-09-06 — notes for tools/label.py (local time, EDT = UTC-4)
-# Times below are message timestamps, not toss timestamps: the beach tosses
-# happened some minutes BEFORE 13:38. Josh: overwrite with the wall-clock
-# time you wrote down, to the second, if you have it.
+# Times are message timestamps (minute resolution). Josh confirmed 14:32: these
+# are as exact as we have; no separate wall-clock record exists. Sync markers
+# therefore carry ~1 min uncertainty — align on the trace, not the notes.
 #
 # MOUNT: OG (JumpHeight-E2C4) NOT on the board. In Nick's flotation vest,
 #   chest height, together with Josh's Epix (the central). Not glued — no time.
