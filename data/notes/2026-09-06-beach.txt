@@ -43,3 +43,4 @@
 14:15         crash     fell
 # 14:19: rider too far down the beach to classify from here. Labels stop; anything after this is UNLABELLED, not "nothing happened".
 14:25         none      bailed; walking out of the surf and hiking back up the beach with the gear (puck on his chest, out of the water)
+14:30         none      back at base; stopping the Epix activity and the other recorders now
