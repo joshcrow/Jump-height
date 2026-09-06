@@ -46,3 +46,9 @@
 14:30         none      back at base; stopping the Epix activity and the other recorders now
 14:32         jump x3   end sync marker, three tosses in the vest at base (time approximate — message time); Epix activity stopped after
 # SESSION END 14:32. Puck should still be running until it reaches the laptop.
+#
+# PRODUCT NOTE (Josh, 14:40): apart from the vest, this session was not
+# unusual — go out, get humbled, walk back. So a zero-jump session is the
+# COMMON case, not the edge case. A false jump on a day like this costs
+# more trust than a missed jump on a good day. The jumpless false-positive
+# rate is the headline number for the display, not a side finding.
