@@ -72,3 +72,4 @@
 # the app doesn't show it, or the link never came up inside the vest.
 # The FIT file decides. Whether the field showed CONNECTED/E2C4 at activity
 # start is not recorded.
+# 15:05 Josh confirms: field WAS connected at activity start — he remembers seeing the puck battery status on the Epix. So Model.hasData() was true and the SESSION fields were being written. Absent CIQ section in the app therefore points at rendering, not the link. FIT will confirm.
