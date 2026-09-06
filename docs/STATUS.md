@@ -90,7 +90,7 @@ Ordered by what blocks what.
 | **F-24** | minor | Self-arm cannot bootstrap at a small lever arm. **Not reachable** — `JH_SPIN_SELFARM_ENABLED = 0` |
 | **F-28** | minor | Phantoms self-identify by median airborne \|a\|. **Held on water 2026-09-06:** 6 phantoms at 0.50–1.53 g, 9 tosses at 0.04–0.23 g, no overlap. But the "phantoms are short and small" caveat is **retracted**: one water-entry fall read 0.78 s / 0.75 m and became the watch's best airtime |
 | **F-29** | minor | `session_best_airtime` is only ever written in the `fakejump` path (`main.cpp:1148`); real jumps never update it, so `STATS` reports `session_best_airtime_s=0.000` and the watch-side reseed added 08-18 has nothing to reseed from. Seen live: 16 jumps, STATS airtime 0.000 |
-| **F-30** | minor | `session_jumps=16` vs `stored_jumps=15` after the water session: one detected jump was counted, sent to the watch, and not stored. `logJump()` returns false silently when `fs_ok` is false (`main.cpp`, no line emitted) — a reading that did not happen and left no trace. Cause not established |
+| **F-30** | minor | ~~A jump was counted and not stored.~~ **REFUTED same day — no jump was lost.** `session_jumps` is BOOT-scoped and has no reset anywhere (`main.cpp:134` is its only assignment); `clear` zeroes `stored_jumps` alone (`main.cpp:736`). The OG booted 09-04 and was cleared 76 s after the 09-05 sync, so 1 pre-clear jump + 15 post-clear = the 16 the watch showed. **The real finding: the number on the rider's wrist counts from the last PUCK REBOOT, not from the activity or the last clear**, and nothing in the tooling says the two counters measure different spans |
 | ~~F-26~~ | closed | `sim/selfdiag.py` had no test at all — 11/11 mutants survived a 223-test run. Now 17 tests, 10/11 mutants killed |
 | ~~F-27~~ | closed | `jump eval --split` was unguarded; inverting the filter passed the suite. Now killed by a partition property test |
 | ~~F-25~~ | closed | `jump status` reported the help *string* as "commands in binary", hiding `gyro`/`pincensus`/`vbatscan`. Tool label fixed 08-23; help string shipped in the 08-24 flash (`42dbd59`, on-device at `src=76df4a83`) — `jump status` now shows 21 with no gap |
@@ -235,20 +235,43 @@ one ~20 s flight, **no jump**. Session folder `data/sessions/20260906-192422`
   shore-break fall (1), 14:08 pumping onto foil (2). **This is a chest-mount
   number in surf; it says nothing about a board mount.**
 - **The watch showed `jumps=16, best 0.95 m, best airtime 0.78 s` for a day
-  with no jump.** 16 vs the store's 15 is F-30. The 0.95 m is house toss #3,
-  correctly reconciled. The 0.78 s is phantom #9 (a fall), the only airtime
-  the watch ever saw live because STATS carries none (F-29).
+  with no jump.** All three numbers are now accounted for: 16 = 1 jump from
+  09-04 (still counted, because `session_jumps` never resets) + today's 15;
+  0.95 m is house toss #3, correctly reconciled; 0.78 s is phantom #9, a
+  water-entry fall, and the only airtime the watch ever saw live because
+  STATS carries none (F-29). **Nothing was lost — but nothing on that screen
+  was a jump, and the count spanned three days.**
 - **Median airborne |a| separates cleanly** (F-28): tosses 0.036–0.231 g,
-  phantoms 0.502–1.533 g.
+  phantoms 0.502–1.533 g. Pooled with 08-29 and 09-05: **16 tosses
+  0.036–0.255 g vs 11 phantoms 0.502–1.533 g, a 0.247 g gap, and a gate
+  anywhere in 0.30–0.50 g kills 11/11 phantoms and eats 0/16 tosses.**
+  It still must not ship — see F-28 for the spin-lever reason, which is
+  mechanistic and not merely a small-sample caution.
+- **The one flight is in the GPS, not the accelerometer.** `enhanced_speed`
+  above 2.5 m/s spans 14:08:49–14:09:13, **24 contiguous seconds and the
+  only such window in 47 min** — 0.84 % time-on-foil. Accelerometer
+  variance does NOT find it: 258 of 1418 ten-second windows are quieter
+  than the flight, because floating still is quieter than foiling. A
+  quiet-window classifier would have picked 14:28, when he was walking up
+  the beach. **For time-on-foil the watch is the better sensor and the puck
+  alone is not sufficient.**
+- **Water logs at a continuous 50.00 Hz** (142,250 samples in 2,845 s,
+  max gap 0.1 s) where transport averaged 27 Hz with 405 s gaps — the
+  motion gate never closes on water. At 16.97 B/sample that is 3.05 MB/h,
+  so the 14.4 MB region holds **4.7 h of water**. The card's ~5 h figure
+  is now field-confirmed for water specifically, not just mixed use.
 - **FIT developer fields are present and correct** (fitdecode): SESSION
   `jumps/best_jump/best_airtime`, RECORD `jump_height` in 1,213/1,404 records,
   7 distinct live values matching the trace within ~3 s. **Garmin Connect's
   phone app showed none of them in Overview/Stats/Charts** — the archive
   has the data; the rider's screen does not. Strava, as documented, shows
   nothing.
-- **BLE through a wet vest:** 7 of 16 JUMP lines arrived live; the rest were
-  absorbed by STATS reconcile on reconnect (count and best correct,
-  per-jump record lost). `tx_drops=20`. The corruption gate held.
+- **BLE through a wet vest:** 7 of the 15 stored JUMP lines arrived live; the
+  rest were absorbed by STATS reconcile on reconnect (count and best correct,
+  per-jump record lost). `tx_drops=20` is **20 BYTES, not 20 drops**
+  (`jh_link.cpp:360` adds the chunk length) — one chunk given up after 8
+  retries in 2.5 days of uptime. First non-zero `tx_drops` since the
+  2026-08-11 fix. The corruption gate held.
 - **Procedure lessons:** the beach toss triplet landed 50 s *before* the
   activity started, so it exists on the puck and not in the FIT — start the
   activity first. The puck was **not rebooted** (uptime 2.5 days at sync), so
