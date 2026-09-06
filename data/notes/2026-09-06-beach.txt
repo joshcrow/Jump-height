@@ -16,3 +16,4 @@
 # 13:44: Epix activity started, Jump Height field on screen. Puck rebooted before the beach tosses: NOT confirmed.
 # Photo: Nick on the sand, helmet, orange vest (puck + Epix inside), big Slingshot wing, foil board leashed; small shore break, light wind.
 13:44         riding    entering the water (message time)
+13:45         crash     fell on entry, never got on foil, wavy shore break
