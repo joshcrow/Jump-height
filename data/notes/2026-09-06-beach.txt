@@ -52,3 +52,14 @@
 # COMMON case, not the edge case. A false jump on a day like this costs
 # more trust than a missed jump on a good day. The jumpless false-positive
 # rate is the headline number for the display, not a side finding.
+#
+# STRAVA CROSS-CHECK (activity 20065609532, "Nicks ride my watch.", Windsurf,
+# Nags Head): Epix activity ran 13:33:59 -> 14:31:44 local (3465 s elapsed,
+# 2526 s moving, 2.1 km). So the beach sync marker is bounded: AFTER 13:34,
+# BEFORE 13:38. Speed peak 5.9-6.6 m/s (~12 kt) at t=2143 s = 14:09:42,
+# one sample wide at ~11 s resolution — matches the 14:09 "on foil" line.
+# Total time on foil today is on the order of 10-30 s. A 2.9 m/s blip at
+# t=1740 (14:03) and 2.2 m/s at 14:15 are the only other lifts. Heart rate
+# in this FIT is NOT wrist HR (watch was inside the vest): 35-140 bpm of
+# optical noise, ignore. Elevation gain is GPS noise over water, ignore.
+# Strava does not render CIQ developer fields — jump count needs the FIT.
