@@ -1,0 +1,15 @@
+# Water session 2026-09-06 — notes for tools/label.py (local time, EDT = UTC-4)
+# Times below are message timestamps, not toss timestamps: the beach tosses
+# happened some minutes BEFORE 13:38. Josh: overwrite with the wall-clock
+# time you wrote down, to the second, if you have it.
+#
+# MOUNT: OG (JumpHeight-E2C4) NOT on the board. In Nick's flotation vest,
+#   chest height, together with Josh's Epix (the central). Not glued — no time.
+# RIDER: Nick, big wing, light wind, ocean side (beach). Also recording on
+#   his own watch and Surfr.
+# SEA STATE: choppy, disorganized (short chop, not swell). Expect the worst
+#   per-jump spread class from E14, not the flat-water figure.
+# SYNC MARKER 1: three tosses at the house before leaving (time not recorded).
+# SYNC MARKER 2: three tosses at the beach before he went out (~13:3x).
+
+13:38        jump x3   beach sync marker, three tosses in the vest (time approximate — message time)
