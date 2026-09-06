@@ -28,3 +28,4 @@
 13:55         crash     fell trying to stand up again
 13:57         notfoiling  ferrying upwind, sitting
 13:58         notfoiling  standing, pumping again
+13:59         notfoiling  still pumping, no foil
