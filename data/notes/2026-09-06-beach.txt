@@ -11,8 +11,20 @@
 #   per-jump spread class from E14, not the flat-water figure.
 # SYNC MARKER 1: three tosses at the house before leaving (time not recorded).
 # SYNC MARKER 2: three tosses at the beach before he went out (~13:3x).
+#
+# House sync marker, trace-timed (the puck was never rebooted; its clock
+# epoch is 2026-09-04, uptime 2.5 days at sync):
+10:46:30     jump      house toss 1 (trace-timed)
+10:46:31     jump      house toss 2 (trace-timed)
+10:46:33     jump      house toss 3 (trace-timed)
+10:46:40-13:33:00  none  transport and handling: car, vest, beach setup — no jumps
 
-13:38        jump x3   beach sync marker, three tosses in the vest (time approximate — message time)
+# Beach sync marker: three tosses, timed from the puck trace (puck clock, ~2-3 s
+# behind GPS time). They landed ~50 s BEFORE the Epix activity started (13:33:59).
+13:33:08     jump      beach toss 1 (trace-timed)
+13:33:10     jump      beach toss 2 (trace-timed)
+13:33:11     jump      beach toss 3 (trace-timed)
+13:33:15-13:43:59  none  on the sand, vest on, walking to the water
 # 13:44: Epix activity started, Jump Height field on screen. Puck rebooted before the beach tosses: NOT confirmed.
 # Photo: Nick on the sand, helmet, orange vest (puck + Epix inside), big Slingshot wing, foil board leashed; small shore break, light wind.
 13:44         riding    entering the water (message time)
@@ -44,7 +56,11 @@
 # 14:19: rider too far down the beach to classify from here. Labels stop; anything after this is UNLABELLED, not "nothing happened".
 14:25         none      bailed; walking out of the surf and hiking back up the beach with the gear (puck on his chest, out of the water)
 14:30         none      back at base; stopping the Epix activity and the other recorders now
-14:32         jump x3   end sync marker, three tosses in the vest at base (time approximate — message time); Epix activity stopped after
+# End sync marker, trace-timed. Epix activity stopped 14:31:44.
+13:44:00-14:31:25  none  IN THE WATER: zero real jumps the whole time (nine falls, pumping, paddling, one ~20 s flight)
+14:31:31     jump      end toss 1 (trace-timed)
+14:31:33     jump      end toss 2 (trace-timed)
+14:31:37     jump      end toss 3 (trace-timed)
 # SESSION END 14:32. Puck should still be running until it reaches the laptop.
 #
 # PRODUCT NOTE (Josh, 14:40): apart from the vest, this session was not
@@ -73,3 +89,38 @@
 # The FIT file decides. Whether the field showed CONNECTED/E2C4 at activity
 # start is not recorded.
 # 15:05 Josh confirms: field WAS connected at activity start — he remembers seeing the puck battery status on the Epix. So Model.hasData() was true and the SESSION fields were being written. Absent CIQ section in the app therefore points at rendering, not the link. FIT will confirm.
+#
+# FIT PULLED 19:18 (data/fit/2026-09-06-13-33-59.fit, 101,953 B, via
+# mtp-getfile; Chrome was not running). Developer fields ARE present:
+#   SESSION jumps=16  best_jump=3.11 ft (0.95 m)  best_airtime=0.78 s
+#   RECORD jump_height written in 1213 of 1404 records (Garmin repeats the
+#   last value); 7 distinct values = 7 JUMP lines received LIVE:
+#     13:44:08 0.10 m   water entry
+#     13:44:11 0.75 m   water entry / first fall
+#     13:47:18 0.31 m   fall in shore break (labelled 13:47 crash)
+#     14:08:51 0.11 m   pumping up, just before the 14:09 flight
+#     14:08:56 0.15 m   same
+#     14:31:34 0.58 m   END SYNC TOSSES (real, deliberate)
+#     14:31:40 0.73 m   same
+#   Count 16 vs 7 live: STATS reconcile raises the count without a record
+#   write (Model.mc), so 9 jumps were counted while the link was down.
+#   best_jump 0.95 m matches none of the 7 live heights -> also reconciled.
+#   The beach tosses (~13:34-13:38) produced NO live record although the
+#   activity was running — link may not have been up yet at toss time.
+#   Zero real jumps today. Tosses: 3 house + 3 beach + 3 end = 9, so
+#   ~7 phantoms in ~50 min of water if every toss was detected. Puck trace
+#   is the arbiter; sync pending.
+# Second FIT on the watch, 17:21:48 local, is a Kayak activity (4.15 km,
+# 82 min, no developer fields) — not part of the session, not saved.
+#
+# RESULT (synced 19:24, data/sessions/20260906-192422, copies in
+# data/firmware-archive/session-copy-20260906-192422 and
+# ~/JumpHeight-session-backups/20260906-192422, diff-verified):
+#   puck: session_jumps=16 stored_jumps=15 (F-30), tx_drops=20, uptime 2.5 d
+#   9/9 tosses detected; 6 live phantoms (5 on water in ~47 min, 1 in the car)
+#   offline replay: 12 jumps = 9 tosses + 3 phantoms
+#   med_a_g: tosses 0.036-0.231, phantoms 0.502-1.533 (F-28 holds)
+#   watch best_airtime 0.78 s = phantom #9; STATS best airtime = 0.000 (F-29)
+#   eval: matched 9/9, missed 0, spurious 3 (offline), labels admissible
+# Puck NOT cleared. Next: `./tools/jump sync --clear` only after confirming
+# both copies open, then reboot the puck before the next session.

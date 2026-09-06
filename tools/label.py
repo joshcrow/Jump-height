@@ -71,11 +71,17 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("session")
     ap.add_argument("notes")
+    ap.add_argument("--date", default=None,
+                    help="calendar day the notes refer to (YYYY-MM-DD). Default: the day "
+                         "of trace time zero. REQUIRED when the puck has been up for more "
+                         "than a day: on 2026-09-06 the OG had booted on 09-04, and the "
+                         "default would have placed every label two days early.")
     args = ap.parse_args()
 
     session = Path(args.session)
     epoch = load_epoch(session)
-    day = epoch.astimezone().date()
+    day = (datetime.date.fromisoformat(args.date) if args.date
+           else epoch.astimezone().date())
 
     rows = []
     for raw in Path(args.notes).read_text().splitlines():

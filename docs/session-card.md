@@ -71,8 +71,13 @@ Full registry: [bench-playbook.md §1](bench-playbook.md).
    including if it was already sitting there powered on from an earlier
    test. Why this matters: [glue-and-forget.md §3b](glue-and-forget.md).
    Skipping it has already put someone else's desk tosses from hours
-   earlier into a real ride's saved data.
-2. **Sync marker: three deliberate flat drops of the board onto something
+   earlier into a real ride's saved data — and on 2026-09-06 it put the
+   morning's house tosses and a car-ride phantom into the rider's count
+   (puck uptime at sync: 2.5 days).
+2. **Start the watch activity FIRST, then the sync marker.** On 2026-09-06
+   the beach triplet landed 50 s before the activity started: it is on
+   the puck and absent from the FIT.
+   **Sync marker: three deliberate flat drops of the board onto something
    soft, ~2 s apart.** Not a finger tap — a tap is 2-5 ms and the stored
    trace is 50 Hz, so it can be absent from the data entirely.
 3. **Write down the wall-clock time, to the second.** Trace time is seconds

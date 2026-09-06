@@ -1,0 +1,9 @@
+{
+  "unit": null,
+  "firmware": "0.4.3",
+  "cal": "CAL airtime_offset_s=0.0192 height_scale=1.000 source=device off_src=device scale_src=defaults vbat_src=defaults",
+  "synced_at_utc": "2026-09-06T23:24:22.764014+00:00",
+  "device_uptime_s_at_sync": 214392.999,
+  "trace_epoch_utc": "2026-09-04T11:51:09.765014+00:00",
+  "note": "Add wall-clock ranges to labels.csv using trace_epoch_utc; see docs/bench-program.md section 4."
+}

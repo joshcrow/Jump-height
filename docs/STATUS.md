@@ -24,7 +24,7 @@ another document. Docs are the thing under suspicion.
 | Which board can measure power or run untethered? | **The OG only.** Drain, endurance and DC/DC numbers are meaningless elsewhere. | same |
 | Why did my BLE reading change between calls? | **Three boards can advertise.** Unpinned tools answer from whichever replies first. Always `--name`. | `tools/blepin.py` |
 | Can I trust a "dead board" verdict? | **No — four have been wrong.** Nothing was ever damaged. Establish the board's *configuration* first. | `docs/xiao-hardware-truth.md` |
-| What firmware is on the OG? | **`src=76df4a83`.** Confirm with `stats`; never infer from a commit date. | live read, 2026-08-24 |
+| What firmware is on the OG? | **`src=5c80a436`** — matches the tree (`jump sync` 2026-09-06: "device is running THIS source tree"). Confirm with `stats`; never infer from a commit date. | live read, 2026-09-06 |
 | Are the OG's heights trustworthy today? | **Bench-calibrated, yes** — drop ritual re-run 2026-08-24: 8 drops from 101.6 cm, bias −19 ms ±9, `airtime_offset_s=0.0192`, `off_src=device`, survived a reflash. `height_scale` remains defaults *by design* until the on-water video calibration. | live read, below |
 | How does the app reach the rider's watch? | **Connect IQ store, and it is APPROVED (2026-08-25).** Install from the Connect IQ phone app; sideloading is impossible on the Instinct 3. | `docs/watch.md` |
 | When is the water day? | **No date exists anywhere in this repo.** The freeze is *defined* as ≥4 days before it, so there is no freeze window. | — |
@@ -88,6 +88,9 @@ Ordered by what blocks what.
 | **F-22** | minor | `trace_bytes()` over-reports once the region fills; self-corrects at the next boot |
 | **F-23** | minor | Full-chip mount is ~80× empty (74 ms vs 0.93 ms). The walk is the floor; no counter scheme fixes it |
 | **F-24** | minor | Self-arm cannot bootstrap at a small lever arm. **Not reachable** — `JH_SPIN_SELFARM_ENABLED = 0` |
+| **F-28** | minor | Phantoms self-identify by median airborne \|a\|. **Held on water 2026-09-06:** 6 phantoms at 0.50–1.53 g, 9 tosses at 0.04–0.23 g, no overlap. But the "phantoms are short and small" caveat is **retracted**: one water-entry fall read 0.78 s / 0.75 m and became the watch's best airtime |
+| **F-29** | minor | `session_best_airtime` is only ever written in the `fakejump` path (`main.cpp:1148`); real jumps never update it, so `STATS` reports `session_best_airtime_s=0.000` and the watch-side reseed added 08-18 has nothing to reseed from. Seen live: 16 jumps, STATS airtime 0.000 |
+| **F-30** | minor | `session_jumps=16` vs `stored_jumps=15` after the water session: one detected jump was counted, sent to the watch, and not stored. `logJump()` returns false silently when `fs_ok` is false (`main.cpp`, no line emitted) — a reading that did not happen and left no trace. Cause not established |
 | ~~F-26~~ | closed | `sim/selfdiag.py` had no test at all — 11/11 mutants survived a 223-test run. Now 17 tests, 10/11 mutants killed |
 | ~~F-27~~ | closed | `jump eval --split` was unguarded; inverting the filter passed the suite. Now killed by a partition property test |
 | ~~F-25~~ | closed | `jump status` reported the help *string* as "commands in binary", hiding `gyro`/`pincensus`/`vbatscan`. Tool label fixed 08-23; help string shipped in the 08-24 flash (`42dbd59`, on-device at `src=76df4a83`) — `jump status` now shows 21 with no gap |
@@ -214,11 +217,52 @@ First real-motion exposure, deliberately bracketed by two toss-triplets:
   end-to-end: `matched 6/6, spurious 6` with the placeholder session still
   correctly refused alongside. The grading path is no longer unrehearsed.
 
+## Field-measured 2026-09-06 — first water session: vest mount, zero real jumps
+
+The rider (Instinct 3, field not yet on a data screen) wore the OG and the
+owner's Epix in a flotation-vest pocket at chest height — **not on the
+board**, no glue. Nags Head ocean side, light wind, disorganised chop,
+waist-high shore break. 58 min activity, ~47 min in the water, nine falls,
+one ~20 s flight, **no jump**. Session folder `data/sessions/20260906-192422`
+(+ two verified copies), FIT `data/fit/2026-09-06-13-33-59.fit`, labels from
+`data/notes/2026-09-06-beach.txt`.
+
+- **Detection: 9/9 deliberate tosses found** (three triplets: house 10:46,
+  beach 13:33, base 14:31), live and offline agree on all nine.
+- **False positives on water, vest mount: 5 in ~47 min ≈ 6/h live** (plus one
+  in 2.8 h of car/handling). Offline replay at 50 Hz kept 3 of the 6. Every
+  phantom sits under a labelled fall or pump-up: 13:44 entry fall (2), 13:47
+  shore-break fall (1), 14:08 pumping onto foil (2). **This is a chest-mount
+  number in surf; it says nothing about a board mount.**
+- **The watch showed `jumps=16, best 0.95 m, best airtime 0.78 s` for a day
+  with no jump.** 16 vs the store's 15 is F-30. The 0.95 m is house toss #3,
+  correctly reconciled. The 0.78 s is phantom #9 (a fall), the only airtime
+  the watch ever saw live because STATS carries none (F-29).
+- **Median airborne |a| separates cleanly** (F-28): tosses 0.036–0.231 g,
+  phantoms 0.502–1.533 g.
+- **FIT developer fields are present and correct** (fitdecode): SESSION
+  `jumps/best_jump/best_airtime`, RECORD `jump_height` in 1,213/1,404 records,
+  7 distinct live values matching the trace within ~3 s. **Garmin Connect's
+  phone app showed none of them in Overview/Stats/Charts** — the archive
+  has the data; the rider's screen does not. Strava, as documented, shows
+  nothing.
+- **BLE through a wet vest:** 7 of 16 JUMP lines arrived live; the rest were
+  absorbed by STATS reconcile on reconnect (count and best correct,
+  per-jump record lost). `tx_drops=20`. The corruption gate held.
+- **Procedure lessons:** the beach toss triplet landed 50 s *before* the
+  activity started, so it exists on the puck and not in the FIT — start the
+  activity first. The puck was **not rebooted** (uptime 2.5 days at sync), so
+  the session count included the morning's house tosses and a car phantom.
+  `label.py` assumed the notes' day was the boot day; `--date` added.
+
 ## Known-unmeasured
 
 Stated plainly so an absence is never mistaken for a pass:
 
-- The detector has **never seen water.** Every number is bench or simulator.
+- The detector has seen water once (2026-09-06) **on a chest, with no jump in
+  it.** No jump has ever been measured on water; every height number is
+  bench or simulator, and the vest-mount phantom rate does not transfer to
+  a board mount.
 - **The water takeoff-edge offset is a NAMED unmeasured risk (E16).** The
   −19 ms drop-ritual latency is edge-shape latency; a foil leaving water is
   a different edge. If it unloads slowly, heights read up to ~25 cm low on a
