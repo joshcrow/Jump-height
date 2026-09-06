@@ -31,3 +31,4 @@
 13:59         notfoiling  still pumping, no foil
 13:59         crash     fell
 14:00         notfoiling  ferrying upwind on knees
+14:02         crash     hard going; some pumping on knees to move upwind, then fell
