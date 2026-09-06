@@ -35,3 +35,4 @@
 14:02         notfoiling  paddling the board, wing flagged out behind
 14:06         notfoiling  swimming/paddling with feet, folding the wing leading edge. Photo: rider in water beside board, wing down, whitewater breaking around him
 14:09         foiling   ON FOIL, first flight of the session
+14:09         crash     fell, off foil
