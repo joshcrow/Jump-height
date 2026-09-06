@@ -38,3 +38,4 @@
 14:09         crash     fell, off foil
 14:11         crash     up and pumping, then fell
 14:13         notfoiling  standing and pumping
+14:14         foiling   on foil
