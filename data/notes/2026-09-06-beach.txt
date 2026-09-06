@@ -26,3 +26,4 @@
 13:52         notfoiling  still pumping, not on foil
 13:53         crash     no foil, splashed down
 13:55         crash     fell trying to stand up again
+13:57         notfoiling  ferrying upwind, sitting
