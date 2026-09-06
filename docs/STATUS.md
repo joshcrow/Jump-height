@@ -230,10 +230,17 @@ one ~20 s flight, **no jump**. Session folder `data/sessions/20260906-192422`
 - **Detection: 9/9 deliberate tosses found** (three triplets: house 10:46,
   beach 13:33, base 14:31), live and offline agree on all nine.
 - **False positives on water, vest mount: 5 in ~47 min ≈ 6/h live** (plus one
-  in 2.8 h of car/handling). Offline replay at 50 Hz kept 3 of the 6. Every
-  phantom sits under a labelled fall or pump-up: 13:44 entry fall (2), 13:47
-  shore-break fall (1), 14:08 pumping onto foil (2). **This is a chest-mount
-  number in surf; it says nothing about a board mount.**
+  in 2.8 h of car/handling). Every phantom sits under a labelled fall or under
+  the takeoff onto foil: 13:44 entry fall (2), 13:47 shore-break fall (1),
+  14:08 the foil takeoff itself (2, at GPS 2.5–2.9 m/s and rising). **This is
+  a chest-mount number in surf; it says nothing about a board mount.**
+- **The offline pass is stricter than the device, and that hides the problem.**
+  The device (200 Hz) found 15; `jump replay` on the 50 Hz logged trace found
+  12, rejecting exactly three — the car phantom, the 14:08 foil-takeoff
+  phantom, and **the 0.75 m water-entry phantom that became the watch's best
+  airtime.** `jump eval` scores the offline set, so it reported 3 spurious
+  where the rider's wrist saw 6. **Every phantom rate computed from a trace
+  understates what the rider is shown.** Nothing in the tooling says so.
 - **The watch showed `jumps=16, best 0.95 m, best airtime 0.78 s` for a day
   with no jump.** All three numbers are now accounted for: 16 = 1 jump from
   09-04 (still counted, because `session_jumps` never resets) + today's 15;
@@ -242,11 +249,13 @@ one ~20 s flight, **no jump**. Session folder `data/sessions/20260906-192422`
   STATS carries none (F-29). **Nothing was lost — but nothing on that screen
   was a jump, and the count spanned three days.**
 - **Median airborne |a| separates cleanly** (F-28): tosses 0.036–0.231 g,
-  phantoms 0.502–1.533 g. Pooled with 08-29 and 09-05: **16 tosses
-  0.036–0.255 g vs 11 phantoms 0.502–1.533 g, a 0.247 g gap, and a gate
-  anywhere in 0.30–0.50 g kills 11/11 phantoms and eats 0/16 tosses.**
-  It still must not ship — see F-28 for the spin-lever reason, which is
-  mechanistic and not merely a small-sample caution.
+  phantoms 0.502–1.533 g. **Pooled against labels.csv as truth (08-29 +
+  09-06, strict 1:1 matching): 15 real tosses 0.036–0.231 g vs 12 spurious
+  0.255–1.533 g. The margin is 0.024 g, not the quarter-g it looks like** —
+  one 08-29 bounce 0.5 s after a labelled toss sits at 0.255 g and closes
+  the gap. A gate at 0.24–0.25 g kills 12/12 spurious and eats 0/15 real;
+  the 0.5 g gate under discussion kills only 11/12. It must not ship — see
+  F-28 for the spin-lever mechanism, which a 0.024 g margin cannot absorb.
 - **The one flight is in the GPS, not the accelerometer.** `enhanced_speed`
   above 2.5 m/s spans 14:08:49–14:09:13, **24 contiguous seconds and the
   only such window in 47 min** — 0.84 % time-on-foil. Accelerometer

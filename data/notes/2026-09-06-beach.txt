@@ -148,10 +148,21 @@
 #  - Water logs at a continuous 50.00 Hz, no gate closure (transport averaged
 #    27 Hz with 405 s gaps). 16.97 B/sample = 3.05 MB/h, so the 14.4 MB region
 #    holds 4.7 h of water.
-#  - Pooled gate sweep across 08-29/09-05/09-06: 16 tosses 0.036-0.255 g vs
-#    11 phantoms 0.502-1.533 g; any gate in 0.30-0.50 g kills 11/11 phantoms
-#    and eats 0/16 tosses. STILL DO NOT SHIP: omega^2*r for a sensor 0.5 m from
+#  - Pooled gate sweep, CORRECTED 20:00. The first pass bucketed detections by
+#    time window and reported a 0.247 g gap; that was wrong — the window
+#    swallowed a spurious detection. Scored against labels.csv with strict 1:1
+#    matching (the truth jump eval uses): 15 real tosses 0.036-0.231 g vs 12
+#    spurious 0.255-1.533 g, margin 0.024 g. The gap-closer is 08-29
+#    t=116992.578 (0.255 g), a bounce 0.5 s after labelled toss 2/3. A gate at
+#    0.24-0.25 g kills 12/12 and eats 0/15; the 0.5 g gate kills only 11/12.
+#    STILL DO NOT SHIP: omega^2*r for a sensor 0.5 m from
 #    the rotation axis at 180 dps is 0.50 g, exactly the gate, and the
 #    correction is inert (spin_lever_m=0.0, selfarm disabled). The tosses
 #    tumble fast on a tiny lever arm, so this corpus is the configuration in
 #    which spin contamination is smallest — it cannot bound the real risk.
+#  - The offline pass is STRICTER than the device: 15 device detections vs 12
+#    from `jump replay` on the 50 Hz trace. The three it rejects are the car
+#    phantom, the 14:08 foil-takeoff phantom, and the 0.75 m water-entry
+#    phantom that became the watch's best airtime. `jump eval` scores the
+#    offline set, so it said 3 spurious where the wrist saw 6. Any phantom
+#    rate computed from a trace understates what the rider is shown.
