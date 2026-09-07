@@ -202,3 +202,19 @@
 #   the real event. That is minute-resolution message timing doing exactly
 #   what tools/label.py's header warns of. Use the REGION labels
 #   (foiling/notfoiling) as truth; do not use crash instants.
+#
+# GATE MARGIN, THIRD AND FINAL FIGURE (20:55). The adversarial verifier in
+# the six-agent analysis caught that my pooled sweep used only the two
+# sessions with a labels.csv and so ignored two bench sessions whose
+# deliberate events are documented in their own logs. Confirmed by direct
+# computation:
+#   REAL n=41  (15 label-verified + 18 tosses 20260824-183054 + 8 drops
+#               20260827-122115), med_acorr 0.036 - 0.238
+#   SPUR n=13  (12 label-verified + the lone 09-05 detection), 0.255 - 1.533
+#   highest real 0.238 g = 08-24 n=18 (t=136248.2, h=1.49 m), and the 08-24
+#   drop log receives that row verbatim and calls it valid-looking.
+#   lowest spurious 0.255 g = 08-29 n=2, a bounce 0.5 s after labelled toss 2/3.
+#   MARGIN 0.017 g. Only gate killing 13/13 at zero real cost: 0.239-0.2549 g,
+#   a 17 mg window. The 0.5 g gate F-28 proposes kills 12/13.
+# Superseded figures, in order, all mine: 0.247 g (window-bucketed, wrong),
+# 0.024 g (label-strict, under-sampled), 0.017 g (full documented corpus).

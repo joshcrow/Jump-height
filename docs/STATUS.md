@@ -249,13 +249,16 @@ one ~20 s flight, **no jump**. Session folder `data/sessions/20260906-192422`
   STATS carries none (F-29). **Nothing was lost — but nothing on that screen
   was a jump, and the count spanned three days.**
 - **Median airborne |a| separates cleanly** (F-28): tosses 0.036–0.231 g,
-  phantoms 0.502–1.533 g. **Pooled against labels.csv as truth (08-29 +
-  09-06, strict 1:1 matching): 15 real tosses 0.036–0.231 g vs 12 spurious
-  0.255–1.533 g. The margin is 0.024 g, not the quarter-g it looks like** —
-  one 08-29 bounce 0.5 s after a labelled toss sits at 0.255 g and closes
-  the gap. A gate at 0.24–0.25 g kills 12/12 spurious and eats 0/15 real;
-  the 0.5 g gate under discussion kills only 11/12. It must not ship — see
-  F-28 for the spin-lever mechanism, which a 0.024 g margin cannot absorb.
+  phantoms 0.502–1.533 g. **Pooled over every documented-deliberate session
+  (41 real vs 13 spurious): the margin is 0.017 g.** Highest real is
+  `20260824-183054` n=18 at 0.238 g (in the 08-24 drop log, which calls it a
+  valid-looking jump); lowest spurious is `20260829-110356` n=2 at 0.255 g, a
+  bounce 0.5 s after a labelled toss. **The only gate that kills 13/13 at
+  zero real cost sits in 0.239–0.2549 g — a 17 mg window.** The 0.5 g gate
+  under discussion kills 12/13. Label-strict (the two sessions with a
+  labels.csv) the figure is 0.024 g over 15 real; the fuller corpus is the
+  honest one. It must not ship — see F-28: the uncorrected spin term spans
+  30–500 mg, one to thirty times the entire window.
 - **The one flight is in the GPS, not the accelerometer.** `enhanced_speed`
   above 2.5 m/s spans 14:08:49–14:09:13, **24 contiguous seconds and the
   only such window in 47 min** — 0.84 % time-on-foil. Accelerometer
