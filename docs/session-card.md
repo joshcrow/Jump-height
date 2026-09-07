@@ -165,6 +165,12 @@ are timestamped, and `tools/label.py` converts them into labels the same way.
 4. `./tools/jump sync` → **copy the session folder somewhere else** → only
    then consider clearing.
 
+No bench on hand (Nick's case)? See [rider-sync.md](rider-sync.md) — plug it
+into the MacBook and open the link in Chrome (or use a phone over Bluetooth
+if there's no Mac around); same job, no bench needed. Do it **at home, once
+the puck is on the charger and the watch is out of its activity — never at
+the beach** (docs/watch.md, BLE link dependability).
+
 ## If something goes wrong
 
 | Symptom | What it actually means |

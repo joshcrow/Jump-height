@@ -71,9 +71,11 @@
 //   TRACE_BYTES                              jh_store::trace_bytes()
 //   TRACE_RECHECK                            fast counter vs the slow
 //                                            snprintf recompute (F-08)
-//   TRACE_RECHECK                            fast counter vs the slow
-//                                            snprintf recompute (F-08)
 //   TRACE_IS_FULL                            jh_store::trace_is_full()
+//   TRACE_RAW_BYTES                          jh_store::trace_raw_bytes() —
+//                                            the byte count a `traceraw`
+//                                            export announces; prints
+//                                            TRACE_RAW_BYTES n=<N>
 //   OPEN_READ JUMPS|TRACE                    jh_store::open_read(...)
 //   READ_ALL                                 drains read_chunk() to EOF,
 //                                            raw bytes framed between
@@ -82,6 +84,22 @@
 //                                            lines (see the parser note
 //                                            below for the exact framing
 //                                            contract).
+//   OPEN_READ_RAW                            jh_store::open_read_raw() —
+//                                            the `traceraw` export's open;
+//                                            prints OPEN_READ_RAW ok=<0|1>
+//   READ_RAW_ALL                             drains read_raw_chunk() to
+//                                            EOF and prints ONE line
+//                                            `RAW_HEX <lowercase hex>`
+//                                            followed by `RAW_BYTES n=<N>`.
+//                                            Hex, not raw bytes: a trace
+//                                            region is binary and carries
+//                                            0x0A as ordinary data, while
+//                                            the Python side parses this
+//                                            harness's output line by line.
+//                                            READ_ALL's marker framing works
+//                                            only because its payload is
+//                                            text; a binary payload needs an
+//                                            encoding, not a frame.
 //   CLOSE_READ                               jh_store::close_read()
 //   CLEAR                                    jh_store::clear()
 //   TRACE_CLEAR                              jh_store::trace_clear()
@@ -264,6 +282,24 @@ void cmdReadAll() {
   std::printf("\n===READ_ALL_END===\n");
 }
 
+// The raw (`traceraw`) export's whole payload, hex-encoded on one line —
+// see the command-language note above for why hex and not a byte frame.
+// 512 is a multiple of 4, which read_raw_chunk() requires of every chunk
+// that isn't the final one (jh_store.h: the nRF52 store's flash addresses
+// must stay word-aligned).
+void cmdReadRawAll() {
+  std::printf("RAW_HEX ");
+  uint8_t buf[512];
+  size_t n;
+  unsigned long total = 0;
+  while ((n = jh_store::read_raw_chunk(buf, sizeof(buf))) > 0) {
+    for (size_t i = 0; i < n; ++i) std::printf("%02x", buf[i]);
+    total += (unsigned long)n;
+  }
+  std::printf("\n");
+  std::printf("RAW_BYTES n=%lu\n", total);
+}
+
 }  // namespace
 
 int main() {
@@ -316,6 +352,8 @@ int main() {
       std::printf("TRACE_BYTES n=%u\n", jh_store::trace_bytes());
     } else if (cmd == "TRACE_IS_FULL") {
       std::printf("TRACE_IS_FULL full=%d\n", jh_store::trace_is_full() ? 1 : 0);
+    } else if (cmd == "TRACE_RAW_BYTES") {
+      std::printf("TRACE_RAW_BYTES n=%u\n", jh_store::trace_raw_bytes());
     } else if (cmd == "OPEN_READ") {
       std::string which;
       iss >> which;
@@ -323,6 +361,10 @@ int main() {
       std::printf("OPEN_READ ok=%d\n", ok ? 1 : 0);
     } else if (cmd == "READ_ALL") {
       cmdReadAll();
+    } else if (cmd == "OPEN_READ_RAW") {
+      std::printf("OPEN_READ_RAW ok=%d\n", jh_store::open_read_raw() ? 1 : 0);
+    } else if (cmd == "READ_RAW_ALL") {
+      cmdReadRawAll();
     } else if (cmd == "CLOSE_READ") {
       jh_store::close_read();
       std::printf("CLOSE_READ ok=1\n");

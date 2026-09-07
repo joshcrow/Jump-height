@@ -32,5 +32,8 @@ board. Here's everything you need to know. One page.
 10. **If the whole thing looks dead — blank screen, nothing showing —
    there's nothing to do about it on the water.** Just tell us when
    you're back. We sort it out at home, never at the beach.
+11. **After the ride, see [rider-sync.md](rider-sync.md).** Plug it into
+    the MacBook, open the link in Chrome, send it over — a few minutes, no
+    bench needed.
 
 That's it. Thanks again — go have a good ride.

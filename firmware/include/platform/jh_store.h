@@ -131,7 +131,56 @@ bool trace_is_full();
 // FILE BEGIN/END frame either way (see main.cpp's printFileFramed).
 bool open_read(StoredFile which);
 size_t read_chunk(uint8_t* buf, size_t max_len);
+// Closes EITHER reader mode — the CSV one above or the raw one below. There
+// is one read slot, not two: open_read() and open_read_raw() take the same
+// slot, and whichever is open, this is what ends it.
 void close_read();
+
+// ---- raw trace-region export (the `traceraw` command) ----
+// The SAME stored trace, streamed as the platform's own bytes instead of as
+// decoded CSV text. A `trace` dump costs ~17 bytes per sample; the stored
+// binary form costs ~2 (firmware/include/trace_codec.h), and over BLE the
+// wire is the bottleneck — a rider syncing from a phone with no laptop is
+// the whole reason this exists. Clients decode it with
+// sim/trace_codec.py::decode_region_recovering(), which mirrors this
+// platform's own read-back walk (align4 stepping plus torn-write recovery),
+// and get back exactly the rows `trace` would have sent.
+//
+// Bytes a traceraw will stream: the trace region's append offset, i.e. the
+// end of the last durably-written block, align4'd. 0 when storage is down,
+// and 0 on a fresh or just-cleared region. Samples still sitting in the
+// in-progress block are NOT counted until that block is closed —
+// open_read_raw() closes it (exactly as open_read(TRACE) does), so this is
+// exact from the moment the export is opened, which is when main.cpp's
+// traceraw arm asks.
+uint32_t trace_raw_bytes();
+// Capacity of the trace region in bytes — what trace_raw_bytes() would
+// approach on a region filled to the cap. Reported on the traceraw chatter
+// line so a client can show "how full is this puck" without a second
+// command. 0 before storage has mounted (the geometry isn't known yet).
+uint32_t trace_region_bytes();
+// Open the TRACE region for a RAW read: wakes the flash, closes the open
+// in-progress block exactly like open_read(StoredFile::TRACE), and resets
+// the raw cursor to the region start. False when storage isn't mounted;
+// false also on a platform that has no raw trace store at all, which is how
+// main.cpp decides between streaming and `ERR traceraw_unsupported`. Takes
+// the single read slot: close_read() ends it.
+bool open_read_raw();
+// Next sequential raw bytes, from the region start up to trace_raw_bytes().
+// Returns 0 at EOF (and 0 if no raw read is open). `max_len` must be at
+// least 4 while bytes remain: this platform's flash reads must stay
+// word-aligned (see align4() in the nRF52 implementation — the QSPI
+// peripheral silently drops the low two address bits), so a chunk is
+// trimmed to a whole number of 4-byte words unless it is the final one, and
+// a caller with room for less than one word cannot be served without
+// breaking that invariant. Such a call returns 0, which reads as EOF, so
+// BOTH host-compilable stores assert on it rather than let a short export
+// look like a complete one — the nRF52 implementation as the store_host
+// harness compiles it, and the host store, which could otherwise serve the
+// call happily and leave the violation to surface first on silicon.
+// main.cpp reads 228 bytes at a time and additionally compares the bytes it
+// actually streamed against trace_raw_bytes().
+size_t read_raw_chunk(uint8_t* buf, size_t max_len);
 
 // ---- housekeeping ----
 // Remove both files (no-op if storage isn't mounted) and reset all counters

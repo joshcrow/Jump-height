@@ -20,6 +20,9 @@ data/*.csv
 # Regenerate with sim/make_spin_trace.py.
 !data/spin_railed_gyro.csv
 data/sessions/
+# Received rider bundles (docs/rider-sync.md), before `jump ingest` unpacks
+# them into data/sessions/ — user-local, like data/sessions/ itself.
+data/inbox/
 data/logs/
 data/diagnostics/
 data/wizard_state.json

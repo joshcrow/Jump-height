@@ -56,6 +56,7 @@ Ground truth on demand, preferred over anything above: `./tools/jump boards`
 | Labels, scoring, the eval contract | `docs/data-pipeline.md` |
 | Numbered, binding decisions | `DECISIONS.md` |
 | Open findings (F-22…F-25) | `docs/audit-2026-08-22.md` |
+| How the rider sends data | `docs/rider-sync.md` |
 
 ## 4. Maintenance rule
 

@@ -24,9 +24,10 @@ another document. Docs are the thing under suspicion.
 | Which board can measure power or run untethered? | **The OG only.** Drain, endurance and DC/DC numbers are meaningless elsewhere. | same |
 | Why did my BLE reading change between calls? | **Three boards can advertise.** Unpinned tools answer from whichever replies first. Always `--name`. | `tools/blepin.py` |
 | Can I trust a "dead board" verdict? | **No — four have been wrong.** Nothing was ever damaged. Establish the board's *configuration* first. | `docs/xiao-hardware-truth.md` |
-| What firmware is on the OG? | **`src=5c80a436`** — matches the tree (`jump sync` 2026-09-06: "device is running THIS source tree"). Confirm with `stats`; never infer from a commit date. | live read, 2026-09-06 |
+| What firmware is on the OG? | **`src=5c80a436`** — matched the tree at the 2026-09-06 live read (`jump sync`: "device is running THIS source tree"). The tree has since moved (traceraw and other firmware work landed) and the OG has **NOT** been reflashed — see "Remote diagnostics" below. Confirm with `stats` before any claim otherwise; never infer from a commit date or a hash printed in a doc. | live read, 2026-09-06 |
 | Are the OG's heights trustworthy today? | **Bench-calibrated, yes** — drop ritual re-run 2026-08-24: 8 drops from 101.6 cm, bias −19 ms ±9, `airtime_offset_s=0.0192`, `off_src=device`, survived a reflash. `height_scale` remains defaults *by design* until the on-water video calibration. | live read, below |
 | How does the app reach the rider's watch? | **Connect IQ store, and it is APPROVED (2026-08-25).** Install from the Connect IQ phone app; sideloading is impossible on the Instinct 3. | `docs/watch.md` |
+| How does the rider get the data to me? | **A sync page → a zip → `./tools/jump ingest`. Two ways in: the USB cable in Chrome on his Intel MacBook (recommended) or Bluetooth from his phone** — `manifest.json`'s `transfer.transport` records which one ran (`"usb"` or `"ble"`). No repo, no toolchain, no bench needed for the normal flow (an emergency remote-guided CLI session is the documented fallback if the page ever fails, DECISION #42). This is NOT the retired browser app coming back — it is a one-way export surface, like `tools/jump`, not a user interface; the watch remains the product's only UI. Built 2026-09-07, **not yet run on real hardware** — see the dated section below. | `docs/rider-sync.md`, `web/sync/`, DECISION #42 |
 | When is the water day? | **No date exists anywhere in this repo.** The freeze is *defined* as ≥4 days before it, so there is no freeze window. | — |
 
 ---
@@ -89,7 +90,7 @@ Ordered by what blocks what.
 | **F-23** | minor | Full-chip mount is ~80× empty (74 ms vs 0.93 ms). The walk is the floor; no counter scheme fixes it |
 | **F-24** | minor | Self-arm cannot bootstrap at a small lever arm. **Not reachable** — `JH_SPIN_SELFARM_ENABLED = 0` |
 | **F-28** | minor | Phantoms self-identify by median airborne \|a\|. **Held on water 2026-09-06:** 6 phantoms at 0.50–1.53 g, 9 tosses at 0.04–0.23 g, no overlap. But the "phantoms are short and small" caveat is **retracted**: one water-entry fall read 0.78 s / 0.75 m and became the watch's best airtime |
-| **F-29** | minor | `session_best_airtime` is only ever written in the `fakejump` path (`main.cpp:1148`); real jumps never update it, so `STATS` reports `session_best_airtime_s=0.000` and the watch-side reseed added 08-18 has nothing to reseed from. Seen live: 16 jumps, STATS airtime 0.000 |
+| **F-29** | minor | `session_best_airtime` is only ever written in the `fakejump` path (`main.cpp:1332`); real jumps never update it, so `STATS` reports `session_best_airtime_s=0.000` and the watch-side reseed added 08-18 has nothing to reseed from. Seen live: 16 jumps, STATS airtime 0.000 |
 | **F-30** | minor | ~~A jump was counted and not stored.~~ **REFUTED same day — no jump was lost.** `session_jumps` is BOOT-scoped and has no reset anywhere (`main.cpp:134` is its only assignment); `clear` zeroes `stored_jumps` alone (`main.cpp:736`). The OG booted 09-04 and was cleared 76 s after the 09-05 sync, so 1 pre-clear jump + 15 post-clear = the 16 the watch showed. **The real finding: the number on the rider's wrist counts from the last PUCK REBOOT, not from the activity or the last clear**, and nothing in the tooling says the two counters measure different spans |
 | ~~F-31~~ | closed | **The suite did not read its own constants.** A 333-mutant overnight campaign found five gap classes, all the same shape: deliberately-chosen constants that nothing asserted. Worst two — `regression_check`'s failure paths were all flippable to pass, and `lever_arm`'s measured-wrong 5 % shave could be reinstated silently. **Suite 249 → 455; no behaviour changed.** All 333 mutants, all 11 modules. Worst three: a regression gate whose every failure path could be flipped to pass; a measured-wrong 5 % shave reinstatable in silence; and `while True` deletable from the board-slap generator with all 64 slap tests still green, because they assert ZERO jumps and removing the spikes only cleans the stream. `selfdiag` killed 11/11 — F-26's fix holding |
 | ~~F-26~~ | closed | `sim/selfdiag.py` had no test at all — 11/11 mutants survived a 223-test run. Now 17 tests, 10/11 mutants killed |
@@ -290,6 +291,80 @@ one ~20 s flight, **no jump**. Session folder `data/sessions/20260906-192422`
   activity first. The puck was **not rebooted** (uptime 2.5 days at sync), so
   the session count included the morning's house tosses and a car phantom.
   `label.py` assumed the notes' day was the boot day; `--date` added.
+
+## Remote diagnostics — built 2026-09-07, NOT yet run on hardware
+
+The rider (Nick) is taking the OG home. He has an older Intel MacBook (no
+repo, no toolchain on it) and a phone — no bench either way. Four pieces
+exist to get his data back without a bench:
+
+- **Firmware `traceraw`** — `firmware/src/main.cpp` (command dispatch),
+  `firmware/include/base64.h` (dependency-free base64 encoder). Streams the
+  trace region's raw bytes instead of CSV; falls back cleanly (`ERR
+  unknown_command traceraw`) on firmware that predates it.
+- **The sync page** — `web/sync/` (`index.html`, `sync.css`, `sync.js`).
+  Connects over the USB cable (Web Serial, Chrome on his Mac — recommended)
+  or over Bluetooth (Web Bluetooth, phone or Mac), pulls
+  info/stats/jumps/traceraw(→trace)/selftest, builds a zip, hands it to his
+  Downloads or share sheet. Which transport ran is recorded in
+  `manifest.json`'s `transfer.transport` (`"usb"` or `"ble"`).
+- **`./tools/jump ingest`** — unpacks a bundle into a `data/sessions/<id>/`
+  folder and runs the same analysis `jump sync` does.
+- **Docs** — this row, `docs/rider-sync.md` (Nick's page), `docs/watch.md`,
+  DECISIONS #42/#43, `docs/bench-playbook.md` §1 (clone-board placeholder).
+
+**How each part is verified today — all off real silicon:**
+- The store side of `traceraw`: `firmware/test/store_host/` runs the real,
+  unmodified `firmware/src/platform/nrf52/jh_store.cpp` against a
+  real-semantics mock QSPI flash, driven by `tools/tests/test_store_host.py`.
+- The command itself: `firmware/src/main.cpp` compiled and run natively
+  (PlatformIO `env:host`), driven over its real stdin/stdout protocol by
+  `tools/tests/test_hostdev.py`.
+- The page: a real headless Chromium loads the actual `web/sync/index.html` +
+  `sync.js` and plays a scripted fake puck through the page's own test seam,
+  in `tools/tests/test_web_sync.py` — the Bluetooth-shaped and the
+  cable-shaped flows, the verification gate, the old-firmware fallback,
+  fs=down, the iPhone dead end, and the cable button/port-picker paths.
+  **The Web Serial transport itself (`SerialTransport` in `sync.js`) has
+  driven no port here** — only a real Chrome on a real cable exercises it.
+- The CLI ingest path: `tools/tests/test_ingest.py` (bundle round-trip for
+  both trace formats, directory ingest, the crc32/jump-row/csv-byte-count
+  refusals and their `--force` overrides, and the two refusals that need no
+  arithmetic — a puck whose store was not mounted (NO REC) and a bundle the
+  page itself marked `verified=false`; bundles built in-test with
+  `sim/trace_codec.encode_region`). The `traceraw`/`--csv` sync-side
+  coverage lives separately, in `tools/tests/test_cli.py::TestSync`.
+
+**What is UNMEASURED — say so plainly, none of this has run on a real puck:**
+- **`traceraw` on silicon at all.** The OG is on `src=5c80a436` (row above),
+  which predates the command — `stats`/`selftest` will confirm this before
+  any claim otherwise. Until the OG is reflashed, both the page and
+  `jump sync` fall back to CSV, which is the designed behaviour, not a bug.
+- **Real BLE throughput.** The 10-16 KB/s figure in `docs/rider-sync.md` is
+  an ESTIMATE from MTU × connection interval, not a measurement — nothing
+  has been timed end to end yet.
+- **USB transfer time.** Not measured, and no number is estimated either —
+  `docs/rider-sync.md` says only that it's expected to be faster than
+  Bluetooth, since it rides the same USB serial link `./tools/jump sync`
+  already uses. The first real cable sync on his Mac settles it.
+- **The cable path end to end.** Chrome's Web Serial against the puck's CDC
+  port has not been tried by this project on any machine, let alone his
+  Intel MacBook: the port picker's entry name, the macOS accessory prompt,
+  and the stale-buffer drain in `SerialTransport.open` are all reasoning,
+  not observation. One sync on the bench Mac before the handoff is the
+  cheapest possible measurement of all three.
+- **Bluefy's share sheet on an actual iPhone.** `navigator.share({files})`
+  behaviour there is untested by this project.
+- **The Garmin two-central slowdown warning.** The page's "is your watch in
+  an activity?" message is a design response to the documented no-second-
+  central rule (`docs/watch.md`, BLE link dependability) — it has not been
+  triggered and observed on real hardware.
+
+**Flash-batch candidates — the owner's decision, none of this is done:**
+`traceraw` itself, F-29 (`session_best_airtime` never set on real jumps, see
+Open findings above), and gating `dfu` behind a required argument before any
+OTA is ever pushed to the rider (DECISION #43). All three are candidates for
+the *next* flash batch, not committed to one.
 
 ## Known-unmeasured
 

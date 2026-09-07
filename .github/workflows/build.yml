@@ -1,15 +1,23 @@
-# Builds the firmware and publishes the drag-and-drop .uf2 as a CI artifact.
+# Builds the firmware, publishes the drag-and-drop .uf2 as a CI artifact, and
+# publishes the rider's sync page to GitHub Pages.
 #
 # The Sense (nRF52) is the only firmware target since the ESP32 v1 platform was
 # retired on 2026-08-18 (commit 12480c6) — which also removed the in-browser
 # flasher, because ESP Web Tools cannot flash that board. The owner's
 # watch-only direction (2026-08-23) then retired the browser app itself
-# (recoverable at tag archive/web-app), so the GitHub Pages publish that used
-# to sit next to it went too. What's left of the zero-install story is this
-# workflow's `.uf2` artifact (docs/sense.md §3.3/§3.9) plus the bootloader's
-# own double-tap-reset "XIAO-SENSE" USB drive — download the artifact from the
-# Actions run, drop it on that drive. Everything else flashes from the bench —
-# `./tools/jump flash` over USB, `tools/otadfu.py` over the air.
+# (recoverable at tag archive/web-app), and the GitHub Pages publish that sat
+# next to it went too. What's left of the zero-install story for FIRMWARE is
+# this workflow's `.uf2` artifact (docs/sense.md §3.3/§3.9) plus the
+# bootloader's own double-tap-reset "XIAO-SENSE" USB drive — download the
+# artifact from the Actions run, drop it on that drive. Everything else flashes
+# from the bench — `./tools/jump flash` over USB, `tools/otadfu.py` over the
+# air.
+#
+# Pages came BACK on 2026-09-07 for a different page and a different reason:
+# the OG puck now lives at the rider's house, with a phone and no laptop, no
+# repo and no bench. `web/sync/` is the only route his rides have back to the
+# owner, so publishing it is not a convenience — it is the data path. See the
+# `pages` job at the bottom.
 
 name: build
 
@@ -51,7 +59,53 @@ jobs:
           # infrastructure skip is a failure — skipping here would leave F-14's
           # refuse-on-ambiguity rule, the one guarding against flashing the
           # wrong board, unverified in CI while the suite stayed green.
-          pip install pytest pyserial platformio bleak
+          pip install pytest pyserial platformio bleak playwright
+
+      - name: Install Playwright's Chromium
+        # tools/tests/test_web_sync.py drives the real web/sync/ page in a real
+        # browser and SKIPS ITSELF, with the reason stated, when no Chromium
+        # will launch. By the policy noted just below, that skip is a FAILURE:
+        # the browser is infrastructure we control. Without this step the
+        # rider's ONLY route for getting a session off the puck — connect,
+        # verify, bundle, and the gate that stops him erasing an incomplete
+        # download — would sit entirely unexercised while CI stayed green.
+        # --with-deps pulls the shared libraries headless Chromium needs on a
+        # bare ubuntu-latest runner.
+        run: python -m playwright install --with-deps chromium
+
+      - name: Verify Chromium actually launches (web-sync acceptance)
+        # The step above SUCCEEDING is not the same fact as a browser that
+        # runs, and nothing else here turns the difference into a failure:
+        # `pytest -q` exits 0 on skips, test_web_sync.py raises SkipTest when
+        # no browser launches, and its whole class is skipped when playwright
+        # imports half-installed. So an install that leaves an unlaunchable
+        # browser (a missing shared library, a revision mismatch, a sandbox
+        # refusal) would leave the rider's only data path unexercised while
+        # this job stayed green — F-02's shape exactly, and the same reason
+        # the env:host acceptance step below exists for F-03.
+        #
+        # It drives the test module's OWN import and launch, rather than a
+        # second copy of them, so this gate cannot drift from what the suite
+        # actually does: each of the two skip paths becomes a non-zero exit
+        # here, and nothing else does.
+        run: |
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, "tools/tests")
+          import test_web_sync as t
+          assert t.sync_playwright is not None, \
+              f"playwright did not import, so the whole class would skip: {t._PW_IMPORT_ERROR}"
+          pw = t.sync_playwright().start()
+          try:
+              browser = t._launch_chromium(pw)   # raises SkipTest -> fails this step
+              page = browser.new_page()
+              page.set_content("<title>acceptance</title>")
+              assert page.title() == "acceptance", "the browser launched but did not render"
+              browser.close()
+          finally:
+              pw.stop()
+          print("chromium launches and renders — test_web_sync.py cannot skip silently")
+          PY
 
       # F-03 (audit 2026-08-22). PlatformIO belongs in THIS job, not only in
       # the firmware job. tools/tests/test_hostdev.py drives the real firmware
@@ -176,3 +230,59 @@ jobs:
         run: |
           echo "::error::Sense (nRF52) build or .uf2 conversion failed — see the 'Build firmware (Sense / nRF52)' / 'Convert Sense firmware to .uf2' steps above. No .uf2 was produced this run."
           exit 1
+
+  # Publishes web/ to GitHub Pages, so the rider's page lives at
+  #     https://joshcrow.github.io/Jump-height/sync/
+  # (web/index.html is the landing page and just points at sync/).
+  #
+  # ONE-TIME REPO SETTING, and nothing here can do it for you: Settings →
+  # Pages → Source must be set to "GitHub Actions". Until it is, deploy-pages
+  # fails this job with a "Pages site not found"-shaped error rather than
+  # silently publishing nothing — which is the right way round.
+  #
+  # needs: test — the page is only worth publishing if the browser test that
+  # drives it passed. That test is the thing standing between the rider and an
+  # incomplete download followed by an erase, so shipping the page past a red
+  # suite would defeat the point of having it.
+  pages:
+    needs: test
+    # main only. A PR from a fork must never be able to replace the page the
+    # rider is told to open, and a branch build has nothing to publish.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # actions/deploy-pages fails when another deployment to the same
+    # environment is already in flight, so two merges a minute apart would red
+    # one build for a reason that has nothing to do with the code in it — on
+    # the one job whose red is supposed to mean "the rider's page is broken".
+    # cancel-in-progress stays false: a half-finished deploy must not be
+    # cancelled, it must finish and let the next one follow. This is the
+    # pairing GitHub's own Pages starter workflow uses with
+    # `environment: github-pages`.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    # Scoped to THIS job: the top-level grant stays `contents: read`, so the
+    # firmware and test jobs never carry a write token for Pages or an OIDC
+    # identity. contents: read is repeated here because a job-level block
+    # REPLACES the top-level one outright — without it, checkout below has no
+    # read permission at all.
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Package web/ for Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          # Static files only — no build step, no CDN, no framework. What is in
+          # the repo is exactly what the rider's phone loads.
+          path: web
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4

@@ -63,6 +63,7 @@
 
 #include "platform/jh_store.h"
 
+#include <assert.h>   // host-only guards; ARDUINO builds compile them out
 #include <math.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -535,6 +536,15 @@ bool       s_read_open         = false;
 bool       s_read_header_sent  = false;
 uint32_t   s_read_src_cursor   = 0;  // bytes, relative to the region start
 uint32_t   s_read_src_used     = 0;  // total valid bytes in that region
+
+// RAW trace export (`traceraw`, jh_store.h's open_read_raw/read_raw_chunk).
+// Shares the ONE read slot with the CSV reader above — open_read_raw() takes
+// it, close_read() releases whichever mode holds it — so a client can never
+// have a half-finished CSV dump and a half-finished binary export
+// interleaved on the same wire.
+bool       s_read_raw_open     = false;
+uint32_t   s_read_raw_cursor   = 0;  // bytes, relative to the trace region start
+uint32_t   s_read_raw_used     = 0;  // == the append offset when opened
 
 // Worst case one trace block's decoded CSV text: 255 samples * up to ~20
 // bytes/line ("%.3f,%.3f\n" comfortably fits under 20 for our value ranges).
@@ -1094,6 +1104,8 @@ bool open_read(StoredFile which) {
   s_read_header_sent = false;
   s_read_pending_len = 0;
   s_read_pending_pos = 0;
+  s_read_raw_open    = false;  // one read slot, either mode — see
+                               // open_read_raw(), which releases this one
   s_read_src_cursor  = 0;
   s_read_src_used    = (which == StoredFile::JUMPS) ? s_jumps_append_off : s_trace_append_off;
   s_read_open        = true;
@@ -1125,8 +1137,92 @@ size_t read_chunk(uint8_t* buf, size_t max_len) {
   return n;
 }
 
+// ---------------------------------------------------- raw trace-region read
+// The `traceraw` export (jh_store.h). Same region, same append offset, same
+// tail-flush as open_read(TRACE) — the only difference is that nothing is
+// decoded on the way out: the client gets the stored trace_codec blocks
+// themselves and decodes them with sim/trace_codec.py's
+// decode_region_recovering(), which mirrors produceNextUnit()'s own walk
+// (align4 stepping plus torn-write recovery).
+uint32_t trace_raw_bytes() { return s_fs_ok ? s_trace_append_off : 0; }
+
+// Guarded like trace_raw_bytes() one line above, because jh_store.h says so:
+// "0 before storage has mounted (the geometry isn't known yet)". mountLadder()
+// sets s_trace_region_bytes and returns true BEFORE init() can go on to set
+// s_fs_ok = false (a failed first-boot format) or try_mount() can (an
+// unreadable superblock), so without this the accessor reports a full ~1.93 MB
+// region for a store that is down — a header asserting a guarantee its
+// implementation does not make, and the host store (host/jh_store.cpp) already
+// honours it. No wire change: main.cpp's traceraw arm is gated on fs_ok.
+uint32_t trace_region_bytes() { return s_fs_ok ? s_trace_region_bytes : 0; }
+
+bool open_read_raw() {
+  if (!s_fs_ok) return false;
+
+  flashWake();  // stays awake for the whole read session; close_read() sleeps
+  // Force out any tail still sitting in the in-progress block, for exactly
+  // the reason open_read() does it: a `traceraw` right after the last active
+  // burst must not miss it. This is also what makes trace_raw_bytes()
+  // exact from here on — the append offset now includes that block.
+  closeAndWriteBlock();
+
+  // One read slot (jh_store.h): taking it for the raw reader releases the
+  // CSV one, so a stale s_read_open can never make read_chunk() and
+  // read_raw_chunk() both believe they are streaming.
+  s_read_open        = false;
+  s_read_pending_len = 0;
+  s_read_pending_pos = 0;
+
+  s_read_raw_open   = true;
+  s_read_raw_cursor = 0;
+  s_read_raw_used   = s_trace_append_off;
+  return true;
+}
+
+size_t read_raw_chunk(uint8_t* buf, size_t max_len) {
+  if (!s_read_raw_open || buf == nullptr) return 0;
+  if (s_read_raw_cursor >= s_read_raw_used) return 0;  // EOF
+
+  // WORD-ALIGNED READ ADDRESSES, ALWAYS — the invariant align4()'s comment
+  // exists for: the nRF52840 QSPI peripheral silently drops the low two bits
+  // of a flash address, so an unaligned read returns a NEIGHBOUR'S bytes and
+  // reports success (found on silicon 2026-07-31, SENSE_FIRST_BOOT.md item
+  // 22). Three facts keep every address below aligned, and all three must
+  // hold together:
+  //   * s_trace_region_start is SUPERBLOCK_BYTES + JUMPS_REGION_BYTES, both
+  //     multiples of 4 (static_assert'd below),
+  //   * s_read_raw_used is the append offset, which closeAndWriteBlock()
+  //     advances with align4() and every scan path steps with align4(),
+  //   * the cursor therefore only ever moves by whole words: a chunk is
+  //     trimmed to a multiple of 4 unless it is the FINAL one, whose length
+  //     is (aligned used - aligned cursor) and so aligned by construction.
+  static_assert(SUPERBLOCK_BYTES % 4 == 0 && JUMPS_REGION_BYTES % 4 == 0,
+                "trace region must start word-aligned (see align4())");
+  uint32_t n = s_read_raw_used - s_read_raw_cursor;
+  if (n > (uint32_t)max_len) n = (uint32_t)max_len & ~3u;
+  if (n == 0) {
+    // The caller offered room for less than one whole word while bytes
+    // remain — it cannot be served without breaking the invariant above, and
+    // returning 0 reads as EOF (jh_store.h documents this as a caller-
+    // contract violation). A short export that looks complete is exactly the
+    // failure CLAUDE.md rule 3 forbids, so: abort on host builds, where the
+    // test suite would otherwise sail past it, and stay alive on the device,
+    // where main.cpp's traceraw arm compares the bytes it streamed against
+    // trace_raw_bytes() and reports the shortfall in band.
+#if !defined(ARDUINO)
+    assert(!"read_raw_chunk needs >= 4 bytes of buffer while data remains");
+#endif
+    return 0;
+  }
+
+  s_flash.readBuffer(s_trace_region_start + s_read_raw_cursor, buf, n);
+  s_read_raw_cursor += n;
+  return n;
+}
+
 void close_read() {
-  s_read_open = false;
+  s_read_open     = false;
+  s_read_raw_open = false;
   flashSleep();
 }
 
