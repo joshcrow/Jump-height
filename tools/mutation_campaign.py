@@ -43,6 +43,21 @@ makes the mutated line behave differently AT ALL; if the answer is "none",
 it is a noop and needs no test. CLAUDE.md rule 5 applies to this tool's own
 output as much as to anything else.
 
+TWO CLASSES OF SURVIVOR THAT ARE UNTESTABLE BY NATURE. Expect both, in
+quantity, and do not write tests for either:
+  1. Numerically-equivalent guard clauses — the detector.py:124 case above.
+  2. BOUNDARY-EQUALITY comparison flips on a FLOAT threshold: `>` -> `>=`,
+     `<=` -> `<`. These differ only when the operands are exactly equal, and
+     for a computed float against a constant that is measure-zero. Mutant 13
+     of the same run was `if rot_g > 16.0:` -> `>=` in the anti-livelock
+     guard. It survived — and the guard is nonetheless WELL tested: moving
+     the threshold to 160.0, to 1.6, or replacing the condition with `False`
+     were each killed by tools/tests/ (verified 2026-09-06). So the F-16
+     fixture (data/spin_railed_gyro.csv) does the job it was built for. An
+     unkillable boundary flip on a well-pinned threshold is not a gap.
+Same flips on an INTEGER threshold or a loop bound are a different matter —
+there equality is reachable, so those survivors ARE worth a test.
+
 Usage:
     python3 tools/mutation_campaign.py --repo <worktree> [--limit N]
 Output: <worktree>/mutation-report.json + a human summary on stdout.
