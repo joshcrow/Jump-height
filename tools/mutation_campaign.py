@@ -61,8 +61,25 @@ quantity, and do not write tests for either:
      pinned only COARSELY. Large moves are caught; a 25 % move is not. The
      unkillable boundary flip is still not a gap, but "the threshold is
      tested" was too strong, and the honest form is "large moves are caught".
+  3. ENUM RELABELLING — a const mutation on a line like
+     `RIDING, CANDIDATE, AIRBORNE = 0, 1, 2` (detector.py:69 in the same
+     run, `2 -> 3`). The values are only ever compared against each other,
+     nothing serialises them, the one external consumer
+     (sim/experiments/g5_lever_tolerance.py) imports the constant rather
+     than a literal, and the C++ twin's `enum class State` is compared
+     through detector OUTPUTS, not state numbers. Distinct is all that is
+     required, so renumbering is equivalent.
 Same flips on an INTEGER threshold or a loop bound are a different matter —
 there equality is reachable, so those survivors ARE worth a test.
+
+WORKED FULL-MODULE RESULT — sim/detector.py, 2026-09-06, 29 mutants, 17
+survivors (59 %). Triaged to completion, the 17 are: 4 Params defaults (a
+REAL gap, closed by tools/tests/test_params_parity.py in cc4a0e5), 11
+boundary-equality flips (class 2), 1 enum relabel (class 3), and 1 genuine
+finding — `16.0 -> 20.0` on the anti-livelock threshold, which says the
+threshold is pinned only coarsely. So a 59 % survival rate resolved to ONE
+gap worth closing and one worth noting. Do not read a raw survival rate as
+a test-quality score; triage first.
 
 Usage:
     python3 tools/mutation_campaign.py --repo <worktree> [--limit N]
