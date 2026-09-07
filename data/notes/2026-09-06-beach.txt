@@ -166,3 +166,39 @@
 #    phantom that became the watch's best airtime. `jump eval` scores the
 #    offline set, so it said 3 spurious where the wrist saw 6. Any phantom
 #    rate computed from a trace understates what the rider is shown.
+#
+# FURTHER ANALYSIS 20:30 — one retraction, one open finding, two settled items.
+#
+# RETRACTED: the 14:08:49 "getting up on foil" event is NOT a record of the
+#   foil unloading from water and does NOT bear on E16's water takeoff-edge
+#   offset. |a| sits at ~1 g right through t=195455-195485: the board is
+#   supported the whole time. Getting ONTO foil is lift increasing; a jump
+#   takeoff is lift collapsing. Opposite edges, not a proxy. And the sensor
+#   was on a chest, so a body would have damped the edge anyway. E16 needs a
+#   real jump with the puck on the board; today's data cannot touch it.
+#
+# NOT ESTABLISHED — device 15 detections vs offline replay 12. The
+#   disagreement is real and reproducible: replaying a +/-6 s slice around
+#   each device-only event in isolation still misses all three, so it is not
+#   a state-machine context effect from the 2.5-day trace. FOUR candidate
+#   explanations were measured and ELIMINATED (do not re-chase):
+#     1. free-fall sample count       — 5-6 samples below 0.35 g in BOTH groups
+#     2. free-fall contiguity         — all six clear 0.08 s (>=4 samples @50Hz)
+#     3. wider-trace detector context — misses persist in isolation
+#     4. landing-spike decimation     — peak 2.54-3.83 g present in all six
+#   The next step needs the replay instrumented to dump detector state
+#   transitions; that is a bigger job than an evening. Until then, the
+#   operative fact stands on its own: an offline replay of the 50 Hz log
+#   cannot reproduce what the rider was shown, so every phantom rate computed
+#   from a trace understates the wrist.
+#
+# SETTLED: the unlabelled gap 14:19-14:25 backfills as notfoiling/none —
+#   44 GPS samples, max 1.54 m/s, median 1.08. Slow drift and the walk in.
+#   No foiling, no jumps. Label coverage now spans the whole activity.
+#
+# SETTLED: the crash labels are NOT per-event truth. Cross-checked against
+#   GPS, only 2 of 9 show the expected speed drop, and the 14:09 one shows
+#   speed RISING after (4.15 -> 6.17 m/s) because the label sits ~10 s after
+#   the real event. That is minute-resolution message timing doing exactly
+#   what tools/label.py's header warns of. Use the REGION labels
+#   (foiling/notfoiling) as truth; do not use crash instants.
