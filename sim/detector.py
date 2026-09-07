@@ -77,6 +77,16 @@ class JumpEvent:
     height_m: float        # height_scale * g * airtime_s^2 / 8
 
 
+# The accelerometer's full-scale range, in g. The Sense carries an
+# LSM6DS3TR-C at +-16 g. This is a HARDWARE fact and it appears in three
+# places in two languages — here, sim/sensor_model.py's SensorConfig.clip_g,
+# and firmware/include/jump_detector.h's `rot_g > 16.0f` guard. It has no
+# generator and lives in no single source of truth, so
+# tools/tests/test_accel_full_scale.py pins the three together. Named rather
+# than inlined because the 2026-09-06 mutation campaign showed the guard's
+# literal could be anything from 10 to 48 without a single test noticing.
+ACCEL_FULL_SCALE_G = 16.0
+
 # States
 RIDING, CANDIDATE, AIRBORNE = 0, 1, 2
 
@@ -149,7 +159,7 @@ class Detector:
         # Its absence here meant the SIM disagreed with the firmware on exactly
         # the inputs that caused a real firmware bug — and the parity harness
         # could not see it, because it only ever exercised the accel-only path.
-        if rot_g > 16.0:
+        if rot_g > ACCEL_FULL_SCALE_G:
             return accel_mag_g
         sq = accel_mag_g * accel_mag_g - rot_g * rot_g
         return math.sqrt(sq) if sq > 0.0 else 0.0
