@@ -72,6 +72,23 @@ quantity, and do not write tests for either:
 Same flips on an INTEGER threshold or a loop bound are a different matter —
 there equality is reachable, so those survivors ARE worth a test.
 
+  REFINEMENT (2026-09-07, from an adversarial audit of these dismissals):
+  class 2's exemption is "a computed float against a CONSTANT". If the value
+  on the other side is CALLER-SUPPLIED, equality can be SOLVED FOR rather
+  than waited for, and the exemption does not apply. Worked example, and it
+  cuts both ways. `sim/seastate.py:148`'s `if t >= duration_s: break` is a
+  sum of `expovariate` draws against a caller's `duration_s`, so exact
+  equality IS constructible: pick a seed, sum four arrivals, pass that sum
+  as `duration_s`. The audit correctly refused the dismissal on that ground.
+  It was still WRONG, for a reason no reachability argument reaches — the
+  phantom event writes nothing, ALWAYS. `i0 = max(0, int(te * fs_hz))` with
+  `te == duration_s` is the SAME EXPRESSION as `n = int(duration_s * fs_hz)`
+  on the same value, so `i0 == n`, and `i1 = min(n, i0 + k) == n`, so
+  `range(i0, i1)` is empty for any duration, rate or sample rate. Verified
+  by construction: streams bit-identical including sign. So: reachability is
+  necessary but not sufficient. Ask BOTH "can I hit the boundary?" and
+  "does hitting it change an output?"
+
 WORKED FULL-MODULE RESULT — sim/detector.py, 2026-09-06, 29 mutants, 17
 survivors (59 %). Triaged to completion, the 17 are: 4 Params defaults (a
 REAL gap, closed by tools/tests/test_params_parity.py in cc4a0e5), 11
