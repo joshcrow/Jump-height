@@ -53,7 +53,23 @@ TARGETS = [
     "sim/lever_arm.py",      # spin/lever calibration
     "sim/trace_codec.py",    # the codec with a C++ twin
     "tools/blepin.py",       # board pinning — has flashed a wrong board
+    # Added 2026-09-06 after the first water session. The F-28 gate decision
+    # rests on E3/E4's simulated physics (median |a| collapses to AUC 0.258
+    # under a spin confound), so these four modules are now load-bearing for a
+    # SHIP/DON'T-SHIP call and had never been mutation-tested:
+    "sim/sensor_model.py",   # renders the omega^2*r confound the gate would meet
+    "sim/wing_model.py",     # the flight physics every E-series number rests on
+    "sim/seastate.py",       # E14/E15's chop model — the venue error bars
+    "sim/windows.py",        # airborne-window bookkeeping behind med_a itself
+    "sim/generate.py",       # synthetic session builder used by the harness
 ]
+
+# NOT a target, and the reason is a finding in itself: `tools/label.py` has
+# NO test that imports it (2026-09-06 — the ten tests matching "label" all
+# live in test_evaluate.py and exercise labels.csv, not the generator). It
+# produces the ground truth `jump eval` scores against, and it was edited on
+# 2026-09-06. Mutating an untested module only proves it is untested, which
+# is already known; write the tests instead, then add it here.
 
 CMP_FLIP = {
     ast.Lt: ast.LtE, ast.LtE: ast.Lt,
