@@ -28,8 +28,20 @@ DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "config" / "params.jso
 
 @dataclass
 class Params:
-    """Tunable thresholds. Defaults match config/params.json; prefer
-    load_params() so edits to the JSON take effect everywhere."""
+    """Tunable thresholds. Prefer load_params() so edits to the JSON take
+    effect everywhere.
+
+    These defaults match config/params.json with ONE deliberate exception:
+    `airtime_offset_s` is 0.0 here and 0.0192 there. That offset corrects the
+    DEVICE's takeoff-edge detection latency (-19 ms, 8 drops, 2026-08-24);
+    the simulator renders flights from physics and has no such latency, and
+    eight E-series scripts build a bare Params() so they measure physics
+    rather than physics plus a hardware correction. Setting this default to
+    the JSON value would silently add 19 ms to every airtime in those
+    experiments. Pinned by tools/tests/test_params_parity.py, which exists
+    because the mutation campaign found NO test read these defaults at all
+    (2026-09-06: freefall_confirm_s 0.08 -> 0.1 survived all 249 tests).
+    """
 
     g: float = 9.80665             # gravity, m/s^2
     freefall_enter_g: float = 0.35     # |a| below this => possible takeoff
