@@ -30,6 +30,19 @@ dies in seconds, and only SURVIVORS pay the full suite cost. That
 asymmetry is what makes a few hundred mutants an overnight job instead of
 a week.
 
+READING THE REPORT — a survivor is a CANDIDATE, not a finding. The `noop`
+detection here is SYNTACTIC, so it cannot see a mutation that is equivalent
+only by numerical coincidence, and those land in the report as SURVIVED.
+Worked example, 2026-09-06 run, mutant 12 of 333: `sim/detector.py:124`
+`spin_lever_m <= 0.0` -> `< 0.0` in `correct_for_spin`. The branch only
+matters at exactly r = 0, and there the body computes
+`sqrt(max(0, a^2 - 0^2))`, which returned bit-identical results to the
+short-circuit across 200,000 random (|a|, gyro) pairs. No test can kill it
+because there is nothing to catch. Triage each survivor by asking what input
+makes the mutated line behave differently AT ALL; if the answer is "none",
+it is a noop and needs no test. CLAUDE.md rule 5 applies to this tool's own
+output as much as to anything else.
+
 Usage:
     python3 tools/mutation_campaign.py --repo <worktree> [--limit N]
 Output: <worktree>/mutation-report.json + a human summary on stdout.
