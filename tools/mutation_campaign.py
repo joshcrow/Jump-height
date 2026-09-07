@@ -50,11 +50,17 @@ quantity, and do not write tests for either:
      `<=` -> `<`. These differ only when the operands are exactly equal, and
      for a computed float against a constant that is measure-zero. Mutant 13
      of the same run was `if rot_g > 16.0:` -> `>=` in the anti-livelock
-     guard. It survived — and the guard is nonetheless WELL tested: moving
-     the threshold to 160.0, to 1.6, or replacing the condition with `False`
-     were each killed by tools/tests/ (verified 2026-09-06). So the F-16
-     fixture (data/spin_railed_gyro.csv) does the job it was built for. An
-     unkillable boundary flip on a well-pinned threshold is not a gap.
+     guard. It survived, and no test can reach the difference.
+     CORRECTION, same evening, and the correction matters more than the
+     original point. I first wrote that the guard is "WELL tested" on the
+     evidence that 160.0, 1.6 and `if False:` were each killed. Then this
+     campaign reached the same line and reported `16.0 -> 20.0` SURVIVED.
+     Testing two far-apart endpoints and generalising to the middle is
+     precisely the error E12 exists to correct — it swept the CURVE between
+     E11's endpoints for exactly this reason. So: the guard's threshold is
+     pinned only COARSELY. Large moves are caught; a 25 % move is not. The
+     unkillable boundary flip is still not a gap, but "the threshold is
+     tested" was too strong, and the honest form is "large moves are caught".
 Same flips on an INTEGER threshold or a loop bound are a different matter —
 there equality is reachable, so those survivors ARE worth a test.
 
