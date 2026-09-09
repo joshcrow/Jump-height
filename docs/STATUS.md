@@ -28,7 +28,7 @@ another document. Docs are the thing under suspicion.
 | What firmware is on the OG? | **`src=5c80a436`** — matched the tree at the 2026-09-07 live read (`jump sync`: "device is running THIS source tree"). **The tree has since moved** (this merge: `traceraw`, the sync page, `jump ingest`; `build.gen.h` now `ae67dc8d`) and the OG has **NOT** been reflashed — every client falls back to CSV `trace`, by design. Confirm with `stats`; never infer from a commit date or a hash in a doc. | live read, 2026-09-07 |
 | Are the OG's heights trustworthy today? | **Bench-calibrated, yes** — drop ritual re-run 2026-08-24: 8 drops from 101.6 cm, bias −19 ms ±9, `airtime_offset_s=0.0192`, `off_src=device`, survived a reflash. `height_scale` remains defaults *by design* until the on-water video calibration. | live read, below |
 | How does the app reach the rider's watch? | **Connect IQ store, and it is APPROVED (2026-08-25).** Install from the Connect IQ phone app; sideloading is impossible on the Instinct 3. | `docs/watch.md` |
-| How does the rider get the data to me? | **A sync page → a zip → `./tools/jump ingest`. Two ways in: the USB cable in Chrome on his Intel MacBook (recommended) or Bluetooth from his phone** — `manifest.json`'s `transfer.transport` records which one ran (`"usb"` or `"ble"`). No repo, no toolchain, no bench needed for the normal flow (an emergency remote-guided CLI session is the documented fallback if the page ever fails, DECISION #42). This is NOT the retired browser app coming back — it is a one-way export surface, like `tools/jump`, not a user interface; the watch remains the product's only UI. Built 2026-09-07, **not yet run on real hardware** — see the dated section below. **Not deployed as of this merge — `/sync/` was 404 on 2026-09-09; the link is real only once the owner loads it and sees the `2026-09-09b` footer (Remote diagnostics, below).** The FIT export + a text line is the channel that already works (8 zips, August). | `docs/rider-sync.md`, `web/sync/`, DECISION #42 |
+| How does the rider get the data to me? | **A sync page → a zip → `./tools/jump ingest`. Two ways in: the USB cable in Chrome on his Intel MacBook (recommended) or Bluetooth from his phone** — `manifest.json`'s `transfer.transport` records which one ran (`"usb"` or `"ble"`). No repo, no toolchain, no bench needed for the normal flow (an emergency remote-guided CLI session is the documented fallback if the page ever fails, DECISION #42). This is NOT the retired browser app coming back — it is a one-way export surface, like `tools/jump`, not a user interface; the watch remains the product's only UI. Built 2026-09-07, **not yet run on real hardware** — see the dated section below. **Deployed 2026-09-09 14:09 UTC and verified in a real Chrome load — footer `page version 2026-09-09b` (Remote diagnostics, below). Never yet connected to a real port.** The FIT export + a text line is the channel that already works (8 zips, August). | `docs/rider-sync.md`, `web/sync/`, DECISION #42 |
 | When is the water day? | **No date exists anywhere in this repo.** The freeze is *defined* as ≥4 days before it, so there is no freeze window. | — |
 
 ---
@@ -429,8 +429,17 @@ hand — CLAUDE.md rule 5). What changed, all pinned by tests, suite 523 →
   skips are the `HAVE_NICK` classes in `test_fitread.py` — they read
   `data/nick-sessions/`, which is gitignored, so CI cannot see those files;
   locally the same suite is 592 passed, 0 skipped. Chromium launched in CI
-  and drove the page. The link is not real until the owner loads it and
-  sees the `2026-09-09b` footer.
+  and drove the page. **Merged and deployed 2026-09-09 14:09 UTC** (PR #3,
+  merge `aa9d86e`, run `34361217565`: test / firmware / pages all success).
+  Verified live, not assumed: `/`, `/sync/`, `/sync/sync.js`,
+  `/sync/CONTRACT.md` all HTTP 200 with that last-modified; the served
+  `sync.js` carries `PAGE_VERSION = '2026-09-09b'`; a real Chrome load
+  shows the footer `page version 2026-09-09b`, ends at "You're finished.
+  Josh empties the puck.", offers both Connect buttons, and has no step 4;
+  `?allowclear=1` shows step 4 and the button; zero console messages over
+  two fresh loads. The root now serves the landing page, not the retired
+  08-23 app. **Still unmeasured: a real port.** The page has been loaded,
+  never connected.
 
 **How each part is verified today — all off real silicon:**
 - The store side of `traceraw`: `firmware/test/store_host/` runs the real,
