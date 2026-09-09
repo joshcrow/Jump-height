@@ -422,9 +422,15 @@ hand — CLAUDE.md rule 5). What changed, all pinned by tests, suite 523 →
 - Page version `2026-09-09b`. **Deploy status at merge time:** `/sync/` was
   **404** and the root served the retired 08-23 app; Pages source is
   already "GitHub Actions" (`gh api …/pages` → `build_type: workflow`); the
-  `pages` job needs the `test` job, which now installs Playwright + Chromium
-  and **had never run in CI**. The link is not real until the owner loads it
-  and sees the `2026-09-09b` footer.
+  `pages` job needs the `test` job, which now installs Playwright + Chromium.
+  **First CI run ever, PR #3, 2026-09-09: FAILED** — `fitdecode` was not in
+  the workflow's pip line (6 failed, 23 errors, all `test_fitread`). Fixed
+  in `f3d2a9a`; **re-run green: 580 passed, 12 skipped, 1 xfailed.** The 12
+  skips are the `HAVE_NICK` classes in `test_fitread.py` — they read
+  `data/nick-sessions/`, which is gitignored, so CI cannot see those files;
+  locally the same suite is 592 passed, 0 skipped. Chromium launched in CI
+  and drove the page. The link is not real until the owner loads it and
+  sees the `2026-09-09b` footer.
 
 **How each part is verified today — all off real silicon:**
 - The store side of `traceraw`: `firmware/test/store_host/` runs the real,
