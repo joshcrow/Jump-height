@@ -59,7 +59,7 @@ jobs:
           # infrastructure skip is a failure — skipping here would leave F-14's
           # refuse-on-ambiguity rule, the one guarding against flashing the
           # wrong board, unverified in CI while the suite stayed green.
-          pip install pytest pyserial platformio bleak playwright
+          pip install pytest pyserial platformio bleak playwright fitdecode
 
       - name: Install Playwright's Chromium
         # tools/tests/test_web_sync.py drives the real web/sync/ page in a real
