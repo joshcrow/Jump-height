@@ -22,6 +22,23 @@ table is a rediscovery waiting to happen.**
 | **"The spare"** — 3rd Sense *(registry formerly titled this row "Board #3"; that ordinal now collides with "the third board" = the Puck/8673, and identity confusion has cost four wrong verdicts — so the ordinal is retired; this board is THE SPARE, full stop)* | **`JumpHeight-45ED`** | `14E6E6F1…` | `11641737F0ECA0D6` | **NO — no pigtail, USB only.** | Bench board. Running `src=54b2e904`. Healthy sensor (`accel 1.021 g / noise 0.0025 g`). **Its `vbat_mv` / `batt_pct` are a FLOATING divider and mean nothing** — seen reading 3742 mV/23 % and 4133 mV/97 % minutes apart. Never log a battery figure from it. |
 | **"Puck"** — 2nd Sense (2026-08-12) | **`JumpHeight-8673`** | `B96D14EA…` | `2513620E30AE413D` | **NO** — USB only | **REASSESSED 2026-08-20: HEALTHY.** Flashed `src=15b2d468`, selftest 6/6 (accel 1.050 g, noise 0.0045 g, flash 2093056B_free). The fourth "dead board" verdict in this project to prove wrong. Role: Era-2 development board (standby/System-OFF/OTA-abort work — never the OG). |
 | ~~"Mule"~~ | — | — | — | — | Retired name: the "mule" and the "OG" are the SAME board (row 1). Calling the product board sacrificial is how it nearly got treated as disposable. |
+| **"The clone"** — planned second OG-spec board for the rider *(placeholder row, 2026-09-07)* | **unknown** | **unknown** | **unknown** | **YES, planned** — built to the OG's spec, pigtail soldered like row 1 | **Not built.** No name, address or serial exists until it is first flashed — filling this row **in that same commit** is the §1b rule this table exists to enforce, not a follow-up. Once it exists, its first BLE sync will hand us its name for free: the sync page (`web/sync/`) shows the connected puck's advertised name on Connect, and the bundle it produces is named `jumpheight-<PUCK4>-...zip` — the 4-char suffix is right there in the filename Josh receives. |
+
+**The OG is leaving the bench for the rider's home (2026-09-07).** §1a's
+rule 1 below — "only the OG can run untethered" — now describes a board this
+repo cannot walk over to. Every bench procedure in this file (the reboot ritual,
+`pincensus`, physical reset, the recovery ladder) assumes hands on the
+board; none of it is available once the OG is at Nick's. `docs/rider-sync.md`
+and DECISION #42 are what remote diagnostics look like instead — over the
+USB cable or Bluetooth, through his phone or his Mac. He does have an older
+Intel MacBook, but no repo and no toolchain on it — that is not a bench, but
+it does buy two things this file's rungs otherwise assume are unavailable:
+a cable path at all (Chrome + Web Serial, no phone required), and, in an
+emergency, a remote-guided `git clone` + `./tools/jump monitor`/`selftest`
+session talked through with him on a call. The physical recovery rungs
+(reset button, replug) exist at his end too, if described to him over that
+same call — this file's rungs assume hands already on the board; a call
+with Nick is Josh's hands, at a remove.
 
 ### 1a. The three rules this table exists to enforce
 

@@ -24,29 +24,34 @@ another document. Docs are the thing under suspicion.
 | Which board can measure power or run untethered? | **The OG only.** Drain, endurance and DC/DC numbers are meaningless elsewhere. | same |
 | Why did my BLE reading change between calls? | **Three boards can advertise.** Unpinned tools answer from whichever replies first. Always `--name`. | `tools/blepin.py` |
 | Can I trust a "dead board" verdict? | **No — four have been wrong.** Nothing was ever damaged. Establish the board's *configuration* first. | `docs/xiao-hardware-truth.md` |
-| What firmware is on the OG? | **`src=5c80a436`** — matches the tree (`jump sync` 2026-09-06: "device is running THIS source tree"). Confirm with `stats`; never infer from a commit date. | live read, 2026-09-06 |
+| **Where is the OG?** | **At Nick's, from 2026-09-07.** Synced (two SHA-256-identical copies), `clear`ed, calibration intact, battery full, before it left. Reset button pressed before it left (owner, 2026-09-08) — so `session_jumps` starts at 0 for the loan; not machine-verified, Nick's first watch count confirms it. Nick has no admin path: `mount`, `clear`, `dfu` all need a laptop. | this session, 2026-09-07 |
+| What firmware is on the OG? | **`src=5c80a436`** — matched the tree at the 2026-09-07 live read (`jump sync`: "device is running THIS source tree"). **The tree has since moved** (this merge: `traceraw`, the sync page, `jump ingest`; `build.gen.h` now `ae67dc8d`) and the OG has **NOT** been reflashed — every client falls back to CSV `trace`, by design. Confirm with `stats`; never infer from a commit date or a hash in a doc. | live read, 2026-09-07 |
 | Are the OG's heights trustworthy today? | **Bench-calibrated, yes** — drop ritual re-run 2026-08-24: 8 drops from 101.6 cm, bias −19 ms ±9, `airtime_offset_s=0.0192`, `off_src=device`, survived a reflash. `height_scale` remains defaults *by design* until the on-water video calibration. | live read, below |
 | How does the app reach the rider's watch? | **Connect IQ store, and it is APPROVED (2026-08-25).** Install from the Connect IQ phone app; sideloading is impossible on the Instinct 3. | `docs/watch.md` |
+| How does the rider get the data to me? | **A sync page → a zip → `./tools/jump ingest`. Two ways in: the USB cable in Chrome on his Intel MacBook (recommended) or Bluetooth from his phone** — `manifest.json`'s `transfer.transport` records which one ran (`"usb"` or `"ble"`). No repo, no toolchain, no bench needed for the normal flow (an emergency remote-guided CLI session is the documented fallback if the page ever fails, DECISION #42). This is NOT the retired browser app coming back — it is a one-way export surface, like `tools/jump`, not a user interface; the watch remains the product's only UI. Built 2026-09-07, **not yet run on real hardware** — see the dated section below. **Not deployed as of this merge — `/sync/` was 404 on 2026-09-09; the link is real only once the owner loads it and sees the `2026-09-09b` footer (Remote diagnostics, below).** The FIT export + a text line is the channel that already works (8 zips, August). | `docs/rider-sync.md`, `web/sync/`, DECISION #42 |
 | When is the water day? | **No date exists anywhere in this repo.** The freeze is *defined* as ≥4 days before it, so there is no freeze window. | — |
 
 ---
 
-## The OG, read over USB on 2026-08-24
+## The OG, last read before handover — 2026-09-07 17:00 EDT
 
 ```
 INFO fw=0.4.3 sample_hz=200 log_hz=50 motion_thresh_g=0.12 idle_timeout_s=20
-     ble=1 vbat_mv=4094 batt_pct=93 chg=1 src=76df4a83
+     ble=1 vbat_mv=4097 batt_pct=99 chg=0 src=5c80a436
 CAL  airtime_offset_s=0.0192 height_scale=1.000
      source=device off_src=device scale_src=defaults vbat_src=defaults
 SELFTEST i2c / whoami / accel / noise / ble / flash — 6/6 PASS
-STATS stored_jumps=0 (session synced to two copies, then cleared)
+STATS session_jumps=19 stored_jumps=0 trace_bytes=0 uptime_s=292180  (after clear;
+      session_jumps is boot-scoped — F-30 — and only the reset button zeroes it)
 ```
 
-`dcdc=1` at every boot (audit F-05). The drop calibration was applied live,
-then **baked and reflashed the same night, and survived the reflash in NVS**
-— the flashed build and the tree agree at `src=76df4a83`. The pre-audit
-session (18 jumps, 1.58 MB trace) is in `data/sessions/20260824-183054` and
-a verified second copy.
+The drop calibration (2026-08-24, `off_src=device`) survived the 09-07
+`clear`: calibration and the store guards are separate NVS keys
+(`jh_persist.h:42-56`). The session it left behind is
+`data/sessions/20260907-163005` plus a SHA-256-identical copy in
+`~/JumpHeight-session-backups/` (the 09-06 convention; `data/sessions/` is
+gitignored), labelled (`labels.csv`, from
+`data/notes/2026-09-07-beach.txt`).
 
 ---
 
@@ -56,6 +61,28 @@ Ordered by what blocks what.
 
 1. **Set the date.** Everything sequences off it, and no freeze window can
    begin without it.
+1a. **Nick's Instinct 3 — installed, but the field could not be placed.**
+   Owner, 2026-09-08: the Connect IQ phone app shows Jump Height installed on
+   Nick's watch, but the owner "couldn't figure out how to get the data
+   field to show up anywhere" — no data screen has it. The store listing is
+   live (fetched 2026-09-07: "Jump Height", Josh, Data Field, free). No
+   Instinct↔puck connection has ever been recorded. Mount for this loan is
+   the **vest pocket** (owner, 2026-09-08), the one configuration ever run
+   on water. Two things the brief now tells him
+   that this repo measured: his profile is **"Wing Foil"** (sport=generic,
+   sub_sport=track_me in 8/8 of his archived FITs, `data/nick-sessions/fits/`),
+   not Windsurf; and **`NO REC` renders only in the single-field layout**
+   (F-32). Until his first watch photo arrives, treat the watch side as
+   UNKNOWN, not working.
+1b. **Nick's data-return path is the FIT export + a text line** — the one
+   that already worked in August (8 zips, `data/nick-sessions/raw/`). Nothing
+   on `main` ingests a FIT (`grep fitdecode tools/ sim/` → 0 code hits);
+   every FIT read so far was a one-off script. The trace comes home with
+   the puck. An unmerged branch, `origin/claude/device-diagnostic-export-45ttyq`
+   (`e5d6160`, 2026-09-07): a Web Serial/BLE sync page + `jump ingest` +
+   firmware `traceraw`. **Not merged, not published (its rider URL was 404
+   on 2026-09-07), and `traceraw` is not on the OG.** Merging is a decision,
+   not a fact.
 2. ~~Connect IQ store submission.~~ **APPROVED 2026-08-25, ~18 h after
    filing** (submitted 08-24 ~18:30, approval email 12:18 PM). Live at
    `apps.garmin.com/en-US/apps/7d0edbd4-24a7-45c2-a6b8-c0886ba34172`;
@@ -85,16 +112,17 @@ Ordered by what blocks what.
 
 | | Severity | What |
 |---|---|---|
-| **F-22** | minor | `trace_bytes()` over-reports once the region fills; self-corrects at the next boot |
+| **F-22** | minor | `trace_bytes()` over-reports once the region fills; self-corrects at the next boot. **Hit live 2026-09-07:** `tracecheck fast=15917918 slow=15917153`; `jump sync` compares the download against the fast number and **refused to clear a complete file, twice, −765 both times.** `tracecheck`'s slow number is the arbiter — the tool should use it |
+| **F-32** | minor | **`NO REC` renders only in the single-field layout.** `JumpFieldView.mc:209-211` sets it inside `_drawFull`; `_drawHalf` (`:284`) and `_drawSmall` (`:329`) never read `storageDown()`. A rider who shares the screen with speed/time is never told the puck stopped saving. The rider brief now says one field per screen; the fix is a rebuild + resubmission |
 | **F-23** | minor | Full-chip mount is ~80× empty (74 ms vs 0.93 ms). The walk is the floor; no counter scheme fixes it |
 | **F-24** | minor | Self-arm cannot bootstrap at a small lever arm. **Not reachable** — `JH_SPIN_SELFARM_ENABLED = 0` |
 | **F-28** | minor | Phantoms self-identify by median airborne \|a\|. **Held on water 2026-09-06:** 6 phantoms at 0.50–1.53 g, 9 tosses at 0.04–0.23 g, no overlap. But the "phantoms are short and small" caveat is **retracted**: one water-entry fall read 0.78 s / 0.75 m and became the watch's best airtime |
-| **F-29** | minor | `session_best_airtime` is only ever written in the `fakejump` path (`main.cpp:1148`); real jumps never update it, so `STATS` reports `session_best_airtime_s=0.000` and the watch-side reseed added 08-18 has nothing to reseed from. Seen live: 16 jumps, STATS airtime 0.000 |
+| **F-29** | minor | `session_best_airtime` is only ever written in the `fakejump` path (`main.cpp:1332`); real jumps never update it, so `STATS` reports `session_best_airtime_s=0.000` and the watch-side reseed added 08-18 has nothing to reseed from. Seen live: 16 jumps, STATS airtime 0.000 |
 | **F-30** | minor | ~~A jump was counted and not stored.~~ **REFUTED same day — no jump was lost.** `session_jumps` is BOOT-scoped and has no reset anywhere (`main.cpp:134` is its only assignment); `clear` zeroes `stored_jumps` alone (`main.cpp:736`). The OG booted 09-04 and was cleared 76 s after the 09-05 sync, so 1 pre-clear jump + 15 post-clear = the 16 the watch showed. **The real finding: the number on the rider's wrist counts from the last PUCK REBOOT, not from the activity or the last clear**, and nothing in the tooling says the two counters measure different spans |
 | ~~F-31~~ | closed | **The suite did not read its own constants.** A 333-mutant overnight campaign found five gap classes, all the same shape: deliberately-chosen constants that nothing asserted. Worst two — `regression_check`'s failure paths were all flippable to pass, and `lever_arm`'s measured-wrong 5 % shave could be reinstated silently. **Suite 249 → 455; no behaviour changed.** All 333 mutants, all 11 modules. Worst three: a regression gate whose every failure path could be flipped to pass; a measured-wrong 5 % shave reinstatable in silence; and `while True` deletable from the board-slap generator with all 64 slap tests still green, because they assert ZERO jumps and removing the spikes only cleans the stream. `selfdiag` killed 11/11 — F-26's fix holding |
 | ~~F-26~~ | closed | `sim/selfdiag.py` had no test at all — 11/11 mutants survived a 223-test run. Now 17 tests, 10/11 mutants killed |
 | ~~F-27~~ | closed | `jump eval --split` was unguarded; inverting the filter passed the suite. Now killed by a partition property test |
-| ~~F-25~~ | closed | `jump status` reported the help *string* as "commands in binary", hiding `gyro`/`pincensus`/`vbatscan`. Tool label fixed 08-23; help string shipped in the 08-24 flash (`42dbd59`, on-device at `src=76df4a83`) — `jump status` now shows 21 with no gap |
+| ~~F-25~~ | closed | `jump status` reported the help *string* as "commands in binary", hiding `gyro`/`pincensus`/`vbatscan`. Tool label fixed 08-23; help string shipped in the 08-24 flash (`42dbd59`, on-device at `src=76df4a83`) — `jump status` now shows 21 with no gap. **Residue (2026-09-07):** the regex at `tools/jump:2626` matches `cmd == "..."` only; `set` (`main.cpp:942`) and `fillstore` (`:793`) dispatch via `startsWith` and are counted nowhere — 23 reachable, 21 reported |
 
 ## Closed recently — do not re-open
 
@@ -147,19 +175,24 @@ The curve is flat then cliffs: ~10–15 mV/h for fifty hours, then gone in
 three polls. **Do not extrapolate a remaining-time estimate from the flat
 middle** — that is precisely what makes voltage-percentage gauges lie.
 
-**The battery percentage gauge is now conclusively broken, with numbers:**
+**The battery percentage gauge WAS broken, with numbers — and was re-anchored
+the same day.** The table below is the OLD table's error. `ea270e7` refitted
+`kCurve[]` to this discharge (`jh_power.cpp:90-123`, worst error 2.0 h of
+57.1, pinned by `tools/tests/test_batt_curve.py`) and `8cec162` flashed it —
+it is in `src=5c80a436`, on the OG now. Remaining limits, from the source:
+15 % of the cell's life sits inside 35 mV around 3515–3550 (coarse in the
+middle), and it is calibrated at idle so it reads pessimistic under
+recording load. The rider brief's rule is "charge after every ride", not a
+number. Corrected 2026-09-07; this section had read as current for eleven days.
 
-| gauge read | vbat | puck then ran |
+| OLD gauge read | vbat | puck then ran |
 |---|---|---|
 | ≤20 % | 3733 mV | **38.9 more hours** |
 | ≤5 % | 3564 mV | **28.1 more hours** |
 | 0 % | 3307 mV | 5 more hours |
 
-It sat at 0 % for the last five hours while answering every poll. **This
-number is shown to the rider on the watch** (`docs/rider-brief.md` item 1),
-so today the product displays a figure that was wrong by 39 hours. Committed
-curve: `curve.csv` in the soak directory — this is the dataset the gauge
-re-anchor needs.
+It sat at 0 % for the last five hours while answering every poll. Committed
+curve: `curve.csv` in the soak directory — the dataset the re-anchor used.
 
 ## After a deep discharge, the flash does not mount on the recovery boot
 
@@ -213,7 +246,9 @@ First real-motion exposure, deliberately bracketed by two toss-triplets:
   the endpoint was read after charging began.
 - **Trace capacity field-confirmed:** 12.6 of 14.4 MB used (~87%) — the
   ~5 h moving-time figure is real, and the session card's two-outing note
-  earned its place.
+  earned its place. (Both are CSV-equivalent `trace_bytes` figures; the
+  physical region is 2,027,520 B and the CSV number at exhaustion is not a
+  constant — see 2026-09-07.)
 - **The eval pipeline scored its first real, admissible labeled session**
   end-to-end: `matched 6/6, spurious 6` with the placeholder session still
   correctly refused alongside. The grading path is no longer unrehearsed.
@@ -271,8 +306,10 @@ one ~20 s flight, **no jump**. Session folder `data/sessions/20260906-192422`
 - **Water logs at a continuous 50.00 Hz** (142,250 samples in 2,845 s,
   max gap 0.1 s) where transport averaged 27 Hz with 405 s gaps — the
   motion gate never closes on water. At 16.97 B/sample that is 3.05 MB/h,
-  so the 14.4 MB region holds **4.7 h of water**. The card's ~5 h figure
-  is now field-confirmed for water specifically, not just mixed use.
+  so the region holds **~5 h of water** — measured full on 2026-09-07 at
+  937,644 samples = **5.2 h of logged time** (`data/sessions/20260907-163005`).
+  The "14.4 MB" here was the 08-29 CSV-equivalent fill, not the capacity;
+  the 09-07 fill read 15.9 MB for the same physical 2,027,520 B.
 - **FIT developer fields are present and correct** (fitdecode): SESSION
   `jumps/best_jump/best_airtime`, RECORD `jump_height` in 1,213/1,404 records,
   7 distinct live values matching the trace within ~3 s. **Garmin Connect's
@@ -290,6 +327,170 @@ one ~20 s flight, **no jump**. Session folder `data/sessions/20260906-192422`
   activity first. The puck was **not rebooted** (uptime 2.5 days at sync), so
   the session count included the morning's house tosses and a car phantom.
   `label.py` assumed the notes' day was the boot day; `--date` added.
+
+## Field-measured 2026-09-07 — pocket walk, the region fills, and the F-28 margin goes negative
+
+Owner's pocket, walk to the beach and back, no water. Three deliberate tosses
+at the house (the sync-marker ritual, owner-confirmed), then 1.83 h of walking.
+Session `data/sessions/20260907-163005` + backup copy; labels from
+`data/notes/2026-09-07-beach.txt` (times trace-derived, exact to the second).
+
+- **Detection: 3/3 tosses found, 0 phantoms in 1.83 h of walking** (11:42–13:32
+  EDT). First clean walking false-positive number: **0/h**, against the
+  0.9/h of the 08-29 run-included carry.
+- **Toss #18 spun** (`med_w` 1017 dps) and read **`med_a` 0.352 g** — a real,
+  owner-labelled jump above the lowest recorded phantom (0.255 g). **F-28's
+  pooled 17 mg window is now negative**, by exactly the spin mechanism STATUS
+  already gave as the reason it must not ship. Pooled corpus is now 44 real
+  vs 13 spurious; no |a|-only gate separates them at zero cost.
+- **The trace region filled at t=279,711 s (13:33 EDT) and recorded nothing
+  for the next 3.2 h** — the walk home, the car, the bench — while `stats`
+  answered normally and nothing on any surface said so. STATS carries no
+  fullness key (`main.cpp:686-693`); the one-shot `# trace log full` serial
+  line fires once per boot. **Had it gone to Nick like this, his first ride
+  would have auto-cleared the region (`main.cpp:1549`) and the day's data
+  with it.** Physical region: 2,027,520 B (2 MiB − 4 KB superblock − 64 KB
+  jumps, `jh_store.cpp:107`); when full the firmware **stops, never wraps**
+  (`main.cpp:1707`, `jh_store.cpp:1045`).
+- **F-22 hit the tooling.** `tracecheck fast=15917918 slow=15917153`; sync
+  compared its download against `fast` and refused to clear a byte-complete
+  file twice. The −765 B is F-22's dropped-block residue. `tracecheck` is
+  the arbiter; `jump sync` should call it before calling a file SHORT.
+- **Region cleared 17:00 EDT** after two verified copies. `session_jumps=19`
+  survives the clear (F-30) and only the reset button zeroes it.
+
+## Remote diagnostics — built 2026-09-07, reviewed and corrected 2026-09-09, NOT yet run on hardware
+
+The rider (Nick) is taking the OG home. He has an older Intel MacBook (no
+repo, no toolchain on it) and a phone — no bench either way. Four pieces
+exist to get his data back without a bench:
+
+- **Firmware `traceraw`** — `firmware/src/main.cpp` (command dispatch),
+  `firmware/include/base64.h` (dependency-free base64 encoder). Streams the
+  trace region's raw bytes instead of CSV; falls back cleanly (`ERR
+  unknown_command traceraw`) on firmware that predates it.
+- **The sync page** — `web/sync/` (`index.html`, `sync.css`, `sync.js`).
+  Connects over the USB cable (Web Serial, Chrome on his Mac — recommended)
+  or over Bluetooth (Web Bluetooth, phone or Mac), pulls
+  info/stats/jumps/traceraw(→trace)/selftest, builds a zip, hands it to his
+  Downloads or share sheet. Which transport ran is recorded in
+  `manifest.json`'s `transfer.transport` (`"usb"` or `"ble"`).
+- **`./tools/jump ingest`** — unpacks a bundle into a `data/sessions/<id>/`
+  folder and runs the same analysis `jump sync` does.
+- **Docs** — this row, `docs/rider-sync.md` (Nick's page), `docs/watch.md`,
+  DECISIONS #42/#43, `docs/bench-playbook.md` §1 (clone-board placeholder).
+
+**Reviewed 2026-09-09 before it reached `main`** (four Opus reviews, each
+blocking finding refuted or confirmed by a second agent, then verified by
+hand — CLAUDE.md rule 5). What changed, all pinned by tests, suite 523 →
+592 passed, 1 xfailed, Playwright driving the real page for 28:
+- **`web/sync/CONTRACT.md` did not exist.** Cited 28+ times across 12 files
+  (including `jump ingest --help`), in no commit on any ref — CLAUDE.md §4's
+  identifier-without-a-lookup-entry. Reconstructed from what the code does,
+  every rule citing its implementing line; disagreements recorded in its
+  appendices, not harmonised.
+- **F-22 on every path the rider can reach.** The page and `jump ingest`
+  hard-compared the download against STATS `trace_bytes` — the counter
+  measured 765 B high on the OG 2026-09-07 — so a full puck could never
+  verify and every such bundle needed `--force`. Now: a 1..800 B shortfall
+  is accepted with a visible note (`sync.js` csv arm; `tools/jump`
+  `_verify_ingest_bundle`); the bench `jump sync` asks the device
+  (`tracecheck`, 300 s) instead. The band is the whole arbiter on the csv
+  path — no crc32 there — and is one-sided and narrow for that reason.
+- **Two real-puck shapes a byte match refuses:** a cleared region emits the
+  6-byte CSV header against `trace_bytes=0` (`jh_store.cpp:1119-1126`) —
+  the first bundle of the loan; and the puck keeps logging while handled,
+  so `got` runs past the connect-time count. The page re-reads `stats`
+  after the dump and ships `trace_bytes_after`; page and ingest accept up
+  to it.
+- **"Empty the puck" is hidden** behind `?allowclear=1` (`ALLOW_CLEAR`,
+  gates the button, the unhide and `doClear()`): the brief says the rider
+  never clears, and "delivered" only ever meant `a.click()` returned.
+- A pull that died mid-frame no longer poisons the retry (`fileSection`
+  reset in `doPull`); a puck that never answered `stats` cannot be pulled
+  (the manifest would ship `trace_epoch_utc` null and `label.py` would
+  misdiagnose a live puck); "reload this page" on link loss.
+- `docs/rider-sync.md` said the puck keeps everything until emptied — the
+  firmware wipes a full region at the next ride. Fixed, with Wing Foil for
+  Windsurf, share-sheet-before-Downloads (measured on the owner's Mac, not
+  Nick's), no accessory prompt on an Intel Mac, and the full-puck Bluetooth
+  estimate (~20-30 min).
+- `tools/fitread.py` — the first thing on `main` that reads a FIT (41 tests
+  on all nine real files). `docs/serial-parity-2026-09-09.md` — the page's
+  serial assumptions vs the firmware vs `tools/jump`, the checklist for the
+  first real-port test.
+- Page version `2026-09-09b`. **Deploy status at merge time:** `/sync/` was
+  **404** and the root served the retired 08-23 app; Pages source is
+  already "GitHub Actions" (`gh api …/pages` → `build_type: workflow`); the
+  `pages` job needs the `test` job, which now installs Playwright + Chromium.
+  **First CI run ever, PR #3, 2026-09-09: FAILED** — `fitdecode` was not in
+  the workflow's pip line (6 failed, 23 errors, all `test_fitread`). Fixed
+  in `f3d2a9a`; **re-run green: 580 passed, 12 skipped, 1 xfailed.** The 12
+  skips are the `HAVE_NICK` classes in `test_fitread.py` — they read
+  `data/nick-sessions/`, which is gitignored, so CI cannot see those files;
+  locally the same suite is 592 passed, 0 skipped. Chromium launched in CI
+  and drove the page. The link is not real until the owner loads it and
+  sees the `2026-09-09b` footer.
+
+**How each part is verified today — all off real silicon:**
+- The store side of `traceraw`: `firmware/test/store_host/` runs the real,
+  unmodified `firmware/src/platform/nrf52/jh_store.cpp` against a
+  real-semantics mock QSPI flash, driven by `tools/tests/test_store_host.py`.
+- The command itself: `firmware/src/main.cpp` compiled and run natively
+  (PlatformIO `env:host`), driven over its real stdin/stdout protocol by
+  `tools/tests/test_hostdev.py`.
+- The page: a real headless Chromium loads the actual `web/sync/index.html` +
+  `sync.js` and plays a scripted fake puck through the page's own test seam,
+  in `tools/tests/test_web_sync.py` — the Bluetooth-shaped and the
+  cable-shaped flows, the verification gate, the old-firmware fallback,
+  fs=down, the iPhone dead end, and the cable button/port-picker paths.
+  **The Web Serial transport itself (`SerialTransport` in `sync.js`) has
+  driven no port here** — only a real Chrome on a real cable exercises it.
+- The CLI ingest path: `tools/tests/test_ingest.py` (bundle round-trip for
+  both trace formats, directory ingest, the crc32/jump-row/csv-byte-count
+  refusals and their `--force` overrides, and the two refusals that need no
+  arithmetic — a puck whose store was not mounted (NO REC) and a bundle the
+  page itself marked `verified=false`; bundles built in-test with
+  `sim/trace_codec.encode_region`). The `traceraw`/`--csv` sync-side
+  coverage lives separately, in `tools/tests/test_cli.py::TestSync`.
+
+**What is UNMEASURED — say so plainly, none of this has run on a real puck:**
+- **`traceraw` on silicon at all.** The OG is on `src=5c80a436` (row above),
+  which predates the command — `stats`/`selftest` will confirm this before
+  any claim otherwise. Until the OG is reflashed, both the page and
+  `jump sync` fall back to CSV, which is the designed behaviour, not a bug.
+- **Real BLE throughput.** The 10-16 KB/s figure in `docs/rider-sync.md` is
+  an ESTIMATE from MTU × connection interval, not a measurement — nothing
+  has been timed end to end yet.
+- **USB transfer time.** Not measured, and no number is estimated either —
+  `docs/rider-sync.md` says only that it's expected to be faster than
+  Bluetooth, since it rides the same USB serial link `./tools/jump sync`
+  already uses. The first real cable sync on his Mac settles it.
+- **The cable path end to end.** Chrome's Web Serial against the puck's CDC
+  port has not been tried by this project on any machine, let alone his
+  Intel MacBook: the port picker's entry name, the macOS accessory prompt,
+  and the stale-buffer drain in `SerialTransport.open` are all reasoning,
+  not observation. One sync on the bench Mac before the handoff is the
+  cheapest possible measurement of all three.
+- **The 800 B band, the 6-byte header rule and `trace_bytes_after` growth**
+  are read from source and played by a scripted puck — never observed off
+  silicon. `tracecheck`'s walk time on a full region (the 300 s floor) is
+  likewise untimed.
+- **Nick's Chrome:** whether `navigator.canShare({files})` is true there
+  (it is on the owner's Chrome 152 → share sheet first) and what the port
+  picker names the CDC port.
+- **Bluefy's share sheet on an actual iPhone.** `navigator.share({files})`
+  behaviour there is untested by this project.
+- **The Garmin two-central slowdown warning.** The page's "is your watch in
+  an activity?" message is a design response to the documented no-second-
+  central rule (`docs/watch.md`, BLE link dependability) — it has not been
+  triggered and observed on real hardware.
+
+**Flash-batch candidates — the owner's decision, none of this is done:**
+`traceraw` itself, F-29 (`session_best_airtime` never set on real jumps, see
+Open findings above), and gating `dfu` behind a required argument before any
+OTA is ever pushed to the rider (DECISION #43). All three are candidates for
+the *next* flash batch, not committed to one.
 
 ## Known-unmeasured
 
@@ -323,7 +524,17 @@ Stated plainly so an absence is never mistaken for a pass:
 - Off-current has never been measured and is **unmeasurable** with the
   instruments this project owns — cell self-discharge is the same order as the
   signal.
-- The Instinct has never rendered a jump. All watch evidence is Epix.
+- The Instinct has never rendered a jump. All watch evidence is Epix. **No
+  evidence the field is even installed on Nick's Instinct** (open gate 1a).
+- **The enclosure has never been bucket-tested, floated loaded, or
+  BLE-range-checked closed** — every repo hit for "bucket" is an instruction,
+  none is a record (`DECISIONS.md` #9, `session-card.md:48`). The 09-06 water
+  session was a vest pocket; whether the puck itself got wet is unrecorded.
+- **Whether a reset recovers `fs=down` after a flat battery.** `main.cpp:1279`
+  skips the boot mount when the StoreGuard was found latched; the 08-27
+  recovery used `mount`, and STATUS never recorded whether the guard was
+  latched. So the brief's "charge, press reset, text a photo" is a hope with
+  a fallback, not a fix.
 - `jump monitor` and `setup` have no test coverage. (`jump drop` got its
   first real runs 2026-08-24.)
 

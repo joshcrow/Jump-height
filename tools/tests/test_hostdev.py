@@ -32,19 +32,32 @@ Run via ./tools/jump simtest, or directly:
 
 from __future__ import annotations
 
+import base64
+import itertools
 import os
+import re
 import select
 import shutil
+import string
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+import zlib
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent.parent
 FIRMWARE_DIR = REPO / "firmware"
 FW_VERSION = "0.4.3"  # firmware/src/main.cpp's FW_VERSION
+
+# The `traceraw` tests below decode the device's raw export with the SAME
+# module the phone page and `jump ingest` decode it with — the point of the
+# exercise is that one decoder serves every client, so importing a second
+# implementation here would test the wrong thing.
+sys.path.insert(0, str(REPO / "sim"))
+
+import trace_codec  # noqa: E402  (path insert must come first)
 
 
 def _find_pio() -> list[str] | None:
@@ -636,3 +649,334 @@ class TestStorageRefusalIsVisible(HostDevTestCase):
         finally:
             dev.close()
             os.chmod(host_dir, 0o700)   # before tearDown's rmtree
+
+
+class TestTraceRawExport(HostDevTestCase):
+    """`traceraw` — the same stored trace `trace` sends, streamed as the
+    store's own binary blocks in base64 instead of ~17-byte CSV rows.
+
+    It exists for the rider-sync path: a phone pulling a full session over
+    BLE waits on the wire, and the binary form is roughly 2.7 bytes/sample
+    (~2 stored, +33% for base64) against the CSV's ~17. So the bar here is
+    not "it produces output" — it is that a client can VERIFY what it got
+    (byte count + CRC-32) and decode it back to exactly the rows `trace`
+    would have sent.
+
+    This drives the real firmware path natively (framing, base64, the
+    streaming CRC-32, the reliable-export bracket in
+    firmware/src/main.cpp's printTraceRawFramed). The host store keeps CSV
+    text rather than trace_codec blocks, so its open_read_raw() synthesizes a
+    region image laid out exactly the way the nRF52 store lays one out
+    (firmware/src/platform/host/jh_store.cpp) — what goes over the wire is a
+    genuine trace region, decoded here by the same sim/trace_codec.py the
+    phone page and `jump ingest` use.
+    """
+
+    # The wire contract, as regexes rather than prose: any drift in the
+    # chatter lines breaks the page's progress bar and its verification, so
+    # these are deliberately anchored and exact.
+    CHATTER_RE = re.compile(r"^# traceraw bytes=(\d+) log_hz=(\d+) region_bytes=(\d+)$")
+    CRC_RE = re.compile(r"^# traceraw crc32=([0-9a-f]{8}) bytes=(\d+)$")
+    B64_CHARS = set(string.ascii_letters + string.digits + "+/")
+
+    def _parse_traceraw(self, lines: list[str]) -> dict:
+        """Parse one `traceraw` response STRICTLY per the wire contract, and
+        return {raw, bytes, log_hz, region_bytes, crc32}.
+
+        Strict on purpose. Every check below is something a client depends
+        on: `tools/jump`'s parse_file_sections matches FILE lines by
+        `startswith("FILE ")` + `endswith(" BEGIN"/" END")`, so an extra
+        token on those lines silently changes the file NAME it thinks it is
+        reading; a body line that isn't a whole number of base64 groups
+        decodes to different bytes; '=' padding anywhere but the very end
+        means the stream was cut and re-padded mid-file.
+        """
+        text = [ln.rstrip("\r") for ln in lines]
+
+        chatter = [m for m in (self.CHATTER_RE.match(ln) for ln in text) if m]
+        self.assertEqual(len(chatter), 1,
+                         f"expected exactly one traceraw header line:\n" + "\n".join(text))
+        crc_m = [m for m in (self.CRC_RE.match(ln) for ln in text) if m]
+        self.assertEqual(len(crc_m), 1,
+                         f"expected exactly one traceraw crc32 line:\n" + "\n".join(text))
+
+        file_lines = [(i, ln) for i, ln in enumerate(text) if ln.startswith("FILE ")]
+        self.assertEqual([ln for _, ln in file_lines],
+                         ["FILE trace.bin BEGIN", "FILE trace.bin END"],
+                         "the FILE frame lines must carry NO extra tokens — "
+                         "every existing parser matches them by prefix/suffix")
+        begin_i, end_i = file_lines[0][0], file_lines[1][0]
+
+        self.assertLess(text.index(chatter[0].string), begin_i,
+                        "bytes= must arrive before the frame: it is what a "
+                        "client sizes its progress bar and its check with")
+        self.assertGreater(text.index(crc_m[0].string), end_i,
+                           "crc32= is computed over the streamed bytes, so it "
+                           "can only be honest after the frame closes")
+        self.assertEqual(text[-1].strip(), "OK traceraw",
+                         "the response must end on its OK terminator")
+        self.assertFalse([ln for ln in text if "INCOMPLETE" in ln],
+                         "the device reported an incomplete export:\n" + "\n".join(text))
+
+        body = text[begin_i + 1:end_i]
+        for i, ln in enumerate(body):
+            last = i == len(body) - 1
+            if last:
+                self.assertTrue(0 < len(ln) <= 76,
+                                f"final body line has length {len(ln)}: {ln!r}")
+            else:
+                self.assertEqual(len(ln), 76,
+                                 f"body line {i} is {len(ln)} chars, not 76: {ln!r}")
+            self.assertEqual(len(ln) % 4, 0,
+                             f"body line {i} is not a whole number of base64 groups")
+            stripped = ln.rstrip("=")
+            self.assertLessEqual(len(ln) - len(stripped), 2,
+                                 f"body line {i} has more than two '=' pad chars")
+            if not last:
+                self.assertEqual(stripped, ln,
+                                 f"'=' padding on non-final body line {i}: {ln!r}")
+            self.assertTrue(set(stripped) <= self.B64_CHARS,
+                            f"non-base64 characters in body line {i}: {ln!r}")
+
+        raw = base64.b64decode("".join(body), validate=True)
+        declared = int(chatter[0].group(1))
+        crc_hex, crc_bytes = crc_m[0].group(1), int(crc_m[0].group(2))
+        self.assertEqual(len(raw), declared,
+                         "decoded byte count must equal the announced bytes=")
+        self.assertEqual(crc_bytes, declared,
+                         "the two bytes= values (before and after the frame) "
+                         "must agree, or a client cannot tell which to trust")
+        self.assertEqual(f"{zlib.crc32(raw) & 0xFFFFFFFF:08x}", crc_hex,
+                         "crc32 must be CRC-32/ISO-HDLC over the raw bytes — "
+                         "exactly Python's zlib.crc32")
+        return {
+            "raw": raw,
+            "bytes": declared,
+            "log_hz": int(chatter[0].group(2)),
+            "region_bytes": int(chatter[0].group(3)),
+            "crc32": crc_hex,
+        }
+
+    @staticmethod
+    def _file_body(lines: list[str], name: str) -> list[str]:
+        """The rows inside a `FILE <name> BEGIN/END` frame, header dropped."""
+        begin = lines.index(f"FILE {name} BEGIN")
+        end = lines.index(f"FILE {name} END")
+        return [ln for ln in lines[begin + 1:end] if ln and ln != "t,mag"]
+
+    def test_traceraw_streams_a_verifiable_trace_that_decodes_to_the_csv(self) -> None:
+        script = write_script(self.tmp_path / "script.txt",
+                              "rest 2.0\njump 0.65\nrest 2.0\n")
+        dev = HostDevice(self.host_binary, self.tmp_path / "hostdir", script)
+        try:
+            self.assertTrue(dev.drain_boot())
+            self.assertIsNotNone(dev.wait_for("JUMP", timeout=10.0),
+                                 "no JUMP from the scripted toss — no trace to export")
+            # Let a few whole seconds of trace accumulate before exporting.
+            # MEASURED NECESSITY, not padding of the test: exporting straight
+            # after the JUMP gave a region of two PARTIAL blocks, and a block
+            # is 6 + 2*count bytes — odd counts land on a 4-byte boundary by
+            # themselves. Deleting the image builder's align4 padding
+            # entirely still passed this test in that state. Full seconds at
+            # 50 Hz give even counts, which need the padding; the assertion
+            # below then fails loudly if a run somehow gets none anyway,
+            # rather than going quietly green on a fixture that cannot see
+            # the bug. (The motion gate stays open for JH_IDLE_TIMEOUT_S
+            # after the last movement, so the trace keeps growing here and
+            # the device emits nothing that could fill the pipe.)
+            time.sleep(3.0)
+
+            info = next(ln for ln in dev.command("info") if ln.startswith("INFO "))
+            info_log_hz = int(parse_kv(info)["log_hz"])
+
+            got = self._parse_traceraw(dev.command("traceraw"))
+            self.assertGreater(got["bytes"], 0,
+                               "the scripted ride must have stored a trace")
+            self.assertEqual(got["log_hz"], info_log_hz,
+                             "traceraw's log_hz is what the client reconstructs "
+                             "sample times with; it must match INFO's")
+            # Capacity can never be less than what is stored. (On the host
+            # store the two are equal — the synthesized image IS the used
+            # prefix; on the nRF52 they are genuinely independent.)
+            self.assertGreaterEqual(got["region_bytes"], got["bytes"])
+
+            res = trace_codec.decode_region_recovering(got["raw"], log_hz=got["log_hz"])
+            self.assertEqual(res.consumed, got["bytes"],
+                             "the decoder must consume every exported byte — "
+                             "stopping early is how a session loses its tail")
+            self.assertEqual(res.damaged_patches, 0,
+                             "nothing tore here; damage would mean the image is malformed")
+
+            # --- and it is the SAME trace `trace` returns ---
+            # Sampling continues between the two commands, so `trace` sees the
+            # raw export's rows plus whatever arrived after it; compare on the
+            # common prefix.
+            rendered = trace_codec.region_to_csv(got["raw"], log_hz=got["log_hz"]).splitlines()
+            trace_rows = self._file_body(dev.command("trace"), "trace.csv")
+            self.assertGreater(len(rendered), 0)
+            self.assertGreaterEqual(len(trace_rows), len(rendered))
+            prefix = trace_rows[:len(rendered)]
+
+            # Magnitudes are preserved EXACTLY (milli-g quantization cannot
+            # move a 3-decimal value), so compare that column byte for byte.
+            self.assertEqual([r.split(",")[1] for r in rendered],
+                             [r.split(",")[1] for r in prefix],
+                             "the magnitude column must survive the round trip intact")
+
+            # Timestamps are not compared row-for-row against `trace`, and
+            # that is the format's documented trade, not a defect: a block
+            # stores ONE t0 and the decoder rebuilds the rest at exactly
+            # 1/log_hz spacing (trace_codec.h, "Per-sample time
+            # reconstruction"). The host build samples off a real clock, so
+            # its rows carry real jitter — measured while writing this test,
+            # on this machine: 3 of 135 rows differed from the reconstructed
+            # time by 1-8 ms (e.g. logged 1.643, reconstructed 1.640), and a
+            # separate run logged two consecutive rows both rounding to
+            # 2.400 s. A row-for-row timestamp comparison would therefore be
+            # flaky here and would be testing the clock. What must hold is
+            # that the export is those same rows put through that same
+            # transform, so re-encode them here with the Python mirror and
+            # require the bytes to match. That pins the host store's image
+            # synthesis against sim/trace_codec.py at the same time.
+            pairs = [(float(a), float(b))
+                     for a, b in (r.split(",") for r in prefix)]
+            blocks = [list(group) for _, group
+                      in itertools.groupby(pairs, key=lambda p: int(p[0]))]
+            expected = b"".join(
+                trace_codec.encode_region(
+                    block, got["log_hz"],
+                    samples_per_block=trace_codec.MAX_SAMPLES_PER_BLOCK)
+                for block in blocks)
+            # The fixture must actually contain a block that needs align4
+            # padding, or this comparison cannot see a missing-padding bug at
+            # all (see the sleep above for how that was found). A block is
+            # 6 + 2*count bytes, so only EVEN sample counts need padding.
+            padding = len(expected) - sum(trace_codec.block_size(len(b)) for b in blocks)
+            self.assertGreater(
+                padding, 0,
+                f"no block in this run needed align4 padding (block sample "
+                f"counts {[len(b) for b in blocks]}) — the fixture is too "
+                f"small or too jittery to test the region layout")
+            self.assertEqual(got["raw"], expected,
+                             "the exported region does not match the same trace "
+                             "rows re-encoded by sim/trace_codec.py")
+            self.assertEqual("\n".join(rendered) + "\n",
+                             trace_codec.region_to_csv(expected, log_hz=got["log_hz"]))
+        finally:
+            dev.close()
+
+    def test_traceraw_short_export_cannot_self_verify_and_says_so_outside_the_frame(self) -> None:
+        """The store comes up SHORT of what it announced — and the response
+        must make that impossible to miss.
+
+        Reached with $JH_HOST_RAW_OVERREPORT (firmware/src/platform/host/
+        jh_store.cpp): the store announces 8 bytes more than its image holds,
+        the way a lost open_read_raw() flush or a failed mid-stream read
+        would. Nothing else on this platform can come up short, so without
+        this knob main.cpp's `streamed != declared` arm ships untested.
+
+        Three things are pinned here, all of them shapes CLAUDE.md rule 3
+        forbids (a silent failure that looks like a pass):
+
+        1. The base64 body stays PURE. A `#` warning line inside the frame is
+           not a note — tools/jump's parse_file_sections and web/sync's
+           sync.js copy everything between BEGIN and END into the file, and
+           b64decode/atob then throw on it (the em dash isn't even ASCII), so
+           the page reports "unreadable data" for a cause the puck named.
+        2. The warning is OUTSIDE the frame, as `#` chatter. That is where
+           both scanners look, and web/sync/CONTRACT.md §2 keeps FILE bodies out of the
+           device.log Josh receives — so inside the frame is exactly where
+           `verified` criterion (a)'s only evidence would be discarded.
+        3. BOTH `bytes=` values are N, the announced count. If the trailing
+           one carried what actually streamed, the pair (crc32 over the short
+           body + a byte count that matches it) would be internally
+           consistent, and a client checking the count next to the crc would
+           call a truncated trace verified — and web/sync/CONTRACT.md §2 then permits
+           offering `clear`."""
+        script = write_script(self.tmp_path / "script.txt",
+                              "rest 2.0\njump 0.65\nrest 2.0\n")
+        dev = HostDevice(self.host_binary, self.tmp_path / "hostdir", script,
+                         extra_env={"JH_HOST_RAW_OVERREPORT": "8"})
+        try:
+            self.assertTrue(dev.drain_boot())
+            self.assertIsNotNone(dev.wait_for("JUMP", timeout=10.0),
+                                 "no JUMP from the scripted toss — no trace to export")
+            time.sleep(3.0)   # let whole seconds accumulate, as above
+            lines = [ln.rstrip("\r") for ln in dev.command("traceraw")]
+
+            begin = lines.index("FILE trace.bin BEGIN")
+            end = lines.index("FILE trace.bin END")
+            body = lines[begin + 1:end]
+
+            # (1) the body is base64 and nothing else.
+            self.assertTrue(body, "the scripted ride must have stored a trace")
+            try:
+                raw = base64.b64decode("".join(body), validate=True)
+            except ValueError as e:
+                self.fail(
+                    f"the FILE body is not pure base64 ({e}) — something else "
+                    f"was emitted between BEGIN and END, and every client "
+                    f"decodes those lines straight into trace.bin. Last body "
+                    f"lines: {body[-2:]!r}")
+
+            # (2) the complaint rides outside the frame, as chatter.
+            warnings = [i for i, ln in enumerate(lines) if "INCOMPLETE" in ln]
+            self.assertTrue(warnings,
+                            "the store came up short and the device said "
+                            "nothing:\n" + "\n".join(lines))
+            for i in warnings:
+                self.assertTrue(lines[i].startswith("#"),
+                                f"warning is not a chatter line: {lines[i]!r}")
+                self.assertFalse(begin < i < end,
+                                 f"warning sits INSIDE the base64 body (line "
+                                 f"{i}, frame {begin}..{end}): {lines[i]!r}")
+            self.assertTrue(
+                any("streamed" in lines[i] for i in warnings),
+                "the shortfall warning must name what streamed vs what was "
+                "announced:\n" + "\n".join(lines[i] for i in warnings))
+
+            # (3) both bytes= are N, and N is not what arrived.
+            declared = int(self.CHATTER_RE.match(
+                next(ln for ln in lines if self.CHATTER_RE.match(ln))).group(1))
+            crc_m = next(self.CRC_RE.match(ln) for ln in lines
+                         if self.CRC_RE.match(ln))
+            self.assertEqual(int(crc_m.group(2)), declared,
+                             "the trailing bytes= must be the SAME N the "
+                             "header announced — printing what actually "
+                             "streamed lets a short export self-verify")
+            self.assertEqual(len(raw), declared - 8,
+                             "the knob is what makes this scenario short; if "
+                             "the body matched the announcement there is "
+                             "nothing here to detect")
+            # The crc IS honest about what went out, so the receiver's own
+            # check fails on the count, not on a corrupt-looking payload.
+            self.assertEqual(f"{zlib.crc32(raw) & 0xFFFFFFFF:08x}", crc_m.group(1))
+            self.assertNotEqual(len(raw), declared,
+                                "a receiver comparing received bytes to "
+                                "bytes= must be able to see the shortfall")
+        finally:
+            dev.close()
+
+    def test_traceraw_with_no_trace_is_a_well_formed_empty_export(self) -> None:
+        """A puck that has recorded nothing (here: a script that never moves,
+        so the motion gate never opens) must answer with the empty framing —
+        bytes=0, no body lines, crc32 of nothing — NOT an error. This is the
+        state a just-cleared puck hands the phone page, and "empty" and
+        "failed" have to be distinguishable there: one is fine, the other
+        means don't offer to clear."""
+        script = write_script(self.tmp_path / "script.txt", "rest 5.0\n")
+        dev = HostDevice(self.host_binary, self.tmp_path / "hostdir", script)
+        try:
+            self.assertTrue(dev.drain_boot())
+            lines = dev.command("traceraw")
+            got = self._parse_traceraw(lines)
+            self.assertEqual(got["bytes"], 0)
+            self.assertEqual(got["raw"], b"")
+            # zlib.crc32(b"") — the receiver's own check has to agree on the
+            # empty case too, or every empty sync looks corrupt.
+            self.assertEqual(got["crc32"], "00000000")
+            begin = lines.index("FILE trace.bin BEGIN")
+            self.assertEqual(lines[begin + 1], "FILE trace.bin END",
+                             "an empty export must have NO body lines at all")
+        finally:
+            dev.close()

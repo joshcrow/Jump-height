@@ -34,7 +34,8 @@ evaluator (`sim/evaluate.py`, `./tools/jump eval`).
 
 ```
 capture ──▶ sync ──▶ label ──▶ eval ──▶ regression-gate ──▶ tune ──▶ deploy ──▶ (repeat)
- (ride)   (USB/BLE)  (video)  (score)   (block if worse)  (params)  (flash)
+ (ride)   (USB/BLE,  (video)  (score)   (block if worse)  (params)  (flash)
+           or bundle → ingest — the rider's no-repo path, docs/rider-sync.md)
 ```
 
 - **Per session:** capture ritual → `jump sync` → label from video → the session
@@ -55,6 +56,21 @@ data/sessions/<id>/
   labels.csv     ← NEW: video-derived ground truth (schema below)
   session.json   ← NEW: provenance + train/test split (schema below)
 ```
+
+A session that came in as a bundle (`./tools/jump ingest`, `docs/rider-sync.md`
+— the rider's no-repo path) may also carry `trace.bin` (the raw `traceraw` bytes,
+kept alongside the decoded `trace.csv`), `notes.txt` (whatever the rider
+typed on the sync page) and `device.log` (every line the puck sent during
+that sync). `trace.bin` appears only on the traceraw path; `notes.txt` and
+`device.log` are always written by `ingest` — empty if the bundle omitted
+them — so only `trace.bin` is genuinely optional. A session synced the
+normal way over USB/BLE has none of the three, and nothing in
+`eval`/`evaluate.py` reads them. **This bundle `notes.txt` is the rider's
+free text plus the sea/wind chips he tapped, NOT the timestamped notes file
+`tools/label.py` expects** — feeding it to `label.py` prints
+`! skipped (unparseable)` per line and still writes a 0-row `labels.csv`,
+which is enough to make the session look labeled to `eval` when it isn't.
+Don't point `label.py` at a bundle's `notes.txt`.
 
 **Nesting is allowed, and since 2026-08-23 it is actually found.** A session is
 any directory holding both `trace.csv` and `labels.csv`, at *any* depth —
@@ -307,3 +323,22 @@ you swap synthetic truth for video labels and the machinery is already there. Th
 one instrumented water session that validates the arm ceiling *also* calibrates
 `height_scale`, labels landings, and seeds the riding-dynamics thresholds — they all
 ride along on the same day on the water.
+
+## Reading a Garmin FIT — `tools/fitread.py`
+
+The rider's Garmin Connect export (a zip holding `<id>_ACTIVITY.fit`) is the
+one data channel that has already worked with no owner present (8 zips,
+2026-08-27, `data/nick-sessions/raw/`, untracked). Until 2026-09-09 nothing on
+`main` could read one — every FIT read was a one-off script. Now:
+
+    ./tools/fitread.py <file.fit | export.zip> [--out DIR]
+
+prints the profile name / sport / sub_sport, start and end (UTC + local),
+record count, every developer field with its non-null count, the SESSION
+`jumps` / `best_jump` / `best_airtime` when present, max `enhanced_speed`,
+and the time-on-foil windows (`enhanced_speed` > 2.5 m/s for ≥ 10 s — the
+2026-09-06 heuristic from `STATUS.md`). `--out` writes `fit-summary.json` and
+`fit-records.csv` beside the puck's files. A field that was not read prints
+`absent`, never 0. Tests: `tools/tests/test_fitread.py`, run against all nine
+real FITs in the repo; the Epix file reproduces STATUS's "1,213 of 1,404
+records" literally, so the doc and the parser cannot drift apart.

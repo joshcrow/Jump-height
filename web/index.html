@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>JumpHeight</title>
+<!--
+  The whole site is two static pages. This one exists so that
+  https://joshcrow.github.io/Jump-height/ is not a 404 for anyone who trims
+  the /sync/ off the link — it says what the site is and points at the one
+  page that does something. No script, no external requests.
+-->
+<style>
+  :root { color-scheme: light; }
+  body {
+    margin: 0; padding: 2rem 1.25rem; background: #ffffff; color: #0b0b0b;
+    font: 400 18px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          Helvetica, Arial, sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  main { max-width: 34rem; margin: 0 auto; }
+  h1 { font-size: 1.6rem; margin: 0 0 .5rem; font-weight: 600; }
+  p { margin: 0 0 1rem; }
+  .muted { color: #4a4a46; }
+  a.go {
+    display: block; margin: 1.5rem 0; padding: 1.1rem 1.25rem; min-height: 56px;
+    background: #0b0b0b; color: #ffffff; text-align: center; font-weight: 600;
+    text-decoration: none; border-radius: 10px;
+  }
+  a.go:focus-visible { outline: 3px solid #0b57c0; outline-offset: 3px; }
+  code { background: #f7f7f5; padding: .1em .35em; border-radius: 4px; font-size: .9em; }
+</style>
+</head>
+<body>
+<main>
+  <h1>JumpHeight</h1>
+  <p>This site has one job: getting a ride off the puck and back to Josh,
+     from a phone, with nothing to install.</p>
+  <a class="go" href="sync/">Send a ride &rarr;</a>
+  <p class="muted">Everything happens on your phone. Nothing is uploaded
+     anywhere unless you tap Send and choose where it goes.</p>
+  <p class="muted">Easiest with the USB cable: plug the puck into a computer
+     and open this in <b>Chrome</b>. Over Bluetooth it also works from Chrome on
+     Android or a computer, or from the free <b>Bluefy</b> app on an iPhone.</p>
+  <p class="muted">Source: <code>joshcrow/Jump-height</code></p>
+</main>
+</body>
+</html>

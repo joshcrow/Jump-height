@@ -177,6 +177,21 @@ def _extract_read_alls(text: str) -> tuple[list[str], str]:
     return payloads, "".join(out_parts)
 
 
+def _raw_hex_payloads(text: str) -> list[bytes]:
+    """Every READ_RAW_ALL payload in the harness's raw stdout, in order.
+
+    store_host_harness.cpp prints the `traceraw` export as ONE
+    `RAW_HEX <lowercase hex>` line rather than as bytes inside a marker
+    frame: the trace region is binary, so it contains 0x0A as ordinary data,
+    and the line-based parsing above would be cut in half by it. (READ_ALL's
+    frame works because its payload is CSV text.)"""
+    out: list[bytes] = []
+    for line in text.splitlines():
+        if line.startswith("RAW_HEX"):
+            out.append(bytes.fromhex(line[len("RAW_HEX"):].strip()))
+    return out
+
+
 def _parse_kv_lines(text: str) -> list[dict]:
     events: list[dict] = []
     for line in text.splitlines():
@@ -1251,6 +1266,240 @@ class TestStoreHost(unittest.TestCase):
             csv = trace_codec.decode_region_to_csv(raw_trace_region, log_hz=LOG_HZ)
             expected = "".join(f"{t:.3f},{m:.3f}\n" for t, m in samples)
             self.assertEqual(csv, expected, f"multi-hour parity failed at t0={t0}")
+
+    # ------------------------------------------------- raw export (traceraw)
+    #
+    # `traceraw` (firmware/src/main.cpp) streams the trace region's stored
+    # bytes instead of the ~17-byte-per-sample CSV `trace` decodes — the
+    # phone-sync path's whole reason for existing. That only works if a
+    # client decoding those bytes gets back EXACTLY what a `trace` would have
+    # sent, so that is what these pin, end to end and in both directions:
+    # jh_store's own read-back (produceNextUnit, CSV) against
+    # sim/trace_codec.py's decode_region_recovering() (raw), over the same
+    # region, including the torn-write cases where the two walks have to skip
+    # identically or diverge silently. A decoder that stopped at the first
+    # damaged patch would drop the tail of a session and look successful —
+    # "records perfectly, downloads incompletely", which is the failure the
+    # whole export integrity story exists to prevent.
+
+    def _assert_raw_export_matches_dump(self, r: RunResult, *,
+                                        expect_damage: bool) -> bytes:
+        """Parity bar for one scripted session, which must have run exactly
+        one CSV read (OPEN_READ TRACE / READ_ALL / CLOSE_READ) and exactly one
+        raw read (OPEN_READ_RAW / READ_RAW_ALL / CLOSE_READ) with a
+        TRACE_RAW_BYTES beside it — in EITHER order. _RAW_TAIL runs the CSV
+        first; test_traceraw_reads_the_in_progress_block_with_no_csv_read_first
+        runs the raw first, which is the order the rider's page uses, so the
+        order is deliberately not part of this bar.
+
+        Checks, all of which must hold together: the raw byte count agrees
+        three ways (announced by trace_raw_bytes(), actually streamed, and
+        actually received); the Python walk consumes every one of those bytes
+        (consumed == N — i.e. it never stopped early and never ran off the
+        end); the damaged-patch count is what the scenario built; and the
+        rendered CSV, header prepended, is byte-for-byte the CSV dump.
+        Returns the raw bytes for any further scenario-specific checks."""
+        self.assertEqual(r.returncode, 0, r.raw_stdout)
+        self.assertEqual(last(r.events, "OPEN_READ_RAW")["ok"], "1",
+                         "open_read_raw() must succeed on a mounted store")
+
+        payloads = _raw_hex_payloads(r.raw_stdout)
+        self.assertEqual(len(payloads), 1,
+                         f"expected exactly one READ_RAW_ALL payload, got "
+                         f"{len(payloads)}")
+        raw = payloads[0]
+        received = len(raw)
+        streamed = int(last(r.events, "RAW_BYTES")["n"])
+        announced = int(last(r.events, "TRACE_RAW_BYTES")["n"])
+        self.assertEqual(received, streamed,
+                         "the hex payload and the harness's own byte count disagree")
+        self.assertEqual(streamed, announced,
+                         "read_raw_chunk() streamed a different number of bytes "
+                         "than trace_raw_bytes() announced — a client verifying "
+                         "against bytes= would call a good export short")
+
+        res = trace_codec.decode_region_recovering(raw, log_hz=LOG_HZ)
+        self.assertEqual(res.consumed, announced,
+                         "the Python walk must consume the whole exported prefix")
+        if expect_damage:
+            self.assertGreaterEqual(
+                res.damaged_patches, 1,
+                "this scenario tore a write on purpose; a decode that saw no "
+                "damage is not exercising the recovery path")
+        else:
+            self.assertEqual(res.damaged_patches, 0,
+                             "a clean region must decode with no damaged patches")
+
+        self.assertEqual("t,mag\n" + trace_codec.region_to_csv(raw, log_hz=LOG_HZ),
+                         r.read_alls[0],
+                         "the raw export must render the SAME CSV the device's "
+                         "own dump streams, byte for byte")
+        return raw
+
+    # The read order every raw-export test uses: the CSV dump first (which
+    # also closes the in-progress block, so the two reads see identical
+    # data), then the byte count, then the raw export.
+    _RAW_TAIL = [
+        "OPEN_READ TRACE", "READ_ALL", "CLOSE_READ",
+        "TRACE_RAW_BYTES",
+        "OPEN_READ_RAW", "READ_RAW_ALL", "CLOSE_READ",
+    ]
+
+    def test_traceraw_matches_the_csv_dump_on_a_clean_region(self) -> None:
+        """Three blocks of different lengths (3, 2 and 4 samples), so the
+        align4 padding between blocks is exercised in both the 0-byte and the
+        2-byte case rather than only whichever one a uniform fixture happens
+        to produce."""
+        r = run_harness(self.harness, [
+            "INIT",
+            "TRACE_APPEND 0.020,1.001;0.040,1.002;0.060,1.003",
+            "TRACE_APPEND 1.020,1.010;1.040,1.011",
+            "TRACE_APPEND 2.020,1.020;2.040,1.021;2.060,1.022;2.080,1.023",
+        ] + self._RAW_TAIL, backing=self._backing("traceraw_clean.bin"))
+        raw = self._assert_raw_export_matches_dump(r, expect_damage=False)
+        self.assertGreater(len(raw), 0, "the fixture must actually store blocks")
+        self.assertEqual(len(raw) % 4, 0,
+                         "the append offset is align4 by construction")
+
+    def test_traceraw_on_an_empty_region_is_empty(self) -> None:
+        """A freshly formatted chip: bytes=0, nothing to decode, and the CSV
+        side is the bare header. This is the state a cleared puck hands the
+        phone page, and the page must be able to tell it apart from a
+        failure — so it has to be a clean, well-formed empty export, not an
+        error and not a refusal."""
+        r = run_harness(self.harness, ["INIT"] + self._RAW_TAIL,
+                        backing=self._backing("traceraw_empty.bin"))
+        raw = self._assert_raw_export_matches_dump(r, expect_damage=False)
+        self.assertEqual(raw, b"")
+        self.assertEqual(r.read_alls[0], "t,mag\n")
+
+    def test_traceraw_after_clear_is_empty(self) -> None:
+        """Same, but reached the way a rider actually reaches it: store a
+        real trace, then `clear`. The append offset must be back to zero —
+        a raw export that still streamed the erased region's stale bytes
+        would hand the next sync a session that no longer exists."""
+        r = run_harness(self.harness, [
+            "INIT",
+            "TRACE_APPEND 0.020,1.001;0.040,1.002;0.060,1.003",
+            "TRACE_APPEND 1.020,1.010;1.040,1.011",
+            "OPEN_READ TRACE", "CLOSE_READ",   # force the last block out first
+            "CLEAR",
+        ] + self._RAW_TAIL, backing=self._backing("traceraw_cleared.bin"))
+        raw = self._assert_raw_export_matches_dump(r, expect_damage=False)
+        self.assertEqual(raw, b"")
+        # read_alls[0] is the CSV dump from the _RAW_TAIL, i.e. after CLEAR.
+        self.assertEqual(r.read_alls[0], "t,mag\n")
+
+    def test_traceraw_reads_the_in_progress_block_with_no_csv_read_first(self) -> None:
+        """The raw export FIRST — no OPEN_READ TRACE ahead of it — which is
+        the only order that tests open_read_raw()'s own closeAndWriteBlock()
+        (jh_store.cpp), and is the order the rider actually produces: the
+        phone page sends `jumps` then `traceraw` (web/sync/CONTRACT.md §3 step 2) and
+        never opens the CSV reader at all.
+
+        Every other test here runs _RAW_TAIL, whose OPEN_READ TRACE already
+        flushed the in-progress block — so with that ordering the raw path is
+        never asked to do it, and deleting the flush from open_read_raw()
+        leaves the whole suite green (MEASURED by mutation while writing this
+        test: the un-mutated harness announced 24 bytes / 5 rows here, the
+        mutant 12 bytes / 3 rows, and every other test still passed).
+
+        What the mutant loses is the tail of the LAST burst — up to a nominal
+        second of samples — while `trace` still shows them. Nothing on the
+        wire would say so: declared == streamed == the crc'd bytes, the
+        Python walk consumes them all, and web/sync/CONTRACT.md §2's `verified` goes
+        true on a short trace. That is why the last batch below is asserted
+        by name."""
+        r = run_harness(self.harness, [
+            "INIT",
+            "TRACE_APPEND 0.020,1.001;0.040,1.002;0.060,1.003",
+            "TRACE_APPEND 1.020,1.010;1.040,1.011",   # still OPEN at this point
+            # Raw first. TRACE_RAW_BYTES sits AFTER the open on purpose: the
+            # append offset only includes that last block once the open has
+            # closed it, which is exactly what jh_store.h promises ("exact
+            # from the moment the export is opened").
+            "OPEN_READ_RAW", "TRACE_RAW_BYTES", "READ_RAW_ALL", "CLOSE_READ",
+            # The CSV dump last, as the parity reference.
+            "OPEN_READ TRACE", "READ_ALL", "CLOSE_READ",
+        ], backing=self._backing("traceraw_raw_first.bin"))
+        raw = self._assert_raw_export_matches_dump(r, expect_damage=False)
+
+        rows = trace_codec.region_to_csv(raw, log_hz=LOG_HZ).splitlines()
+        self.assertEqual(rows, ["0.020,1.001", "0.040,1.002", "0.060,1.003",
+                                "1.020,1.010", "1.040,1.011"],
+                         "the raw export dropped the still-open block — the "
+                         "tail of the session, silently, with no CSV read to "
+                         "have flushed it first")
+
+    def test_traceraw_refuses_to_open_when_storage_is_not_mounted(self) -> None:
+        """The refusal main.cpp turns into `ERR traceraw_unsupported` (and,
+        before it, `ERR traceraw storage_down`): with no INIT, the store is
+        unmounted and open_read_raw() must say no rather than hand back an
+        export of an unread region. "Storage is down" and "there is no
+        trace" have to stay distinguishable — a client that confuses them
+        offers to clear a puck whose session it never read."""
+        r = run_harness(self.harness, [
+            "OK",                 # no INIT first: storage is not mounted
+            "TRACE_RAW_BYTES",
+            "OPEN_READ_RAW",
+        ], backing=self._backing("traceraw_unmounted.bin"))
+        self.assertEqual(r.returncode, 0, r.raw_stdout)
+        self.assertEqual(last(r.events, "OK")["ok"], "0",
+                         "this scenario is only meaningful with storage down")
+        self.assertEqual(last(r.events, "OPEN_READ_RAW")["ok"], "0")
+        # SAY ONLY WHAT THIS SHOWS: a never-mounted store reports 0 and
+        # refuses the open. It does NOT pin trace_raw_bytes()'s s_fs_ok guard
+        # against a stale append offset — with no INIT the offset is 0 anyway,
+        # and dropping the guard keeps this green (MEASURED by mutation).
+        # That stronger claim is not reachable through this harness's API:
+        # every state that clears s_fs_ok after a successful mount also zeroes
+        # the offset (clear() resets it unconditionally) or is a fresh process
+        # that never scanned one.
+        self.assertEqual(int(last(r.events, "TRACE_RAW_BYTES")["n"]), 0,
+                         "a never-mounted store must report 0 raw bytes")
+
+    def test_traceraw_recovers_a_torn_block_exactly_like_the_dump(self) -> None:
+        """The scenario test_power_cut_trace_block_recovers_and_is_readable
+        already builds — a power cut mid-block-write, then a reboot that
+        resumes appending PAST the damage — read out both ways.
+
+        This is the case that decides whether the raw export can be trusted
+        at all: the device's own read-back skips a torn patch to the next
+        safe page boundary and keeps going (jh_store.cpp's produceNextUnit),
+        and sim/trace_codec.py's decode_region_recovering() has to make the
+        identical jump. If it stopped at the first bad block instead, every
+        sample recorded after the power cut would silently vanish from the
+        rider's download while the CSV path still showed them."""
+        backing = self._backing("traceraw_torn.bin")
+
+        r1 = run_harness(self.harness, [
+            "INIT",
+            "TRACE_APPEND 0.020,1.001;0.040,1.002",  # block A: closes on the next line
+            "TRACE_APPEND 1.020,1.010",               # block B: torn below
+            "FAULT_AFTER 4",
+            "OPEN_READ TRACE", "CLOSE_READ",          # forces block B's write — this tears
+        ], backing=backing)
+        self.assertEqual(r1.returncode, FAULT_EXIT_CODE,
+                         "expected the armed fault to terminate the process")
+
+        # Reboot: append past the damage, then read both ways.
+        r2 = run_harness(self.harness, [
+            "INIT",
+            "TRACE_APPEND 5.000,2.000;5.020,2.001",
+            "TRACE_APPEND 9.000,3.000",
+        ] + self._RAW_TAIL, backing=backing)
+        raw2 = self._assert_raw_export_matches_dump(r2, expect_damage=True)
+        rows = [ln for ln in r2.read_alls[0].splitlines() if ln and ln != "t,mag"]
+        self.assertEqual(rows, ["0.020,1.001", "0.040,1.002", "5.000,2.000",
+                                "5.020,2.001", "9.000,3.000"],
+                         "samples on BOTH sides of the damage must survive — "
+                         "this is what the raw export has to reproduce")
+
+        # And it stays true across a further reboot, where the append point
+        # is re-derived by the boot scan rather than carried in RAM.
+        r3 = run_harness(self.harness, ["INIT"] + self._RAW_TAIL, backing=backing)
+        raw3 = self._assert_raw_export_matches_dump(r3, expect_damage=True)
+        self.assertEqual(raw3, raw2, "the exported bytes must be stable across a reboot")
 
     # ---------------------------------------------------- non-finite guard (H)
 

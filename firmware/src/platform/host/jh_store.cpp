@@ -17,6 +17,14 @@
 // semantics + the CSV wire format a framed dump sends — not any particular
 // on-disk representation.
 //
+// The ONE place that on-disk difference shows through is the raw export
+// (`traceraw`): its wire contract is trace_codec blocks, which this store
+// doesn't keep. So open_read_raw() synthesizes a region image from the
+// stored trace.csv, laid out exactly as the nRF52 store lays one out — see
+// buildRawImage() below for what that means and why it is worth doing
+// (it is what lets tools/tests/test_hostdev.py exercise main.cpp's real
+// traceraw path natively, rather than only on silicon).
+//
 // There is no format-on-fail case on a host filesystem the way there is on
 // first-ever-boot flash, so init() never needs to call `announce` — this
 // mirrors the ESP32 code path taken on every boot AFTER the very first one
@@ -26,14 +34,19 @@
 
 #include "platform/jh_store.h"
 
+#include <cassert>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
+#include <vector>
 
 #include <sys/statvfs.h>
 
 #include "host_paths.h"
 #include "params.gen.h"
+#include "trace_codec.h"
 
 namespace jh_store {
 
@@ -57,8 +70,85 @@ bool s_jumps_header = false;
 
 FILE* s_read_file = nullptr;
 
+// ---- raw trace-region export (`traceraw`) ----
+// The host store keeps CSV text, not trace_codec blocks, so there is no
+// region image to stream — one is SYNTHESIZED from trace.csv at
+// open_read_raw() time (buildRawImage() below). That is deliberate: it lets
+// tools/tests/test_hostdev.py drive main.cpp's real traceraw path — framing,
+// base64, CRC-32, the reliable-export bracket — natively, against a store
+// whose contents the test also knows in plain text. It is NOT a claim that
+// this platform stores binary trace.
+std::vector<uint8_t> s_raw_image;
+size_t s_raw_pos  = 0;
+bool   s_raw_open = false;
+
 std::string jumpsPath() { return jh_host::path(kJumpsName); }
 std::string tracePath() { return jh_host::path(kTraceName); }
+
+// Re-encode the whole of trace.csv into a trace-region IMAGE laid out the
+// way firmware/src/platform/nrf52/jh_store.cpp lays one out, so that what
+// main.cpp streams here is decodable by exactly the same client code that
+// decodes a real puck's export (sim/trace_codec.py::decode_region_
+// recovering): consecutive trace_codec blocks, one per nominal second of
+// samples (the block policy feedSample() applies — a new block whenever
+// floor(t) changes) or MAX_SAMPLES_PER_BLOCK, each block starting on a
+// 4-byte boundary with the 0-3 pad bytes left at 0xFF (the erased-flash
+// value the nRF52 writer never touches), and the image ending at align4 —
+// which is what `traceraw` reports as bytes=.
+//
+// Rebuilt from scratch on every call: trace.csv on disk is the only state
+// this store has, so there is nothing here that can drift out of date with
+// it the way a cached image could.
+void buildRawImage() {
+  s_raw_image.clear();
+  FILE* f = std::fopen(tracePath().c_str(), "rb");
+  if (!f) return;  // no trace stored yet — an empty image, and bytes=0
+
+  trace_codec::Encoder enc;
+  bool block_open = false;
+  long block_sec  = 0;
+  uint8_t blk[trace_codec::block_size(trace_codec::MAX_SAMPLES_PER_BLOCK)];
+
+  auto close_block = [&]() {
+    if (!block_open || enc.count() == 0) { block_open = false; return; }
+    block_open = false;
+    const size_t n = enc.finish(blk, sizeof(blk));
+    if (n == 0) return;
+    s_raw_image.insert(s_raw_image.end(), blk, blk + n);
+    while ((s_raw_image.size() & 3u) != 0) s_raw_image.push_back(0xFF);
+  };
+
+  char line[256];
+  while (std::fgets(line, sizeof(line), f)) {
+    // Skip anything that doesn't start a number — i.e. the "t,mag" header.
+    // Testing the first character rather than "skip line 1" so a file
+    // without a header (or with a blank line in it) is still read correctly
+    // instead of silently losing its first sample.
+    const char c = line[0];
+    if (!((c >= '0' && c <= '9') || c == '-' || c == '+' || c == '.')) continue;
+    const char* comma = std::strchr(line, ',');
+    if (!comma) continue;
+    // t_s stays double all the way to t0_ms_from_t_s(), the same rule
+    // firmware/src/platform/nrf52/jh_store.cpp's feedSample() follows and
+    // for the same reason (trace_codec.h's "Double precision, both
+    // directions" note): narrowing here would move the anchor at multi-hour
+    // timestamps and diverge from the Python mirror.
+    const double t_s   = std::atof(line);
+    const float  mag_g = (float)std::atof(comma + 1);
+    if (!std::isfinite(t_s) || !std::isfinite(mag_g)) continue;
+
+    const long sec = (long)std::floor(t_s);
+    if (!block_open || sec != block_sec || enc.full()) {
+      close_block();
+      enc.begin(trace_codec::t0_ms_from_t_s(t_s));
+      block_open = true;
+      block_sec  = sec;
+    }
+    enc.add_sample(mag_g);
+  }
+  close_block();
+  std::fclose(f);
+}
 
 // -1 if the file doesn't exist (or can't be opened).
 long fileSize(const std::string& p) {
@@ -200,6 +290,7 @@ bool trace_is_full() { return s_trace_full; }
 
 bool open_read(StoredFile which) {
   if (!s_fs_ok) return false;
+  s_raw_open = false;  // one read slot, either mode (jh_store.h)
   const std::string p = (which == StoredFile::JUMPS) ? jumpsPath() : tracePath();
   s_read_file = std::fopen(p.c_str(), "rb");
   return s_read_file != nullptr;
@@ -215,6 +306,79 @@ void close_read() {
     std::fclose(s_read_file);
     s_read_file = nullptr;
   }
+  s_raw_open = false;  // one read slot, either mode (jh_store.h)
+}
+
+// ---------------------------------------------- raw trace-region export
+// DIVERGENCE FROM THE DEVICE, stated plainly: there is no fixed-size trace
+// region here — the synthesized image (buildRawImage()) is exactly the used
+// prefix, so trace_region_bytes() and trace_raw_bytes() return the same
+// number on this platform. A client must not read the pair as "used out of
+// capacity" against a host build; on the nRF52 they are genuinely
+// independent (append offset vs ~1.93 MB of region).
+// TEST SEAM, host build only — $JH_HOST_RAW_OVERREPORT (same idiom as this
+// platform's JH_VBAT_MV/JH_CHG, jh_power.cpp): announce N bytes MORE than the
+// image actually holds, without changing the image. It makes the store lie in
+// exactly the way a lost open_read_raw() flush or a failed mid-stream read
+// would, and it is the only way a test can reach main.cpp's
+// `streamed != declared` arm — nothing else on this platform can come up
+// short, so without it the arm that stands between the rider and a truncated
+// export that self-verifies (web/sync/CONTRACT.md §2's `verified`) would ship untested.
+// Unset — every ordinary run, and every build that isn't env:host — this is 0
+// and the store behaves exactly as before.
+static uint32_t raw_overreport_bytes() {   // internal linkage: not seam API
+  const char* v = std::getenv("JH_HOST_RAW_OVERREPORT");
+  return (v && v[0]) ? (uint32_t)std::strtoul(v, nullptr, 10) : 0;
+}
+
+uint32_t trace_raw_bytes() {
+  if (!s_fs_ok) return 0;
+  // Don't rebuild under a reader's feet: while a raw export is open, the
+  // image being streamed is the one this number must describe.
+  if (!s_raw_open) buildRawImage();
+  return (uint32_t)s_raw_image.size() + raw_overreport_bytes();
+}
+
+uint32_t trace_region_bytes() { return trace_raw_bytes(); }
+
+bool open_read_raw() {
+  if (!s_fs_ok) return false;
+  // Taking the one read slot releases the CSV reader — including its open
+  // FILE*, which would otherwise leak for the life of the process.
+  if (s_read_file) {
+    std::fclose(s_read_file);
+    s_read_file = nullptr;
+  }
+  buildRawImage();
+  s_raw_pos  = 0;
+  s_raw_open = true;
+  return true;
+}
+
+size_t read_raw_chunk(uint8_t* buf, size_t max_len) {
+  if (!s_raw_open || buf == nullptr) return 0;
+  if (s_raw_pos >= s_raw_image.size()) return 0;  // EOF
+  // No word-alignment rule here (this reads RAM, not a QSPI peripheral), so
+  // any max_len is servable — the nRF52 implementation's 4-byte floor is a
+  // property of that bus, not of the seam's contract.
+  //
+  // But the PRECONDITION is the seam's, not that bus's (jh_store.h: max_len
+  // must be >= 4 while bytes remain), so enforce it here too rather than
+  // quietly serving a call that would come up short on silicon. This store
+  // is the one a caller develops against — env:host never compiles the
+  // nRF52 store, so its identical assert (nrf52/jh_store.cpp, under
+  // `#if !defined(ARDUINO)`) cannot see this caller at all, and a violation
+  // would first surface on the device as a truncated export that looks
+  // complete. That is the shape CLAUDE.md rule 3 forbids, so: fail loudly,
+  // here, where it is cheap.
+  assert(max_len >= 4 &&
+         "read_raw_chunk needs >= 4 bytes of buffer while data remains");
+  if (max_len == 0) return 0;  // reads as EOF, like the nRF52 store's guard
+  size_t n = s_raw_image.size() - s_raw_pos;
+  if (n > max_len) n = max_len;
+  std::memcpy(buf, s_raw_image.data() + s_raw_pos, n);
+  s_raw_pos += n;
+  return n;
 }
 
 bool trace_wedged() { return false; }  // host store has no sector erase to fail

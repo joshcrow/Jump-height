@@ -1,0 +1,154 @@
+/*
+  Rider sync page — styles.
+
+  Deliberately ONE theme, light and high contrast (CONTRACT.md §3): this page is
+  read on a beach in daylight, on a borrowed browser, once. The archived app's
+  auto/light/dark switch (git show archive/web-app:web/style.css) was right for
+  a tool used every day and wrong here — a preference is one more thing that
+  can be in the wrong state at the moment it matters.
+
+  Contrast: text pairs kept at the archived app's WCAG-AAA values (ink #0b0b0b
+  and muted #4a4a46 on white are 19:1 and 9.2:1), so they inherit a ratio that
+  was computed, not eyeballed.
+
+  Tap targets: every button is >= 56px tall and full width. He is doing this
+  with wet, cold hands.
+*/
+
+:root {
+  color-scheme: light;          /* never let a dark-mode phone repaint this */
+  --bg: #ffffff;
+  --text: #0b0b0b;
+  --muted: #4a4a46;
+  --hairline: #e4e4e1;
+  --fill: #f7f7f5;
+  --action: #0b0b0b;
+  --action-ink: #ffffff;
+  --danger: #9d1f1f;
+  --ok: #135f2b;
+  --warn: #6e4700;
+  --focus: #0b57c0;
+}
+
+* { box-sizing: border-box; }
+
+/* [hidden] must always win: an author display rule would otherwise quietly
+   un-hide the clear button, which is the one control on this page that must
+   never appear early. */
+[hidden] { display: none !important; }
+
+body {
+  margin: 0;
+  padding: 1.5rem 1rem 3rem;
+  background: var(--bg);
+  color: var(--text);
+  font: 400 18px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        Helvetica, Arial, sans-serif;
+  -webkit-text-size-adjust: 100%;
+}
+
+.wrap { max-width: 34rem; margin: 0 auto; }
+
+h1 { font-size: 1.65rem; font-weight: 600; margin: 0 0 .4rem; }
+h2 {
+  font-size: 1.15rem; font-weight: 600; margin: 0 0 .5rem;
+  display: flex; align-items: center; gap: .6rem;
+}
+.num {
+  flex: none; width: 1.9rem; height: 1.9rem; border-radius: 50%;
+  background: var(--action); color: var(--action-ink);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 1rem; font-weight: 700;
+}
+
+p { margin: 0 0 .8rem; }
+.lede { color: var(--muted); }
+.hint { color: var(--muted); font-size: .95rem; }
+.muted { color: var(--muted); }
+.small { font-size: .85rem; }
+.warn { color: var(--warn); font-weight: 600; }
+
+.status {
+  border: 1px solid var(--hairline);
+  border-left: 6px solid var(--action);
+  background: var(--fill);
+  padding: .8rem .9rem;
+  margin: 1rem 0 1.5rem;
+  white-space: pre-wrap;      /* multi-sentence failures keep their line breaks */
+}
+.status.is-ok   { border-left-color: var(--ok); }
+.status.is-bad  { border-left-color: var(--danger); }
+.status.is-busy { border-left-color: var(--warn); }
+
+.step {
+  border-top: 1px solid var(--hairline);
+  padding: 1.4rem 0 .4rem;
+}
+
+.btn {
+  display: block; width: 100%; min-height: 56px;
+  margin: .9rem 0 .2rem; padding: 1rem 1.1rem;
+  font: inherit; font-weight: 600; text-align: center;
+  border: 2px solid var(--action); border-radius: 10px;
+  background: var(--action); color: var(--action-ink);
+  cursor: pointer;
+}
+.btn:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+.btn:disabled { opacity: .38; cursor: default; }
+.btn-danger { background: var(--danger); border-color: var(--danger); }
+
+.facts { margin: 1rem 0 0; padding: 0; border-top: 1px solid var(--hairline); }
+.facts div {
+  display: flex; justify-content: space-between; gap: 1rem;
+  padding: .55rem 0; border-bottom: 1px solid var(--hairline);
+}
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; font-weight: 600; text-align: right; }
+
+.progress { margin: .8rem 0 0; }
+.bar {
+  height: 14px; border-radius: 7px; background: var(--fill);
+  border: 1px solid var(--hairline); overflow: hidden;
+}
+.bar-fill { height: 100%; width: 0; background: var(--action); transition: width .2s linear; }
+.progress-text { margin: .5rem 0 .3rem; font-variant-numeric: tabular-nums; }
+
+textarea {
+  display: block; width: 100%; padding: .75rem;
+  font: inherit; color: var(--text); background: var(--bg);
+  border: 2px solid var(--hairline); border-radius: 10px; resize: vertical;
+}
+textarea:focus-visible { outline: 3px solid var(--focus); outline-offset: 1px; }
+
+.chips-label { margin: 1rem 0 .4rem; font-weight: 600; font-size: .95rem; }
+.chips { display: flex; flex-wrap: wrap; gap: .5rem; }
+.chip {
+  min-height: 44px; padding: .55rem .9rem;
+  font: inherit; font-size: .95rem;
+  background: var(--bg); color: var(--text);
+  border: 2px solid var(--hairline); border-radius: 999px; cursor: pointer;
+}
+.chip:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+/* Selected chips carry a word (the checkmark) as well as the fill — never
+   colour alone. */
+.chip[aria-pressed="true"] {
+  background: var(--action); color: var(--action-ink); border-color: var(--action);
+}
+
+.result { margin: 1.5rem 0 0; }
+.result ul { margin: .4rem 0 0; padding-left: 1.2rem; }
+.result li { margin: .2rem 0; }
+.result .head { font-weight: 600; }
+.result .head.is-ok { color: var(--ok); }
+.result .head.is-bad { color: var(--danger); }
+/* The iOS save link (sync.js saveLink): a link he has to press and HOLD, so it
+   needs a big, unmissable target rather than inline-link sizing. */
+.result .save-link {
+  display: inline-block; margin: .3rem 0; padding: .6rem .8rem;
+  min-height: 44px; font-weight: 600; word-break: break-all;
+  color: var(--text); background: var(--fill);
+  border: 2px solid var(--action); border-radius: 10px;
+}
+.result .save-link:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+
+footer { margin-top: 2.5rem; border-top: 1px solid var(--hairline); padding-top: 1rem; }

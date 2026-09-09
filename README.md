@@ -37,7 +37,7 @@ exists yet — **[`docs/STATUS.md`](docs/STATUS.md)** is the current reference.
 | **Detection algorithm** | ✅ Proven in sim and on the bench. Shared C++ core, mirrored in Python. |
 | **The puck** — XIAO nRF52840 Sense | ✅ On silicon, **three healthy units**, each advertising a unique name (`JumpHeight-XXXX`) since 2026-08-18. **Four "dead board" verdicts in this project have been wrong; nothing was ever damaged.** The IMU-bus pair traced to GPIO drive strength — `pinMode()` silently selects a 0.5 mA driver for a pin that IS the sensor's power supply (DECISIONS #37 keeps the wrong turns on record). Fully wireless firmware pipeline: OTA gate passed twice back-to-back, bootloader upgraded over the air. |
 | **v1 prototype** — FireBeetle ESP32 | 🪦 **Retired 2026-08-18** (owner decision), not merely frozen. It is the rig the algorithm was proven on and it stays listed as history — but the platform code, its PlatformIO envs, its partition map and the browser flasher are all deleted, so it cannot be built, flashed or flown any more. The Sense carries the water day. |
-| **User interface** | ✅ **The watch is the only interface (owner decision, 2026-08-23).** The browser app is retired; its original anchor, in-browser ESP Web Tools flashing, already went with the ESP32 platform on 2026-08-18 — recoverable at tag `archive/web-app`. The Sense flashes by `.uf2` drag-drop (built by CI, downloaded as a build artifact) or `./tools/jump flash` over USB, and updates over the air via `tools/otadfu.py`. |
+| **User interface** | ✅ **The watch is the only interface (owner decision, 2026-08-23).** The browser app is retired; its original anchor, in-browser ESP Web Tools flashing, already went with the ESP32 platform on 2026-08-18 — recoverable at tag `archive/web-app`. The Sense flashes by `.uf2` drag-drop (built by CI, downloaded as a build artifact) or `./tools/jump flash` over USB, and updates over the air via `tools/otadfu.py`. A sync page (`web/sync/`) exists purely to export diagnostics off a rider's puck — over the USB cable in Chrome on his Mac, or over Bluetooth from a phone ([`docs/rider-sync.md`](docs/rider-sync.md)) — it is not a control surface and does not change this row. |
 | **Garmin watch field** | ✅ **M2 closed 2026-08-18** — jumps rendered on a real wrist (Epix Gen 2): 3 stored desk tosses reconciled on connect, then 10 live `fakejump`s one by one, and the saved activity's FIT carries the developer fields. ⚠️ The *rider's* watch (Instinct 3) can only be reached via **Connect IQ store approval** — sideloading is impossible there; see [`docs/watch.md`](docs/watch.md). |
 | **Battery & power** | ✅ **Measured, not estimated (2026-08-18).** ≥25.7 h idle on one charge — the death run walked past the gauge's "empty" and kept going. Cell is LP502030+PCM, 250 mAh, 3.0 V cut-off. Idle draw **≤10 mA by conservation of charge**, which refutes the 16 mA the voltage gauge produced. The internal DC/DC regulator is **enabled at every boot** since audit F-05 (`dcdc=1` confirmed live 2026-08-23); post-DC/DC draw is pending re-measurement. |
 | **Phase 2 — the water day** | 🌊 **Next.** Nothing here has been in the ocean yet. |
@@ -296,7 +296,7 @@ Jump-height/
 ├── config/params.json   ← ALL tunable settings — feeds firmware + sim + analysis
 ├── tools/
 │   ├── jump             ← the one-command interface (wizard/flash/selftest/desktest/
-│   │                      drop/sync/validate/replay/eval/report)
+│   │                      drop/sync/ingest/validate/replay/eval/report)
 │   ├── blecmd.py        ← talk to the puck over BLE from the laptop (no phone)
 │   ├── blepin.py        ← shared board census: pin one board, never "whichever answered"
 │   ├── label.py         ← turns messaged session notes into on-foil/off-foil labels
@@ -320,6 +320,9 @@ Jump-height/
 │   └── src/platform/{nrf52,host}/       ← per-board glue (host = tests, no board)
 ├── garmin/
 │   └── jumpfield/       ← the Connect IQ data field
+├── web/
+│   └── sync/            ← rider diagnostic-export page (docs/rider-sync.md) —
+│                          an export surface, not a UI; the watch stays that
 ├── sim/
 │   ├── detector.py      ← Python mirror of the firmware detector
 │   ├── wing_model.py    ← ballistic wing-jump physics

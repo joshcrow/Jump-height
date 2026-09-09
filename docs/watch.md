@@ -29,8 +29,9 @@ only route onto the rider's watch.** (The MTP procedure, `tools/mtp_send` +
 OpenMTP fallback, still works for the Epix dev bench, proven 2026-08-10 —
 it just never reaches the Instinct.)
 
-**Artifact:** `garmin/jumpfield/bin/JumpField.iq` — **79,145 bytes, built
-2026-08-23, 4 of 4 device variants clean.** Gitignored, so file size + mtime
+**Artifact:** `garmin/jumpfield/bin/JumpField.iq` — **79,136 bytes, built
+2026-08-24 18:29, 4 of 4 device variants clean** (the approved build; the
+earlier 79,145 B / 08-23 figure here was the pre-rebuild artifact). Gitignored, so file size + mtime
 is the only handle on which build is on disk. **Rebuild immediately before
 submitting, and after any change under `garmin/jumpfield/source/`** — review
 takes days and it's the rider's only way to get the app.
@@ -82,9 +83,31 @@ The filing steps below are kept for the next update/resubmission:
 
 **Desk sequence once installed, in priority order** (everything after a cut
 evening recovers on the weekend; everything before it doesn't):
-1. Setup on his watch: Activities & Apps → Windsurf → Data Screens → add →
-   Connect IQ → Jump Height. Let him drive it — a confusing setup is a
-   finding about the product.
+1. Setup on his watch: Activities & Apps → **Wing Foil** → Wing Foil
+   settings → Data Screens → pick a screen → Layout → **1 Field** → Data
+   Fields → Field 1 → **scroll to the bottom of the category list →
+   "Connect IQ Fields"** → Jump Height. **The Connect IQ entry is inside the
+   field-slot picker, one level deeper than the Data Screens menu** — the
+   Instinct 3 manual never mentions it in the data-screen flow (grepped,
+   5,702 lines, 2026-09-09), which is the likeliest reason the 2026-09-08
+   attempt found it nowhere. Do NOT apply the Instinct 2 "use a 3-field
+   layout, the subscreen can't take a CIQ field" workaround: the SDK's
+   `simulator.json` gives `instinct3solar45mm` no subscreen slot and a real
+   full-screen 1-field layout. Store-side compatibility is not in question —
+   Garmin's app API lists his part number `006-B4585-00` (8/8 of his FITs);
+   fw 15.18's release notes *fix* a CIQ-datafield display bug. If "Connect
+   IQ Fields" is absent from the list: Wing Foil settings → Restore Defaults,
+   then repeat; if it is still absent, the .prg never reached the watch —
+   re-install from the Connect IQ phone app with the Instinct selected, sync,
+   power-cycle. Proof is one photo: a running Wing Foil activity with the
+   full-screen field showing (`E2C4` in the header = installed, placed,
+   running, linked; "finding puck" = placed and running, BLE still open).
+   Single-field because of F-32:
+   `NO REC` renders in the full tier only). "Wing Foil" is the profile he
+   actually records — sport=generic, sub_sport=track_me in 8/8 of his
+   archived FITs (`data/nick-sessions/fits/`); a field added to Windsurf
+   never runs. Let him drive it — a confusing setup is a finding about the
+   product.
 2. Layout, all three tiers, photographed — header shows the connected
    puck's id (see Puck identity), expect `E2C4` with the OG.
 3. Desk test untethered: three real tosses; `fakejump` over BLE (`!N`
@@ -133,6 +156,18 @@ to the 5 s floor only on a confirmed LIVE. **Memory:** static footprint
 measured **12,417 B of the 32,768 B** budget (`monkeyc --build-stats`), no
 per-line leak over ~1,200 simulated lines. **RETRACTED:** an earlier
 "124 KB vs 32 KB" fear was `.prg` file size, not runtime memory.
+
+**`traceraw` (added 2026-09-07)** — a command outside the watch's own
+protocol, for the rider sync page and `jump sync`/`ingest`, not the Garmin
+field. It streams the trace region's stored bytes base64-framed instead of
+as CSV: ~2 B/sample against CSV's ~17 B/sample, an estimated ~6x fewer bytes
+over BLE, which is the bottleneck on the phone path. Chatter lines (`#`,
+ignored by every client) carry the byte count and a CRC-32 for the
+receiver to verify against. On firmware that predates the command it
+answers `ERR unknown_command traceraw`, and that specific error is the
+client's cue to fall back to `trace`/`dump`; any other `ERR` is reported
+as-is. Command + wire format: `firmware/src/main.cpp`; the decoder both the
+page and `jump ingest` share: `sim/trace_codec.py`.
 
 ## FIT developer fields
 
@@ -208,8 +243,9 @@ isolated, so any fix must be automatic and silent, never a settings screen
 one puck, one watch — not blocking, since shore admin during a ride is out
 of range regardless.
 
-**Storage lifecycle:** the trace region holds ~5 h of recording and stops
-writing — silently, no watch symptom — once full; jumps (2048 records) are
+**Storage lifecycle:** the trace region (2,027,520 B physical) holds ~5 h
+of recording — measured 5.2 h at 937,644 samples, 2026-09-07 — and stops
+writing — silently, no watch symptom, no STATS key — once full; jumps (2048 records) are
 separately append-only. `jh_store::trace_clear()` (shipped 2026-08-20)
 auto-clears the trace **only** (jumps always preserved), and only when
 trace is already full, board has been still ≥1 h, and motion has just
@@ -235,6 +271,10 @@ required argument, or disabled outside a bench build) before this is ever
 handed to anyone else. (Binary trace v2 wire format — firmware storage, not
 a watch/BLE concern — is specified in `firmware/include/trace_codec.h`.)
 
+**OTA to the rider is deferred, not merely risky — DECISION #43.** The
+prerequisites and what would reopen the question are there; this section is
+the mechanism, that decision is the call.
+
 ## Surfr — the reference device on the rider's own wrist
 
 Researched 2026-08-27 (thesurfr.app, /garmin). Surfr is a Connect IQ WATCH
@@ -258,15 +298,34 @@ rotation-confused, AI-corrected after the fact); the puck measures the BOARD
 with the gyro on the detector hot path (DECISION #29). Same jump, different
 instrument class.
 
-## Two surfaces
+## Three surfaces
 
 **The Garmin watch is the product's only user-facing interface** (owner
 decision, 2026-08-23 — the web app is retired, `archive/web-app` tag).
 Glanceable state during a session, writes the FIT activity; read-only by
 design, sends exactly one command, `stats`, per connect. `tools/jump` (Mac)
 is the only other surface: development bench AND field admin — `dump`,
-`clear`, `selftest`, `format`, `mount`, `off`, `dfu` all require it, and
-therefore a laptop; nothing still runs a no-laptop admin path.
+`format`, `mount`, `off`, `dfu` all require it, and therefore a laptop;
+`stats`, `selftest`, `jumps`, `traceraw` and `clear` are also reachable from
+the rider sync page below.
+
+**The rider sync page (`web/sync/`, built 2026-09-07) is a third surface, and
+it is NOT the retired browser app coming back.** That app was a live control
+surface — connect, watch jumps arrive, run toss tests and drop calibration —
+and the owner's watch-only decision above retired it outright (DECISIONS
+#20/#23). This page does one thing: it sends `info`/`stats`/`jumps`/
+`traceraw`/`selftest`/`clear` to pull everything off the puck and hand it to
+the rider — over the USB cable (Web Serial, Chrome on his Mac, the
+recommended path) or over Bluetooth (Web Bluetooth, phone or Mac) — as a
+zip. An export surface, exactly like `tools/jump` is, not a UI anyone
+watches or drives a session from. It exists because the rider (Nick) has no
+repo and no toolchain on the Intel MacBook he does have; the standing
+no-second-BLE-central rule (BLE link dependability, above) applies to the
+**Bluetooth** connection only — the cable isn't a second BLE central, so it
+isn't restricted by that rule. Either way this runs **at home while the puck
+charges, never on the water** — same as every other admin command.
+Rider-facing instructions: `docs/rider-sync.md`. Not yet run on real
+hardware — `docs/STATUS.md`'s dated section.
 
 ## Out of scope
 

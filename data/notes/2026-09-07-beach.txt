@@ -1,0 +1,9 @@
+# 2026-09-07 — pocket-carry walk to the beach, NO water. Notes for tools/label.py (local, EDT = UTC-4).
+# Puck: OG (JumpHeight-E2C4), in Josh's pocket, not mounted. Booted 09-04 07:51 EDT (uptime 3.4 d at sync).
+# Josh confirmed 17:0x: the three events at trace t=273043-273047 were his deliberate
+# sync-marker tosses ("I did the three tosses. It's the ritual"). Time below is derived
+# from the trace (trace_epoch_utc + t), not from a wall clock — treat as exact to the second.
+# The trace REGION FILLED at t=279711 (13:32:59 EDT); nothing after that was recorded,
+# including the walk home. Region was cleared 17:00 EDT after a tracecheck-verified sync.
+11:41:51   jump x3   deliberate flat tosses, ~2 s apart, sync-marker ritual. #18 spun (med_w 1017 dps) -> med_a 0.352 g
+11:42-13:32  none    walking to the beach and around, puck in pocket. No jump. (trace stops 13:32:59, region full)

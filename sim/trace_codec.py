@@ -220,3 +220,126 @@ def decode_to_csv(data: bytes, log_hz: int) -> str:
     sample, byte for byte. This is the parity test's acceptance bar."""
     samples, _consumed = decode(data, log_hz)
     return "".join(f"{s.t_s:.3f},{s.mag_g:.3f}\n" for s in samples)
+
+
+# ---------------------------------------------------------------------------
+# Raw trace-REGION decode with the firmware's own damage recovery.
+#
+# `traceraw` (firmware/src/main.cpp) exports the trace region's bytes
+# [0, append_off) exactly as stored. decode_region() above stops at the FIRST
+# block that fails to validate; the device's own read-back
+# (jh_store.cpp::produceNextUnit) does not — it treats a patch that is
+# neither valid nor erased as a torn write, skips to the first 256-byte page
+# boundary beyond anything that write could have touched
+# (skipPastTornWrite: off + kMaxTraceBlockBytes rounded up to a page), and
+# keeps going, so a `dump` surfaces every valid block on BOTH sides of the
+# damage. A host decoder that stops early would silently drop the tail of a
+# session after one power-cut block — the exact "records perfectly,
+# downloads incompletely" failure the sync integrity gate exists for. So
+# this walk mirrors produceNextUnit() step for step, and the store_host
+# parity test (tools/tests/test_store_host.py) pins the two against each
+# other on the torn-write scenarios that suite already reproduces.
+
+PAGE_BYTES = 256                                   # jh_store.cpp PAGE_BYTES
+MAX_TRACE_BLOCK_BYTES = block_size(MAX_SAMPLES_PER_BLOCK)  # 516: kMaxTraceBlockBytes
+
+
+def align4(off: int) -> int:
+    """jh_store.cpp::align4 — every block starts on a 4-byte boundary."""
+    return (off + 3) & ~3
+
+
+def _is_erased(buf: bytes) -> bool:
+    return all(b == 0xFF for b in buf)
+
+
+def _skip_past_torn_write(off: int, region_bytes: int) -> int:
+    """jh_store.cpp::skipPastTornWrite(off, kMaxTraceBlockBytes, region_bytes)."""
+    next_page = ((off + MAX_TRACE_BLOCK_BYTES + PAGE_BYTES - 1) // PAGE_BYTES) * PAGE_BYTES
+    return next_page if next_page < region_bytes else region_bytes
+
+
+@dataclass
+class RegionResult:
+    samples: list          # every recovered Sample, in stored order
+    consumed: int          # offset the walk ended at (== len(data) when clean)
+    damaged_patches: int   # torn/corrupt patches skipped, 0 on a clean region
+
+
+def decode_region_recovering(data: bytes, log_hz: int) -> RegionResult:
+    """Decode a raw trace-region image the way the device's own `trace`
+    read-back does: align4 stepping (decode_region) PLUS torn-write recovery
+    (skip a damaged patch to the next safe page boundary and continue).
+
+    `data` is the region's used prefix, as `traceraw` sends it. Bytes the
+    walk would read beyond the end are treated as erased (0xFF), which is
+    what the device sees past its append offset."""
+    n = len(data)
+    samples: list = []
+    off = 0
+    damaged = 0
+    while off < n:
+        hdr = data[off:off + HEADER_BYTES]
+        hdr_padded = hdr + b"\xff" * (HEADER_BYTES - len(hdr))
+        t0_ms, count = struct.unpack_from("<IB", hdr_padded, 0)
+        if t0_ms == 0xFFFFFFFF or count == 0 or count > MAX_SAMPLES_PER_BLOCK:
+            if _is_erased(hdr_padded):
+                break                              # ordinary end of data
+            off = _skip_past_torn_write(off, n)
+            damaged += 1
+            continue
+        need = block_size(count)
+        if off + need > n:
+            if _is_erased(hdr_padded):
+                break
+            off = _skip_past_torn_write(off, n)
+            damaged += 1
+            continue
+        r = decode_one_block(data[off:off + need], log_hz)
+        if not r.ok:
+            if _is_erased(data[off:off + need]):
+                break
+            off = _skip_past_torn_write(off, n)
+            damaged += 1
+            continue
+        samples.extend(r.samples)
+        off = align4(off + r.bytes_consumed)       # writer advances identically
+    return RegionResult(samples=samples, consumed=min(off, n), damaged_patches=damaged)
+
+
+def region_to_csv(data: bytes, log_hz: int) -> str:
+    """decode_region_recovering(), formatted as the wire CSV rows a `trace`
+    dump would send (see decode_to_csv()) — no header; callers add
+    "t,mag\\n" exactly as jh_store.cpp's read-back does."""
+    r = decode_region_recovering(data, log_hz)
+    return "".join(f"{s.t_s:.3f},{s.mag_g:.3f}\n" for s in r.samples)
+
+
+def encode_region(samples, log_hz: int, samples_per_block: int = 50) -> bytes:
+    """Build a raw trace-REGION image from (t_s, mag_g) pairs the way
+    jh_store.cpp lays one out: consecutive trace_codec blocks, each starting
+    on a 4-byte boundary, the 0-3 pad bytes between them left erased (0xFF),
+    and the image ending at align4(last block end) — which is exactly what
+    `traceraw` reports as bytes=. For fixtures, the fake device, and tests;
+    the device never runs this (it encodes on the fly in closeAndWriteBlock).
+
+    Block policy: one block per `samples_per_block` samples (the device
+    closes a block once per nominal second at log_hz, or at 255 samples);
+    the block's t0 is its first sample's time. Sample times are reconstructed
+    on decode at 1/log_hz spacing from t0, so evenly-spaced input round-trips
+    exactly and irregular input does not — the format's documented trade."""
+    out = bytearray()
+    enc = Encoder()
+    pairs = list(samples)
+    i = 0
+    while i < len(pairs):
+        t0_s = pairs[i][0]
+        enc.begin(int(round(t0_s * 1000.0)))
+        while i < len(pairs) and enc.count() < samples_per_block and not enc.full():
+            enc.add_sample(pairs[i][1])
+            i += 1
+        blk = enc.finish()
+        out += blk
+        pad = align4(len(out)) - len(out)
+        out += b"\xff" * pad
+    return bytes(out)

@@ -26,7 +26,10 @@
 //   INFO fw=.. sample_hz=.. log_hz=.. ble=1 / PARAMS <key=value ...>
 //   FILE <name> BEGIN ... FILE <name> END
 //   OK <cmd> | ERR <detail>    — every typed command finishes with one of these
-// Commands: help stats jumps trace dump clear selftest info
+// Commands: help stats jumps trace traceraw dump clear selftest info
+//   (`traceraw` is the same stored trace as `trace`, streamed as the store's
+//    own binary blocks in base64 instead of ~17-byte CSV rows — see
+//    printTraceRawFramed() for the framing contract clients parse.)
 //
 // BLE (added in v0.3.0): the SAME protocol is mirrored over a Nordic UART
 // Service so a phone/laptop can read jumps and send commands wirelessly. Since
@@ -50,6 +53,7 @@
 #include <stdarg.h>
 #include <string.h>
 #include "params.gen.h"
+#include "base64.h"
 #include "build.gen.h"
 #include "gyro_bias.h"
 #include "jump_detector.h"
@@ -434,6 +438,165 @@ static void printFileFramed(jh_store::StoredFile which, const char* name) {
   emitf("FILE %s END\n", name);
 }
 
+// CRC-32/ISO-HDLC — byte for byte what Python's zlib.crc32() computes
+// (reflected poly 0xEDB88320, init 0xFFFFFFFF, final XOR 0xFFFFFFFF), so a
+// receiver verifies a traceraw export with one stdlib call and no
+// device-specific code. Bitwise on purpose: a 1 KB lookup table would buy
+// speed this transfer cannot use — the export is bandwidth-bound (BLE at a
+// few KB/s), not CPU-bound — and would cost RAM on a part that has little
+// to spare. Caller seeds with 0xFFFFFFFF and XORs the result at the end.
+static uint32_t crc32Update(uint32_t crc, const uint8_t* data, size_t len) {
+  for (size_t i = 0; i < len; ++i) {
+    crc ^= data[i];
+    for (int b = 0; b < 8; ++b) {
+      crc = (crc & 1u) ? ((crc >> 1) ^ 0xEDB88320u) : (crc >> 1);
+    }
+  }
+  return crc;
+}
+
+// The `traceraw` body: the trace region's stored bytes, base64-framed.
+//
+// WHY, in one line: a `trace` costs ~17 bytes per sample and this costs ~2.7
+// (~2 stored, +33% for base64), and a rider syncing a full session from a
+// phone over BLE is waiting on the wire, not on the flash.
+//
+// The framing is a wire contract shared with the phone page and the CLI, and
+// tools/tests/test_hostdev.py parses it strictly, so it is fixed:
+//   # traceraw bytes=<N> log_hz=<hz> region_bytes=<capacity>
+//   FILE trace.bin BEGIN
+//   <base64, 76 characters per line (57 raw bytes), last line shorter>
+//   FILE trace.bin END
+//   [# WARNING trace.bin INCOMPLETE — ... , only if something came up short]
+//   # traceraw crc32=<8 lowercase hex> bytes=<N>
+// The FILE lines carry NO extra tokens: tools/jump's parse_file_sections
+// matches `startswith("FILE ")` + `endswith(" BEGIN"/" END")`, so metadata
+// rides on the `#` chatter lines every client already ignores.
+//
+// Same reliable-export bracket as printFileFramed above (s_serial_must_not_
+// drop + the dropped-byte count + an INCOMPLETE warning + watchdog feeds),
+// extended over the two chatter lines as well: bytes= and crc32= are how the
+// receiver knows the download is whole, and dropping THOSE would turn a good
+// export into an unverifiable one.
+static void printTraceRawFramed() {
+  const uint32_t declared = jh_store::trace_raw_bytes();
+
+  s_serial_must_not_drop = true;
+  s_serial_dropped_bytes = 0;
+  emitf("# traceraw bytes=%lu log_hz=%d region_bytes=%lu\n",
+        (unsigned long)declared, JH_LOG_HZ,
+        (unsigned long)jh_store::trace_region_bytes());
+  emitLine("FILE trace.bin BEGIN");
+
+  // 228 = 4 lines' worth of input (57 bytes each). Reading in line-group
+  // multiples is what keeps every line but the last exactly 76 characters
+  // without buffering a partial group, and 228 is a multiple of 4, which the
+  // nRF52 store requires of every read length that isn't the final one (its
+  // flash addresses must stay word-aligned — see align4() there).
+  //
+  // This relies on read_raw_chunk() returning a SHORT chunk only at EOF,
+  // which is jh_store.h's contract and what both stores do. A store that
+  // ever returned a short chunk mid-stream would emit '=' padding in the
+  // middle of the body; that decodes as an error in every standard decoder
+  // (Python's b64decode raises, the browser's atob throws), so it would
+  // fail loudly rather than deliver quietly-wrong bytes.
+  uint8_t  raw[228];
+  // +1 for the '\n': the line and its terminator leave as ONE emitBytes
+  // call. Each call is its own Serial.availableForWrite() test and — inside
+  // this must-not-drop bracket — its own bounded waitForSerialRoom() spin of
+  // up to 2 s (see emitBytes above), plus a fresh subscribedHandles() scan
+  // in jh_link::write. Two calls per 77-byte line is ~6x the emitBytes calls
+  // per byte of output that printFileFramed makes (arithmetic, not a
+  // measurement: 2 calls per 77 bytes against its 1 per 240), on the one
+  // export path that has no second attempt.
+  char     b64[base64::encoded_len(57) + 1];
+  uint32_t crc      = 0xFFFFFFFFu;
+  uint32_t streamed = 0;
+  uint32_t chunks   = 0;
+  size_t   got;
+  while ((got = jh_store::read_raw_chunk(raw, sizeof(raw))) > 0) {
+    streamed += (uint32_t)got;
+    crc = crc32Update(crc, raw, got);
+    for (size_t off = 0; off < got; off += 57) {
+      const size_t take = (got - off) < 57 ? (got - off) : 57;
+      const size_t n = base64::encode(raw + off, take, b64, sizeof(b64));
+      // Unreachable: b64 is sized for the largest `take` this loop can pass
+      // (base64::encoded_len(57)). If it ever did fire, the body would be
+      // short against the bytes= this response already announced, so the
+      // receiver's byte-count and crc32 checks both reject it — it cannot
+      // pass as a complete export.
+      if (n == 0) continue;
+      b64[n] = '\n';
+      emitBytes(b64, n + 1);
+    }
+    if ((++chunks & 15) == 0) {
+      // Feed every few chunks, exactly as printFileFramed does and for the
+      // same reason: a serial-only session drops rather than blocks, so a
+      // full-region export is pure CPU for long enough to starve the
+      // watchdog.
+      jh_link::watchdog_feed();
+      // And keep jh_clock's wrap tracker alive, the same discard-the-value
+      // call jh_link::pump() makes for this exact reason (jh_link.cpp).
+      // micros64() detects a 32-bit micros() wrap ONLY by seeing the raw
+      // counter go down between consecutive calls, and jh_clock.cpp's file
+      // comment states the precondition it rests on: "A caller that stopped
+      // invoking this for over an hour would break the assumption; nothing
+      // in this codebase does." A long BLE export would: nothing else on
+      // this path calls it (emitBytes/waitForSerialRoom use millis(),
+      // jh_link::write and sendOneChunk use raw 32-bit micros(), and pump()
+      // does not run while handleCommand does). A missed wrap makes every
+      // later micros64() 71.6 min low — including the `stats` uptime_s that
+      // is the trace's only wall-clock anchor (web/sync/CONTRACT.md §2's
+      // trace_epoch_utc = synced_at_utc - uptime_s).
+      (void)jh_clock::micros64();
+    }
+  }
+  crc ^= 0xFFFFFFFFu;
+  jh_store::close_read();
+
+  emitLine("FILE trace.bin END");
+
+  // Report truth about completeness — twice, because there are two ways to
+  // come up short and they are different faults. Both lines lead with the
+  // same "WARNING trace.bin INCOMPLETE" text every client already looks for.
+  //
+  // AFTER the frame closes, not inside it. The body is base64 ONLY
+  // (web/sync/CONTRACT.md §1): every client copies what lands between BEGIN and END
+  // into the file itself (tools/jump's parse_file_sections; web/sync's
+  // sync.js feeds those lines straight to atob), so a warning in there is
+  // not a note — it is a decode failure, and the em dash makes Python's
+  // b64decode raise before any check runs. Worse, those clients deliberately
+  // keep FILE bodies OUT of the device.log they ship (web/sync/CONTRACT.md §2), and
+  // §2's `verified` criterion (a) is "no INCOMPLETE warning line from the
+  // puck" — so inside the frame is precisely where the one line that
+  // criterion depends on would be thrown away. Out here it is ordinary `#`
+  // chatter, which is where both scanners already look.
+  if (s_serial_dropped_bytes) {
+    emitf("# WARNING trace.bin INCOMPLETE — %lu bytes never reached the host; re-run the download\n",
+          (unsigned long)s_serial_dropped_bytes);
+  }
+  if (streamed != declared) {
+    // The store handed back fewer bytes than it said it had. Nothing else on
+    // the wire would show it — the base64 body is self-consistent and the
+    // crc32 below is computed over exactly what went out — so say it in
+    // band.
+    emitf("# WARNING trace.bin INCOMPLETE — streamed %lu of %lu bytes; re-run the download\n",
+          (unsigned long)streamed, (unsigned long)declared);
+  }
+  // bytes= here is N — the SAME number the header line announced, which is
+  // what web/sync/CONTRACT.md §1 fixes both chatter lines to. NOT `streamed`: a
+  // receiver naturally reads the byte count off this line (it sits next to
+  // the crc it is checking), and printing what actually went out would let a
+  // store-shortfall export self-verify — crc32 matches the short body, the
+  // count next to it matches too, and §2's `verified` goes true on a trace
+  // missing its tail. The crc32 IS over what streamed, so with N here a
+  // short body fails the byte-count check against EITHER line, and the
+  // WARNING above names the cause.
+  emitf("# traceraw crc32=%08lx bytes=%lu\n", (unsigned long)crc,
+        (unsigned long)declared);
+  s_serial_must_not_drop = false;   // back to drop-is-fine for chatter
+}
+
 static void scanStoredJumps() {
   stored_jumps = 0;
   stored_best  = 0.0f;
@@ -616,7 +779,7 @@ static void printHelp() {
   // was dispatched but absent from every help line, so the one instrument
   // DECISION #38 makes mandatory looked unshipped to anyone who checked the
   // documented way). Every `cmd == "..."` arm must appear here.
-  emitLine("# commands: help | stats | jumps | trace | tracecheck | dump | clear | selftest | revive | i2cdiag | dcdc | info | off | dfu | uf2 | fakejump | mount | format | pincensus | vbatscan | gyro");
+  emitLine("# commands: help | stats | jumps | trace | traceraw | tracecheck | dump | clear | selftest | revive | i2cdiag | dcdc | info | off | dfu | uf2 | fakejump | mount | format | pincensus | vbatscan | gyro");
   emitLine("#           set <airtime_offset_s|height_scale|vbat_scale> <value|default>");
   emitLine("#           pincensus (bench: every GPIO vs pull-down/pull-up — DECISION #38)");
   emitLine("#           vbatscan  (bench: battery ADC vs acquisition time)");
@@ -702,6 +865,27 @@ static void handleCommand(const String& cmd) {
     flushTrace();
     printFileFramed(jh_store::StoredFile::TRACE, "trace.csv");
     emitLine("OK trace");
+  } else if (cmd == "traceraw") {
+    // The same stored trace `trace` sends, as the region's own bytes instead
+    // of decoded CSV — see printTraceRawFramed() for the framing and why it
+    // exists. Runs here, inside handleCommand, where sampling is already
+    // paused, exactly like `dump`.
+    flushTrace();
+    if (!fs_ok) {
+      // NOT an empty export: "storage is down" and "there is no trace" are
+      // different answers, and a client that cannot tell them apart will
+      // happily clear a puck whose session it never actually read (the same
+      // reasoning as `stats`'s fs=down key above).
+      emitLine("ERR traceraw storage_down");
+    } else if (!jh_store::open_read_raw()) {
+      // The seam answers for itself — no platform #ifdef here. A store with
+      // no raw trace to give says so by refusing the open, and the client
+      // falls back to the CSV `trace`/`dump` path.
+      emitLine("ERR traceraw_unsupported this build has no raw trace store");
+    } else {
+      printTraceRawFramed();
+      emitLine("OK traceraw");
+    }
   } else if (cmd == "tracecheck") {
     // F-08's cross-check. The mount-time byte counter computes each sample's
     // CSV length arithmetically instead of snprintf-ing it; this re-walks the

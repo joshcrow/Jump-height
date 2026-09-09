@@ -15,10 +15,14 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zlib
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent.parent
 JUMP = str(REPO / "tools" / "jump")
+sys.path.insert(0, str(REPO / "sim"))
+
+from trace_codec import decode_region_recovering, encode_region  # noqa: E402
 
 
 def run_cli(args, env_extra=None, timeout=90):
@@ -431,6 +435,393 @@ class TestSync(unittest.TestCase):
             jumps = (sess / "jumps.csv").read_text()
             self.assertTrue(jumps.startswith("n,takeoff_s,airtime_raw_s,airtime_s,height_m"))
             self.assertTrue((sess / "trace.csv").read_text().startswith("t,mag"))
+
+    def test_sync_default_goes_via_traceraw_and_writes_trace_bin(self):
+        """web/sync/CONTRACT.md §1: `sync` (no --csv) tries `traceraw` first — ~2
+        B/sample raw trace-region bytes, base64-framed, crc32-verified —
+        and keeps BOTH the decoded trace.csv and the raw trace.bin next to
+        it, so a bench sync exercises the exact wire path Nick's phone will
+        use before it ever ships to him."""
+        with tempfile.TemporaryDirectory() as td:
+            r = run_cli(["sync", "--fake", "--fast", "--out", td])
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            sess = next(Path(td).iterdir())
+            self.assertTrue((sess / "trace.bin").exists(),
+                            "traceraw path must keep the raw trace.bin")
+            self.assertIn("traceraw verified", r.stdout)
+            self.assertGreater((sess / "trace.bin").stat().st_size, 0)
+
+    def test_sync_csv_flag_skips_traceraw(self):
+        """--csv (web/sync/CONTRACT.md §4) forces the old `dump` path: no trace.bin,
+        and the verdict line is the original 'trace verified' wording, not
+        traceraw's — confirming --csv actually took the other branch rather
+        than merely skipping the trace.bin write."""
+        with tempfile.TemporaryDirectory() as td:
+            r = run_cli(["sync", "--fake", "--fast", "--csv", "--out", td])
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            sess = next(Path(td).iterdir())
+            self.assertFalse((sess / "trace.bin").exists(),
+                             "--csv must not touch traceraw at all")
+            self.assertIn("trace verified", r.stdout)
+            self.assertNotIn("traceraw verified", r.stdout)
+
+    def test_sync_traceraw_and_csv_paths_produce_identical_files(self):
+        """The whole point of web/sync/CONTRACT.md §1's round-trip guarantee: whether
+        `sync` takes the new binary path or the old CSV one, the session it
+        writes must be indistinguishable — same trace.csv, same jumps.csv."""
+        with tempfile.TemporaryDirectory() as td1, \
+             tempfile.TemporaryDirectory() as td2:
+            r1 = run_cli(["sync", "--fake", "--fast", "--out", td1])
+            r2 = run_cli(["sync", "--fake", "--fast", "--csv", "--out", td2])
+            self.assertEqual(r1.returncode, 0, r1.stdout + r1.stderr)
+            self.assertEqual(r2.returncode, 0, r2.stdout + r2.stderr)
+            sess1 = next(Path(td1).iterdir())
+            sess2 = next(Path(td2).iterdir())
+            self.assertEqual((sess1 / "trace.csv").read_bytes(),
+                             (sess2 / "trace.csv").read_bytes())
+            self.assertEqual((sess1 / "jumps.csv").read_bytes(),
+                             (sess2 / "jumps.csv").read_bytes())
+
+    def test_sync_falls_back_to_dump_on_old_firmware(self):
+        """web/sync/CONTRACT.md §1: `ERR unknown_command traceraw` (today's real OG,
+        docs/STATUS.md's src=5c80a436) must fall back to `dump`, not abort —
+        the path every bench sync takes until the flash batch lands. Before
+        this test, only `--csv` (a DIFFERENT code path: `via = None` is set
+        without ever sending `traceraw`) exercised the `else` branch that
+        writes jumps.csv/trace.csv without trace.bin."""
+        with tempfile.TemporaryDirectory() as td:
+            r = run_cli(["sync", "--fake", "--fast", "--fake-no-traceraw",
+                        "--out", td])
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("(old firmware — falling back to `dump`)", r.stdout)
+            sess = next(Path(td).iterdir())
+            self.assertFalse((sess / "trace.bin").exists(),
+                             "the fallback path must not produce a trace.bin")
+            self.assertIn("trace verified", r.stdout)
+            self.assertNotIn("traceraw verified", r.stdout)
+
+    def test_sync_aborts_on_non_fallback_traceraw_error(self):
+        """web/sync/CONTRACT.md §1: only the EXACT string 'ERR unknown_command
+        traceraw' triggers the CSV fallback — any other ERR (storage not
+        mounted, etc) is reported as-is and the sync aborts, since there is
+        no CSV path that recovers from e.g. the storage layer being down."""
+        with tempfile.TemporaryDirectory() as td:
+            r = run_cli(["sync", "--fake", "--fast",
+                        "--fake-traceraw-error", "storage_down", "--out", td])
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+            self.assertIn("ERR traceraw storage_down", r.stdout)
+            self.assertEqual(list(Path(td).iterdir()), [],
+                             "an aborted sync must not write a session dir")
+
+
+class TestF22TracecheckArbitration(unittest.TestCase):
+    """Audit F-22, measured on the OG 2026-09-07 with a FULL trace region:
+
+        sync downloaded            15,917,153 B
+        STATS trace_bytes          15,917,918 B   (-765)
+        `tracecheck`               "# tracecheck fast=15917918 slow=15917153
+                                    DISAGREE — the slow number is the correct one"
+
+    The download was COMPLETE. The tool printed 'TRACE INCOMPLETE … Do NOT
+    clear' and refused to clear, twice — on a puck whose region was full and
+    which therefore had stopped recording (main.cpp:1707). The live counter
+    over-reports once the region fills; the re-walked number is the arbiter,
+    which is F-22's own prescribed fix ("make `tracecheck` the authority").
+
+    Every case here goes through the CSV `dump` path, because that is the
+    path the rider's puck actually takes (it predates `traceraw`).
+    """
+
+    def _sync(self, td, *extra):
+        return run_cli(["sync", "--fake", "--fast", "--csv", "--out", td]
+                       + list(extra))
+
+    def test_over_report_confirmed_by_tracecheck_verifies_and_permits_clear(self):
+        with tempfile.TemporaryDirectory() as td:
+            r = self._sync(td, "--fake-trace-overreport", "765", "--clear")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            sess = next(Path(td).iterdir())
+            true_b = (sess / "trace.csv").stat().st_size
+
+            self.assertIn("trace_bytes over-reported by 765 B (audit F-22, "
+                          "region full); tracecheck confirms the download is "
+                          "complete.", r.stdout)
+            self.assertNotIn("TRACE INCOMPLETE", r.stdout)
+            self.assertNotIn("refusing to clear", r.stdout)
+            self.assertIn("device cleared", r.stdout)
+
+            # Both numbers travel with the session, so a clear made on F-22's
+            # strength can be re-litigated later from the file alone.
+            blob = json.loads((sess / "session.json").read_text())
+            self.assertEqual(blob["trace_bytes_device"], true_b + 765)
+            self.assertEqual(blob["tracecheck_slow_bytes"], true_b)
+            self.assertEqual(blob["tracecheck_fast_bytes"], true_b + 765)
+            # …additively: the wall-clock anchor is still there.
+            self.assertIn("trace_epoch_utc", blob)
+
+    def test_slow_number_that_also_disagrees_keeps_the_refusal(self):
+        """tracecheck is the arbiter, not an excuse. A re-walk that matches
+        NEITHER the download nor the live counter is a genuine shortfall, and
+        the refusal must stand with both numbers on screen."""
+        with tempfile.TemporaryDirectory() as td:
+            r = self._sync(td, "--fake-trace-overreport", "765",
+                           "--fake-tracecheck-slow-delta", "400", "--clear")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            sess = next(Path(td).iterdir())
+            true_b = (sess / "trace.csv").stat().st_size
+
+            self.assertIn("TRACE INCOMPLETE", r.stdout)
+            self.assertIn(f"tracecheck: fast={true_b + 765:,} "
+                          f"slow={true_b + 400:,}", r.stdout)
+            self.assertIn("Do NOT clear the device.", r.stdout)
+            self.assertIn("refusing to clear", r.stdout)
+            self.assertNotIn("device cleared", r.stdout)
+
+            blob = json.loads((sess / "session.json").read_text())
+            self.assertEqual(blob["tracecheck_slow_bytes"], true_b + 400)
+
+    def test_silent_tracecheck_keeps_the_refusal_and_names_the_silence(self):
+        """CLAUDE.md rule 3: a reading that did not happen is a finding. An
+        unanswered `tracecheck` leaves the mismatch exactly as unexplained as
+        it was — it must never read as the F-22 pass above."""
+        with tempfile.TemporaryDirectory() as td:
+            r = self._sync(td, "--fake-trace-overreport", "765",
+                           "--fake-tracecheck-silent",
+                           "--fake-tracecheck-timeout", "3", "--clear")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("TRACE INCOMPLETE", r.stdout)
+            self.assertIn("tracecheck did not answer — no reply within 3 s",
+                          r.stdout)
+            self.assertNotIn("audit F-22", r.stdout)
+            self.assertIn("refusing to clear", r.stdout)
+            self.assertNotIn("device cleared", r.stdout)
+
+            sess = next(Path(td).iterdir())
+            blob = json.loads((sess / "session.json").read_text())
+            self.assertIsNone(blob["tracecheck_slow_bytes"])
+            self.assertIn("no reply within 3 s", blob["tracecheck_error"])
+
+    def test_default_timeout_is_minutes_because_the_walk_is(self):
+        """`tracecheck` re-reads and decodes every block in the region
+        (main.cpp -> jh_store.cpp's walkTraceRegion(), which feeds the
+        watchdog every 64 blocks) and sends nothing until it finishes. A
+        20 s command timeout would turn a working full-region check into
+        the 'did not answer' refusal above."""
+        self.assertGreaterEqual(_load_jump_module().TRACECHECK_TIMEOUT_S, 300)
+
+    def test_a_mismatch_with_no_tracecheck_offered_still_refuses(self):
+        """The pure function keeps its old behavior for any caller that has
+        no device to ask — and says the cross-check never ran rather than
+        implying it passed."""
+        mod = _load_jump_module()
+        ok, out = mod._verify_download([], 12, 12, 2048, 2813)
+        self.assertFalse(ok)
+        self.assertTrue(any("TRACE INCOMPLETE" in l for l in out))
+        self.assertTrue(any("tracecheck was not consulted" in l for l in out))
+
+    def test_out_of_band_skew_is_resolved_but_never_filed_under_f22(self):
+        """CLAUDE.md rule 6. F-22's evidence is an over-report of at most one
+        50-sample batch (800 B). A 100 kB skew is not that finding, however
+        the download itself checks out, and must not borrow its name."""
+        mod = _load_jump_module()
+        tc = mod.TraceCheck(fast=102048, slow=2048, reason=None)
+        ok, out = mod._verify_download([], 12, 12, 2048, 102048, lambda: tc)
+        self.assertTrue(ok)
+        self.assertFalse(any("F-22, region full" in l for l in out),
+                         "an unexplained skew must not be attributed to F-22")
+        self.assertTrue(any("outside audit F-22's known range" in l for l in out))
+        self.assertTrue(any("confirms the download is complete" in l for l in out))
+
+
+class _StubDevice:
+    """A minimal stand-in for jump's `Device`, for unit-testing
+    `_sync_via_traceraw()` against a scripted response WITHOUT spawning
+    tools/fake_device.py — used for wire shapes the fake can't (yet, or
+    easily) produce, like an in-frame '#' warning or a truncated base64
+    line."""
+
+    def __init__(self, responses: dict):
+        self.responses = responses
+
+    def command(self, cmd, timeout=60):
+        return self.responses[cmd]
+
+
+class TestTracerawFrameCorruption(unittest.TestCase):
+    """tools/jump:1718 (finding, 2026-09-07): a mid-transfer serial drop
+    puts either the firmware's own in-frame '# WARNING ... INCOMPLETE' line
+    (main.cpp emits it BEFORE the FILE END terminator) or a truncated
+    base64 line into the frame body. Before the fix, base64.b64decode()
+    raised on both — a bare traceback where every OTHER transfer failure in
+    this file prints a plain "Do NOT clear the device" verdict."""
+
+    def setUp(self):
+        self.sync_via_traceraw = _load_jump_module()._sync_via_traceraw
+
+    def test_in_frame_warning_line_is_filtered_not_joined_into_base64(self):
+        """The exact firmware sequence: the WARNING lands INSIDE BEGIN/END,
+        with a UTF-8 em dash that survives read_line's errors='replace'.
+        Filtering '#' lines out of the body must let the (otherwise valid)
+        base64 decode cleanly, WITHOUT losing the warning line itself — it
+        must still reach _verify_traceraw_download() via received_lines."""
+        dev = _StubDevice({
+            "traceraw": [
+                "# traceraw bytes=0 log_hz=50 region_bytes=0",
+                "FILE trace.bin BEGIN",
+                "# WARNING trace.bin INCOMPLETE — 512 bytes never reached the host",
+                "FILE trace.bin END",
+                "# traceraw crc32=00000000 bytes=0",
+                "OK traceraw",
+            ],
+            "jumps": ["n,takeoff_s,airtime_raw_s,airtime_s,height_m"],
+        })
+        via = self.sync_via_traceraw(dev)
+        self.assertIsNotNone(via, "a valid (if incomplete) frame must not "
+                                  "be mistaken for old-firmware fallback")
+        self.assertEqual(via["raw_bytes"], b"")
+        self.assertTrue(any("INCOMPLETE" in l for l in via["received_lines"]),
+                        "the warning must survive into received_lines so "
+                        "_verify_traceraw_download()'s check (a) still sees it")
+
+    def test_truncated_base64_line_fails_closed_not_a_traceback(self):
+        """A line truncated mid-transfer (not a whole dropped line — those
+        stay a multiple of 4 chars and decode fine) makes the base64 body's
+        length not a multiple of 4. Must raise SystemExit(1) with a plain
+        verdict, never let the raw ValueError/binascii.Error escape."""
+        dev = _StubDevice({
+            "traceraw": [
+                "# traceraw bytes=8 log_hz=50 region_bytes=8",
+                "FILE trace.bin BEGIN",
+                "AAAAAAA",  # 7 chars: not a multiple of 4
+                "FILE trace.bin END",
+                "# traceraw crc32=deadbeef bytes=8",
+                "OK traceraw",
+            ],
+            "jumps": [],
+        })
+        with self.assertRaises(SystemExit) as cm:
+            self.sync_via_traceraw(dev)
+        self.assertEqual(cm.exception.code, 1)
+
+    def test_truncated_base64_prints_a_plain_verdict(self):
+        """Same fixture as above, but asserting the PRINTED message shape —
+        this is the actual regression: not just "doesn't crash the process"
+        (main() already prints tracebacks it doesn't catch) but "prints the
+        same shaped verdict every other transfer failure here does"."""
+        import io
+        from contextlib import redirect_stdout
+
+        dev = _StubDevice({
+            "traceraw": [
+                "# traceraw bytes=8 log_hz=50 region_bytes=8",
+                "FILE trace.bin BEGIN",
+                "AAAAAAA",
+                "FILE trace.bin END",
+                "# traceraw crc32=deadbeef bytes=8",
+                "OK traceraw",
+            ],
+            "jumps": [],
+        })
+        buf = io.StringIO()
+        with redirect_stdout(buf), self.assertRaises(SystemExit):
+            self.sync_via_traceraw(dev)
+        out = buf.getvalue()
+        self.assertIn("TRACERAW FRAME CORRUPT", out)
+        self.assertIn("Do NOT clear the device", out)
+        self.assertNotIn("Traceback", out)
+
+
+class TestTracerawLogHzFallback(unittest.TestCase):
+    """tools/jump:1737 (finding, minor): when the '# traceraw ... log_hz='
+    chatter is missing/unparsable, log_hz silently falls back to
+    config/params.json — CLAUDE.md rule 3 says the substitution itself must
+    be reported, not just performed."""
+
+    def test_missing_log_hz_chatter_prints_the_substituted_rate(self):
+        import io
+        from contextlib import redirect_stdout
+
+        dev = _StubDevice({
+            "traceraw": [
+                "# traceraw bytes=0 region_bytes=0",  # no log_hz=
+                "FILE trace.bin BEGIN",
+                "FILE trace.bin END",
+                "# traceraw crc32=00000000 bytes=0",
+                "OK traceraw",
+            ],
+            "jumps": ["n,takeoff_s,airtime_raw_s,airtime_s,height_m"],
+        })
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            via = _load_jump_module()._sync_via_traceraw(dev)
+        self.assertIsNotNone(via)
+        out = buf.getvalue()
+        self.assertIn("carried no log_hz", out)
+        self.assertIn("50", out)  # config/params.json's default
+
+
+class TestTracerawVerification(unittest.TestCase):
+    """`_verify_traceraw_download()`'s failure paths (web/sync/CONTRACT.md §1),
+    driven directly. Mutation-tested finding (2026-09-07): disabling the
+    crc32 check (:1712 -> `if False:`) and the consumed==N check (:1958 ->
+    `if False:`) together left TestSync's own fixtures green — they only
+    ever feed a clean image with a correct crc32, so nothing here actually
+    pinned these branches before."""
+
+    def setUp(self):
+        self.v = _load_jump_module()._verify_traceraw_download
+
+    @staticmethod
+    def _region(n_samples=10, log_hz=50):
+        return [(i / log_hz, 1.0 + 0.001 * i) for i in range(n_samples)]
+
+    def test_crc_mismatch_fails(self):
+        image = encode_region(self._region(), 50)
+        region = decode_region_recovering(image, 50)
+        ok, out = self.v([], 0, None, image, len(image), "deadbeef", region,
+                         len("t,mag\n"), None)
+        self.assertFalse(ok)
+        self.assertTrue(any("CRC MISMATCH" in l for l in out))
+
+    def test_short_transfer_fails(self):
+        image = encode_region(self._region(), 50)
+        region = decode_region_recovering(image, 50)
+        crc = f"{zlib.crc32(image) & 0xffffffff:08x}"
+        ok, out = self.v([], 0, None, image[:-4], len(image), crc, region,
+                         0, None)
+        self.assertFalse(ok)
+        self.assertTrue(any("TRACERAW SHORT" in l for l in out))
+
+    def test_damaged_patch_with_matching_crc_fails_and_does_not_claim_no_loss(self):
+        """The 2026-09-07 finding, at unit level: a torn write already on
+        the device's flash (so crc32 over the transferred bytes matches —
+        the corruption predates the transfer) must fail, and must never say
+        'no bytes lost' — skipPastTornWrite() always drops the samples in
+        the patch it jumps past."""
+        samples = self._region(1500)
+        image = bytearray(encode_region(samples, 50))
+        image[10] ^= 0xFF
+        image = bytes(image)
+        region = decode_region_recovering(image, 50)
+        crc = f"{zlib.crc32(image) & 0xffffffff:08x}"
+        ok, out = self.v([], 0, None, image, len(image), crc, region, 0, None)
+        self.assertFalse(ok, "damage inside the region must fail, not warn")
+        self.assertNotIn("no bytes lost", "\n".join(out))
+
+    def test_in_frame_incomplete_warning_fails(self):
+        region = decode_region_recovering(b"", 50)
+        ok, out = self.v(
+            ["# WARNING trace.bin INCOMPLETE -- 512 bytes never reached the host"],
+            0, None, b"", 0, "00000000", region, len("t,mag\n"), None)
+        self.assertFalse(ok)
+        self.assertTrue(any("DROPPED TRANSFER" in l for l in out))
+
+    def test_empty_region_is_verified(self):
+        region = decode_region_recovering(b"", 50)
+        ok, out = self.v([], 0, None, b"", 0, "00000000", region,
+                         len("t,mag\n"), None)
+        self.assertTrue(ok)
+        self.assertTrue(any("traceraw verified" in l for l in out))
 
 
 class TestValidateMath(unittest.TestCase):

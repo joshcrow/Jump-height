@@ -19,6 +19,12 @@ Individual steps, if you'd rather drive manually:
     ./tools/jump desktest    guided assembly check (3 tosses onto a cushion)
     ./tools/jump drop        guided calibration from measured drops
     ./tools/jump sync        download a session, analyze it, write a report
+                               (tries the fast `traceraw` wire path first,
+                               falling back to CSV `dump` on old firmware;
+                               --csv forces the old path)
+    ./tools/jump ingest      import a rider-synced bundle (zip or an
+                               already-unzipped dir) from web/sync/ into
+                               data/sessions/ — no device needed
     ./tools/jump validate    video ground-truth calibration + a publishable
                                error-bar report (film jumps, --pairs a CSV
                                of jump_n,fps,frames)
@@ -38,6 +44,8 @@ POSIX fallback (Linux/macOS). Windows users: `setup` installs pyserial.
 from __future__ import annotations
 
 import argparse
+import base64
+import collections
 import glob
 import json
 import math
@@ -49,6 +57,8 @@ import statistics
 import subprocess
 import sys
 import time
+import zipfile
+import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -269,8 +279,150 @@ def parse_kv(line: str) -> dict:
     return out
 
 
+def _parse_jumps_rows(jumps_lines: list[str]) -> tuple:
+    """Parses jumps.csv's data rows into (list of dicts, bad_row_count) —
+    the ONE parser both _verify_jumps_rows()'s row count and
+    _analyze_and_report()'s report are built from, so a mangled row can
+    never disappear between the green "✅ jumps verified: N rows" line and
+    the report's jump count the way it did before 2026-09-07: the count fed
+    to verification was a LINE count while the report silently dropped
+    whatever `float()` choked on, so a corrupted mid-file row (a dropped BLE
+    notification's shape: NUL bytes, a non-numeric field) passed
+    verification and then vanished from the report with nothing said.
+    Blank trailing lines are skipped, not counted as bad — an artifact of a
+    trailing newline, not a dropped row."""
+    dev_jumps: list[dict] = []
+    bad = 0
+    for row in jumps_lines[1:]:
+        if not row.strip():
+            continue
+        cells = row.split(",")
+        if len(cells) >= 5:
+            try:
+                dev_jumps.append({
+                    "takeoff": float(cells[1]), "raw": float(cells[2]),
+                    "airtime": float(cells[3]), "height": float(cells[4])})
+                continue
+            except ValueError:
+                pass
+        bad += 1
+    return dev_jumps, bad
+
+
+def _verify_jumps_rows(n_jump_rows, dev_jump_count) -> tuple:
+    """(b) jumps.csv rows vs the device's own stored_jumps — pulled out of
+    _verify_download 2026-09-07 so the `traceraw` sync path and `ingest`
+    (web/sync/CONTRACT.md §1/§2) hold jumps.csv to the exact same bar as the `dump`
+    fallback, with the identical verdict wording. Returns
+    (True/False/None, [lines]) — None only when the source (an old device,
+    or a bundle whose manifest never reported stored_jumps_device) can't say.
+
+    `n_jump_rows` must be the PARSED row count (_parse_jumps_rows()'s first
+    return value, length-of), never a raw line count — a mangled row that
+    _analyze_and_report() silently drops must show up here as a shortfall,
+    not as an untroubled match.
+    """
+    if dev_jump_count is None:
+        return None, ["  ℹ️  jumps not verified: device reported no stored_jumps "
+                      "(old firmware)"]
+    if n_jump_rows == dev_jump_count:
+        return True, [f"  ✅ jumps verified: {n_jump_rows} rows = the device's own "
+                      f"stored_jumps"]
+    return False, [f"  ❌ JUMPS FILE SHORT — parsed {n_jump_rows} rows, device "
+                   f"holds {dev_jump_count}",
+                   "     These are the actual results, not raw samples. Do NOT "
+                   "clear the device."]
+
+
+# docs/audit-2026-08-22.md F-22's own evidence line: "800 bytes, exactly one
+# 50-sample batch at 16 B/line" — the live STATS counter over-reports by AT
+# MOST one batch, and only in that direction (device count AHEAD of what a
+# clean read-back produces), because it counts a block's bytes before the
+# block closes. A delta outside this band — the wrong sign, too large, or
+# alongside any damaged patch — is NOT what F-22 found, and citing it there
+# would be a wrong citation (CLAUDE.md rule 6: on 2026-08-23 a rule was
+# attributed to a file that did not contain it).
+F22_MAX_OVERREPORT_BYTES = 800
+
+
+def _trace_bytes_note(got_csv_bytes: int, dev_trace_bytes: "int | None",
+                      damaged_patches: int = 0) -> str:
+    """Informational line comparing a decoded/received trace.csv's byte
+    length against the device's own STATS `trace_bytes` counter — shared by
+    the `traceraw` sync path and `ingest`, where crc32 (or, for a csv bundle,
+    the manifest's own byte count) already carries the hard pass/fail and
+    this is a second, softer opinion. Never fails the download on its own —
+    but ONLY within F22_MAX_OVERREPORT_BYTES's band does it get to say so;
+    outside that band the mismatch is unexplained and must not borrow F-22's
+    reassurance. Still printed either way: CLAUDE.md rule 3, a reading that
+    goes unreported is itself a finding."""
+    if dev_trace_bytes is None:
+        return ("  ℹ️  trace not cross-checked: device reported no trace_bytes "
+                "(old firmware)")
+    if got_csv_bytes == dev_trace_bytes:
+        return (f"  ✅ trace cross-check: {got_csv_bytes:,} bytes = the "
+                f"device's own trace_bytes")
+    delta = got_csv_bytes - dev_trace_bytes
+    if damaged_patches == 0 and -F22_MAX_OVERREPORT_BYTES <= delta < 0:
+        return (f"  ⚠️  trace_bytes mismatch — decoded {got_csv_bytes:,} bytes, "
+                f"device reported trace_bytes={dev_trace_bytes:,} ({delta:+,}); "
+                "likely audit F-22 (STATS over-reports by up to one batch once "
+                "the trace region is FULL), not a bad download — crc32 and a "
+                "full region decode already verified independently")
+    return (f"  ⚠️  trace_bytes mismatch — decoded {got_csv_bytes:,} bytes, "
+            f"device reported trace_bytes={dev_trace_bytes:,} ({delta:+,}); "
+            "outside audit F-22's known range (over-report of at most "
+            f"{F22_MAX_OVERREPORT_BYTES} B once the region is full) — this is "
+            "an unexplained shortfall, not F-22, and not a reassurance")
+
+
+# The device's answer to `tracecheck` (main.cpp's "# tracecheck fast=%lu
+# slow=%lu %s"). `fast` is the live counter STATS' trace_bytes also reports;
+# `slow` is a full re-walk of the trace region — and per the firmware's own
+# wording when they differ, "the slow number is the correct one". Both are
+# None when the device did not answer with a parseable line, and `reason`
+# then says why, so a check that did not happen can never read as one that
+# passed (CLAUDE.md rule 3).
+TraceCheck = collections.namedtuple("TraceCheck", ("fast", "slow", "reason"))
+
+# `tracecheck` sends NOTHING until its walk finishes: it re-reads and decodes
+# every block in the trace region (main.cpp's tracecheck branch ->
+# jh_store.cpp's walkTraceRegion(), which feeds the watchdog every 64 blocks
+# so the walk itself is safe to be this long). On a full 2,027,520 B region
+# that is ~19k blocks off QSPI flash, so the inactivity timeout has to be
+# minutes, not the 20 s a chatty command gets. 300 s is the floor this tool
+# was specified to allow; it is an INACTIVITY timeout (Device.command), so a
+# device that answers sooner costs nothing.
+TRACECHECK_TIMEOUT_S = 300.0
+
+
+def _query_tracecheck(dev: "Device", timeout: float = TRACECHECK_TIMEOUT_S) -> TraceCheck:
+    """Ask a connected device for both trace-byte counters. Never raises —
+    every failure comes back as a TraceCheck with a `reason`, because the
+    caller's job is to keep REFUSING on an unanswered check, not to crash.
+
+    `ERR tracecheck mismatch` is the EXPECTED terminator when the two
+    counters disagree (main.cpp emits the numbers first, then the ERR), so
+    the fast=/slow= line is parsed before any ERR is considered a failure."""
+    try:
+        lines = dev.command("tracecheck", timeout=timeout)
+    except TimeoutError:
+        return TraceCheck(None, None, f"no reply within {timeout:.0f} s")
+    except Exception as exc:            # serial gone, device reset mid-walk…
+        return TraceCheck(None, None,
+                          f"the command could not be completed ({type(exc).__name__})")
+    for ln in lines:
+        m = re.search(r"fast=(\d+)\s+slow=(\d+)", ln)
+        if m:
+            return TraceCheck(int(m.group(1)), int(m.group(2)), None)
+    err = next((l.strip() for l in lines if l.startswith("ERR")), None)
+    if err:
+        return TraceCheck(None, None, f"the device refused it: {err[:120]}")
+    return TraceCheck(None, None, "its reply carried no fast=/slow= line")
+
+
 def _verify_download(received_lines, n_jump_rows, dev_jump_count,
-                     got_trace_bytes, dev_trace_bytes) -> tuple:
+                     got_trace_bytes, dev_trace_bytes, tracecheck=None) -> tuple:
     """Is this download COMPLETE? Returns (ok_or_None, [lines to print]).
 
     Pure, so the failure paths can actually be tested — extracted 2026-08-20
@@ -283,6 +435,14 @@ def _verify_download(received_lines, n_jump_rows, dev_jump_count,
 
     Three independent checks. ok is None only when the device is too old to
     report either figure; any single failure makes the whole download unsafe.
+
+    `tracecheck` is an optional zero-argument callable returning a
+    TraceCheck — normally `lambda: _query_tracecheck(dev)`. It is called
+    ONLY when the trace byte counts disagree (it costs the device a full
+    region re-walk), and it is the ONLY thing that can turn that
+    disagreement into a pass. Left None (unit tests, any caller with no
+    device in hand), a mismatch stays a refusal and the report says the
+    cross-check never ran.
     """
     out, ok = [], None
 
@@ -299,21 +459,12 @@ def _verify_download(received_lines, n_jump_rows, dev_jump_count,
         out.append("     Do NOT clear the device. Re-run `./tools/jump sync`.")
 
     # (b) jumps.csv rows vs the device's own stored_jumps.
-    if dev_jump_count is not None:
-        if n_jump_rows == dev_jump_count:
-            out.append(f"  ✅ jumps verified: {n_jump_rows} rows = the device's own "
-                       f"stored_jumps")
-            if ok is None:
-                ok = True
-        else:
-            ok = False
-            out.append(f"  ❌ JUMPS FILE SHORT — parsed {n_jump_rows} rows, device "
-                       f"holds {dev_jump_count}")
-            out.append("     These are the actual results, not raw samples. Do NOT "
-                       "clear the device.")
-    else:
-        out.append("  ℹ️  jumps not verified: device reported no stored_jumps "
-                   "(old firmware)")
+    jumps_ok, jumps_out = _verify_jumps_rows(n_jump_rows, dev_jump_count)
+    out.extend(jumps_out)
+    if jumps_ok is False:
+        ok = False
+    elif jumps_ok is True and ok is None:
+        ok = True
 
     # (c) trace.csv byte count (the original check).
     if dev_trace_bytes is not None:
@@ -324,12 +475,58 @@ def _verify_download(received_lines, n_jump_rows, dev_jump_count,
             if ok is None:
                 ok = True
         else:
-            ok = False
+            # A mismatch is NOT the end of the question any more. STATS'
+            # trace_bytes is a live counter that over-reports once the trace
+            # region fills (audit F-22) — measured on the OG 2026-09-07:
+            # sync pulled 15,917,153 B, STATS said 15,917,918, and the
+            # device's own `tracecheck` answered "fast=15917918
+            # slow=15917153 DISAGREE — the slow number is the correct one".
+            # The download was COMPLETE and this tool refused to clear,
+            # twice. So: ask the device to re-walk the region and let the
+            # slow number arbitrate. It is the only counter derived from
+            # what is actually stored, and F-22's own fix note says to
+            # "make `tracecheck` the authority".
+            #
+            # Everything else still refuses. A slow number that also
+            # disagrees is a real shortfall, and a `tracecheck` that never
+            # answers leaves the mismatch exactly as unexplained as it was.
             delta = got_trace_bytes - dev_trace_bytes
-            out.append(f"  ❌ TRACE INCOMPLETE — got {got_trace_bytes:,} bytes, "
-                       f"device says {dev_trace_bytes:,} ({delta:+,})")
-            out.append("     The session file is SHORT. Do NOT clear the device.")
-            out.append("     Re-run `./tools/jump sync` — the data is still on the puck.")
+            tc = tracecheck() if tracecheck is not None else None
+            if tc is not None and tc.slow is not None and got_trace_bytes == tc.slow:
+                if ok is None:
+                    ok = True
+                # Only an over-report of at most one batch is F-22 (see
+                # F22_MAX_OVERREPORT_BYTES). Anything else is still resolved
+                # — tracecheck outranks the live counter either way — but it
+                # must not be filed under a finding that did not describe it
+                # (CLAUDE.md rule 6).
+                if -F22_MAX_OVERREPORT_BYTES <= delta < 0:
+                    out.append(f"  ✅ trace_bytes over-reported by {-delta:,} B "
+                               "(audit F-22, region full); tracecheck confirms "
+                               "the download is complete.")
+                else:
+                    out.append(f"  ✅ trace_bytes off by {delta:+,} B — outside "
+                               f"audit F-22's known range (an over-report of at "
+                               f"most {F22_MAX_OVERREPORT_BYTES} B once the region "
+                               f"is full), so unexplained; but tracecheck's "
+                               f"re-walk ({tc.slow:,} B) confirms the download "
+                               f"is complete.")
+            else:
+                ok = False
+                out.append(f"  ❌ TRACE INCOMPLETE — got {got_trace_bytes:,} bytes, "
+                           f"device says {dev_trace_bytes:,} ({delta:+,})")
+                if tc is None:
+                    out.append("     tracecheck was not consulted — F-22's "
+                               "cross-check (docs/audit-2026-08-22.md) did not run.")
+                elif tc.slow is None:
+                    out.append(f"     tracecheck did not answer — {tc.reason}. The "
+                               f"mismatch stands unexplained.")
+                else:
+                    out.append(f"     tracecheck: fast={tc.fast:,} slow={tc.slow:,} "
+                               f"— the slow number is the arbiter, and this "
+                               f"download ({got_trace_bytes:,} B) matches neither.")
+                out.append("     The session file is SHORT. Do NOT clear the device.")
+                out.append("     Re-run `./tools/jump sync` — the data is still on the puck.")
     else:
         out.append("  ℹ️  trace not verified: device reported no trace_bytes "
                    "(old firmware) — treat this session file as unconfirmed")
@@ -1399,6 +1596,14 @@ def parse_file_sections(lines: list[str]) -> dict:
     return files
 
 
+# The note stamped into every session.json — web/sync/CONTRACT.md §2 requires
+# `jump ingest` write the identical schema _write_session_info() does, and
+# this constant is the one place both writers pull it from so they can't
+# drift apart the way jumps.csv/trace.csv formats never have.
+SESSION_NOTE = ("Add wall-clock ranges to labels.csv using trace_epoch_utc; "
+                "see docs/bench-program.md section 4.")
+
+
 def _write_session_info(sess: Path, dev: "Device") -> None:
     """A small ADDITIVE companion to jumps.csv/trace.csv: the firmware
     version and CAL line captured at sync time, so a future session-vs-
@@ -1444,155 +1649,529 @@ def _write_session_info(sess: Path, dev: "Device") -> None:
             # The instant trace time t=0 corresponds to, in the real world.
             "trace_epoch_utc": (now - datetime.timedelta(seconds=uptime)).isoformat()
                                if uptime == uptime else None,
-            "note": ("Add wall-clock ranges to labels.csv using trace_epoch_utc; "
-                     "see docs/bench-program.md section 4."),
+            "note": SESSION_NOTE,
         }
         (sess / "session.json").write_text(_json.dumps(blob, indent=2) + "\n")
     except Exception:
         pass  # best-effort: never cost a download
 
 
-def cmd_sync(args) -> int:
-    from detector import Detector, load_params
+def _merge_session_json(sess: Path, updates: dict) -> bool:
+    """Add keys to the session.json _write_session_info() already wrote,
+    keeping everything already in it. Returns False when the numbers could
+    NOT be recorded, so the caller can say so out loud rather than let a
+    lost reading pass silently (CLAUDE.md rule 3).
 
-    dev, proc = open_device(args, "session")
+    Used for the byte counters the verdict turned on — the device's own
+    STATS `trace_bytes`, and `tracecheck`'s re-walked figure when the two
+    disagreed — because six weeks from now the only way to re-litigate a
+    session cleared on the strength of F-22 is a file that recorded both
+    numbers. An unparseable session.json is left EXACTLY as it is: it is
+    someone else's evidence, and overwriting it would destroy the
+    wall-clock anchor rather than annotate it."""
+    path = sess / "session.json"
+    try:
+        blob: dict = {}
+        if path.exists():
+            blob = json.loads(path.read_text())
+            if not isinstance(blob, dict):
+                return False
+        blob.update(updates)
+        path.write_text(json.dumps(blob, indent=2) + "\n")
+        return True
+    except Exception:
+        return False
+
+
+def _analyze_and_report(sess: Path, jumps_rows: list[str], trace_rows: list[str],
+                        params) -> dict:
+    """The analysis `sync` and `ingest` share (web/sync/CONTRACT.md §0 item 3: a
+    bundle ingested from Nick's phone must be scored exactly the way a bench
+    sync is). Parses the device's own jump list, re-runs the offline
+    detector over the trace, prints the live-vs-offline verdict, writes
+    report.md, and returns the pieces the caller's clear-prompt (sync) or
+    exit code (ingest) still needs.
+
+    `jumps_rows`/`trace_rows` are header-plus-data line lists — the same
+    shape parse_file_sections() hands back per file (e.g.
+    files.get("jumps.csv", [])) — regardless of whether the header+rows
+    arrived via a live `dump`/`jumps` response, a decoded `traceraw` frame,
+    or an ingested bundle. Extracted 2026-09-07 (web/sync/CONTRACT.md) so `ingest`
+    doesn't re-implement (and drift from) sync's own analysis."""
+    from detector import Detector
+
+    # Device's own jump list. _parse_jumps_rows() is the SAME parser
+    # _verify_jumps_rows()'s row count is built from (both callers now feed
+    # it the parsed count, not a line count) — a mangled row (a dropped BLE
+    # notification's shape: NUL bytes, a non-numeric field) can therefore
+    # never pass verification and then vanish from this report unremarked,
+    # the way it did before 2026-09-07 (a corrupted mid-file row imported
+    # under a green "✅ jumps verified: N rows" and the report silently
+    # reported N-1 with nothing said).
+    dev_jumps, bad_jump_rows = _parse_jumps_rows(jumps_rows)
+
+    # Offline re-detection over the trace (catches jumps the live pass missed)
+    rows: list[tuple[float, float]] = []
+    bad_trace_rows = 0
+    for row in trace_rows[1:]:
+        if not row.strip():
+            continue
+        cells = row.split(",")
+        if len(cells) >= 2:
+            try:
+                rows.append((float(cells[0]), float(cells[1])))
+                continue
+            except ValueError:
+                pass
+        bad_trace_rows += 1
+    offline: list = []
+    for seg in split_segments(rows):
+        det = Detector(params)
+        for t, m in seg:
+            ev = det.update(t, m)
+            if ev:
+                offline.append(ev)
+
+    # Cross-check: match by airtime (times reset per boot, so counts +
+    # airtimes are the robust comparison)
+    dev_raws = sorted(j["raw"] for j in dev_jumps)
+    off_raws = sorted(e.airtime_raw_s for e in offline)
+    agree = len(dev_raws) == len(off_raws) and all(
+        abs(a - b) <= 0.05 for a, b in zip(dev_raws, off_raws))
+
+    best = max((j["height"] for j in dev_jumps), default=0.0)
+    best_off = max((e.height_m for e in offline), default=0.0)
+
+    # A capped trace can't cover the whole session, so live-vs-offline
+    # disagreement is expected and NOT a detector problem — don't cry wolf.
+    # DISABLED (review 2026-08-14): trace_max_bytes is an ESP32-era
+    # CSV-on-flash constant that the nRF52 store explicitly does NOT use —
+    # its real cap is the physical trace region, ~5.3 h of moving time.
+    # Comparing a decoded-CSV size against it fired a FALSE "trace hit its
+    # size cap" on any session longer than ~44 min, and that REPLACED the
+    # live-vs-offline agreement verdict with an informational note — losing
+    # the one automated cross-check on the evening it matters most.
+    # The honest cap check needs the device's own trace_bytes; until the
+    # download carries it, claim nothing.
+    trace_capped = False
+    if trace_capped:
+        agreement = ("ℹ️ trace hit its size cap — offline re-analysis only "
+                     "covers the first ~45 min of moving time, so live vs "
+                     "offline counts can differ legitimately")
+    elif agree:
+        agreement = "✅ live and offline detection agree"
+    else:
+        agreement = ("⚠️ live vs offline differ — see tables; consider tuning "
+                     "config/params.json and re-running "
+                     f"`./tools/jump replay --csv {sess / 'trace.csv'}`")
+    report = [f"# Session report — {sess.name}", ""]
+    if bad_jump_rows or bad_trace_rows:
+        # A row silently dropped by _parse_jumps_rows()'s except:pass must
+        # not vanish between the terminal's "✅ jumps verified" line and this
+        # report — CLAUDE.md rule 3, and the exact 2026-09-07 finding this
+        # fixes.
+        if bad_jump_rows:
+            report.append(f"⚠️ **{bad_jump_rows} jumps.csv row(s) could not be "
+                          "parsed** and are missing from the counts below.")
+        if bad_trace_rows:
+            report.append(f"⚠️ **{bad_trace_rows} trace row(s) could not be "
+                          "parsed** and are missing from the offline "
+                          "re-analysis below.")
+        report.append("")
+    report += [
+        f"**Device:** {len(dev_jumps)} jumps, best {best:.2f} m "
+        f"({best * 3.28084:.1f} ft)",
+        f"**Offline re-analysis:** {len(offline)} jumps, best {best_off:.2f} m", "",
+        "Agreement: " + agreement, "",
+        "| # | airtime (s) | height (m) | height (ft) |",
+        "|---|-------------|------------|-------------|",
+    ]
+    for i, j in enumerate(dev_jumps, 1):
+        report.append(f"| {i} | {j['airtime']:.2f} | {j['height']:.2f} | "
+                      f"{j['height'] * 3.28084:.1f} |")
+    report += [
+        "",
+        f"Params: `{params}`", "",
+        "_Note: the device accumulates jumps until `clear`; timestamps reset "
+        "each power-up. Sync + clear after every session to keep reports "
+        "one-session-per-file._",
+    ]
+    (sess / "report.md").write_text("\n".join(report) + "\n")
+
+    print(f"\n=== {len(dev_jumps)} jumps — best {best:.2f} m "
+          f"({best * 3.28084:.1f} ft) ===")
+    for i, j in enumerate(dev_jumps, 1):
+        print(f"  #{i}: airtime {j['airtime']:.2f}s → {j['height']:.2f} m")
+    if bad_jump_rows:
+        print(f"⚠️  {bad_jump_rows} jumps.csv row(s) could not be parsed and "
+              "are missing from this report")
+    if bad_trace_rows:
+        print(f"⚠️  {bad_trace_rows} trace row(s) could not be parsed and are "
+              "missing from the offline re-analysis")
+    if not agree:
+        print("⚠️  offline re-analysis differs from the live detection — "
+              "see the report.")
+    print(f"\nSaved: {sess}/report.md (+ raw CSVs for re-tuning)")
+
+    return {"dev_jumps": dev_jumps, "offline": offline, "agree": agree,
+            "best": best, "best_off": best_off,
+            "bad_jump_rows": bad_jump_rows, "bad_trace_rows": bad_trace_rows}
+
+
+def _verify_region_decode(region, expected_n: int) -> tuple:
+    """Judge decode_region_recovering()'s result — shared by the traceraw
+    sync path and `ingest` (web/sync/CONTRACT.md §1/§2). Returns (ok, [lines]).
+
+    `region.consumed == expected_n` on its own does NOT mean nothing was
+    lost: sim/trace_codec.py's skipPastTornWrite() recovers a torn write by
+    jumping straight to the next page boundary, so the walk can reach the
+    end of the region even though every sample inside the skipped patch is
+    gone — 'consumed' only means the walk got PAST the hole, not that there
+    was no hole. A damaged patch is therefore always a failure here, never a
+    footnote: this fixes the 2026-09-07 finding where a 1-byte flip dropped
+    all 1500 samples of a region and this function's old wording, "no bytes
+    lost", was printed over the empty result — with integrity_ok left True,
+    so `sync` went on to offer to clear the device that held the only copy.
+    """
+    if region.consumed != expected_n:
+        return False, [
+            f"  ❌ TRACE REGION DECODE STOPPED SHORT — consumed "
+            f"{region.consumed:,} of {expected_n:,} bytes "
+            f"({region.damaged_patches} damaged patch(es))",
+            "     Do NOT clear the device. Re-run `./tools/jump sync`."]
+    if region.damaged_patches:
+        return False, [
+            f"  ❌ {region.damaged_patches} damaged patch(es) in the trace "
+            "region — the decoder jumped past them to the next safe page, "
+            f"so the samples inside are unrecoverable ({len(region.samples):,} "
+            f"sample(s) decoded from the rest of a {expected_n:,}-byte "
+            "region). This damage is already on the device's flash, not in "
+            "the transfer: crc32 matches because it was computed over these "
+            "same damaged bytes, and re-running sync will reproduce the "
+            "identical gap. Do NOT clear the device without another way to "
+            "recover it — --force will import what did decode if that is "
+            "still useful."]
+    return True, []
+
+
+def _verify_traceraw_download(received_lines, n_jump_rows, dev_jump_count,
+                              raw_bytes: bytes, expected_bytes: int,
+                              expected_crc32: str, region,
+                              got_csv_bytes: int, dev_trace_bytes) -> tuple:
+    """The traceraw path's integrity gate — web/sync/CONTRACT.md §1. jumps.csv is
+    held to the exact bar _verify_download() uses (via _verify_jumps_rows());
+    the trace itself is verified by crc32 over the raw bytes plus
+    decode_region_recovering() consuming every one of them — a STRONGER
+    guarantee than the old trace.csv byte count, since it catches a
+    same-length payload that got corrupted in transit, not only a short one.
+    Once crc32+consumed both hold, a mismatch against STATS' own
+    `trace_bytes` is downgraded to the F-22-aware warning
+    _trace_bytes_note() prints (docs/audit-2026-08-22.md) rather than a
+    refusal — never silently, per CLAUDE.md rule 3."""
+    out, ok = [], None
+
+    # (a) same in-band complaint check as _verify_download.
+    fw = [l.strip() for l in (received_lines or [])
+          if "INCOMPLETE" in l and l.lstrip().startswith("#")]
+    if fw:
+        ok = False
+        out.append("  ❌ THE DEVICE REPORTED A DROPPED TRANSFER:")
+        out.extend(f"     {l[:150]}" for l in fw[:3])
+        out.append("     Do NOT clear the device. Re-run `./tools/jump sync`.")
+
+    # (b) jumps.csv, exactly as the dump path.
+    jumps_ok, jumps_out = _verify_jumps_rows(n_jump_rows, dev_jump_count)
+    out.extend(jumps_out)
+    if jumps_ok is False:
+        ok = False
+    elif jumps_ok is True and ok is None:
+        ok = True
+
+    # (c) crc32 over the raw trace bytes (web/sync/CONTRACT.md §1).
+    if len(raw_bytes) != expected_bytes:
+        ok = False
+        out.append(f"  ❌ TRACERAW SHORT — got {len(raw_bytes):,} bytes, device "
+                   f"said bytes={expected_bytes:,}")
+        out.append("     Do NOT clear the device. Re-run `./tools/jump sync`.")
+    else:
+        actual_crc32 = f"{zlib.crc32(raw_bytes) & 0xffffffff:08x}"
+        if actual_crc32 != (expected_crc32 or "").lower():
+            ok = False
+            out.append(f"  ❌ TRACERAW CRC MISMATCH — computed {actual_crc32}, "
+                       f"device said {expected_crc32}")
+            out.append("     Do NOT clear the device. Re-run `./tools/jump sync`.")
+        else:
+            out.append(f"  ✅ traceraw verified: {len(raw_bytes):,} bytes, crc32 "
+                       f"{actual_crc32} matches the device")
+            if ok is None:
+                ok = True
+
+    # (d) decode_region_recovering() must consume every byte, AND do so with
+    # no damaged patch — see _verify_region_decode()'s docstring for why
+    # 'consumed to the end' alone is not enough.
+    region_ok, region_out = _verify_region_decode(region, expected_bytes)
+    out.extend(region_out)
+    if region_ok is False:
+        ok = False
+
+    # (e) cross-check against STATS' own trace_bytes — informational once
+    # (c)/(d) both hold; see _trace_bytes_note().
+    out.append(_trace_bytes_note(got_csv_bytes, dev_trace_bytes,
+                                 region.damaged_patches))
+
+    return ok, out
+
+
+def _sync_via_traceraw(dev: "Device") -> "dict | None":
+    """Try web/sync/CONTRACT.md §1's `traceraw` wire path. Returns None ONLY on
+    `ERR unknown_command traceraw` (old firmware) — the caller's cue to fall
+    back to `dump`. Any OTHER ERR (storage_down, traceraw_unsupported, ...)
+    is reported as-is and aborts the sync, exactly as the contract specifies
+    ("Clients fall back to CSV ONLY on ERR unknown_command; any other ERR is
+    reported as-is") — there is no CSV path that recovers from e.g. storage
+    not being mounted.
+
+    On success this decodes+renders but does not judge: it hands back the
+    raw materials (raw bytes, the device's own bytes=/crc32=/log_hz=
+    chatter, the decode result, and the rendered CSVs) for cmd_sync to run
+    through _verify_traceraw_download() — same division of labor the dump
+    path already uses with _verify_download()."""
+    from trace_codec import decode_region_recovering, region_to_csv
+
+    lines = dev.command("traceraw", timeout=120)
+    last = lines[-1].strip() if lines else ""
+    if last == "ERR unknown_command traceraw":
+        return None
+    if last.startswith("ERR"):
+        print(f"❌ {last}")
+        raise SystemExit(1)
+
+    files = parse_file_sections(lines)
+    # main.cpp's own '# WARNING trace.bin INCOMPLETE — ...' line lands
+    # INSIDE the FILE frame when the serial buffer drops bytes mid-transfer
+    # (emitted before the FILE END terminator, same bracket as printFileFramed)
+    # — drop any in-frame '#' chatter before joining, or its text (including
+    # a UTF-8 em dash SerialPort.read_line's errors="replace" preserves)
+    # corrupts the base64 decode. A CSV data row never starts with '#', so
+    # this filter only ever removes chatter, never a real body line.
+    body_lines = [l for l in files.get("trace.bin", []) if not l.startswith("#")]
+    b64 = "".join(body_lines)
+    try:
+        raw_bytes = base64.b64decode(b64) if b64 else b""
+    except ValueError as e:
+        # base64.b64decode raises plain ValueError for non-ASCII input and
+        # binascii.Error (a ValueError subclass) for a malformed/truncated
+        # body — either way this is a corrupt frame, not a Python bug, and
+        # it must fail the SAME way every other transfer failure in this
+        # file does: a plain verdict, not a stack trace, and nothing cleared.
+        print(f"❌ TRACERAW FRAME CORRUPT — the base64 body did not decode "
+              f"({e}). Do NOT clear the device. Re-run `./tools/jump sync` "
+              "(or `--csv` for the old path).")
+        raise SystemExit(1)
+
+    # The two '# traceraw ...' chatter lines web/sync/CONTRACT.md §1 defines: the
+    # pre-frame 'bytes=<N> log_hz=<Hz> region_bytes=<R>' and the post-frame
+    # 'crc32=<hex> bytes=<N>' — told apart by which one carries crc32=.
+    before: dict = {}
+    after: dict = {}
+    for line in lines:
+        if line.startswith("# traceraw "):
+            kv = parse_kv(line)
+            (after if "crc32" in kv else before).update(kv)
+    try:
+        expected_bytes = int(before.get("bytes", after.get("bytes", len(raw_bytes))))
+    except ValueError:
+        expected_bytes = len(raw_bytes)
+    try:
+        log_hz = int(before.get("log_hz", 0))
+    except ValueError:
+        log_hz = 0
+    if log_hz <= 0:
+        # Chatter didn't carry it (or was unparsable) — fall back to the
+        # same config the local detector already trusts, rather than
+        # guessing a rate that would silently mis-decode every block. The
+        # substitution itself must not be silent (CLAUDE.md rule 3): a wrong
+        # rate here mis-decodes every block's timestamps under a green ✅,
+        # since crc32 is computed over the raw bytes and doesn't care what
+        # rate they get decoded at.
+        try:
+            with open(CONFIG_PATH) as f:
+                log_hz = int(json.load(f).get("firmware", {}).get("log_hz", 50))
+            where = "config/params.json"
+        except Exception:
+            log_hz = 50
+            where = "a hardcoded fallback (config/params.json unreadable)"
+        print(f"ℹ️  traceraw chatter carried no log_hz; decoding at {log_hz} Hz "
+              f"from {where}")
+    expected_crc32 = after.get("crc32", "")
+
+    region = decode_region_recovering(raw_bytes, log_hz)
+    trace_csv_body = region_to_csv(raw_bytes, log_hz)
+    trace_csv_text = "t,mag\n" + trace_csv_body
+    trace_csv_lines = ["t,mag"] + trace_csv_body.splitlines()
+
+    jumps_lines = dev.command("jumps", timeout=60)
+    jumps_csv_lines = parse_file_sections(jumps_lines).get("jumps.csv", [])
+
+    return {
+        "received_lines": lines + jumps_lines,
+        "raw_bytes": raw_bytes,
+        "expected_bytes": expected_bytes,
+        "expected_crc32": expected_crc32,
+        "region": region,
+        "trace_csv_text": trace_csv_text,
+        "trace_csv_lines": trace_csv_lines,
+        "jumps_csv_lines": jumps_csv_lines,
+    }
+
+
+def cmd_sync(args) -> int:
+    from detector import load_params
+
+    # Hidden test-only knobs (the --fake-fail precedent): a real puck never
+    # takes either of these, but nothing on the bench today HAS `traceraw`
+    # (docs/STATUS.md: the OG is on src=5c80a436), so the fallback branch
+    # and the non-fallback-ERR abort are otherwise unreachable by any test.
+    fake_extra = []
+    if getattr(args, "fake_no_traceraw", False):
+        fake_extra.append("--no-traceraw")
+    if getattr(args, "fake_traceraw_error", None):
+        fake_extra += ["--traceraw-error", args.fake_traceraw_error]
+    # The F-22 knobs (same test-only precedent): make the fake's STATS
+    # trace_bytes / `tracecheck` counters disagree the way a FULL puck's do,
+    # so the arbitration below is exercised by a test rather than by a human
+    # reading it. No hardware on the bench has a full trace region.
+    if getattr(args, "fake_trace_overreport", 0):
+        fake_extra += ["--trace-bytes-overreport", str(args.fake_trace_overreport)]
+    if getattr(args, "fake_tracecheck_slow_delta", 0):
+        fake_extra += ["--tracecheck-slow-delta", str(args.fake_tracecheck_slow_delta)]
+    if getattr(args, "fake_tracecheck_silent", False):
+        fake_extra.append("--tracecheck-silent")
+    # Client-side, not passed to the fake: a real `tracecheck` may legitimately
+    # take minutes (TRACECHECK_TIMEOUT_S), and a test for the silent case must
+    # not sit through that.
+    tc_timeout = float(getattr(args, "fake_tracecheck_timeout", 0)
+                       or TRACECHECK_TIMEOUT_S)
+    dev, proc = open_device(args, "session", fake_extra=fake_extra or None)
     try:
         print("Downloading session data...")
         check_device_params(dev)
-        lines = dev.command("dump", timeout=120)
-        files = parse_file_sections(lines)
-        jumps_csv = "\n".join(files.get("jumps.csv", []))
-        trace_csv = "\n".join(files.get("trace.csv", []))
 
         out_root = Path(args.out) if args.out else DATA_DIR / "sessions"
         sess = out_root / datetime.now().strftime("%Y%m%d-%H%M%S")
-        sess.mkdir(parents=True, exist_ok=True)
-        (sess / "jumps.csv").write_text(jumps_csv + "\n")
-        (sess / "trace.csv").write_text(trace_csv + "\n")
-        _write_session_info(sess, dev)
 
-        # DOWNLOAD INTEGRITY GATE. docs/plan.md §3.3 calls a session that
-        # records perfectly and downloads incompletely "the cruellest possible
-        # failure", and this exact path HAD a silent-drop bug (emitBytes
-        # discarding whole blocks on a short serial buffer, reproduced and
-        # fixed 2026-08-14). Until now nothing compared what arrived against
-        # what the device says it holds — and the very next prompt offers to
-        # ERASE the device. A byte-exact 13.4 MB proof exists (2026-08-19) but
-        # it was done with a throwaway harness, not through this path.
+        # traceraw first (web/sync/CONTRACT.md §1): ~2 B/sample raw trace-region bytes
+        # instead of the ~17 B/sample CSV `dump` has always sent — BLE is the
+        # bottleneck on the rider's phone path, so this rides the next flash
+        # batch. --csv (or an old firmware's `ERR unknown_command traceraw`)
+        # falls back to exactly the path this tool has always used.
         #
-        # The device already reports `trace_bytes` on STATS, and main.cpp
-        # flushes before dumping so the two are meant to match exactly.
-        # Completeness is decided by _verify_download() — pure and tested, so
-        # its FAILURE paths are exercised (the previous inline version could
-        # not be, and shipped a gate that only checked one of two files).
-        integrity_ok = None
-        dev_trace_bytes = dev_jump_count = None
-        try:
-            st = _last_tagged(dev.command("stats", timeout=10), "STATS ")
-            if st.get("trace_bytes") is not None:
-                dev_trace_bytes = int(st["trace_bytes"])
-            if st.get("stored_jumps") is not None:
-                dev_jump_count = int(st["stored_jumps"])
-        except Exception:
-            pass
-        integrity_ok, _verdict_lines = _verify_download(
-            lines, max(0, len(files.get("jumps.csv", [])) - 1), dev_jump_count,
-            len(trace_csv) + 1, dev_trace_bytes)
-        for _l in _verdict_lines:
-            print(_l)
+        # The session directory is created only once one of the two branches
+        # below actually has bytes to write — _sync_via_traceraw() and
+        # dev.command("dump", ...) both raise (SystemExit / TimeoutError) on
+        # failure, and a failed sync must not litter data/sessions/ with an
+        # empty, misleadingly-timestamped directory (it used to: mkdir ran
+        # up front, before either branch could fail).
+        via = None if getattr(args, "csv", False) else _sync_via_traceraw(dev)
+        if via is not None:
+            sess.mkdir(parents=True, exist_ok=True)
+            (sess / "trace.bin").write_bytes(via["raw_bytes"])
+            (sess / "trace.csv").write_text(via["trace_csv_text"])
+            jumps_csv = "\n".join(via["jumps_csv_lines"])
+            (sess / "jumps.csv").write_text(jumps_csv + "\n")
+            _write_session_info(sess, dev)
 
-        # Device's own jump list
-        dev_jumps: list[dict] = []
-        for row in files.get("jumps.csv", [])[1:]:
-            cells = row.split(",")
-            if len(cells) >= 5:
-                try:
-                    dev_jumps.append({
-                        "takeoff": float(cells[1]), "raw": float(cells[2]),
-                        "airtime": float(cells[3]), "height": float(cells[4])})
-                except ValueError:
-                    pass
-
-        # Offline re-detection over the trace (catches jumps the live pass missed)
-        rows: list[tuple[float, float]] = []
-        for row in files.get("trace.csv", [])[1:]:
-            cells = row.split(",")
-            if len(cells) >= 2:
-                try:
-                    rows.append((float(cells[0]), float(cells[1])))
-                except ValueError:
-                    pass
-        params = load_params(CONFIG_PATH)
-        offline: list = []
-        for seg in split_segments(rows):
-            det = Detector(params)
-            for t, m in seg:
-                ev = det.update(t, m)
-                if ev:
-                    offline.append(ev)
-
-        # Cross-check: match by airtime (times reset per boot, so counts +
-        # airtimes are the robust comparison)
-        dev_raws = sorted(j["raw"] for j in dev_jumps)
-        off_raws = sorted(e.airtime_raw_s for e in offline)
-        agree = len(dev_raws) == len(off_raws) and all(
-            abs(a - b) <= 0.05 for a, b in zip(dev_raws, off_raws))
-
-        best = max((j["height"] for j in dev_jumps), default=0.0)
-        best_off = max((e.height_m for e in offline), default=0.0)
-
-        # A capped trace can't cover the whole session, so live-vs-offline
-        # disagreement is expected and NOT a detector problem — don't cry wolf.
-        # DISABLED (review 2026-08-14): trace_max_bytes is an ESP32-era
-        # CSV-on-flash constant that the nRF52 store explicitly does NOT use —
-        # its real cap is the physical trace region, ~5.3 h of moving time.
-        # Comparing a decoded-CSV size against it fired a FALSE "trace hit its
-        # size cap" on any session longer than ~44 min, and that REPLACED the
-        # live-vs-offline agreement verdict with an informational note — losing
-        # the one automated cross-check on the evening it matters most.
-        # (integrity_ok, set above, gates the clear prompt below)
-        # The honest cap check needs the device's own trace_bytes; until the
-        # download carries it, claim nothing.
-        trace_capped = False
-        if trace_capped:
-            agreement = ("ℹ️ trace hit its size cap — offline re-analysis only "
-                         "covers the first ~45 min of moving time, so live vs "
-                         "offline counts can differ legitimately")
-        elif agree:
-            agreement = "✅ live and offline detection agree"
+            dev_trace_bytes = dev_jump_count = None
+            try:
+                st = _last_tagged(dev.command("stats", timeout=10), "STATS ")
+                if st.get("trace_bytes") is not None:
+                    dev_trace_bytes = int(st["trace_bytes"])
+                if st.get("stored_jumps") is not None:
+                    dev_jump_count = int(st["stored_jumps"])
+            except Exception:
+                pass
+            n_jump_rows = len(_parse_jumps_rows(via["jumps_csv_lines"])[0])
+            integrity_ok, verdict_lines = _verify_traceraw_download(
+                via["received_lines"], n_jump_rows,
+                dev_jump_count, via["raw_bytes"], via["expected_bytes"],
+                via["expected_crc32"], via["region"], len(via["trace_csv_text"]),
+                dev_trace_bytes)
+            for _l in verdict_lines:
+                print(_l)
+            if not _merge_session_json(sess, {"trace_bytes_device": dev_trace_bytes}):
+                print("  ⚠️  could not record trace_bytes_device in session.json")
+            jumps_rows, trace_rows = via["jumps_csv_lines"], via["trace_csv_lines"]
         else:
-            agreement = ("⚠️ live vs offline differ — see tables; consider tuning "
-                         "config/params.json and re-running "
-                         f"`./tools/jump replay --csv {sess / 'trace.csv'}`")
-        report = [
-            f"# Session report — {sess.name}", "",
-            f"**Device:** {len(dev_jumps)} jumps, best {best:.2f} m "
-            f"({best * 3.28084:.1f} ft)",
-            f"**Offline re-analysis:** {len(offline)} jumps, best {best_off:.2f} m", "",
-            "Agreement: " + agreement, "",
-            "| # | airtime (s) | height (m) | height (ft) |",
-            "|---|-------------|------------|-------------|",
-        ]
-        for i, j in enumerate(dev_jumps, 1):
-            report.append(f"| {i} | {j['airtime']:.2f} | {j['height']:.2f} | "
-                          f"{j['height'] * 3.28084:.1f} |")
-        report += [
-            "",
-            f"Params: `{params}`", "",
-            "_Note: the device accumulates jumps until `clear`; timestamps reset "
-            "each power-up. Sync + clear after every session to keep reports "
-            "one-session-per-file._",
-        ]
-        (sess / "report.md").write_text("\n".join(report) + "\n")
+            if not getattr(args, "csv", False):
+                print("(old firmware — falling back to `dump`)")
+            lines = dev.command("dump", timeout=120)
+            files = parse_file_sections(lines)
+            jumps_csv = "\n".join(files.get("jumps.csv", []))
+            trace_csv = "\n".join(files.get("trace.csv", []))
+            sess.mkdir(parents=True, exist_ok=True)
+            (sess / "jumps.csv").write_text(jumps_csv + "\n")
+            (sess / "trace.csv").write_text(trace_csv + "\n")
+            _write_session_info(sess, dev)
 
-        print(f"\n=== {len(dev_jumps)} jumps — best {best:.2f} m "
-              f"({best * 3.28084:.1f} ft) ===")
-        for i, j in enumerate(dev_jumps, 1):
-            print(f"  #{i}: airtime {j['airtime']:.2f}s → {j['height']:.2f} m")
-        if not agree:
-            print("⚠️  offline re-analysis differs from the live detection — "
-                  "see the report.")
-        print(f"\nSaved: {sess}/report.md (+ raw CSVs for re-tuning)")
+            # DOWNLOAD INTEGRITY GATE. docs/plan.md §3.3 calls a session that
+            # records perfectly and downloads incompletely "the cruellest
+            # possible failure", and this exact path HAD a silent-drop bug
+            # (emitBytes discarding whole blocks on a short serial buffer,
+            # reproduced and fixed 2026-08-14). Until now nothing compared
+            # what arrived against what the device says it holds — and the
+            # very next prompt offers to ERASE the device. A byte-exact
+            # 13.4 MB proof exists (2026-08-19) but it was done with a
+            # throwaway harness, not through this path.
+            #
+            # The device already reports `trace_bytes` on STATS, and
+            # main.cpp flushes before dumping so the two are meant to match
+            # exactly. Completeness is decided by _verify_download() — pure
+            # and tested, so its FAILURE paths are exercised (the previous
+            # inline version could not be, and shipped a gate that only
+            # checked one of two files).
+            dev_trace_bytes = dev_jump_count = None
+            try:
+                st = _last_tagged(dev.command("stats", timeout=10), "STATS ")
+                if st.get("trace_bytes") is not None:
+                    dev_trace_bytes = int(st["trace_bytes"])
+                if st.get("stored_jumps") is not None:
+                    dev_jump_count = int(st["stored_jumps"])
+            except Exception:
+                pass
+            jumps_rows = files.get("jumps.csv", [])
+            n_jump_rows = len(_parse_jumps_rows(jumps_rows)[0])
+            # `tracecheck` is asked for ONLY if the byte counts disagree —
+            # _verify_download() calls this at most once, and a full region
+            # re-walk is not something to spend on a download that already
+            # matched. Its answer is kept so session.json can record which
+            # number the verdict actually turned on.
+            tc_seen: list = []
+
+            def _tracecheck():
+                tc_seen.append(_query_tracecheck(dev, tc_timeout))
+                return tc_seen[-1]
+
+            integrity_ok, verdict_lines = _verify_download(
+                lines, n_jump_rows, dev_jump_count,
+                len(trace_csv) + 1, dev_trace_bytes, _tracecheck)
+            for _l in verdict_lines:
+                print(_l)
+            # Both numbers travel with the session: the device's live counter,
+            # and the re-walked one when it had to arbitrate. Without them a
+            # session cleared on F-22's strength cannot be re-litigated later.
+            _rec = {"trace_bytes_device": dev_trace_bytes}
+            if tc_seen:
+                _rec["tracecheck_fast_bytes"] = tc_seen[-1].fast
+                _rec["tracecheck_slow_bytes"] = tc_seen[-1].slow
+                if tc_seen[-1].reason:
+                    _rec["tracecheck_error"] = tc_seen[-1].reason
+            if not _merge_session_json(sess, _rec):
+                print("  ⚠️  could not record trace_bytes_device"
+                      + ("/tracecheck" if tc_seen else "") + " in session.json")
+            trace_rows = files.get("trace.csv", [])
+
+        params = load_params(CONFIG_PATH)
+        _analyze_and_report(sess, jumps_rows, trace_rows, params)
 
         # NEVER offer to erase a device whose download did not verify. This
         # ordering is the whole point of the integrity gate above: the old
@@ -1621,6 +2200,506 @@ def cmd_sync(args) -> int:
         return 0
     finally:
         _close_device(dev, proc)
+
+
+# --------------------------------------------------------------------- ingest
+
+
+def _puck4(puck_name: str) -> str:
+    """The last '-'-separated segment of the advertised name, e.g.
+    'JumpHeight-E2C4' -> 'E2C4' (in practice always 4 characters, since every
+    real puck name is JumpHeight-XXXX) — web/sync/CONTRACT.md §4's PUCK4, used to name
+    both the rider's bundle and the ingested session dir so the two are
+    traceable to each other at a glance."""
+    if not puck_name or "-" not in puck_name:
+        return "UNKN"
+    return puck_name.rsplit("-", 1)[-1]
+
+
+def _verify_ingest_bundle(devlog_lines: list[str], jumps_lines: list[str],
+                          trace_format: str, raw_bytes: "bytes | None",
+                          region, csv_bytes: "bytes | None",
+                          manifest: dict) -> tuple:
+    """Re-runs web/sync/CONTRACT.md §2's verification independently of whatever the
+    bundle's own manifest['verified'] claims — the manifest was produced by
+    a phone browser, not this repo, so it is exactly as untrusted as any
+    other download. Mirrors _verify_download()/_verify_traceraw_download():
+    jumps.csv via the shared _verify_jumps_rows(), trace.bin via crc32 +
+    decode-consumed (with the same F-22 note on the STATS cross-check),
+    trace.csv via a hard byte-count match (there is no crc32 for the CSV
+    fallback, so this stays a hard check, unlike the traceraw path's
+    downgrade).
+
+    Returns (ok, [lines]) with ok a TRUE tri-state — True/False/None — never
+    silently collapsed to True: a manifest that leaves every field null (a
+    phone bug, or hand-edited input) has nothing this function can check,
+    and "nothing checkable" must read as unverified, not as a pass. The
+    caller (cmd_ingest) decides what None means for its own exit code,
+    exactly as cmd_sync already does for the analogous old-firmware case."""
+    out, ok = [], None
+
+    fw = [l.strip() for l in devlog_lines
+          if "INCOMPLETE" in l and l.lstrip().startswith("#")]
+    if fw:
+        ok = False
+        out.append("  ❌ THE DEVICE REPORTED A DROPPED TRANSFER (device.log):")
+        out.extend(f"     {l[:150]}" for l in fw[:3])
+
+    # NO REC — the store never mounted. Every count the manifest carries is
+    # then UNKNOWN, not zero (firmware/src/main.cpp's `stats` says so in the
+    # same breath: the `fs=down` adder key and the "# storage NOT MOUNTED"
+    # chatter come from one `if (!fs_ok)`), and every check below would pass
+    # vacuously against those zeros: an empty trace.csv equals
+    # trace_bytes_device=0 exactly, and the jump cross-check is skipped at
+    # stored_jumps_device=0. Measured on a bundle built that way before this
+    # check existed: "✅ trace.csv verified: 0 bytes", exit 0, a session
+    # folder that looked clean. The watch calls this state NO REC
+    # (docs/rider-brief.md item 6) and the rider brief says it is the one
+    # thing worth coming in for — it must not import as a quiet, empty ride.
+    stats_texts = [str(manifest.get(k) or "") for k in ("stats_before", "stats_after")]
+    fs_down = any(re.search(r"\bfs=down\b", s) for s in stats_texts) or any(
+        l.lstrip().startswith("# storage NOT MOUNTED") for l in devlog_lines)
+    if fs_down:
+        ok = False
+        out.append("  ❌ THE PUCK'S STORAGE WAS NOT MOUNTED when this bundle was "
+                   "pulled (NO REC): its counts are unknown, not zero, and "
+                   "nothing in it is a session.")
+        out.append("     Tell the rider NOT to empty the puck. `mount` is the "
+                   "non-destructive retry (docs/STATUS.md, deep-discharge note).")
+
+    # The page's own verdict. A phone-written `true` proves nothing (every
+    # check here re-runs regardless), but a page that REFUSED to call the
+    # pull verified saw something at pull time — and one of its reasons, "the
+    # puck never said how much ride data to expect", leaves no other mark in
+    # the bundle for this function to find. Honour the refusal; --force is
+    # the deliberate override, exactly as for every other failure here.
+    if manifest.get("verified") is False:
+        ok = False
+        out.append("  ❌ the sync page itself marked this bundle verified=false — "
+                   "it saw something wrong at pull time (its status line said "
+                   "what). Re-pull, or --force to import as UNVERIFIED.")
+    if fs_down:
+        # Stop here. The checks below compare against counts the puck itself
+        # said it could not take; running them would print a ✅ ("trace.csv
+        # verified: 0 bytes") under the ❌ above, and a verdict that reads
+        # both ways is worse than none.
+        return ok, out
+
+    dev_jump_count = manifest.get("stored_jumps_device")
+    n_jump_rows = len(_parse_jumps_rows(jumps_lines)[0])
+    if dev_jump_count:  # "when > 0" (web/sync/CONTRACT.md §2) — 0 legitimately means empty
+        jumps_ok, jumps_out = _verify_jumps_rows(n_jump_rows, int(dev_jump_count))
+        out.extend(jumps_out)
+        if jumps_ok is False:
+            ok = False
+        elif jumps_ok is True and ok is None:
+            ok = True
+    else:
+        out.append(f"  ℹ️  jumps not cross-checked: manifest stored_jumps_device="
+                   f"{dev_jump_count!r}")
+
+    if trace_format == "jhtrace-v2-b64":
+        expected_n = manifest.get("trace_raw_bytes")
+        expected_crc32 = manifest.get("trace_crc32") or ""
+        if raw_bytes is None:
+            ok = False
+            out.append("  ❌ trace.bin is missing from the bundle but manifest "
+                       "trace_format=jhtrace-v2-b64")
+        else:
+            # length and crc32 are judged independently, and a ✅ is only
+            # ever printed when BOTH actually ran and matched — a null
+            # trace_raw_bytes/trace_crc32 (web/sync/CONTRACT.md §2 allows null only
+            # for csv bundles, but this manifest was written by a phone
+            # browser, not this repo, and must be treated as untrusted
+            # everywhere) must never fall through to "matches the manifest"
+            # when nothing was compared. Fixes the 2026-09-07 finding: a
+            # corrupt trace.bin with both fields null printed a ✅ naming a
+            # crc32 nobody supplied, and imported with no --force needed.
+            length_ok = None  # None = unverifiable (no trace_raw_bytes)
+            if expected_n is None:
+                out.append("  ℹ️  trace.bin length NOT verified: manifest has "
+                           "no trace_raw_bytes")
+            elif len(raw_bytes) != int(expected_n):
+                length_ok = False
+                ok = False
+                out.append(f"  ❌ TRACE.BIN SHORT — got {len(raw_bytes):,} bytes, "
+                           f"manifest trace_raw_bytes={int(expected_n):,}")
+            else:
+                length_ok = True
+
+            actual_crc32 = f"{zlib.crc32(raw_bytes) & 0xffffffff:08x}"
+            crc_ok = None  # None = unverifiable (no trace_crc32)
+            if not expected_crc32:
+                out.append(f"  ℹ️  trace.bin crc32 NOT verified: manifest has "
+                           f"no trace_crc32 (computed {actual_crc32} — "
+                           "nothing to compare it against)")
+            elif actual_crc32 != expected_crc32.lower():
+                crc_ok = False
+                ok = False
+                out.append(f"  ❌ TRACE.BIN CRC MISMATCH — computed "
+                           f"{actual_crc32}, manifest says {expected_crc32}")
+            else:
+                crc_ok = True
+
+            if length_ok and crc_ok:
+                out.append(f"  ✅ trace.bin verified: {len(raw_bytes):,} bytes, "
+                           f"crc32 {actual_crc32} matches the manifest")
+                if ok is None:
+                    ok = True
+            elif length_ok is None or crc_ok is None:
+                # At least one of the two hard checks above had nothing to
+                # compare against — CLAUDE.md rule 2, no verdict without a
+                # measurement. --force is the deliberate override.
+                ok = False
+
+            if region is not None:
+                # Run the decode-consumed check against what we ACTUALLY
+                # have even when the manifest didn't say how many bytes to
+                # expect — consumed == len(raw_bytes) is meaningful on its
+                # own (every byte present decoded cleanly), it just can't
+                # additionally confirm the bundle holds the FULL trace.
+                region_expected_n = int(expected_n) if expected_n is not None \
+                    else len(raw_bytes)
+                region_ok, region_out = _verify_region_decode(region, region_expected_n)
+                out.extend(region_out)
+                if region_ok is False:
+                    ok = False
+    else:
+        expected_bytes = manifest.get("trace_bytes_device")
+        if csv_bytes is None:
+            ok = False
+            out.append("  ❌ trace.csv is missing from the bundle but manifest "
+                       "trace_format=csv")
+        elif expected_bytes is not None:
+            got = len(csv_bytes)
+            dev = int(expected_bytes)
+            delta = got - dev
+            if delta == 0:
+                out.append(f"  ✅ trace.csv verified: {got:,} bytes = manifest "
+                           f"trace_bytes_device")
+                if ok is None:
+                    ok = True
+            elif -F22_MAX_OVERREPORT_BYTES <= delta < 0:
+                # Audit F-22, and the ONE case this hard check now forgives.
+                # `trace_bytes` is a live counter that counts a block's bytes
+                # before the block closes, so a FULL trace region reports
+                # high by at most one 50-sample batch, 800 B. The region
+                # STOPS, it never wraps: firmware/src/main.cpp:1710 ("Once
+                # full it records NOTHING, forever"), and
+                # firmware/src/platform/nrf52/jh_store.cpp:932-946 drops a
+                # block rather than write past the region.
+                #
+                # There is no crc32 on this path and no `tracecheck` to ask
+                # (a bundle is a zip; the puck is at the rider's house), so
+                # the band IS the arbiter — which is why it is one-sided and
+                # narrow: short by 1..800 B only. Measured on the OG
+                # 2026-09-07, the puck the rider actually has: `tracecheck
+                # fast=15917918 slow=15917153` — a −765 B gap on a complete
+                # download. Before this, that bundle refused to import
+                # without --force, and the rider's page refused to call it
+                # verified at all.
+                #
+                # `--force` is NOT required here. Everything outside the band
+                # still refuses (below), including a SURPLUS: F-22 only ever
+                # runs the device HIGH, and filing anything else under it
+                # would be a wrong citation (CLAUDE.md rule 6).
+                out.append(f"  ✅ trace.csv verified: {got:,} bytes, {-delta:,} B "
+                           f"under manifest trace_bytes_device={dev:,} — audit "
+                           f"F-22, an over-report of at most "
+                           f"{F22_MAX_OVERREPORT_BYTES} B once the trace region "
+                           f"is FULL (docs/audit-2026-08-22.md)")
+                out.append(f"     The puck is full — its counter runs {-delta:,} "
+                           f"bytes ahead once it fills (a known quirk); the copy "
+                           f"is complete.")
+                if ok is None:
+                    ok = True
+                if manifest.get("verified") is False and not manifest.get("f22_band_applied"):
+                    # The bundle was built by a page that had no band, so its
+                    # refusal above (which this function honours, and which
+                    # already set ok=False) is very likely THIS arithmetic
+                    # seen without the explanation. Say so — it does not
+                    # lift the refusal, it tells Josh which override he is
+                    # making. A page that DID apply the band and still said
+                    # verified=false saw something else, and gets no hint.
+                    out.append("     NOTE: the page's own verified=false above "
+                               "may be this same F-22 gap — its build predates "
+                               "the band (no f22_band_applied in the manifest). "
+                               "Check its reason before using --force.")
+            elif dev == 0 and 0 < got <= 6:
+                # An EMPTY region is not zero bytes on the wire. A real nrf52
+                # puck emits the CSV header "t,mag\n" (6 B) on the first
+                # read_chunk() before it has anything to count
+                # (firmware/src/platform/nrf52/jh_store.cpp:1119-1126), and
+                # only counts that header once a first append happens
+                # (:1058-1063). So "6 bytes against the puck's 0" is the
+                # ordinary shape of a puck that recorded nothing — the first
+                # bundle off a freshly cleared puck, exactly what the rider's
+                # loan starts with. The page accepts it (web/sync/sync.js,
+                # header-only arm; web/sync/CONTRACT.md §2.5b); refusing it
+                # here would send Josh to --force for an empty file.
+                out.append(f"  ✅ trace.csv verified: header only ({got} B) against "
+                           f"manifest trace_bytes_device=0 — an empty region "
+                           f"still emits the CSV header (jh_store.cpp:1119-1126)")
+                out.append("     The puck recorded nothing in this session.")
+                if ok is None:
+                    ok = True
+            elif delta > 0 and manifest.get("trace_bytes_after") is not None \
+                    and got <= int(manifest["trace_bytes_after"]):
+                # The puck keeps logging while it is handled: `stats` and
+                # `trace` both flushTrace() (main.cpp), and the motion gate
+                # is open for IDLE_TIMEOUT_S after the last movement — so a
+                # puck plugged in and connected mid-fidget delivers MORE than
+                # its connect-time counter said. The page reads `stats` again
+                # after the dump and ships it as trace_bytes_after
+                # (web/sync/CONTRACT.md §2.5b); anything up to that reading
+                # is the same complete download, seen later.
+                after = int(manifest["trace_bytes_after"])
+                out.append(f"  ✅ trace.csv verified: {got:,} bytes, {delta:,} B over "
+                           f"manifest trace_bytes_device={dev:,} and within "
+                           f"trace_bytes_after={after:,}")
+                out.append(f"     The puck kept recording while it was plugged in "
+                           f"— {delta:,} extra bytes; that is normal.")
+                if ok is None:
+                    ok = True
+            else:
+                ok = False
+                if delta < 0:
+                    out.append(f"  ❌ TRACE.CSV SHORT — got {got:,} bytes, manifest "
+                               f"trace_bytes_device={dev:,} ({delta:+,})")
+                else:
+                    # Not "SHORT": more arrived than the puck claims to hold.
+                    # Saying SHORT here would be a wrong sentence on the one
+                    # line a human reads.
+                    out.append(f"  ❌ TRACE.CSV LONGER THAN THE PUCK SAID — got "
+                               f"{got:,} bytes, manifest trace_bytes_device="
+                               f"{dev:,} ({delta:+,})")
+                out.append(f"     Outside audit F-22's band: that counter reads "
+                           f"HIGH by at most {F22_MAX_OVERREPORT_BYTES} B once "
+                           f"the trace region is full, and never low. This gap "
+                           f"is unexplained — not F-22, and not a reassurance.")
+        else:
+            out.append("  ℹ️  trace.csv not verified: manifest has no "
+                       "trace_bytes_device")
+
+    # ok stays None (never forced to True) when nothing above found anything
+    # to check — cmd_ingest treats that as a distinct, explicitly-announced
+    # "unverified" state, not a silent pass.
+    return ok, out
+
+
+def _ingest_session_dir_name(manifest: dict) -> str:
+    """web/sync/CONTRACT.md §4's `data/sessions/<YYYYMMDD-HHMMSS>-<PUCK4>/`, timestamp
+    = the bundle's own `synced_at_local` — never this machine's clock (the
+    same rule session.json's trace_epoch_utc follows, web/sync/CONTRACT.md §2).
+    Raises ValueError (caller turns it into a plain ❌ line) rather than
+    falling back to datetime.now(): a directory name silently backdated to
+    whenever `ingest` happened to run is exactly the kind of unlabeled guess
+    CLAUDE.md rule 3 exists to prevent."""
+    local = manifest.get("synced_at_local")
+    if not local:
+        raise ValueError("manifest.json has no synced_at_local")
+    try:
+        dt = datetime.fromisoformat(local)
+    except ValueError as e:
+        raise ValueError(f"manifest.json synced_at_local={local!r} is not a "
+                         f"parseable timestamp: {e}") from e
+    return f"{dt.strftime('%Y%m%d-%H%M%S')}-{_puck4(manifest.get('puck_name', ''))}"
+
+
+def cmd_ingest(args) -> int:
+    """Import a rider-synced bundle (web/sync/'s zip, or its unzipped dir)
+    into data/sessions/ — web/sync/CONTRACT.md §2. Runs the SAME analysis `sync`
+    does (_analyze_and_report()) so a bundle Nick sends from his phone is
+    scored exactly like a bench sync, and re-verifies the bundle
+    independently of whatever its own manifest['verified'] claims — a phone
+    browser wrote that field, not this repo — before writing anything."""
+    from detector import load_params
+
+    bundle_path = Path(args.bundle)
+    if not bundle_path.exists():
+        print(f"❌ bundle not found: {bundle_path}")
+        return 1
+    print(f"Importing bundle: {bundle_path.name}")
+
+    zf = None
+    if bundle_path.is_dir():
+        def read_bytes(name: str):
+            p = bundle_path / name
+            return p.read_bytes() if p.exists() else None
+    else:
+        try:
+            zf = zipfile.ZipFile(bundle_path)
+        except zipfile.BadZipFile as e:
+            print(f"❌ {bundle_path} is not a zip file: {e}")
+            return 1
+        names = set(zf.namelist())
+
+        def read_bytes(name: str):
+            return zf.read(name) if name in names else None
+
+    try:
+        manifest_bytes = read_bytes("manifest.json")
+        if manifest_bytes is None:
+            print(f"❌ manifest.json not found in {bundle_path} — not a "
+                  "jump-sync bundle (web/sync/CONTRACT.md §2)")
+            return 1
+        try:
+            manifest = json.loads(manifest_bytes.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError) as e:
+            print(f"❌ manifest.json in {bundle_path} is not valid JSON: {e}")
+            return 1
+
+        try:
+            dir_name = _ingest_session_dir_name(manifest)
+        except ValueError as e:
+            print(f"❌ {e}")
+            return 1
+
+        jumps_bytes = read_bytes("jumps.csv")
+        if jumps_bytes is None:
+            print(f"❌ jumps.csv not found in {bundle_path}")
+            return 1
+        notes_bytes = read_bytes("notes.txt")
+        if notes_bytes is None:
+            print("  ⚠️  notes.txt missing from the bundle — writing an empty one")
+            notes_bytes = b""
+        devlog_bytes = read_bytes("device.log")
+        if devlog_bytes is None:
+            print("  ⚠️  device.log missing from the bundle — writing an empty one")
+            devlog_bytes = b""
+
+        trace_bin_bytes = read_bytes("trace.bin")
+        trace_csv_bytes = read_bytes("trace.csv")
+        # Trust the manifest's own trace_format, but a bundle that omits the
+        # key (web/sync/CONTRACT.md §2 says all keys are present, but this is
+        # untrusted input) is still ingestable by looking at which trace
+        # file actually showed up.
+        trace_format = manifest.get("trace_format") or (
+            "jhtrace-v2-b64" if trace_bin_bytes is not None else "csv")
+
+        region = None
+        rendered_trace_csv_text = None
+        if trace_format == "jhtrace-v2-b64" and trace_bin_bytes is not None:
+            from trace_codec import decode_region_recovering, region_to_csv
+            try:
+                log_hz = int(manifest.get("log_hz") or 50)
+            except (TypeError, ValueError):
+                log_hz = 50
+            region = decode_region_recovering(trace_bin_bytes, log_hz)
+            rendered_trace_csv_text = "t,mag\n" + region_to_csv(trace_bin_bytes, log_hz)
+
+        devlog_lines = devlog_bytes.decode("utf-8", errors="replace").splitlines()
+        jumps_lines = jumps_bytes.decode("utf-8", errors="replace").splitlines()
+
+        ok, verdict_lines = _verify_ingest_bundle(
+            devlog_lines, jumps_lines, trace_format, trace_bin_bytes, region,
+            trace_csv_bytes, manifest)
+        for l in verdict_lines:
+            print(l)
+        if rendered_trace_csv_text is not None:
+            # Same F-22-aware informational note the traceraw sync path
+            # prints (docs/audit-2026-08-22.md) — never a refusal here
+            # either, crc32+consumed already carried the hard verdict above.
+            print(_trace_bytes_note(len(rendered_trace_csv_text),
+                                    manifest.get("trace_bytes_device"),
+                                    region.damaged_patches if region is not None else 0))
+
+        if ok is False:
+            if args.force:
+                print("\n⚠️  verification failed — importing anyway because "
+                      "--force was given. Treat this session as UNVERIFIED.")
+            else:
+                print("\n⛔ refusing to ingest — verification failed (see above).")
+                print("   Re-pull the bundle from the phone, or re-run with "
+                      "--force to import anyway (not recommended).")
+                return 1
+        elif ok is None:
+            # Nothing in the manifest was checkable (e.g. every trace/jump
+            # field was null) — this is NOT the same as a pass. Mirrors
+            # cmd_sync's "(download unverified — old firmware...)" line for
+            # the analogous case; ingest has no TTY to prompt through, so it
+            # proceeds but says so plainly rather than staying silent.
+            print("\nℹ️  this bundle could not be verified — nothing in the "
+                  "manifest was checkable. Importing, but treat it as "
+                  "UNVERIFIED.")
+
+        out_root = Path(args.out) if args.out else DATA_DIR / "sessions"
+        sess = out_root / dir_name
+        if sess.exists() and any(sess.iterdir()) and not args.force:
+            print(f"\n❌ {sess} already exists and is not empty — importing "
+                  "again would silently overwrite an already-ingested "
+                  "session (report.md, and any labels.csv added by hand). "
+                  "Pass --force to overwrite anyway, or --out a different "
+                  "directory.")
+            return 1
+        sess.mkdir(parents=True, exist_ok=True)
+
+        (sess / "jumps.csv").write_bytes(jumps_bytes)
+        (sess / "notes.txt").write_bytes(notes_bytes)
+        (sess / "device.log").write_bytes(devlog_bytes)
+        if trace_bin_bytes is not None:
+            (sess / "trace.bin").write_bytes(trace_bin_bytes)
+        if rendered_trace_csv_text is not None:
+            (sess / "trace.csv").write_text(rendered_trace_csv_text)
+            trace_rows = rendered_trace_csv_text.splitlines()
+        elif trace_csv_bytes is not None:
+            (sess / "trace.csv").write_bytes(trace_csv_bytes)
+            trace_rows = trace_csv_bytes.decode("utf-8", errors="replace").splitlines()
+        else:
+            trace_rows = []
+
+        fw = manifest.get("fw", "unknown")
+        src = manifest.get("src", "unknown")
+        cal_line = manifest.get("cal") or "CAL unknown"
+        (sess / "session-info.txt").write_text(f"fw={fw}\nbuild_src={src}\n{cal_line}\n")
+
+        # Same schema _write_session_info() writes, plus the bundle-specific
+        # keys web/sync/CONTRACT.md §2 names. trace_epoch_utc/synced_at_utc/uptime_s
+        # come straight from the manifest — the puck's own wall-clock anchor
+        # (captured on the PHONE, in the same breath as its stats_before) —
+        # NEVER recomputed from this machine's clock.
+        session_json = {
+            "unit": manifest.get("puck_name"),
+            "firmware": fw,
+            "cal": cal_line,
+            "synced_at_utc": manifest.get("synced_at_utc"),
+            "device_uptime_s_at_sync": manifest.get("uptime_s"),
+            "trace_epoch_utc": manifest.get("trace_epoch_utc"),
+            "note": SESSION_NOTE,
+            "source": "bundle",
+            "bundle": bundle_path.name,
+            "manifest": manifest,
+            # The verdict itself travels WITH the session — a folder copied
+            # off this machine (docs/session-card.md's "coming off the
+            # water" checklist, just below) must not look identical to a
+            # cleanly-verified one when it wasn't. `verified` collapses
+            # ok's tri-state to a bool (True only when ok is exactly True);
+            # `verification` keeps the actual lines for anyone who needs
+            # the nuance ok is None lost in the collapse.
+            "verified": ok is True,
+            "forced": bool(args.force),
+            "verification": verdict_lines,
+        }
+        (sess / "session.json").write_text(json.dumps(session_json, indent=2) + "\n")
+        if ok is not True:
+            reason = "FAILED (see verification lines below)" if ok is False \
+                else "UNVERIFIED — nothing in the manifest was checkable"
+            (sess / "VERIFICATION-FAILED.txt").write_text(
+                "This session was imported without passing verification: "
+                f"{reason}\n\n" + "\n".join(verdict_lines) + "\n")
+
+        params = load_params(CONFIG_PATH)
+        _analyze_and_report(sess, jumps_lines, trace_rows, params)
+
+        print(f"\n📦 Session written to: {sess}")
+        print("Copy the session folder somewhere else before you do anything "
+              "else with it — same rule as docs/session-card.md's 'coming "
+              "off the water' checklist, now that the bundle has replaced "
+              "the cable.")
+        return 0
+    finally:
+        if zf is not None:
+            zf.close()
 
 
 # ------------------------------------------------------------------ validate
@@ -3621,8 +4700,28 @@ def main() -> int:
     p = add("sync", cmd_sync, help="download session, analyze, write report")
     p.add_argument("--clear", action="store_true", help="clear device after download")
     p.add_argument("--out", help=argparse.SUPPRESS)  # session dir root (tests)
+    p.add_argument("--csv", action="store_true",
+                   help="skip `traceraw`, use the old CSV `dump` path")
     p.add_argument("--fake", action="store_true", help="rehearse with a simulated device")
     p.add_argument("--fast", action="store_true", help=argparse.SUPPRESS)
+    # Test-only, --fake-fail's precedent: force the fake device through the
+    # `ERR unknown_command traceraw` fallback (today's real OG firmware,
+    # src=5c80a436) or a non-fallback ERR, so those branches are exercised
+    # by something other than a human reading the code.
+    p.add_argument("--fake-no-traceraw", action="store_true", help=argparse.SUPPRESS)
+    p.add_argument("--fake-traceraw-error", help=argparse.SUPPRESS)
+    # Test-only, same precedent: rehearse a FULL trace region's F-22 skew
+    # (docs/audit-2026-08-22.md) — STATS trace_bytes and `tracecheck`'s fast
+    # counter ahead of what a read-back produces, with the slow counter
+    # right, wrong, or never answered.
+    p.add_argument("--fake-trace-overreport", type=int, default=0,
+                   help=argparse.SUPPRESS)
+    p.add_argument("--fake-tracecheck-slow-delta", type=int, default=0,
+                   help=argparse.SUPPRESS)
+    p.add_argument("--fake-tracecheck-silent", action="store_true",
+                   help=argparse.SUPPRESS)
+    p.add_argument("--fake-tracecheck-timeout", type=float, default=0,
+                   help=argparse.SUPPRESS)
 
     p = add("validate", cmd_validate,
             help="video ground-truth calibration: compare stored jumps to filmed "
@@ -3659,6 +4758,21 @@ def main() -> int:
     p.add_argument("--verbose", "-v", action="store_true", help="per-session table")
     p.add_argument("--save", help="write summary metrics JSON (a regression baseline)")
     p.add_argument("--baseline", help="compare vs a saved baseline; nonzero exit on regression")
+
+    # ingest imports an offline bundle (web/sync/'s zip, or its unzipped dir)
+    # — no live device involved, so it skips the serial --port exactly like
+    # eval does.
+    p = sub.add_parser("ingest",
+                       help="import a rider-synced bundle (zip or dir) into "
+                            "data/sessions/ — web/sync/CONTRACT.md §2")
+    p.set_defaults(fn=cmd_ingest)
+    p.add_argument("bundle",
+                   help="path to a jumpheight-<PUCK4>-<date>-<time>.zip, or "
+                        "an already-unzipped bundle directory")
+    p.add_argument("--out", help="sessions root (default data/sessions)")
+    p.add_argument("--force", action="store_true",
+                   help="write the session even when re-verification fails "
+                        "(the bundle's own crc32/byte-count checks)")
 
     args = ap.parse_args()
     try:
