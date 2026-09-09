@@ -323,3 +323,22 @@ you swap synthetic truth for video labels and the machinery is already there. Th
 one instrumented water session that validates the arm ceiling *also* calibrates
 `height_scale`, labels landings, and seeds the riding-dynamics thresholds — they all
 ride along on the same day on the water.
+
+## Reading a Garmin FIT — `tools/fitread.py`
+
+The rider's Garmin Connect export (a zip holding `<id>_ACTIVITY.fit`) is the
+one data channel that has already worked with no owner present (8 zips,
+2026-08-27, `data/nick-sessions/raw/`, untracked). Until 2026-09-09 nothing on
+`main` could read one — every FIT read was a one-off script. Now:
+
+    ./tools/fitread.py <file.fit | export.zip> [--out DIR]
+
+prints the profile name / sport / sub_sport, start and end (UTC + local),
+record count, every developer field with its non-null count, the SESSION
+`jumps` / `best_jump` / `best_airtime` when present, max `enhanced_speed`,
+and the time-on-foil windows (`enhanced_speed` > 2.5 m/s for ≥ 10 s — the
+2026-09-06 heuristic from `STATUS.md`). `--out` writes `fit-summary.json` and
+`fit-records.csv` beside the puck's files. A field that was not read prints
+`absent`, never 0. Tests: `tools/tests/test_fitread.py`, run against all nine
+real FITs in the repo; the Epix file reproduces STATUS's "1,213 of 1,404
+records" literally, so the doc and the parser cannot drift apart.
