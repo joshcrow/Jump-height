@@ -1,6 +1,6 @@
 /*
   Rider sync page — all the logic. One file, no framework, no CDN, no build
-  step (CONTRACT §3). Served from GitHub Pages at
+  step (CONTRACT.md §3). Served from GitHub Pages at
   https://joshcrow.github.io/Jump-height/sync/ and from `python3 -m
   http.server` on localhost; both are secure contexts, which Web Bluetooth
   requires.
@@ -17,12 +17,12 @@
   * The trace body is NOT accumulated as text. `traceraw` can be ~2.7 MB of
     base64 for a full region; it is decoded a line at a time straight into a
     growing Uint8Array with the CRC-32 updated as the bytes land, so the page
-    never holds a giant string (CONTRACT §1/§2).
+    never holds a giant string (CONTRACT.md §1/§2).
 
   Rules this page exists to keep:
 
   * "Clear" is offered ONLY after the ride is verified AND delivered
-    (CONTRACT §3 step 4). A short download followed by an erase is the
+    (CONTRACT.md §3 step 4). A short download followed by an erase is the
     cruellest failure this product can have, and the puck is at the rider's
     house with no bench behind it.
   * A reading that did not happen is a finding (CLAUDE.md rule 3). Every
@@ -38,8 +38,8 @@
 
 // Baked into the page and copied into every manifest.json, so Josh can tell
 // which build of this page produced a bundle without asking the rider
-// anything (CONTRACT §2 `page_version`). Bump it when the page changes.
-const PAGE_VERSION = '2026-09-07b';
+// anything (CONTRACT.md §2 `page_version`). Bump it when the page changes.
+const PAGE_VERSION = '2026-09-09b';
 
 // ------------------------------------------------------------------ protocol
 
@@ -51,7 +51,7 @@ const NUS_RX      = '6e400002-b5a3-f393-e0a9-e50e24dcca9e'; // phone -> puck
 const NUS_TX      = '6e400003-b5a3-f393-e0a9-e50e24dcca9e'; // puck -> phone
 const NAME_PREFIX = 'JumpHeight';
 
-// Inactivity timeout, reset on EVERY line (CONTRACT §3 step 2). A long dump
+// Inactivity timeout, reset on EVERY line (CONTRACT.md §3 step 2). A long dump
 // that is still flowing must never trip it; a puck that has genuinely stopped
 // talking must.
 const INACTIVITY_MS = 30000;
@@ -64,13 +64,42 @@ const SELFTEST_MS = 15000;
 const SLOW_AFTER_MS = 10000;
 const SLOW_KBPS = 3;
 
+// Audit F-22 (docs/audit-2026-08-22.md:62-79). `STATS trace_bytes` is a LIVE
+// counter that counts a block's bytes before the block closes, so once the
+// trace region is FULL it can run AHEAD of what a clean read-back produces —
+// by at most one 50-sample batch, "800 bytes, exactly one 50-sample batch at
+// 16 B/line" (the audit filled the region and measured `TRACE_BYTES
+// n=14476006` live against a remount's 14,475,206).
+//
+// This is the SAME BAND, the same value, and the same evidence line as
+// `F22_MAX_OVERREPORT_BYTES = 800` in tools/jump:345 — the page cannot import
+// a Python constant, so the two are duplicated deliberately and must move
+// together. The direction matters: only the device counting HIGH is F-22.
+// More bytes arriving than the puck claims to hold is not this finding and
+// stays a hard failure (CLAUDE.md rule 6 — a wrong citation is worse than
+// none).
+const F22_MAX_OVERREPORT_BYTES = 800;
+
 // Optional push target, off unless the URL carries ?drop=https://… — Josh's
-// convenience, never a default (CONTRACT §3 step 3).
+// convenience, never a default (CONTRACT.md §3 step 3).
 const DROP_URL = (() => {
   try {
     const u = new URLSearchParams(location.search).get('drop');
     return u && /^https:\/\//i.test(u) ? u : null;
   } catch (_e) { return null; }
+})();
+
+// Step 4 is OFF for this loan. The puck is out with Nick, who is asked never
+// to empty it: Josh does that on the bench, where a short download can still
+// be re-pulled off a puck that still holds the ride. So the whole of step 4 —
+// the section, its heading and the button — appears only when the URL carries
+// ?allowclear=1, which nobody but Josh ever types. The gate underneath it
+// (verified AND delivered, CONTRACT.md §3 step 4) is unchanged and still
+// applies on top of this; doClear() re-checks this flag too, so a button
+// unhidden by hand in the inspector still writes nothing to the wire.
+const ALLOW_CLEAR = (() => {
+  try { return new URLSearchParams(location.search).get('allowclear') === '1'; }
+  catch (_e) { return false; }
 })();
 
 // '#mock' plays a Bluetooth-shaped session, '#mock-usb' a cable-shaped one:
@@ -163,7 +192,7 @@ function human(bytes) {
 function pad2(n) { return String(n).padStart(2, '0'); }
 
 /** Local wall clock as 'YYYY-MM-DDTHH:MM:SS' — no zone suffix, because the
- *  zone travels separately as tz_offset_min (CONTRACT §2). */
+ *  zone travels separately as tz_offset_min (CONTRACT.md §2). */
 function localIso(d) {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
        + `T${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
@@ -182,7 +211,7 @@ function tzLabel(d) {
 
 // ------------------------------------------------------------------- CRC-32
 
-// CRC-32/ISO-HDLC, i.e. exactly Python's zlib.crc32 (CONTRACT §1). Table
+// CRC-32/ISO-HDLC, i.e. exactly Python's zlib.crc32 (CONTRACT.md §1). Table
 // driven because the phone updates it over every byte of a multi-megabyte
 // transfer while the UI has to stay responsive; the firmware does the same
 // job bitwise, since there it is the radio, not the CPU, that is the limit.
@@ -320,7 +349,7 @@ class SerialTransport {
   }
 }
 
-/** Test double (CONTRACT §3 test seam). feed(line) plays the puck; sent[] is
+/** Test double (CONTRACT.md §3 test seam). feed(line) plays the puck; sent[] is
  *  the exact list of command strings this page wrote. Deliberately tiny and
  *  stable — tools/tests/test_web_sync.py drives the whole flow through it. */
 class MockTransport {
@@ -348,14 +377,20 @@ let S = null;
 function freshSession(kind) {
   return {
     transportKind: kind,
-    deviceLog: [],            // every line EXCEPT FILE bodies (CONTRACT §2)
+    deviceLog: [],            // every line EXCEPT FILE bodies (CONTRACT.md §2)
     infoLines: [],
     infoKV: {},
     calLine: null,
     puckName: null,
     statsBefore: null, statsBeforeKV: {},
     statsLatest: null, statsLatestKV: {},
-    statsAfter: null,
+    // The SECOND `stats`, read after the dump (doPull). The puck keeps
+    // logging while it is plugged in, so trace_bytes at the end of a pull can
+    // legitimately exceed trace_bytes at the start — and the before-figure
+    // alone turned that growth into a hard failure that every retry
+    // reproduced. Kept as the parsed line as well as the raw one, because
+    // verifyPull needs the number, not the text.
+    statsAfter: null, statsAfterKV: null,
     // The puck said its store is not mounted (fs=down). Sticky for the whole
     // session: only a `mount` makes those counts real again, and this page
     // never sends one. Set in classify().
@@ -375,6 +410,19 @@ function freshSession(kind) {
     slowShown: false,
     verified: false,
     reasons: [],
+    // The trace_bytes cross-check's own working, recorded whether it passed,
+    // failed, or was forgiven — CLAUDE.md rule 3: a reading that goes
+    // unreported is itself a finding, and "verified" alone does not say WHICH
+    // of the two ways it verified. Copied into manifest.json (CONTRACT.md §2)
+    // so Josh can see, off the bundle alone, that a full puck was forgiven
+    // its over-count rather than matching exactly.
+    traceBytesDevice: null,   // STATS trace_bytes (before), or null
+    traceBytesAfter: null,    // STATS trace_bytes (after the dump), or null
+    traceBytesGot: null,      // trace bytes actually received, csv path only
+    f22BandApplied: false,    // true = forgiven inside F-22's band
+    f22Note: null,            // the rider-language sentence, when it was
+    growthNote: null,         // the sentence for a surplus explained by the
+                              // puck logging on between the two stats reads
     delivered: false,
     cleared: false,
     phase: 'connecting',
@@ -426,7 +474,7 @@ function onLine(line) {
     // firmware/src/main.cpp prints "# WARNING <name> INCOMPLETE — ..." after
     // the body and BEFORE its "FILE <name> END" line, and
     // printTraceRawFramed() does the same twice. So device.log must select by
-    // KIND, not by position: CONTRACT §2 says it keeps "the frame lines and
+    // KIND, not by position: CONTRACT.md §2 says it keeps "the frame lines and
     // all `#` chatter", and verifyPull's check (a) reads device.log. Swallowed
     // as body, the puck's own complaint could never fire that check — and
     // jumps.csv carries no crc and no byte count, so check (a) is its ONLY
@@ -434,14 +482,14 @@ function onLine(line) {
     // jumps.csv one row short verified TRUE, the warning became the missing
     // third "jump", and step 4 offered to erase the puck.
     //
-    // Discriminating on '#' is unambiguous: the base64 alphabet (CONTRACT §1)
+    // Discriminating on '#' is unambiguous: the base64 alphabet (CONTRACT.md §1)
     // has no '#', and jumps.csv/trace.csv rows begin with a digit or their
     // header word.
     S.deviceLog.push(line);
     classify(line);
   } else if (inBody) {
     // FILE bodies never enter device.log: the traceraw body alone can be
-    // ~2.7 MB of base64 and device.log is meant to be readable (CONTRACT §2).
+    // ~2.7 MB of base64 and device.log is meant to be readable (CONTRACT.md §2).
     // textBytes is the progress bar's numerator and its denominator
     // (expectedText) is the TRACE frame's size alone, so only the trace frame
     // may add to it — `jumps` runs first, and counting its body here started
@@ -478,7 +526,7 @@ function unknownBody(name) {
 function classify(line) {
   if (line.startsWith('#')) {
     // '# traceraw bytes=N log_hz=H region_bytes=R' before the frame, and
-    // '# traceraw crc32=xxxxxxxx bytes=N' after it (CONTRACT §1).
+    // '# traceraw crc32=xxxxxxxx bytes=N' after it (CONTRACT.md §1).
     if (line.startsWith('# traceraw')) {
       const kv = parseKV(line);
       const n = numOrNull(kv.bytes);
@@ -531,7 +579,7 @@ function classify(line) {
       S.statsBefore = line;
       S.statsBeforeKV = kv;
       // The ONE wall-clock anchor the trace will ever have: uptime_s and the
-      // phone clock read in the same breath (CONTRACT §2). The puck has no
+      // phone clock read in the same breath (CONTRACT.md §2). The puck has no
       // RTC, so nothing downstream can reconstruct this later.
       S.syncedAt = new Date();
     }
@@ -573,7 +621,7 @@ function feedB64(line) {
   const t = S.trace;
   if (t.b64Error) return;
   t.pending += line;
-  // '=' padding appears only at the very end (CONTRACT §1), so once one shows
+  // '=' padding appears only at the very end (CONTRACT.md §1), so once one shows
   // up the remainder is the tail and can be decoded whole.
   const n = t.pending.indexOf('=') >= 0
     ? t.pending.length
@@ -613,7 +661,7 @@ function startCapture(firstWord, onDone, ms) {
 function armCaptureTimer() {
   if (!activeCapture) return;
   clearTimeout(activeCapture.timer);
-  // Resets on every line (CONTRACT §3 step 2), so a slow-but-flowing transfer
+  // Resets on every line (CONTRACT.md §3 step 2), so a slow-but-flowing transfer
   // never trips it while a genuinely stuck puck does.
   activeCapture.timer = setTimeout(() => {
     const c = activeCapture; activeCapture = null;
@@ -726,6 +774,13 @@ function showResult(headText, kind, lines) {
  *  no range to close and no watch to compete with, so the Bluetooth remedies
  *  would send him chasing the wrong thing. */
 function isUsb() { return !!S && S.transportKind === 'usb'; }
+
+/** The last resort, and the one nobody thinks of on a beach: the page itself
+ *  is holding state — a half-open FILE frame, a transport that will not come
+ *  back — that only a reload clears. One constant, used by every "it didn't
+ *  connect" sentence, so the advice cannot drift between them. */
+const RELOAD_HINT = 'If it still won’t connect, reload this page.';
+
 function retryAdvice() {
   return isUsb()
     ? 'Check the cable is pushed in properly at both ends (some cables only charge — use one that carries data), then tap "Copy the ride" again.'
@@ -740,7 +795,14 @@ function setEnabled() {
   // copy of the ride left anywhere — so one stray tap on the big step-2 button
   // would trade the ride for a pull of an empty puck. Send stays enabled just
   // below, which is what step 3 is being kept alive for.
-  $('btn-pull').disabled = busy || !transport || !!(S && S.cleared);
+  // …and never opens at all until the connect-time `stats` actually answered.
+  // trace_epoch_utc is computed from that one reply's uptime_s (CONTRACT.md
+  // §2.3) and it is the ONLY wall-clock anchor the trace will ever have: a
+  // bundle pulled without it ships trace_epoch_utc null, which tools/label.py
+  // reads as a puck with no session behind it. A reading that did not happen
+  // must not become a bundle (CLAUDE.md rule 3).
+  $('btn-pull').disabled = busy || !transport || !!(S && S.cleared)
+                        || !(S && S.statsBefore);
   // Send is offered on any COMPLETED pull, verified or not: an unverified
   // bundle is exactly the one Josh most wants to look at, and step 4 stays
   // shut regardless. A pull that stopped part-way has no bundle to build.
@@ -748,8 +810,9 @@ function setEnabled() {
   // only copy of the ride, so re-sending must stay possible.
   const sendable = !!S && (S.phase === 'pulled' || S.phase === 'sent' || S.phase === 'cleared');
   $('btn-send').disabled = busy || !sendable;
-  // Step 4 exists only after verified AND delivered (CONTRACT §3 step 4).
-  const offerClear = !!(S && S.verified && S.delivered && !S.cleared);
+  // Step 4 exists only after verified AND delivered (CONTRACT.md §3 step 4) —
+  // and, for this loan, only when the URL asked for it at all (ALLOW_CLEAR).
+  const offerClear = ALLOW_CLEAR && !!(S && S.verified && S.delivered && !S.cleared);
   $('btn-clear').hidden = !offerClear;
   $('btn-clear').disabled = busy || !offerClear;
   $('clear-hint').hidden = offerClear;
@@ -829,7 +892,7 @@ async function doConnectUsb() {
     busy = false; setEnabled();
     setStatus('Couldn’t open the cable connection: ' + ((e && e.message) || e)
             + '\nUnplug the puck, plug it back in, and try again. If another '
-            + 'program has the puck open, close it first.', 'bad');
+            + 'program has the puck open, close it first.\n' + RELOAD_HINT, 'bad');
     return;
   }
   await afterConnect(t, 'usb', null);
@@ -903,8 +966,19 @@ async function afterConnect(t, kind, advertisedName) {
   busy = false;
   S.phase = 'connected';
   setEnabled();
-  if (stats.err) {
-    setStatus(failWord(stats.err, 'The puck connected but didn’t say what it has on it.'), 'bad');
+  // No STATS, no pull. `stats` is not just the "what is on it" line: its
+  // uptime_s, read in the same breath as the phone clock, is the ONLY
+  // wall-clock anchor the trace ever gets (trace_epoch_utc, CONTRACT.md §2.3).
+  // Without it the bundle ships trace_epoch_utc null, and tools/label.py reads
+  // that as a puck with no session behind it — a live puck misdiagnosed from a
+  // reading that never happened (CLAUDE.md rule 3). So this covers BOTH the
+  // ERR/timeout case and the quieter one: an 'OK stats' with no STATS line in
+  // it, where err is null and S.statsBefore is still null. setEnabled() keeps
+  // step 2 shut on the same condition.
+  if (stats.err || S.statsBefore === null) {
+    const lead = 'The puck didn’t answer its first question — unplug it, plug '
+               + 'it back in, and reload this page.';
+    setStatus(stats.err ? failWord(stats.err, lead) : lead, 'bad');
     return;
   }
   renderFacts();
@@ -936,14 +1010,14 @@ function onLinkLost() {
   clearInterval(progressTimer);
   busy = false;
   setEnabled();
-  setStatus(isUsb()
+  setStatus((isUsb()
     ? 'The cable connection dropped. Nothing was lost — check the cable at '
       + 'both ends, tap "Connect with the cable" and start again.'
     : 'The puck dropped out of range. Nothing was lost — move closer, '
-      + 'tap Connect and start again.', 'bad');
+      + 'tap Connect and start again.') + '\n' + RELOAD_HINT, 'bad');
 }
 
-// CONTRACT §1's fixed ERR string for "the store never mounted"
+// CONTRACT.md §1's fixed ERR string for "the store never mounted"
 // (firmware/src/main.cpp, `traceraw`) — the one failure on this page that no
 // amount of retrying can change.
 const STORAGE_DOWN_RE = /\bstorage_down\b/;
@@ -959,7 +1033,7 @@ function retryCouldHelp(err) {
 
 /** Turn a capture error into a sentence a rider can act on.
  *
- *  The ERR strings are fixed by CONTRACT §1, so the ones that mean something
+ *  The ERR strings are fixed by CONTRACT.md §1, so the ones that mean something
  *  to him are translated rather than pasted: "ERR traceraw storage_down" is
  *  protocol jargon on a page whose whole promise is that there is none
  *  (web/sync/index.html's own header comment), and the reassurance that
@@ -1001,7 +1075,7 @@ async function doPull() {
   S.phase = 'pulling';
   S.pulling = true;
   S.pullStartMs = Date.now();
-  // device.log is cumulative for the whole session (CONTRACT §2), but the
+  // device.log is cumulative for the whole session (CONTRACT.md §2), but the
   // INCOMPLETE scan below must only look at THIS attempt: a warning left over
   // from a failed first try would otherwise condemn every retry after it.
   S.pullLogStart = S.deviceLog.length;
@@ -1011,6 +1085,20 @@ async function doPull() {
   S.traceCsvLines = [];
   S.selftestLines = [];
   S.trace = freshTrace();
+  // The retry poison. fileSection was reset in exactly two places —
+  // freshSession() and a 'FILE … END' line — so a pull that died INSIDE a
+  // frame (the 30 s inactivity timer, a dropped link) left it pointing at
+  // trace.csv for the rest of the session. The retry's own 'FILE jumps.csv
+  // BEGIN' then matched `inBody` instead of `isBegin` and was swallowed into
+  // the trace sink: jumps.csv came out empty, check (b) failed, and every
+  // retry reproduced the failure of the attempt before it. unknownBodies is
+  // deliberately NOT reset here — it is per-session by design.
+  S.fileSection = null;
+  // Same reasoning as the trace fields: this pull's own second `stats`, or
+  // nothing. A previous attempt's after-figure must not become this one's
+  // ceiling.
+  S.statsAfter = null;
+  S.statsAfterKV = null;
   S.verified = false;
   S.reasons = [];
   S.delivered = false;
@@ -1027,7 +1115,7 @@ async function doPull() {
 
     r = await runCommand('traceraw');
     if (r.err && /^ERR unknown_command\b/.test(r.err)) {
-      // CONTRACT §1: fall back to CSV on ERR unknown_command ONLY. Every other
+      // CONTRACT.md §1: fall back to CSV on ERR unknown_command ONLY. Every other
       // ERR (storage_down, traceraw_unsupported) is the puck reporting a real
       // condition and is shown as-is rather than papered over with a retry.
       S.trace.format = 'csv';
@@ -1043,8 +1131,9 @@ async function doPull() {
     r = await runCommand('stats');
     if (r.err) return endPullFailed('the final check', r.err);
     S.statsAfter = S.statsLatest;
+    S.statsAfterKV = S.statsLatestKV;
 
-    // selftest is diagnostic, not required (CONTRACT §3 step 2): a failure or
+    // selftest is diagnostic, not required (CONTRACT.md §3 step 2): a failure or
     // a timeout here costs a manifest field, never the ride.
     const st = await runCommand('selftest', { timeoutMs: SELFTEST_MS });
     S.selftestLines = st.lines;
@@ -1131,23 +1220,39 @@ function okDetail() {
   const d = [`${S.jumpRows} jumps`];
   if (S.trace.format === 'jhtrace-v2-b64') d.push(`${human(S.trace.len)} of ride data, check number matches`);
   else if (S.trace.format === 'csv') d.push(`${human(byteLen(joinBody(S.traceCsvLines)))} of ride data`);
+  // Said out loud, not swallowed: the check did NOT come out even, and the
+  // rider (and Josh, reading the same sentence in the bundle) is told why it
+  // still counts as complete.
+  if (S.f22Note) d.push(S.f22Note);
+  if (S.growthNote) d.push(S.growthNote);
   if (S.pullSeconds) d.push(`took ${S.pullSeconds} s`);
   for (const n of unknownBodies) d.push(`(the puck also sent "${n}", which this page does not carry)`);
   return d;
 }
 
-/** CONTRACT §2 `verified`: every applicable check, and every one that could
+/** CONTRACT.md §2 `verified`: every applicable check, and every one that could
  *  not run is itself a reason. Returns the reasons in rider language; an empty
  *  list means verified. */
 function verifyPull() {
   const out = [];
 
+  // A retry re-runs this whole function, so the previous attempt's working
+  // must not survive into it: a first pull forgiven inside F-22's band
+  // followed by a byte-exact second one would otherwise still ship
+  // f22_band_applied=true and a note about a quirk that did not apply.
+  S.traceBytesDevice = null;
+  S.traceBytesAfter = null;
+  S.traceBytesGot = null;
+  S.f22BandApplied = false;
+  S.f22Note = null;
+  S.growthNote = null;
+
   // (0) Before any arithmetic: fs=down means the store never mounted, so every
   // count the checks below compare came back unknown rather than zero
   // (firmware/src/main.cpp, `stats`). On the CSV fallback path — today's OG,
-  // src=5c80a436 (CONTRACT §1) — an empty trace.csv matches an unread
+  // src=5c80a436 (CONTRACT.md §1) — an empty trace.csv matches an unread
   // trace_bytes=0 exactly, and check (b) does not run at all when
-  // stored_jumps is 0 (CONTRACT §2 says "when stored_jumps > 0"). So nothing
+  // stored_jumps is 0 (CONTRACT.md §2 says "when stored_jumps > 0"). So nothing
   // objected: measured on the #mock seam before this check existed, the page
   // verified TRUE and offered step 4 for a puck whose store it never read.
   if (S.storageDown) {
@@ -1193,10 +1298,76 @@ function verifyPull() {
     }
   } else if (S.trace.format === 'csv') {
     const devBytes = numOrNull(S.statsBeforeKV.trace_bytes);
+    // The SECOND stats, read after the dump (doPull). The first one is a
+    // reading taken minutes earlier on a puck that never stopped recording,
+    // so it is a floor, not a ceiling — see the surplus branch below.
+    const devBytesAfter = numOrNull((S.statsAfterKV || {}).trace_bytes);
     const got = byteLen(joinBody(S.traceCsvLines));
+    S.traceBytesDevice = devBytes;
+    S.traceBytesAfter = devBytesAfter;
+    S.traceBytesGot = got;
     if (devBytes === null) {
       out.push('The puck never said how much ride data to expect, so it could not be checked.');
-    } else if (got !== devBytes) {
+    } else if (got === devBytes) {
+      // The ordinary case: the counter and the copy agree exactly.
+    } else if (devBytes === 0 && got <= 6) {
+      // The header-only region. A real nrf52 puck ALWAYS emits the 6-byte
+      // "t,mag\n" header when it dumps trace.csv — read_chunk() sends it
+      // before it looks at whether there is a single stored byte behind it
+      // (firmware/src/platform/nrf52/jh_store.cpp:1119-1126) — while
+      // trace_bytes only starts counting that header on the first append
+      // (:1058-1063). So an empty puck reports 0 and hands over 6, and the
+      // surplus arm below called that "6 bytes against the puck's 0 — that
+      // does not add up": a refusal, on the one puck state that is perfectly
+      // fine. It also made endPullOk's "The puck has no jumps saved on it"
+      // branch unreachable on real hardware. Bounded at 6: this forgives the
+      // header and nothing else.
+    } else if (got < devBytes && devBytes - got <= F22_MAX_OVERREPORT_BYTES) {
+      // Audit F-22. The puck's trace region is FULL — the firmware STOPS
+      // writing rather than wrapping (firmware/src/main.cpp:1710, "Once full
+      // it records NOTHING, forever";
+      // firmware/src/platform/nrf52/jh_store.cpp:932-946 drops a block rather
+      // than write past the region) — and its live trace_bytes counter then
+      // reads high by up to one batch. Measured on
+      // the OG 2026-09-07: the puck's own `tracecheck` answered
+      // "fast=15917918 slow=15917153 DISAGREE — the slow number is the
+      // correct one", a −765 B gap, and the download was COMPLETE.
+      //
+      // This page cannot ask `tracecheck` (that command re-walks the whole
+      // region and takes minutes; the CLI has the time for it,
+      // tools/jump:_query_tracecheck, a rider standing on a beach does not).
+      // So the band IS the arbiter here, and it is deliberately narrow:
+      // short by 1..800 B and no more. Without this, the one puck the rider
+      // actually has — src=5c80a436, csv fallback only — cannot produce a
+      // verified bundle once it fills, and the page tells him to re-pull a
+      // ride that already came across whole.
+      S.f22BandApplied = true;
+      S.f22Note = `The puck is full — its counter runs ${(devBytes - got).toLocaleString()} `
+                + 'bytes ahead once it fills (a known quirk); the copy is complete.';
+    } else if (got > devBytes && devBytesAfter !== null && got <= devBytesAfter) {
+      // The stale denominator. trace_bytes came off the connect-time `stats`,
+      // latched once (classify(), S.statsBefore) — and the puck goes on
+      // recording the whole time it is being handled: plugged in, jostled on
+      // the bench, motion above the threshold. Minutes later the copy is
+      // legitimately BIGGER than that first reading, and comparing against it
+      // alone made a growing puck fail as a surplus — a hard refusal that
+      // every retry reproduced, because every retry starts by taking the same
+      // stale reading again.
+      //
+      // The pull's own second `stats` (doPull, after the dump) is the honest
+      // ceiling: anything between the two readings is data the puck wrote
+      // while we watched. Outside them it is still unexplained, and still a
+      // refusal.
+      S.growthNote = 'The puck kept recording while you plugged it in — '
+                   + `${(got - devBytes).toLocaleString()} extra bytes; that is normal.`;
+    } else if (got > devBytes) {
+      // NOT F-22, which only ever runs the device HIGH. More arriving than
+      // the puck says it holds is unexplained, and it is not this page's
+      // business to invent an explanation.
+      out.push(`More ride data arrived than the puck says it has — `
+               + `${got.toLocaleString()} bytes against the puck's `
+               + `${devBytes.toLocaleString()}. That does not add up.`);
+    } else {
       // Exact counts here too, and for the same reason as the raw branch.
       out.push(`Only ${got.toLocaleString()} of the puck's `
                + `${devBytes.toLocaleString()} bytes of ride data came across.`);
@@ -1212,7 +1383,7 @@ function verifyPull() {
 function joinBody(lines) { return lines.length ? lines.join('\n') + '\n' : ''; }
 
 /** PUCK4: the 4 characters after 'JumpHeight-' in the advertised name
- *  (CONTRACT §2/§4). 'xxxx' keeps the filename's shape when the puck never
+ *  (CONTRACT.md §2/§4). 'xxxx' keeps the filename's shape when the puck never
  *  told us its name, so anything reading the name positionally still works
  *  and the gap is obvious rather than silent. */
 function puck4() {
@@ -1250,7 +1421,7 @@ function buildManifest() {
     synced_at_local: localIso(at),
     tz_offset_min: -at.getTimezoneOffset(),
     uptime_s: uptime,
-    // The only wall-clock anchor the trace has (CONTRACT §2): ingest must use
+    // The only wall-clock anchor the trace has (CONTRACT.md §2): ingest must use
     // this and must NOT substitute its own machine's clock.
     trace_epoch_utc: uptime === null ? null : new Date(at.getTime() - uptime * 1000).toISOString(),
     info_lines: S.infoLines,
@@ -1261,6 +1432,21 @@ function buildManifest() {
     trace_format: S.trace.format,
     log_hz: S.trace.logHz !== null ? S.trace.logHz : numOrNull(kvI.log_hz),
     trace_bytes_device: numOrNull(kvB.trace_bytes),
+    // What the trace_bytes cross-check actually compared, and whether F-22's
+    // band forgave the difference. `trace_bytes_got` is in the SAME UNIT as
+    // trace_bytes_device (csv body bytes) and is null on the raw path, where
+    // trace_raw_bytes below is the decoded-binary count and not comparable.
+    // f22_band_applied=true means: short by 1..800 B against a full puck's
+    // live counter, called complete on that basis alone — recorded so ingest
+    // and Josh can see the forgiveness rather than infer it from
+    // verified=true (CLAUDE.md rule 3).
+    trace_bytes_got: S.traceBytesGot,
+    // The pull's own second `stats`. The puck keeps logging while it is
+    // handled, so this is the honest ceiling for trace_bytes_got and the
+    // before-figure is only a floor; ingest can re-derive the comparison from
+    // these two rather than trusting `verified`.
+    trace_bytes_after: numOrNull((S.statsAfterKV || {}).trace_bytes),
+    f22_band_applied: S.f22BandApplied,
     trace_raw_bytes: isRaw ? S.trace.len : null,
     trace_crc32: isRaw ? S.trace.crcHex : null,
     stored_jumps_device: numOrNull(kvB.stored_jumps),
@@ -1285,7 +1471,7 @@ function buildManifest() {
 
 // ---------------------------------------------------------------- zip writer
 
-/* A zip writer, because there is no build step and no CDN (CONTRACT §3) and
+/* A zip writer, because there is no build step and no CDN (CONTRACT.md §3) and
    Python's zipfile has to read the result on Josh's side. Local file headers +
    central directory + EOCD, CRC-32 over the UNCOMPRESSED bytes, and every size
    known before its header is written — which is why the deflate (when it is
@@ -1401,7 +1587,7 @@ function downloadBlob(name, blob) {
   setTimeout(() => URL.revokeObjectURL(url), 10000);
   // "Delivered" here means handed to the browser's downloader: a page gets no
   // completion callback for <a download>, so this is the strongest signal the
-  // platform offers, and CONTRACT §3 defines delivered that way on purpose.
+  // platform offers, and CONTRACT.md §3 defines delivered that way on purpose.
   return true;
 }
 
@@ -1422,7 +1608,7 @@ async function doSend() {
   setStatus('Packing the ride up…', 'busy');
   try {
     // Keep the built bundle so a cancelled share can be retried without
-    // pulling the whole ride off the puck again (CONTRACT §3 step 3).
+    // pulling the whole ride off the puck again (CONTRACT.md §3 step 3).
     if (!lastBundle) lastBundle = await buildBundle();
     const { name, blob } = lastBundle;
     let delivered = false;
@@ -1446,7 +1632,7 @@ async function doSend() {
       // Plainly, and WITHOUT claiming delivery — the ride is still only here,
       // so step 4 stays shut. What this branch must NOT do is tell him to
       // open the page in Bluefy: Bluefy is the only iPhone browser that can
-      // reach the puck at all (CONTRACT §3, web/index.html), so an iPhone
+      // reach the puck at all (CONTRACT.md §3, web/index.html), so an iPhone
       // rider who has connected, pulled and got this far is already standing
       // in it — that sentence is the one instruction he has provably followed.
       // Give him something to try, and something to ask for if it does
@@ -1488,8 +1674,13 @@ async function doSend() {
       const where = how === 'download'
         ? 'Saved to your Downloads. Send that file to Josh (Messages, Mail or AirDrop)'
         : 'Sent';
+      // There is no step 4 for the rider on this loan (ALLOW_CLEAR): the last
+      // thing he is told to do is nothing. The old sentence here — "Last step:
+      // empty the puck so it has room for your next ride" — was an instruction
+      // to do the one thing the brief says he must never do, printed on the
+      // success path where he is most likely to follow it.
       setStatus(S.verified
-        ? `${where}. Last step: empty the puck so it has room for your next ride.`
+        ? `${where}. You’re finished — leave the puck to Josh.`
         : `${where} — but it wasn’t a clean copy, so do NOT empty the puck. `
           + 'Tell Josh and copy the ride again.', S.verified ? 'ok' : 'busy');
     } else {
@@ -1510,8 +1701,9 @@ async function doSend() {
 
 async function doClear() {
   // Belt and braces on top of the hidden button: nothing erases the puck
-  // unless the ride was both verified AND delivered (CONTRACT §3 step 4).
-  if (busy || !S || !S.verified || !S.delivered || !transport) return;
+  // unless the ride was both verified AND delivered (CONTRACT.md §3 step 4) —
+  // and, on this loan, unless the URL asked for step 4 at all.
+  if (busy || !ALLOW_CLEAR || !S || !S.verified || !S.delivered || !transport) return;
   busy = true; setEnabled();
   setStatus('Emptying the puck…', 'busy');
   try {
@@ -1582,7 +1774,7 @@ function buildChips(group, host) {
 
 // ---------------------------------------------------------------- test seam
 
-/** CONTRACT §3: with '#mock' the page installs a MockTransport, exposes
+/** CONTRACT.md §3: with '#mock' the page installs a MockTransport, exposes
  *  window.__mock = { feed(line), sent: [] }, auto-connects, and exposes
  *  window.__sync = { state(), lastBundle() }. Kept deliberately small. */
 function setupMock() {
@@ -1601,9 +1793,18 @@ window.__sync = {
     trace_format: S.trace.format,
     jump_rows: S.jumpRows,
     reasons: S.reasons,
+    trace_bytes_device: S.traceBytesDevice,
+    trace_bytes_after: S.traceBytesAfter,
+    trace_bytes_got: S.traceBytesGot,
+    f22_band_applied: S.f22BandApplied,
+    f22_note: S.f22Note,
+    growth_note: S.growthNote,
     bundle: lastBundle ? lastBundle.name : null,
   } : { phase: 'boot', connected: false, verified: false, delivered: false,
-        cleared: false, trace_format: null, jump_rows: 0, reasons: [], bundle: null }),
+        cleared: false, trace_format: null, jump_rows: 0, reasons: [],
+        trace_bytes_device: null, trace_bytes_after: null, trace_bytes_got: null,
+        f22_band_applied: false, f22_note: null, growth_note: null,
+        bundle: null }),
   lastBundle: () => lastBundle,
 };
 
@@ -1623,6 +1824,13 @@ function init() {
   $('btn-pull').addEventListener('click', doPull);
   $('btn-send').addEventListener('click', doSend);
   $('btn-clear').addEventListener('click', doClear);
+  // Step 4 is not part of the rider's page on this loan: the whole section
+  // goes, so there is no heading to read, no button to find, and nothing to
+  // wonder about. ?allowclear=1 puts it back for Josh — still gated on
+  // verified AND delivered underneath. The step-3 closing line is the
+  // complement: exactly one of the two is ever on screen.
+  $('step-clear').hidden = !ALLOW_CLEAR;
+  $('finish-hint').hidden = ALLOW_CLEAR;
   buildChips('sea', $('chips-sea'));
   buildChips('wind', $('chips-wind'));
   // A typed note changes the bundle, so a note edited after Send must not

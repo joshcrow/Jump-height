@@ -437,7 +437,7 @@ class TestSync(unittest.TestCase):
             self.assertTrue((sess / "trace.csv").read_text().startswith("t,mag"))
 
     def test_sync_default_goes_via_traceraw_and_writes_trace_bin(self):
-        """CONTRACT.md §1: `sync` (no --csv) tries `traceraw` first — ~2
+        """web/sync/CONTRACT.md §1: `sync` (no --csv) tries `traceraw` first — ~2
         B/sample raw trace-region bytes, base64-framed, crc32-verified —
         and keeps BOTH the decoded trace.csv and the raw trace.bin next to
         it, so a bench sync exercises the exact wire path Nick's phone will
@@ -452,7 +452,7 @@ class TestSync(unittest.TestCase):
             self.assertGreater((sess / "trace.bin").stat().st_size, 0)
 
     def test_sync_csv_flag_skips_traceraw(self):
-        """--csv (CONTRACT.md §4) forces the old `dump` path: no trace.bin,
+        """--csv (web/sync/CONTRACT.md §4) forces the old `dump` path: no trace.bin,
         and the verdict line is the original 'trace verified' wording, not
         traceraw's — confirming --csv actually took the other branch rather
         than merely skipping the trace.bin write."""
@@ -466,7 +466,7 @@ class TestSync(unittest.TestCase):
             self.assertNotIn("traceraw verified", r.stdout)
 
     def test_sync_traceraw_and_csv_paths_produce_identical_files(self):
-        """The whole point of CONTRACT.md §1's round-trip guarantee: whether
+        """The whole point of web/sync/CONTRACT.md §1's round-trip guarantee: whether
         `sync` takes the new binary path or the old CSV one, the session it
         writes must be indistinguishable — same trace.csv, same jumps.csv."""
         with tempfile.TemporaryDirectory() as td1, \
@@ -483,7 +483,7 @@ class TestSync(unittest.TestCase):
                              (sess2 / "jumps.csv").read_bytes())
 
     def test_sync_falls_back_to_dump_on_old_firmware(self):
-        """CONTRACT.md §1: `ERR unknown_command traceraw` (today's real OG,
+        """web/sync/CONTRACT.md §1: `ERR unknown_command traceraw` (today's real OG,
         docs/STATUS.md's src=5c80a436) must fall back to `dump`, not abort —
         the path every bench sync takes until the flash batch lands. Before
         this test, only `--csv` (a DIFFERENT code path: `via = None` is set
@@ -501,7 +501,7 @@ class TestSync(unittest.TestCase):
             self.assertNotIn("traceraw verified", r.stdout)
 
     def test_sync_aborts_on_non_fallback_traceraw_error(self):
-        """CONTRACT.md §1: only the EXACT string 'ERR unknown_command
+        """web/sync/CONTRACT.md §1: only the EXACT string 'ERR unknown_command
         traceraw' triggers the CSV fallback — any other ERR (storage not
         mounted, etc) is reported as-is and the sync aborts, since there is
         no CSV path that recovers from e.g. the storage layer being down."""
@@ -512,6 +512,125 @@ class TestSync(unittest.TestCase):
             self.assertIn("ERR traceraw storage_down", r.stdout)
             self.assertEqual(list(Path(td).iterdir()), [],
                              "an aborted sync must not write a session dir")
+
+
+class TestF22TracecheckArbitration(unittest.TestCase):
+    """Audit F-22, measured on the OG 2026-09-07 with a FULL trace region:
+
+        sync downloaded            15,917,153 B
+        STATS trace_bytes          15,917,918 B   (-765)
+        `tracecheck`               "# tracecheck fast=15917918 slow=15917153
+                                    DISAGREE — the slow number is the correct one"
+
+    The download was COMPLETE. The tool printed 'TRACE INCOMPLETE … Do NOT
+    clear' and refused to clear, twice — on a puck whose region was full and
+    which therefore had stopped recording (main.cpp:1707). The live counter
+    over-reports once the region fills; the re-walked number is the arbiter,
+    which is F-22's own prescribed fix ("make `tracecheck` the authority").
+
+    Every case here goes through the CSV `dump` path, because that is the
+    path the rider's puck actually takes (it predates `traceraw`).
+    """
+
+    def _sync(self, td, *extra):
+        return run_cli(["sync", "--fake", "--fast", "--csv", "--out", td]
+                       + list(extra))
+
+    def test_over_report_confirmed_by_tracecheck_verifies_and_permits_clear(self):
+        with tempfile.TemporaryDirectory() as td:
+            r = self._sync(td, "--fake-trace-overreport", "765", "--clear")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            sess = next(Path(td).iterdir())
+            true_b = (sess / "trace.csv").stat().st_size
+
+            self.assertIn("trace_bytes over-reported by 765 B (audit F-22, "
+                          "region full); tracecheck confirms the download is "
+                          "complete.", r.stdout)
+            self.assertNotIn("TRACE INCOMPLETE", r.stdout)
+            self.assertNotIn("refusing to clear", r.stdout)
+            self.assertIn("device cleared", r.stdout)
+
+            # Both numbers travel with the session, so a clear made on F-22's
+            # strength can be re-litigated later from the file alone.
+            blob = json.loads((sess / "session.json").read_text())
+            self.assertEqual(blob["trace_bytes_device"], true_b + 765)
+            self.assertEqual(blob["tracecheck_slow_bytes"], true_b)
+            self.assertEqual(blob["tracecheck_fast_bytes"], true_b + 765)
+            # …additively: the wall-clock anchor is still there.
+            self.assertIn("trace_epoch_utc", blob)
+
+    def test_slow_number_that_also_disagrees_keeps_the_refusal(self):
+        """tracecheck is the arbiter, not an excuse. A re-walk that matches
+        NEITHER the download nor the live counter is a genuine shortfall, and
+        the refusal must stand with both numbers on screen."""
+        with tempfile.TemporaryDirectory() as td:
+            r = self._sync(td, "--fake-trace-overreport", "765",
+                           "--fake-tracecheck-slow-delta", "400", "--clear")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            sess = next(Path(td).iterdir())
+            true_b = (sess / "trace.csv").stat().st_size
+
+            self.assertIn("TRACE INCOMPLETE", r.stdout)
+            self.assertIn(f"tracecheck: fast={true_b + 765:,} "
+                          f"slow={true_b + 400:,}", r.stdout)
+            self.assertIn("Do NOT clear the device.", r.stdout)
+            self.assertIn("refusing to clear", r.stdout)
+            self.assertNotIn("device cleared", r.stdout)
+
+            blob = json.loads((sess / "session.json").read_text())
+            self.assertEqual(blob["tracecheck_slow_bytes"], true_b + 400)
+
+    def test_silent_tracecheck_keeps_the_refusal_and_names_the_silence(self):
+        """CLAUDE.md rule 3: a reading that did not happen is a finding. An
+        unanswered `tracecheck` leaves the mismatch exactly as unexplained as
+        it was — it must never read as the F-22 pass above."""
+        with tempfile.TemporaryDirectory() as td:
+            r = self._sync(td, "--fake-trace-overreport", "765",
+                           "--fake-tracecheck-silent",
+                           "--fake-tracecheck-timeout", "3", "--clear")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("TRACE INCOMPLETE", r.stdout)
+            self.assertIn("tracecheck did not answer — no reply within 3 s",
+                          r.stdout)
+            self.assertNotIn("audit F-22", r.stdout)
+            self.assertIn("refusing to clear", r.stdout)
+            self.assertNotIn("device cleared", r.stdout)
+
+            sess = next(Path(td).iterdir())
+            blob = json.loads((sess / "session.json").read_text())
+            self.assertIsNone(blob["tracecheck_slow_bytes"])
+            self.assertIn("no reply within 3 s", blob["tracecheck_error"])
+
+    def test_default_timeout_is_minutes_because_the_walk_is(self):
+        """`tracecheck` re-reads and decodes every block in the region
+        (main.cpp -> jh_store.cpp's walkTraceRegion(), which feeds the
+        watchdog every 64 blocks) and sends nothing until it finishes. A
+        20 s command timeout would turn a working full-region check into
+        the 'did not answer' refusal above."""
+        self.assertGreaterEqual(_load_jump_module().TRACECHECK_TIMEOUT_S, 300)
+
+    def test_a_mismatch_with_no_tracecheck_offered_still_refuses(self):
+        """The pure function keeps its old behavior for any caller that has
+        no device to ask — and says the cross-check never ran rather than
+        implying it passed."""
+        mod = _load_jump_module()
+        ok, out = mod._verify_download([], 12, 12, 2048, 2813)
+        self.assertFalse(ok)
+        self.assertTrue(any("TRACE INCOMPLETE" in l for l in out))
+        self.assertTrue(any("tracecheck was not consulted" in l for l in out))
+
+    def test_out_of_band_skew_is_resolved_but_never_filed_under_f22(self):
+        """CLAUDE.md rule 6. F-22's evidence is an over-report of at most one
+        50-sample batch (800 B). A 100 kB skew is not that finding, however
+        the download itself checks out, and must not borrow its name."""
+        mod = _load_jump_module()
+        tc = mod.TraceCheck(fast=102048, slow=2048, reason=None)
+        ok, out = mod._verify_download([], 12, 12, 2048, 102048, lambda: tc)
+        self.assertTrue(ok)
+        self.assertFalse(any("F-22, region full" in l for l in out),
+                         "an unexplained skew must not be attributed to F-22")
+        self.assertTrue(any("outside audit F-22's known range" in l for l in out))
+        self.assertTrue(any("confirms the download is complete" in l for l in out))
 
 
 class _StubDevice:
@@ -642,7 +761,7 @@ class TestTracerawLogHzFallback(unittest.TestCase):
 
 
 class TestTracerawVerification(unittest.TestCase):
-    """`_verify_traceraw_download()`'s failure paths (CONTRACT.md §1),
+    """`_verify_traceraw_download()`'s failure paths (web/sync/CONTRACT.md §1),
     driven directly. Mutation-tested finding (2026-09-07): disabling the
     crc32 check (:1712 -> `if False:`) and the consumed==N check (:1958 ->
     `if False:`) together left TestSync's own fixtures green — they only

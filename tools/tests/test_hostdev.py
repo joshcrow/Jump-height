@@ -884,14 +884,14 @@ class TestTraceRawExport(HostDevTestCase):
            b64decode/atob then throw on it (the em dash isn't even ASCII), so
            the page reports "unreadable data" for a cause the puck named.
         2. The warning is OUTSIDE the frame, as `#` chatter. That is where
-           both scanners look, and CONTRACT.md §2 keeps FILE bodies out of the
+           both scanners look, and web/sync/CONTRACT.md §2 keeps FILE bodies out of the
            device.log Josh receives — so inside the frame is exactly where
            `verified` criterion (a)'s only evidence would be discarded.
         3. BOTH `bytes=` values are N, the announced count. If the trailing
            one carried what actually streamed, the pair (crc32 over the short
            body + a byte count that matches it) would be internally
            consistent, and a client checking the count next to the crc would
-           call a truncated trace verified — and CONTRACT.md §2 then permits
+           call a truncated trace verified — and web/sync/CONTRACT.md §2 then permits
            offering `clear`."""
         script = write_script(self.tmp_path / "script.txt",
                               "rest 2.0\njump 0.65\nrest 2.0\n")

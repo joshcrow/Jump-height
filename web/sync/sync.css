@@ -1,7 +1,7 @@
 /*
   Rider sync page — styles.
 
-  Deliberately ONE theme, light and high contrast (CONTRACT §3): this page is
+  Deliberately ONE theme, light and high contrast (CONTRACT.md §3): this page is
   read on a beach in daylight, on a borrowed browser, once. The archived app's
   auto/light/dark switch (git show archive/web-app:web/style.css) was right for
   a tool used every day and wrong here — a preference is one more thing that

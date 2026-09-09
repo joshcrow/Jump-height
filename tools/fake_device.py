@@ -101,6 +101,22 @@ class FakeDevice:
             Path(os.environ.get("JH_CONFIG") or gen_params.CONFIG_PATH))
         return int(cfg["firmware"]["log_hz"])
 
+    def _trace_csv_bytes(self) -> int:
+        """Bytes trace.csv takes in a `dump` — the fake's stand-in for the
+        firmware's live trace-byte counter. One definition, used by BOTH
+        `stats` and `tracecheck`, so the only way the two can disagree here
+        is the deliberate skew the knobs below inject."""
+        if not self.trace_rows:
+            return 0
+        return len("t,mag\n") + sum(len(r) + 1 for r in self.trace_rows)
+
+    def _overreport(self) -> int:
+        """The F-22 skew (docs/audit-2026-08-22.md): how far the LIVE counter
+        sits ahead of what a read-back produces once the trace region is
+        full. Zero unless a test asks for it, and never applied to an empty
+        store — a cleared device reports 0 bytes, not 0+N."""
+        return self.args.trace_bytes_overreport if self.trace_rows else 0
+
     def battery_suffix(self) -> str:
         """The battery keys appended to STATS/INFO, or '' when emulating a
         no-telemetry (v1/ESP32) device — mirroring main.cpp's adder rule
@@ -132,7 +148,7 @@ class FakeDevice:
                     f"{ev.airtime_s:.3f},{ev.height_m:.3f}")
 
         # `self.trace_rows` is rendered from the SAME trace_codec v2 region
-        # image `traceraw` sends (CONTRACT.md §1), not straight from the
+        # image `traceraw` sends (web/sync/CONTRACT.md §1), not straight from the
         # synth output — so 'trace'/'dump' (CSV), 'traceraw' (binary,
         # decoded), and 'stats' trace_bytes (a plain sum over these rows,
         # see `handle()`) all agree by construction, exactly the three-way
@@ -202,12 +218,12 @@ class FakeDevice:
 
     # ----------------------------------------------------------- protocol
     def send_help(self):
-        self.send("# commands: help | stats | jumps | trace | traceraw | dump | "
-                  "clear | selftest | info")
+        self.send("# commands: help | stats | jumps | trace | traceraw | "
+                  "tracecheck | dump | clear | selftest | info")
         self.send("#           set <airtime_offset_s|height_scale> <value|default>")
 
     def send_traceraw(self):
-        """CONTRACT.md §1's `traceraw`: base64-framed raw trace-region bytes
+        """web/sync/CONTRACT.md §1's `traceraw`: base64-framed raw trace-region bytes
         (trace_codec v2 blocks) instead of `trace`/`dump`'s ~17 B/sample CSV.
         self.trace_rows is ALREADY the rendered-from-image form
         (_preload_session()'s comment), so re-encoding it here reproduces
@@ -222,7 +238,7 @@ class FakeDevice:
 
         # region_bytes: the fake has no fixed-size flash region to report
         # against, so it reports exactly what's used — a real device's
-        # region_bytes is always >= bytes= (CONTRACT.md §1's header line).
+        # region_bytes is always >= bytes= (web/sync/CONTRACT.md §1's header line).
         self.send(f"# traceraw bytes={len(image)} log_hz={log_hz} "
                   f"region_bytes={len(image)}")
         self.send("FILE trace.bin BEGIN")
@@ -287,11 +303,11 @@ class FakeDevice:
             stored_best = max((float(r.split(",")[-1]) for r in self.jumps_rows),
                               default=0.0)
             # Bytes trace.csv would take in a dump — lets a client size a
-            # download before starting it (mirrors the firmware's counter).
-            if self.trace_rows:
-                trace_bytes = len("t,mag\n") + sum(len(r) + 1 for r in self.trace_rows)
-            else:
-                trace_bytes = 0
+            # download before starting it (mirrors the firmware's counter,
+            # INCLUDING its F-22 over-report once the region is full: the
+            # same skew `tracecheck`'s fast number carries, because on the
+            # device they are the same counter).
+            trace_bytes = self._trace_csv_bytes() + self._overreport()
             self.send(f"STATS session_jumps={self.session_jumps} "
                       f"session_best_m={self.session_best:.3f} "
                       f"session_best_airtime_s={getattr(self, 'session_best_airtime', 0.0):.3f} "
@@ -316,12 +332,30 @@ class FakeDevice:
                 self.send_help()
                 self.send(f"ERR unknown_command {cmd}")
             elif self.args.traceraw_error:
-                # CONTRACT.md §1: storage_down / traceraw_unsupported / etc
+                # web/sync/CONTRACT.md §1: storage_down / traceraw_unsupported / etc
                 # — NO FILE frame at all, and NOT a fallback trigger (only
                 # the exact string 'ERR unknown_command traceraw' is).
                 self.send(f"ERR traceraw {self.args.traceraw_error}")
             else:
                 self.send_traceraw()
+        elif cmd == "tracecheck":
+            # main.cpp's `tracecheck`: the live counter (`fast`, the same one
+            # STATS reports) against a full re-walk of the region (`slow`),
+            # verbatim wording included — a client that parses this must be
+            # parsing what the firmware really sends. The device answers
+            # NOTHING until its walk finishes, so --tracecheck-silent (a
+            # walk that never returns: a watchdog reset mid-scan, a wedged
+            # store) is emulated by sending no line at all, terminator
+            # included, and letting the client's timeout be the finding.
+            if self.args.tracecheck_silent:
+                return
+            fast = self._trace_csv_bytes() + self._overreport()
+            slow = self._trace_csv_bytes() + (
+                self.args.tracecheck_slow_delta if self.trace_rows else 0)
+            self.send(f"# tracecheck fast={fast} slow={slow} "
+                      + ("agree" if fast == slow
+                         else "DISAGREE — the slow number is the correct one"))
+            self.send("OK tracecheck" if fast == slow else "ERR tracecheck mismatch")
         elif cmd == "dump":
             self.send_file("jumps.csv", "n,takeoff_s,airtime_raw_s,airtime_s,height_m",
                            self.jumps_rows)
@@ -448,7 +482,7 @@ def main() -> int:
     ap.add_argument("--charging", action="store_true", help="report chg=1")
     ap.add_argument("--no-battery", action="store_true",
                     help="emulate a no-battery-telemetry (v1/ESP32) device")
-    # CONTRACT.md §1's two non-happy-path `traceraw` branches — otherwise
+    # web/sync/CONTRACT.md §1's two non-happy-path `traceraw` branches — otherwise
     # unreachable by any test, since every other scenario always implements
     # the command (send_traceraw()) cleanly.
     ap.add_argument("--no-traceraw", action="store_true",
@@ -456,6 +490,20 @@ def main() -> int:
     ap.add_argument("--traceraw-error",
                     help="emulate a non-fallback traceraw failure, "
                          "e.g. 'storage_down' -> ERR traceraw storage_down")
+    # A FULL trace region's counter skew (audit F-22). No board on the bench
+    # has ever filled its region, so this is the only way to rehearse the
+    # state Nick's puck reached: STATS trace_bytes (and `tracecheck`'s fast
+    # number, the same counter) AHEAD of what a `dump` delivers, while the
+    # re-walked slow number matches the download exactly.
+    ap.add_argument("--trace-bytes-overreport", type=int, default=0, metavar="N",
+                    help="report trace_bytes (and tracecheck fast=) N bytes "
+                         "ahead of what `dump` sends — audit F-22")
+    ap.add_argument("--tracecheck-slow-delta", type=int, default=0, metavar="N",
+                    help="skew tracecheck's slow= by N too, so even the "
+                         "arbiter disagrees with the download")
+    ap.add_argument("--tracecheck-silent", action="store_true",
+                    help="never answer `tracecheck` at all (a walk that "
+                         "never returns) — the client must time out")
     args = ap.parse_args()
     try:
         FakeDevice(args).run()

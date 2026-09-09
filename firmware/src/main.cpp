@@ -546,7 +546,7 @@ static void printTraceRawFramed() {
       // jh_link::write and sendOneChunk use raw 32-bit micros(), and pump()
       // does not run while handleCommand does). A missed wrap makes every
       // later micros64() 71.6 min low — including the `stats` uptime_s that
-      // is the trace's only wall-clock anchor (CONTRACT.md §2's
+      // is the trace's only wall-clock anchor (web/sync/CONTRACT.md §2's
       // trace_epoch_utc = synced_at_utc - uptime_s).
       (void)jh_clock::micros64();
     }
@@ -561,12 +561,12 @@ static void printTraceRawFramed() {
   // same "WARNING trace.bin INCOMPLETE" text every client already looks for.
   //
   // AFTER the frame closes, not inside it. The body is base64 ONLY
-  // (CONTRACT.md §1): every client copies what lands between BEGIN and END
+  // (web/sync/CONTRACT.md §1): every client copies what lands between BEGIN and END
   // into the file itself (tools/jump's parse_file_sections; web/sync's
   // sync.js feeds those lines straight to atob), so a warning in there is
   // not a note — it is a decode failure, and the em dash makes Python's
   // b64decode raise before any check runs. Worse, those clients deliberately
-  // keep FILE bodies OUT of the device.log they ship (CONTRACT.md §2), and
+  // keep FILE bodies OUT of the device.log they ship (web/sync/CONTRACT.md §2), and
   // §2's `verified` criterion (a) is "no INCOMPLETE warning line from the
   // puck" — so inside the frame is precisely where the one line that
   // criterion depends on would be thrown away. Out here it is ordinary `#`
@@ -584,7 +584,7 @@ static void printTraceRawFramed() {
           (unsigned long)streamed, (unsigned long)declared);
   }
   // bytes= here is N — the SAME number the header line announced, which is
-  // what CONTRACT.md §1 fixes both chatter lines to. NOT `streamed`: a
+  // what web/sync/CONTRACT.md §1 fixes both chatter lines to. NOT `streamed`: a
   // receiver naturally reads the byte count off this line (it sits next to
   // the crc it is checking), and printing what actually went out would let a
   // store-shortfall export self-verify — crc32 matches the short body, the

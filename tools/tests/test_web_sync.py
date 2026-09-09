@@ -2,7 +2,7 @@
 
 The web equivalent of test_cli.py for the phone path. It loads the real
 web/sync/index.html + sync.js in a real (headless) Chromium and plays the puck
-from Python over the page's own test seam (CONTRACT §3):
+from Python over the page's own test seam (web/sync/CONTRACT.md §3):
 
     window.__mock  = { feed(line), sent: [] }
     window.__sync  = { state(), lastBundle() }
@@ -12,7 +12,7 @@ of command strings the page wrote. So the loop below IS the device: it polls
 sent[], answers each command with canned protocol lines, and asserts on what
 the page does with them. `traceraw`'s reply is built here in Python from
 sim/trace_codec.encode_region + zlib.crc32, to exactly the wire framing in
-CONTRACT §1 — so if the page and the contract ever disagree about 76-column
+web/sync/CONTRACT.md §1 — so if the page and the contract ever disagree about 76-column
 base64, the two chatter lines or the crc, this fails rather than the rider.
 
 WHY the skips are worded, never silent: a reading that did not happen is a
@@ -33,7 +33,7 @@ number doesn't match the one Playwright's default lookup expects, so a plain
 launch() misses it; we retry pinned at /opt/pw-browsers/chromium.
 
 WHY non-local requests are blocked: the page is contracted to make ZERO
-external requests (CONTRACT §3). Aborting anything that isn't localhost turns
+external requests (web/sync/CONTRACT.md §3). Aborting anything that isn't localhost turns
 a future stray CDN reference into a test failure instead of a slow page.
 """
 
@@ -86,7 +86,7 @@ REGION_BYTES = 4 * 1024 * 1024
 # padding at all, and the page's padding branch would never run in CI. A region
 # is align4, so N mod 3 is 1 or 2 for two of every three possible sizes: these
 # two fixtures (208 bytes -> '==', 3248 bytes -> '=') are the ordinary case,
-# not the exotic one. CONTRACT §1 puts padding "only at the very end", which is
+# not the exotic one. web/sync/CONTRACT.md §1 puts padding "only at the very end", which is
 # exactly the assumption feedB64 decodes on.
 TRACE_RAW_PAD2 = trace_codec.encode_region(
     [(i / LOG_HZ, 1.0 + 0.35 * ((i % 37) / 37.0)) for i in range(97)], LOG_HZ)
@@ -113,7 +113,7 @@ JUMPS_ROWS = [
 
 # The old-firmware fallback body. Any plausible CSV works; what matters is that
 # trace_bytes below is EXACTLY its byte count, because that is the whole check
-# the csv path has (CONTRACT §2 verified (c)).
+# the csv path has (web/sync/CONTRACT.md §2 verified (c)).
 CSV_ROWS = [f"{i / LOG_HZ:.2f},{1.0 + 0.01 * (i % 20):.3f}" for i in range(400)]
 CSV_BODY = "t,mag\n" + "".join(r + "\n" for r in CSV_ROWS)
 CSV_BYTES = len(CSV_BODY.encode())
@@ -140,7 +140,7 @@ SELFTEST_LINES = [
 
 # What today's OG actually answers an unknown command with (main.cpp prints the
 # help line first, then the ERR terminator) — the exact shape the page's
-# fallback is allowed to trigger on, and nothing else (CONTRACT §1).
+# fallback is allowed to trigger on, and nothing else (web/sync/CONTRACT.md §1).
 OLD_FW_TRACERAW = [
     "# commands: help info stats jumps trace dump clear selftest set cal off",
     "ERR unknown_command traceraw",
@@ -155,7 +155,7 @@ def stats_line(stored_jumps: int, trace_bytes: int, uptime_s: float = 12345.678)
 
 def traceraw_frame(raw: bytes, *, drop_tail_lines: int = 0, crc: int | None = None,
                    warn: str | None = None) -> list[str]:
-    """The `traceraw` reply, byte for byte per CONTRACT §1.
+    """The `traceraw` reply, byte for byte per web/sync/CONTRACT.md §1.
 
     bytes= always advertises the FULL length: `drop_tail_lines` simulates a
     link that stopped part-way, which is exactly how the page is supposed to
@@ -190,11 +190,23 @@ class FakePuck:
 
     def __init__(self, *, traceraw="ok", stored_jumps=3, jumps_rows=None,
                  trace_bytes=51234, stats_after_clear=(0, 0), raw=None,
-                 jumps_warning=False, fs_down=False, csv_rows=None):
+                 jumps_warning=False, fs_down=False, csv_rows=None,
+                 trace_bytes_growth=0, stats_silent=False):
         self.traceraw = traceraw
         self.stored_jumps = stored_jumps
         self.jumps_rows = JUMPS_ROWS if jumps_rows is None else jumps_rows
         self.trace_bytes = trace_bytes
+        # A real puck does not stop recording because someone plugged it in:
+        # trace_bytes read at connect is a FLOOR, and the second `stats` the
+        # page asks for after the dump is the ceiling. `trace_bytes_growth` is
+        # added from the SECOND `stats` on, so a fixture can play a puck that
+        # logged N more bytes while it was being handled.
+        self.trace_bytes_growth = trace_bytes_growth
+        # 'OK stats' with no STATS line in front of it: err is null, and the
+        # page has no uptime_s, so no wall-clock anchor for the trace
+        # (trace_epoch_utc, web/sync/CONTRACT.md §2.3).
+        self.stats_silent = stats_silent
+        self.stats_calls = 0
         self.stats_after_clear = stats_after_clear
         self.raw = TRACE_RAW if raw is None else raw
         # The puck complains about a short jumps.csv INSIDE the frame, which is
@@ -210,6 +222,9 @@ class FakePuck:
         if cmd == "info":
             return list(INFO_LINES)
         if cmd == "stats":
+            self.stats_calls += 1
+            if self.stats_silent:
+                return ["OK stats"]
             if self.fs_down:
                 # Both lines, from the same `if (!fs_ok)` in main.cpp.
                 return ["# storage NOT MOUNTED — the counts below are unknown, not zero",
@@ -217,7 +232,9 @@ class FakePuck:
             if self.cleared:
                 j, tb = self.stats_after_clear
                 return [stats_line(j, tb), "OK stats"]
-            return [stats_line(self.stored_jumps, self.trace_bytes), "OK stats"]
+            grown = self.trace_bytes + (self.trace_bytes_growth
+                                        if self.stats_calls > 1 else 0)
+            return [stats_line(self.stored_jumps, grown), "OK stats"]
         if cmd == "jumps":
             rows = list(self.jumps_rows)
             tail = [incomplete_warning("jumps.csv")] if self.jumps_warning else []
@@ -247,6 +264,68 @@ class FakePuck:
 
 
 # ------------------------------------------------------------------ plumbing
+
+# A Web Serial port that answers, and can be made to go away. Installed as an
+# init script so navigator.serial exists before the page's init() reads it.
+# Commands are looked up in window.__replies (injected beside this, from the
+# same canned lines the mock seam uses), so the JS stays a transport and the
+# puck stays in Python.
+#
+# What this buys: SerialTransport.open/_readLoop/sendLine actually run, and
+# window.__fakePort.drop() ends the read loop the way a pulled cable does —
+# which is the only way to reach onLinkLost() from a test. It is still a
+# script, not a port: it proves nothing about a real cable on a real Mac.
+FAKE_SERIAL_JS = """
+(() => {
+  const enc = new TextEncoder();
+  const dec = new TextDecoder();
+  const pending = [];
+  let waiting = null;
+  let ended = false;
+  let inbuf = '';
+  function deliver(text) {
+    const chunk = enc.encode(text);
+    if (waiting) { const w = waiting; waiting = null; w({ value: chunk, done: false }); }
+    else pending.push(chunk);
+  }
+  const port = {
+    open: async () => {},
+    close: async () => {},
+    writable: { getWriter: () => ({
+      write: async (bytes) => {
+        inbuf += dec.decode(bytes);
+        let nl;
+        while ((nl = inbuf.indexOf('\\n')) >= 0) {
+          const cmd = inbuf.slice(0, nl).trim();
+          inbuf = inbuf.slice(nl + 1);
+          const reply = (window.__replies || {})[cmd];
+          if (reply) deliver(reply.join('\\n') + '\\n');
+        }
+      },
+      close: async () => {},
+      releaseLock: () => {},
+    }) },
+    readable: { getReader: () => ({
+      read: () => new Promise((resolve) => {
+        if (pending.length) { resolve({ value: pending.shift(), done: false }); return; }
+        if (ended) { resolve({ value: undefined, done: true }); return; }
+        waiting = resolve;
+      }),
+      cancel: async () => {},
+      releaseLock: () => {},
+    }) },
+  };
+  Object.defineProperty(Navigator.prototype, 'serial', {
+    configurable: true,
+    get: () => ({ requestPort: async () => port }),
+  });
+  window.__fakePort = { drop: () => {
+    ended = true;
+    if (waiting) { const w = waiting; waiting = null; w({ value: undefined, done: true }); }
+  } };
+})();
+"""
+
 
 def _serve(directory: Path):
     handler = partial(SimpleHTTPRequestHandler, directory=str(directory))
@@ -339,8 +418,14 @@ class _WebSyncCase(unittest.TestCase):
             route.abort()
 
     # ---------------------------------------------------------------- seam --
-    def _open(self):
-        self.page.goto(f"http://127.0.0.1:{self._port}/sync/#mock",
+    # Step 4 is off for this loan: the page hides the whole section unless the
+    # URL carries ?allowclear=1 (ALLOW_CLEAR, web/sync/sync.js). Every test
+    # that actually exercises the erase has to ask for it by name, which is
+    # the point — the rider's URL never does.
+    ALLOW_CLEAR = "?allowclear=1"
+
+    def _open(self, query=""):
+        self.page.goto(f"http://127.0.0.1:{self._port}/sync/{query}#mock",
                        wait_until="domcontentloaded")
         self.page.wait_for_function(
             "() => window.__mock && typeof window.__mock.feed === 'function'"
@@ -382,10 +467,44 @@ class _WebSyncCase(unittest.TestCase):
         self.fail(f"timed out waiting for {what}. state={self._state()} "
                   f"sent={self._sent()} status={self._status()!r}")
 
-    def _connect(self, puck):
-        self._open()
+    def _answer_until(self, puck, stop_before, timeout=15.0):
+        """Answer commands one at a time until `stop_before` is the next one
+        the page sent, and leave that one unanswered — so the test can play
+        that command badly (a frame that never ends)."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            sent = self._sent()
+            if len(sent) > self._answered:
+                cmd = sent[self._answered]
+                if cmd == stop_before:
+                    return
+                self._answered += 1
+                lines = puck.reply(cmd)
+                self.assertIsNotNone(
+                    lines, f"the page sent a command the fake puck has no "
+                           f"answer for: {cmd!r} (all sent: {sent})")
+                self._feed(lines)
+                continue
+            time.sleep(0.02)
+        self.fail(f"the page never sent {stop_before!r}. sent={self._sent()} "
+                  f"state={self._state()}")
+
+    def _connect(self, puck, query=""):
+        self._open(query)
         self._drive(puck, lambda: self._state()["phase"] == "connected",
                     "the page to finish reading the puck on connect")
+
+    def _wait_for(self, cond, what, timeout=10.0):
+        """Poll a Python-side predicate. Used where page.wait_for_function
+        cannot be: its default polling is requestAnimationFrame, which the
+        fake clock in the retry test stubs out."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if cond():
+                return
+            time.sleep(0.03)
+        self.fail(f"timed out waiting for {what}. state={self._state()} "
+                  f"status={self._status()!r}")
 
     def _pull(self, puck):
         self.page.click("[data-testid=btn-pull]")
@@ -422,9 +541,14 @@ class TestWebSync(_WebSyncCase):
     # --------------------------------------------------------------- tests --
     def test_happy_path_traceraw_bundle(self):
         """Connect -> pull over traceraw -> note -> send -> clear, then the
-        bundle Josh receives is checked file by file against the fixture."""
+        bundle Josh receives is checked file by file against the fixture.
+
+        Driven with ?allowclear=1, because step 4 does not exist on the URL
+        the rider is given (test_step_four_is_hidden_for_this_loan below pins
+        that half). This is the flag half: with it, and only after verified
+        AND delivered, the button is there and the erase works."""
         puck = FakePuck()
-        self._connect(puck)
+        self._connect(puck, self.ALLOW_CLEAR)
 
         # Step 1 shows the puck the rider can recognise, without jargon.
         self.assertIn("JumpHeight-E2C4",
@@ -467,10 +591,12 @@ class TestWebSync(_WebSyncCase):
                     "synced_at_utc", "synced_at_local", "tz_offset_min", "uptime_s",
                     "trace_epoch_utc", "info_lines", "cal", "stats_before",
                     "stats_after", "selftest_lines", "trace_format", "log_hz",
-                    "trace_bytes_device", "trace_raw_bytes", "trace_crc32",
+                    "trace_bytes_device", "trace_bytes_after", "trace_bytes_got",
+                    "f22_band_applied",
+                    "trace_raw_bytes", "trace_crc32",
                     "stored_jumps_device", "jump_rows", "verified", "cleared",
                     "transfer", "user_agent"):
-            self.assertIn(key, man, f"manifest.json is missing CONTRACT §2 key {key!r}")
+            self.assertIn(key, man, f"manifest.json is missing web/sync/CONTRACT.md §2 key {key!r}")
         self.assertEqual(man["bundle_version"], 1)
         self.assertEqual(man["puck_name"], "JumpHeight-E2C4")
         self.assertEqual(man["fw"], "0.4.3")
@@ -520,17 +646,21 @@ class TestWebSync(_WebSyncCase):
         # readable, and the body is ~2.7 MB of base64 on a full region.
         first_b64 = base64.b64encode(TRACE_RAW).decode("ascii")[:76]
         self.assertNotIn(first_b64, log,
-                         "device.log must not carry the base64 body (CONTRACT §2)")
+                         "device.log must not carry the base64 body (web/sync/CONTRACT.md §2)")
 
-        # Static files only, zero external requests (CONTRACT §3): the route
+        # Static files only, zero external requests (web/sync/CONTRACT.md §3): the route
         # handler turned nothing away.
         self.assertEqual(self._blocked, [],
                          "the page reached outside localhost — it must be "
                          "self-contained, with no CDN and no framework")
 
-        # Step 4 only now, and it must confirm from the puck's own stats.
+        # Step 4 only now, only under the flag, and it must confirm from the
+        # puck's own stats.
+        self.assertFalse(self.page.locator("#step-clear").is_hidden(),
+                         "?allowclear=1 must bring step 4 back for Josh")
         self.assertFalse(self.page.locator("[data-testid=btn-clear]").is_hidden(),
-                         "Clear must be offered once the ride is verified and delivered")
+                         "Clear must be offered once the ride is verified and "
+                         "delivered AND the URL asked for it")
         self.page.click("[data-testid=btn-clear]")
         self._drive(puck, lambda: self._state()["phase"] in ("cleared", "failed"),
                     "the puck to confirm it is empty")
@@ -571,7 +701,91 @@ class TestWebSync(_WebSyncCase):
         self.assertIsNone(man["trace_raw_bytes"])
         self.assertIsNone(man["trace_crc32"])
         self.assertEqual(man["trace_bytes_device"], CSV_BYTES)
+        self.assertEqual(man["trace_bytes_got"], CSV_BYTES)
+        self.assertFalse(man["f22_band_applied"],
+                         "a byte-exact pull did not need F-22's band")
         self.assertTrue(man["verified"])
+
+    # -------------------------------------------------------- audit F-22 --
+    # `STATS trace_bytes` is a LIVE counter — it counts a block's bytes before
+    # the block closes — so once the trace region is FULL (the firmware STOPS
+    # writing rather than wrapping) it reads HIGH by at most one 50-sample
+    # batch: 800 B, "exactly one 50-sample batch at 16 B/line"
+    # (docs/audit-2026-08-22.md). Measured on the OG 2026-09-07, which is the
+    # csv-only puck the rider actually has: `tracecheck fast=15917918
+    # slow=15917153` — a −765 B gap on a download that was COMPLETE.
+    #
+    # This page cannot ask `tracecheck` (that command re-walks the whole
+    # region and takes minutes), so the band is the entire arbiter here, and
+    # these three tests are what keeps it one-sided and narrow.
+    F22_BAND = 800
+
+    def _csv_pull_with_gap(self, gap):
+        """Drive a full csv pull where the puck's counter sits `gap` bytes
+        ABOVE the trace.csv it actually sends (negative = it sends more)."""
+        puck = FakePuck(traceraw="unknown", trace_bytes=CSV_BYTES + gap)
+        self._connect(puck)
+        self._pull(puck)
+        st = self._state()
+        self.assertEqual(st["trace_format"], "csv")
+        return puck, st
+
+    def test_csv_f22_band_verifies_and_records_itself(self):
+        """The measured −765 B case: verified, with the quirk said out loud
+        and written into the manifest. Without this the one puck the rider
+        has cannot produce a verified bundle once it fills, and the page
+        tells him to re-pull a ride that already came across whole."""
+        puck, st = self._csv_pull_with_gap(765)
+
+        self.assertTrue(st["verified"],
+                        f"a −765 B F-22 gap is a complete copy: {st['reasons']}")
+        self.assertEqual(st["reasons"], [])
+        self.assertTrue(st["f22_band_applied"])
+        self.assertEqual(st["trace_bytes_device"], CSV_BYTES + 765)
+        self.assertEqual(st["trace_bytes_got"], CSV_BYTES)
+
+        # Said out loud, in the rider's language, on the screen he reads.
+        note = st["f22_note"]
+        self.assertIn("The puck is full", note)
+        self.assertIn("765", note)
+        self.assertIn("the copy is complete", note)
+        self.assertIn(note, self.page.locator("[data-testid=result]").inner_text(),
+                      "the forgiveness must be shown, not just recorded")
+
+        self._send(puck)
+        _name, z = self._bundle()
+        man = json.loads(z.read("manifest.json"))
+        self.assertTrue(man["verified"])
+        self.assertTrue(man["f22_band_applied"])
+        self.assertEqual(man["trace_bytes_device"], CSV_BYTES + 765)
+        self.assertEqual(man["trace_bytes_got"], CSV_BYTES)
+        # And the whole file really is there.
+        self.assertEqual(z.read("trace.csv").decode(), CSV_BODY)
+
+    def test_csv_gap_past_the_band_is_still_a_refusal(self):
+        """801 B — one byte past one batch. More than F-22 ever explained, so
+        it stays a short download: no step 4, and the puck keeps everything."""
+        _puck, st = self._csv_pull_with_gap(self.F22_BAND + 1)
+
+        self.assertFalse(st["verified"], "801 B short must not verify")
+        self.assertFalse(st["f22_band_applied"])
+        joined = " ".join(st["reasons"])
+        self.assertIn("came across", joined)
+        self.assertNotIn("known quirk", joined)
+        self.assertTrue(self.page.locator("[data-testid=btn-clear]").is_hidden(),
+                        "Clear must never be offered on an unverified ride")
+        self.assertIn("still has everything", self._status())
+
+    def test_csv_surplus_is_still_a_refusal(self):
+        """One byte MORE than the puck says it holds. F-22 only ever runs the
+        device counter high; the band is not "within 800 either way"."""
+        _puck, st = self._csv_pull_with_gap(-1)
+
+        self.assertFalse(st["verified"], "a surplus is unexplained, not F-22")
+        self.assertFalse(st["f22_band_applied"])
+        joined = " ".join(st["reasons"])
+        self.assertIn("More ride data arrived than the puck says it has", joined)
+        self.assertTrue(self.page.locator("[data-testid=btn-clear]").is_hidden())
 
     def test_short_transfer_is_not_verified_and_offers_no_clear(self):
         """The cruellest failure this product can have: recorded perfectly,
@@ -602,9 +816,14 @@ class TestWebSync(_WebSyncCase):
 
     def test_clear_is_never_sent_before_the_bundle_is_delivered(self):
         """Ordering, asserted at every stage — this is the one command on the
-        wire that cannot be undone."""
+        wire that cannot be undone.
+
+        Run under ?allowclear=1: without the flag there is no step 4 at all
+        and this ordering has nothing to say. The flag does NOT weaken the
+        gate — verified AND delivered still both have to hold, and that is
+        what the middle of this test measures."""
         puck = FakePuck()
-        self._connect(puck)
+        self._connect(puck, self.ALLOW_CLEAR)
         self.assertNotIn("clear", self._sent())
         self.assertTrue(self.page.locator("[data-testid=btn-clear]").is_hidden())
 
@@ -614,21 +833,247 @@ class TestWebSync(_WebSyncCase):
         self.assertFalse(self._state()["delivered"])
         self.assertTrue(self.page.locator("[data-testid=btn-clear]").is_hidden(),
                         "verified alone must not unlock Clear — delivered too "
-                        "(CONTRACT §3 step 4)")
+                        "(web/sync/CONTRACT.md §3 step 4)")
         self.assertNotIn("clear", self._sent())
 
         self._send(puck)
-        # Delivered: the button appears, but nothing has gone to the puck until
-        # the rider actually taps it.
+        # Delivered, and the flag is on: the button appears, but nothing has
+        # gone to the puck until the rider actually taps it.
         self.assertFalse(self.page.locator("[data-testid=btn-clear]").is_hidden())
         self.assertNotIn("clear", self._sent(),
                          "the page must not send `clear` on its own")
+
+    def test_step_four_is_hidden_for_this_loan(self):
+        """The rider's URL carries no ?allowclear=1, so there is no step 4 at
+        all: no section, no heading, no button — and the page's last word is
+        that he is finished.
+
+        The puck is out on loan and the brief is that he must NEVER empty it;
+        Josh does that on the bench, where a short download can still be
+        re-pulled off a puck that still holds the ride. The verified-AND-
+        delivered gate is not what is being measured here: both hold by the
+        end of this test and the button is still gone."""
+        puck = FakePuck()
+        self._connect(puck)
+        self.assertTrue(self.page.locator("#step-clear").is_hidden(),
+                        "step 4 must not be on the rider's page at all")
+        self.assertIn("Josh empties the puck",
+                      self.page.locator("#finish-hint").inner_text())
+
+        self._pull(puck)
+        self._send(puck)
+        st = self._state()
+        self.assertTrue(st["verified"])
+        self.assertTrue(st["delivered"])
+        self.assertTrue(self.page.locator("#step-clear").is_hidden(),
+                        "verified AND delivered must not bring step 4 back "
+                        "without ?allowclear=1")
+        self.assertTrue(self.page.locator("[data-testid=btn-clear]").is_hidden())
+
+        # The sentence he is left with names who empties the puck. The one it
+        # replaced — "Last step: empty the puck so it has room for your next
+        # ride" — told him to do the one thing the brief forbids, on the
+        # success path, where he is most likely to follow it.
+        status = self._status()
+        self.assertIn("finished", status)
+        self.assertIn("leave the puck to Josh", status)
+        self.assertNotIn("empty the puck so it has room", status)
+        self.assertNotIn("Last step", status)
+
+        # Belt and braces: doClear() re-checks the flag, so a button un-hidden
+        # by hand still writes nothing to the wire.
+        self.page.evaluate(
+            "() => { document.getElementById('step-clear').hidden = false;"
+            "        const b = document.getElementById('btn-clear');"
+            "        b.hidden = false; b.disabled = false; }")
+        self.page.click("[data-testid=btn-clear]")
+        # `clear` would be on the wire synchronously inside doClear; give the
+        # page a round-trip anyway before believing it isn't.
+        time.sleep(0.3)
+        self.assertNotIn("clear", self._sent(),
+                         "doClear must re-check ALLOW_CLEAR, not just the button")
+
+    # ------------------------------------------- the stale denominator (3) --
+    # `trace_bytes` comes off the CONNECT-time `stats`, latched once. The puck
+    # does not stop recording because someone plugged it in, so minutes later
+    # the copy can legitimately be BIGGER than that first reading — and the
+    # surplus arm turned that into a hard failure that every retry reproduced,
+    # because every retry starts by taking the same stale reading again. The
+    # pull's own second `stats` is the honest ceiling.
+
+    def _csv_pull_with_growth(self, before_gap, growth):
+        """A csv pull where the puck reports `CSV_BYTES - before_gap` at
+        connect and `CSV_BYTES - before_gap + growth` on the second `stats`,
+        having handed over the whole CSV_BYTES body in between."""
+        puck = FakePuck(traceraw="unknown", trace_bytes=CSV_BYTES - before_gap,
+                        trace_bytes_growth=growth)
+        self._connect(puck)
+        self._pull(puck)
+        st = self._state()
+        self.assertEqual(st["trace_format"], "csv")
+        return puck, st
+
+    def test_csv_growth_between_the_two_stats_reads_verifies(self):
+        """+700 B logged while the puck was being handled: verified, said out
+        loud, and both readings recorded in the manifest."""
+        puck, st = self._csv_pull_with_growth(700, 700)
+
+        self.assertTrue(st["verified"],
+                        f"a puck that kept logging is not a surplus: {st['reasons']}")
+        self.assertEqual(st["reasons"], [])
+        self.assertEqual(st["trace_bytes_device"], CSV_BYTES - 700)
+        self.assertEqual(st["trace_bytes_after"], CSV_BYTES)
+        self.assertEqual(st["trace_bytes_got"], CSV_BYTES)
+        self.assertFalse(st["f22_band_applied"],
+                         "this is growth, not F-22 — F-22 only ever runs the "
+                         "counter HIGH")
+
+        note = st["growth_note"]
+        self.assertIn("kept recording while you plugged it in", note)
+        self.assertIn("700", note)
+        self.assertIn("that is normal", note)
+        self.assertIn(note, self.page.locator("[data-testid=result]").inner_text(),
+                      "the explanation must be shown, not just recorded")
+
+        self._send(puck)
+        _name, z = self._bundle()
+        man = json.loads(z.read("manifest.json"))
+        self.assertTrue(man["verified"])
+        self.assertEqual(man["trace_bytes_device"], CSV_BYTES - 700)
+        self.assertEqual(man["trace_bytes_after"], CSV_BYTES,
+                         "the after-reading is the ceiling ingest needs to "
+                         "re-derive this for itself")
+        self.assertEqual(man["trace_bytes_got"], CSV_BYTES)
+        self.assertFalse(man["f22_band_applied"])
+        self.assertEqual(z.read("trace.csv").decode(), CSV_BODY)
+
+    def test_csv_growth_past_the_after_reading_is_still_a_refusal(self):
+        """One byte more than the puck ever said it held, on either reading.
+        The window is [before − 800, after]; outside it, unexplained is
+        unexplained."""
+        _puck, st = self._csv_pull_with_growth(700, 699)
+
+        self.assertFalse(st["verified"], "a surplus past stats-after is not growth")
+        self.assertIsNone(st["growth_note"])
+        self.assertFalse(st["f22_band_applied"])
+        joined = " ".join(st["reasons"])
+        self.assertIn("More ride data arrived than the puck says it has", joined)
+        self.assertTrue(self.page.locator("[data-testid=btn-clear]").is_hidden())
+
+    # ------------------------------------------------- the header-only case --
+    def test_header_only_trace_region_reads_as_an_empty_puck(self):
+        """A real nrf52 puck ALWAYS emits the 6-byte "t,mag\\n" header when it
+        dumps trace.csv — read_chunk() sends it before it looks at whether
+        there is a single stored byte behind it
+        (firmware/src/platform/nrf52/jh_store.cpp:1119-1126) — while
+        trace_bytes only starts counting that header on the first append
+        (:1058-1063). So a healthy, empty puck reports 0 and hands over 6, and
+        the surplus arm called it "6 bytes against the puck's 0 … that does
+        not add up": a refusal on the one puck state that is perfectly fine,
+        and it made endPullOk's "no jumps saved on it" branch unreachable on
+        real hardware. This is the rider's own puck, on the csv path, the
+        first ride after Josh emptied it."""
+        puck = FakePuck(traceraw="unknown", stored_jumps=0, trace_bytes=0,
+                        jumps_rows=[], csv_rows=[])
+        self._connect(puck)
+        self._pull(puck)
+
+        st = self._state()
+        self.assertTrue(st["verified"],
+                        f"an empty puck is a perfectly good outcome: {st['reasons']}")
+        self.assertEqual(st["trace_bytes_device"], 0)
+        self.assertEqual(st["trace_bytes_got"], 6, "the 't,mag' header, and nothing else")
+        self.assertFalse(st["f22_band_applied"], "nothing was forgiven by F-22 here")
+        self.assertEqual(st["jump_rows"], 0)
+
+        status = self._status()
+        self.assertIn("no jumps saved on it", status,
+                      f"the empty-puck sentence must be reachable: {status!r}")
+        self.assertIn("send it so Josh can see why", status)
+
+        self._send(puck)
+        _name, z = self._bundle()
+        self.assertEqual(z.read("trace.csv").decode(), "t,mag\n")
+        self.assertTrue(json.loads(z.read("manifest.json"))["verified"])
+
+    # --------------------------------------------------- the retry poison --
+    def test_a_pull_that_died_mid_frame_can_be_retried(self):
+        """`S.fileSection` is the page's "which FILE body am I inside" flag.
+        It was reset in exactly two places — freshSession() and a
+        'FILE … END' line — so a pull that died INSIDE a frame left it
+        pointing at trace.csv for the rest of the session. The retry's own
+        'FILE jumps.csv BEGIN' then matched `inBody` instead of `isBegin` and
+        was swallowed into the trace sink: jumps.csv came out empty, check (b)
+        failed, and every retry reproduced the failure of the attempt before
+        it. The rider's remedy for a failed pull is to tap the button again,
+        so this is the path he is most likely to be on.
+
+        The 30 s inactivity timer is fast-forwarded rather than waited out, so
+        what fires is the page's own INACTIVITY_MS timer on the real timeout
+        path. With the fake clock in place the DOM is clicked from script:
+        Playwright's own actionability polling uses requestAnimationFrame,
+        which the clock stubs."""
+        puck = FakePuck(traceraw="unknown", trace_bytes=CSV_BYTES)
+        self._connect(puck)
+        self.page.clock.install()
+
+        # First attempt: `jumps` and `traceraw` answered as usual, then a
+        # trace.csv frame that begins and never ends.
+        self.page.evaluate("() => document.getElementById('btn-pull').click()")
+        self._answer_until(puck, "trace")
+        self._answered += 1                     # this one we play ourselves
+        self._feed(["FILE trace.csv BEGIN", "t,mag"] + list(CSV_ROWS[:3]))
+        self.page.clock.fast_forward(31_000)
+        self._wait_for(lambda: self._state()["phase"] == "failed",
+                       "the inactivity timer to end the first pull")
+        first = self._status()
+        self.assertIn("stopped part-way", first)
+        self.assertIn("went quiet for 30 seconds", first,
+                      f"it must be the INACTIVITY_MS timer that ended it, not "
+                      f"some other failure: {first!r}")
+
+        # Second attempt: the same puck, answering everything.
+        self.page.evaluate("() => document.getElementById('btn-pull').click()")
+        self._drive(puck, lambda: self._state()["phase"] in ("pulled", "failed"),
+                    "the retry to finish")
+
+        st = self._state()
+        self.assertEqual(st["phase"], "pulled")
+        self.assertEqual(st["jump_rows"], 3,
+                         "the retry's `FILE jumps.csv BEGIN` was swallowed as "
+                         "trace body by the previous attempt's half-open frame")
+        self.assertEqual(st["trace_bytes_got"], CSV_BYTES)
+        self.assertTrue(st["verified"],
+                        f"the retry must verify on its own merits: {st['reasons']}")
+
+    # ------------------------------------------------------ the stats gate --
+    def test_a_puck_that_never_answers_stats_cannot_be_pulled(self):
+        """`stats` is not just "what is on it": its uptime_s, read in the same
+        breath as the phone clock, is the ONLY wall-clock anchor the trace
+        ever gets (trace_epoch_utc, web/sync/CONTRACT.md §2.3). A bundle
+        pulled without it ships trace_epoch_utc null, which reads downstream
+        as a puck with no session behind it — a live puck misdiagnosed from a
+        reading that never happened (CLAUDE.md rule 3).
+
+        The quiet shape is the one that mattered: 'OK stats' with no STATS
+        line in front of it. `err` is null, so nothing failed; S.statsBefore
+        is null, so nothing was read."""
+        puck = FakePuck(stats_silent=True)
+        self._connect(puck)
+
+        status = self._status()
+        self.assertIn("answer its first question", status)
+        self.assertIn("reload this page", status)
+        self.assertTrue(self.page.locator("[data-testid=btn-pull]").is_disabled(),
+                        "step 2 must be shut without the wall-clock anchor")
+        self.assertNotIn("jumps", self._sent(),
+                         "no pull may start from a puck that did not answer `stats`")
 
     def test_incomplete_warning_inside_the_jumps_frame_is_heard(self):
         """The puck's own complaint arrives INSIDE the FILE frame
         (firmware/src/main.cpp printFileFramed: the warning is printed after
         the body and before "FILE jumps.csv END"). jumps.csv has no crc and no
-        byte count, so CONTRACT §2 check (a) is the only thing standing between
+        byte count, so web/sync/CONTRACT.md §2 check (a) is the only thing standing between
         a dropped result row and an erased puck.
 
         Before this was fixed the line was routed into the body sink: it
@@ -655,7 +1100,7 @@ class TestWebSync(_WebSyncCase):
         # results file, where it would read as a jump.
         self.assertIn("INCOMPLETE", z.read("device.log").decode(),
                       "device.log must keep the `#` chatter emitted inside a "
-                      "FILE frame (CONTRACT §2)")
+                      "FILE frame (web/sync/CONTRACT.md §2)")
         self.assertEqual(z.read("jumps.csv").decode(),
                          "\n".join([JUMPS_HEADER] + JUMPS_ROWS[:2]) + "\n")
         man = json.loads(z.read("manifest.json"))
@@ -779,7 +1224,7 @@ class TestWebSync(_WebSyncCase):
         """Replace the browser context with one that identifies as an iPhone.
 
         doSend's iOS branch is otherwise unreachable in CI, and it is the
-        branch that runs on the only browser an iPhone rider has (CONTRACT §3:
+        branch that runs on the only browser an iPhone rider has (web/sync/CONTRACT.md §3:
         Bluefy is the only one that can reach the puck at all). Chromium is not
         Safari and this proves NOTHING about how Bluefy handles the link — what
         it proves is that the branch runs, builds its link, and still refuses
@@ -836,9 +1281,12 @@ class TestWebSync(_WebSyncCase):
         After step 4 the phone holds the ONLY copy, so a re-send has to rebuild
         rather than ship the cached zip that still says cleared:false — and
         step 2 must not be sitting there enabled, one tap from replacing that
-        copy with a pull of an empty puck."""
+        copy with a pull of an empty puck.
+
+        ?allowclear=1, for the same reason as the happy path: the rider's own
+        URL has no step 4 to reach."""
         puck = FakePuck()
-        self._connect(puck)
+        self._connect(puck, self.ALLOW_CLEAR)
         self._pull(puck)
         self._send(puck)
         self.assertFalse(json.loads(self._bundle()[1].read("manifest.json"))["cleared"])
@@ -869,9 +1317,14 @@ class TestWebSyncCable(_WebSyncCase):
     """The USB-cable link (Web Serial) added 2026-09-07 for the rider's
     Intel MacBook. Headless Chromium has navigator.serial, so the button is
     genuinely offered here; what it cannot do is show a real port picker, so
-    requestPort is stubbed to reject the way a cancelled picker does. The
-    transport itself (SerialTransport.open/_readLoop) is exercised by nobody
-    but a real Chrome on a real cable — say so rather than pretend."""
+    requestPort is stubbed — to reject the way a cancelled picker does, or to
+    hand back the scripted port in FAKE_SERIAL_JS above.
+
+    Against that scripted port SerialTransport.open/_readLoop/sendLine do run
+    (test_link_lost_over_the_cable_says_to_reload). What no test here can
+    exercise is a REAL port: enumeration, the 400 ms drain, a cable half out.
+    That still needs a real Chrome on a real cable, and none is on this
+    bench — say so rather than pretend."""
 
     def _open_plain(self, init_script=None):
         if init_script:
@@ -925,6 +1378,51 @@ class TestWebSyncCable(_WebSyncCase):
         self.assertIn("usbmodem", status)
         # Both connect buttons come back: he can try again.
         self.assertFalse(self.page.locator("[data-testid=btn-connect-usb]").is_disabled())
+
+    def test_a_cable_that_will_not_open_says_to_reload(self):
+        """The port is there and it will not open — another program has it,
+        or the CDC device is wedged. He is told to unplug it, and then the
+        thing nobody thinks of on their own: reload the page."""
+        self._open_plain(
+            "Object.defineProperty(Navigator.prototype, 'serial', { configurable: true, "
+            "get: () => ({ requestPort: () => Promise.resolve({ open: () => "
+            "Promise.reject(new DOMException('Failed to open serial port.', "
+            "'NetworkError')) }) }) });")
+        self.page.click("[data-testid=btn-connect-usb]")
+        self._wait_for(lambda: "plug it back in" in self._status(),
+                       "the failed open to be reported")
+        status = self._status()
+        self.assertIn("reload this page", status,
+                      f"the last-resort remedy must be offered: {status!r}")
+
+    def test_link_lost_over_the_cable_says_to_reload(self):
+        """A connected session whose port goes away mid-session — the cable
+        pulled, the puck rebooted. onLinkLost() is the only place that
+        sentence appears for a live link, and it is reachable only with a
+        transport that really closes, which is what FAKE_SERIAL_JS is for.
+
+        The drop is taken while the page is IDLE on purpose: a drop during an
+        in-flight command is reported by that command's own failure path
+        instead, which is a different sentence."""
+        replies = {"info": list(INFO_LINES),
+                   "stats": [stats_line(3, CSV_BYTES), "OK stats"]}
+        self._open_plain("window.__replies = " + json.dumps(replies) + ";"
+                         + FAKE_SERIAL_JS)
+        self.page.click("[data-testid=btn-connect-usb]")
+        self._wait_for(lambda: "Now tap" in self._status(),
+                       "the cable session to finish reading the puck")
+        self.assertTrue(self.page.evaluate("() => window.__sync.state().connected"))
+
+        self.page.evaluate("() => window.__fakePort.drop()")
+        self._wait_for(lambda: "dropped" in self._status(),
+                       "the page to notice the link went away")
+
+        status = self._status()
+        self.assertIn("cable", status, "over USB he must not be told to move closer")
+        self.assertNotIn("out of range", status)
+        self.assertIn("reload this page", status,
+                      f"the last-resort remedy must be offered: {status!r}")
+        self.assertFalse(self.page.evaluate("() => window.__sync.state().connected"))
 
     def test_usb_session_records_its_transport_and_gives_cable_advice(self):
         """A cable-shaped mock session: the manifest names the transport, and a

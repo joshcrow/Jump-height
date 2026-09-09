@@ -1394,7 +1394,7 @@ class TestStoreHost(unittest.TestCase):
         """The raw export FIRST — no OPEN_READ TRACE ahead of it — which is
         the only order that tests open_read_raw()'s own closeAndWriteBlock()
         (jh_store.cpp), and is the order the rider actually produces: the
-        phone page sends `jumps` then `traceraw` (CONTRACT.md §3 step 2) and
+        phone page sends `jumps` then `traceraw` (web/sync/CONTRACT.md §3 step 2) and
         never opens the CSV reader at all.
 
         Every other test here runs _RAW_TAIL, whose OPEN_READ TRACE already
@@ -1407,7 +1407,7 @@ class TestStoreHost(unittest.TestCase):
         What the mutant loses is the tail of the LAST burst — up to a nominal
         second of samples — while `trace` still shows them. Nothing on the
         wire would say so: declared == streamed == the crc'd bytes, the
-        Python walk consumes them all, and CONTRACT.md §2's `verified` goes
+        Python walk consumes them all, and web/sync/CONTRACT.md §2's `verified` goes
         true on a short trace. That is why the last batch below is asserted
         by name."""
         r = run_harness(self.harness, [

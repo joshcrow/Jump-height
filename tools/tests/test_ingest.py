@@ -1,4 +1,4 @@
-"""Tests for `./tools/jump ingest` (CONTRACT.md §2): importing a rider-synced
+"""Tests for `./tools/jump ingest` (web/sync/CONTRACT.md §2): importing a rider-synced
 bundle (web/sync/'s zip, or its unzipped dir) into data/sessions/.
 
 Bundles are built IN-TEST — zipfile + sim/trace_codec.encode_region() (the
@@ -53,7 +53,7 @@ def _load_jump_module():
 
 
 def make_manifest(**overrides) -> dict:
-    """CONTRACT.md §2's manifest.json, with every key present (as a real
+    """web/sync/CONTRACT.md §2's manifest.json, with every key present (as a real
     bundle would have) and sane defaults a test overrides selectively."""
     m = {
         "bundle_version": 1,
@@ -106,7 +106,7 @@ def jumps_csv_bytes(n_jumps: int = 2) -> bytes:
 def jhtrace_bundle_files(n_jumps: int = 2, n_samples: int = 100,
                          corrupt_crc: bool = False,
                          stored_jumps_device: "int | None" = None) -> dict:
-    """A CONTRACT.md §2 bundle's files, trace_format=jhtrace-v2-b64."""
+    """A web/sync/CONTRACT.md §2 bundle's files, trace_format=jhtrace-v2-b64."""
     pairs = trace_pairs(n_samples)
     image = encode_region(pairs, LOG_HZ)
     crc = f"{zlib.crc32(image) & 0xffffffff:08x}"
@@ -129,20 +129,46 @@ def jhtrace_bundle_files(n_jumps: int = 2, n_samples: int = 100,
     }, manifest, image
 
 
+# tools/jump's F22_MAX_OVERREPORT_BYTES, restated so a change to it that
+# nobody mirrored here fails loudly instead of quietly widening every
+# boundary test below. Asserted against the real constant in
+# TestIngestF22CsvBand.test_the_band_here_is_the_band_in_the_tool.
+F22_BAND = 800
+
+# What `bad_byte_count=True` means now. It used to be 500 — which, once the
+# F-22 band landed, is INSIDE the band and therefore FORGIVEN: the test named
+# "csv byte count mismatch refuses" would have gone on passing while testing
+# a case the tool no longer refuses. A fixture that silently stops exercising
+# what its name claims is exactly CLAUDE.md rule 3's "a reading that did not
+# happen". 5,000 B is unambiguously outside the band; the boundary itself is
+# pinned separately at ±1 B either side of it.
+CSV_GAP_OUTSIDE_F22 = 5000
+
+
 def csv_bundle_files(n_jumps: int = 2, n_samples: int = 100,
-                     bad_byte_count: bool = False) -> dict:
-    """A CONTRACT.md §2 bundle's files, trace_format=csv (old-firmware
-    fallback: the page never got `traceraw`, so it fell back to `trace`)."""
+                     bad_byte_count: bool = False,
+                     device_over_by: "int | None" = None,
+                     verified: bool = True) -> dict:
+    """A web/sync/CONTRACT.md §2 bundle's files, trace_format=csv (old-firmware
+    fallback: the page never got `traceraw`, so it fell back to `trace`).
+
+    `device_over_by` is how far the manifest's `trace_bytes_device` sits ABOVE
+    the trace.csv actually in the bundle — the direction audit F-22 produces
+    (the live counter reads high on a full region). Negative means the bundle
+    carries MORE than the puck claimed, which F-22 never explains.
+    """
     pairs = trace_pairs(n_samples)
     csv_text = "t,mag\n" + "".join(f"{t:.3f},{m:.3f}\n" for t, m in pairs)
     csv_bytes = csv_text.encode()
-    trace_bytes_device = len(csv_bytes) + (500 if bad_byte_count else 0)
+    if device_over_by is None:
+        device_over_by = CSV_GAP_OUTSIDE_F22 if bad_byte_count else 0
+    trace_bytes_device = len(csv_bytes) + device_over_by
     jumps_bytes = jumps_csv_bytes(n_jumps)
     manifest = make_manifest(
         trace_format="csv", log_hz=LOG_HZ,
         trace_raw_bytes=None, trace_crc32=None,
         trace_bytes_device=trace_bytes_device,
-        stored_jumps_device=n_jumps, jump_rows=n_jumps)
+        stored_jumps_device=n_jumps, jump_rows=n_jumps, verified=verified)
     return {
         "manifest.json": json.dumps(manifest).encode(),
         "jumps.csv": jumps_bytes,
@@ -153,13 +179,13 @@ def csv_bundle_files(n_jumps: int = 2, n_samples: int = 100,
 
 
 def demo_session_bundle_files() -> tuple:
-    """A CONTRACT.md §2 bundle built from the SAME demo session
+    """A web/sync/CONTRACT.md §2 bundle built from the SAME demo session
     tools/fake_device.py's 'session' scenario preloads (generate.DEMO_JUMPS
     run through the real sim/detector.Detector) — unlike jhtrace_bundle_
     files()'s flat 1.0 + 0.001*i ramp (trace_pairs(), used by every other
     fixture in this file), a ramp never crosses the detector's free-fall
     gate, so it can never tell an offline pass that found nothing apart
-    from one that actually ran. CONTRACT.md §0 item 3's whole point — a
+    from one that actually ran. web/sync/CONTRACT.md §0 item 3's whole point — a
     phone bundle is 'scored exactly the way a bench sync is' — goes unpinned
     without a trace that actually contains jumps."""
     from detector import Detector, load_params
@@ -279,7 +305,7 @@ class TestIngestHappyPath(unittest.TestCase):
 
     def test_ingest_of_already_unzipped_directory_works(self):
         """A rider (or Josh) may forward the unzipped folder instead of the
-        .zip — CONTRACT.md §2's bundle shape, opened by hand."""
+        .zip — web/sync/CONTRACT.md §2's bundle shape, opened by hand."""
         files, manifest, image = jhtrace_bundle_files(n_jumps=1)
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
@@ -332,7 +358,7 @@ class TestIngestRefusesBadBundles(unittest.TestCase):
 
     def test_jump_row_mismatch_refuses_without_force(self):
         """jumps.csv holds 2 rows but the manifest's stored_jumps_device
-        (what the puck itself reported) says 3 — CONTRACT.md §2's third hard
+        (what the puck itself reported) says 3 — web/sync/CONTRACT.md §2's third hard
         check, reusing the exact _verify_jumps_rows() wording sync uses."""
         files, _manifest, _image = jhtrace_bundle_files(
             n_jumps=2, stored_jumps_device=3)
@@ -392,8 +418,136 @@ class TestIngestRefusesBadBundles(unittest.TestCase):
             self.assertIn(missing.name, r.stdout)
 
 
+class TestIngestF22CsvBand(unittest.TestCase):
+    """Audit F-22 on the csv path — the ONE mismatch `ingest` now forgives.
+
+    `STATS trace_bytes` is a live counter: it counts a block's bytes before
+    the block closes, so once the trace region is FULL (firmware STOPS, it
+    never wraps) the number reads high by at most one 50-sample batch,
+    800 B (docs/audit-2026-08-22.md's "800 bytes, exactly one 50-sample
+    batch at 16 B/line").
+
+    Measured on the OG 2026-09-07 — the puck the rider actually has,
+    src=5c80a436, which predates `traceraw` and so can only ever produce a
+    csv bundle: `tracecheck fast=15917918 slow=15917153`, a −765 B gap on a
+    download that was COMPLETE. Before this band existed that bundle needed
+    `--force` to import, which is the same override used for a genuinely
+    corrupt one — the rider's only working path and a real failure were
+    indistinguishable.
+
+    The band is deliberately one-sided and narrow, because that is all the
+    evidence supports. There is no crc32 on this path and no `tracecheck` to
+    ask (a bundle is a zip), so it is the whole arbiter.
+    """
+
+    def test_the_band_here_is_the_band_in_the_tool(self):
+        """F22_BAND above is a copy. If tools/jump's constant moves and this
+        one doesn't, every boundary test below silently starts testing the
+        wrong number — so compare them rather than trusting the comment."""
+        self.assertEqual(_load_jump_module().F22_MAX_OVERREPORT_BYTES, F22_BAND)
+
+    def test_minus_765_ingests_clean_and_says_why(self):
+        """The measured OG case. Exit 0, no --force, and the reason is
+        PRINTED — a forgiveness nobody is told about is not a verdict."""
+        files, manifest, csv_bytes = csv_bundle_files(n_jumps=2, device_over_by=765)
+        self.assertEqual(manifest["trace_bytes_device"] - len(csv_bytes), 765)
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            bundle = write_zip(tmp, "jumpheight-E2C4-20260913-1432.zip", files)
+            out_dir = tmp / "sessions"
+            r = run_cli(["ingest", str(bundle), "--out", str(out_dir)])
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+            self.assertIn("✅ trace.csv verified", r.stdout)
+            self.assertIn("765 B under", r.stdout)
+            self.assertIn("F-22", r.stdout)
+            self.assertIn("The puck is full", r.stdout)
+            self.assertIn("the copy is complete", r.stdout)
+            # It must NOT read as a failure that was waved through.
+            self.assertNotIn("TRACE.CSV SHORT", r.stdout)
+            self.assertNotIn("--force", r.stdout)
+            self.assertNotIn("UNVERIFIED", r.stdout)
+
+            sess = next(out_dir.iterdir())
+            self.assertEqual((sess / "trace.csv").read_bytes(), csv_bytes)
+            session_json = json.loads((sess / "session.json").read_text())
+            self.assertTrue(session_json["verified"],
+                            "an F-22 gap is a complete download, not a doubt")
+            self.assertFalse(session_json["forced"])
+            # The reason travels with the folder, not just the terminal.
+            self.assertTrue(any("F-22" in l for l in session_json["verification"]),
+                            session_json["verification"])
+            self.assertFalse((sess / "VERIFICATION-FAILED.txt").exists())
+
+    def test_exactly_the_band_edge_ingests(self):
+        """800 B is inside — the constant is `<=`, and one 50-sample batch is
+        exactly what the audit measured."""
+        files, _m, _c = csv_bundle_files(n_jumps=2, device_over_by=F22_BAND)
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            bundle = write_zip(tmp, "edge.zip", files)
+            out_dir = tmp / "sessions"
+            r = run_cli(["ingest", str(bundle), "--out", str(out_dir)])
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("✅ trace.csv verified", r.stdout)
+
+    def test_minus_801_refuses(self):
+        """One byte past the band. More than one batch is not F-22, and
+        borrowing its reassurance there would be the wrong citation
+        (CLAUDE.md rule 6)."""
+        files, _m, _c = csv_bundle_files(n_jumps=2, device_over_by=F22_BAND + 1)
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            bundle = write_zip(tmp, "past-band.zip", files)
+            out_dir = tmp / "sessions"
+            r = run_cli(["ingest", str(bundle), "--out", str(out_dir)])
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+            self.assertIn("TRACE.CSV SHORT", r.stdout)
+            self.assertIn("-801", r.stdout)
+            self.assertIn("not F-22", r.stdout)
+            self.assertNotIn("The puck is full", r.stdout)
+            self.assertFalse(out_dir.exists(),
+                             "a refused ingest must not write ANY session")
+
+    def test_plus_one_refuses(self):
+        """A SURPLUS. F-22 only ever runs the device counter HIGH; one byte
+        more arriving than the puck says it holds is unexplained, and the
+        band must not be read as "within 800 either way"."""
+        files, _m, _c = csv_bundle_files(n_jumps=2, device_over_by=-1)
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            bundle = write_zip(tmp, "surplus.zip", files)
+            out_dir = tmp / "sessions"
+            r = run_cli(["ingest", str(bundle), "--out", str(out_dir)])
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+            self.assertIn("LONGER THAN THE PUCK SAID", r.stdout)
+            self.assertIn("+1", r.stdout)
+            self.assertNotIn("The puck is full", r.stdout)
+            self.assertFalse(out_dir.exists())
+
+    def test_page_refusal_still_refuses_but_names_f22(self):
+        """A bundle from a page build with no band: it wrote verified=false
+        over this very gap. ingest still HONOURS the refusal (--force is the
+        deliberate override) — but it says which override Josh is making,
+        instead of leaving him to guess between F-22 and real corruption."""
+        files, _m, _c = csv_bundle_files(n_jumps=2, device_over_by=765,
+                                         verified=False)
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            bundle = write_zip(tmp, "old-page.zip", files)
+            out_dir = tmp / "sessions"
+            r = run_cli(["ingest", str(bundle), "--out", str(out_dir)])
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+            self.assertIn("marked this bundle verified=false", r.stdout)
+            self.assertIn("its build predates the band", r.stdout)
+            self.assertFalse(out_dir.exists())
+
+            r2 = run_cli(["ingest", str(bundle), "--out", str(out_dir), "--force"])
+            self.assertEqual(r2.returncode, 0, r2.stdout + r2.stderr)
+
+
 class TestIngestOfflineReDetection(unittest.TestCase):
-    """CONTRACT.md §0 item 3: a bundle must be scored exactly the way a
+    """web/sync/CONTRACT.md §0 item 3: a bundle must be scored exactly the way a
     bench sync is. TestIngestHappyPath's fixtures all use trace_pairs()'s
     flat ramp, which the detector never fires on — "0 jumps" in the report
     is therefore indistinguishable from "the offline pass never ran at
@@ -682,3 +836,78 @@ class TestIngestHonoursThePagesRefusal(unittest.TestCase):
             self.assertEqual(r2.returncode, 0, r2.stdout + r2.stderr)
             sess = next(out_dir.iterdir())
             self.assertTrue((sess / "VERIFICATION-FAILED.txt").exists())
+
+
+class TestIngestAcceptsWhatThePageAccepts(unittest.TestCase):
+    """The page (web/sync/sync.js, CONTRACT.md §2.5b) verifies two csv shapes
+    that a plain got==trace_bytes_device check refuses, and until 2026-09-09
+    `ingest` refused both — measured by calling _verify_ingest_bundle()
+    directly: "+700" and "+6", ok=False. A bundle the rider's page calls
+    verified must not need --force on Josh's side.
+
+      * header-only: a cleared puck emits "t,mag\\n" (6 B) with
+        trace_bytes_device=0 — the FIRST bundle of the loan.
+      * growth: the puck kept logging while handled, so got > device, but
+        got <= trace_bytes_after (the page's post-dump stats read).
+    """
+
+    def _ingest(self, files, name="jumpheight-E2C4-20260913-1432.zip"):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            bundle = write_zip(tmp, name, files)
+            out_dir = tmp / "sessions"
+            r = run_cli(["ingest", str(bundle), "--out", str(out_dir)])
+            sess = next(out_dir.iterdir(), None) if out_dir.exists() else None
+            sj = json.loads((sess / "session.json").read_text()) if sess else None
+            return r, sj
+
+    def test_header_only_region_is_an_empty_puck_not_a_surplus(self):
+        files, manifest, csv_bytes = csv_bundle_files(n_jumps=0, n_samples=0,
+                                                      device_over_by=-6)
+        self.assertEqual(csv_bytes, b"t,mag\n")
+        self.assertEqual(manifest["trace_bytes_device"], 0)
+        r, sj = self._ingest(files)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("header only (6 B)", r.stdout)
+        self.assertIn("recorded nothing", r.stdout)
+        self.assertNotIn("LONGER THAN THE PUCK SAID", r.stdout)
+        self.assertNotIn("--force", r.stdout)
+        self.assertTrue(sj["verified"], sj)
+
+    def test_seven_bytes_against_zero_is_still_a_refusal(self):
+        files, manifest, csv_bytes = csv_bundle_files(n_jumps=0, n_samples=0,
+                                                      device_over_by=-6)
+        files["trace.csv"] = b"t,mag\n\n"          # 7 B: not just the header
+        r, sj = self._ingest(files)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("LONGER THAN THE PUCK SAID", r.stdout)
+
+    def test_growth_within_trace_bytes_after_verifies(self):
+        files, manifest, csv_bytes = csv_bundle_files(n_jumps=2, device_over_by=-700)
+        self.assertEqual(len(csv_bytes) - manifest["trace_bytes_device"], 700)
+        manifest["trace_bytes_after"] = len(csv_bytes)          # got == after
+        files["manifest.json"] = json.dumps(manifest).encode()
+        r, sj = self._ingest(files)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("700 B over", r.stdout)
+        self.assertIn("within trace_bytes_after", r.stdout)
+        self.assertIn("kept recording", r.stdout)
+        self.assertNotIn("--force", r.stdout)
+        self.assertTrue(sj["verified"], sj)
+
+    def test_growth_past_trace_bytes_after_is_still_a_refusal(self):
+        files, manifest, csv_bytes = csv_bundle_files(n_jumps=2, device_over_by=-700)
+        manifest["trace_bytes_after"] = len(csv_bytes) - 1     # got == after + 1
+        files["manifest.json"] = json.dumps(manifest).encode()
+        r, sj = self._ingest(files)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("LONGER THAN THE PUCK SAID", r.stdout)
+
+    def test_growth_without_trace_bytes_after_is_still_a_refusal(self):
+        """A pre-2026-09-09b page ships no trace_bytes_after; a surplus then
+        has no ceiling to be judged against and stays unexplained."""
+        files, manifest, csv_bytes = csv_bundle_files(n_jumps=2, device_over_by=-700)
+        self.assertNotIn("trace_bytes_after", manifest)
+        r, sj = self._ingest(files)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("LONGER THAN THE PUCK SAID", r.stdout)

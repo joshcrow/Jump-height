@@ -5,15 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Send your ride — JumpHeight</title>
 <!--
-  The rider's page. He has a phone, no laptop, no repo, no bench (CONTRACT §0).
+  The rider's page. He has a phone, no laptop, no repo, no bench (CONTRACT.md §0).
   Everything on screen is written for him: no MTU, no base64, no "NUS", no
   byte counts unless a byte count is the actual news.
 
-  Static files only — no build step, no CDN, no framework (CONTRACT §3). The
+  Static files only — no build step, no CDN, no framework (CONTRACT.md §3). The
   markup is the whole skeleton; sync.js only ever fills in text nodes, never
   innerHTML, so a hostile or malformed device line can't become markup.
 
-  data-testid hooks are contract (CONTRACT §3, test seam): btn-connect,
+  data-testid hooks are contract (CONTRACT.md §3, test seam): btn-connect,
   btn-pull, btn-send, btn-clear, status, progress, puck-name, battery,
   result, note. Rename one and tools/tests/test_web_sync.py fails loudly.
 -->
@@ -23,9 +23,9 @@
 <main class="wrap">
 
   <h1>Send your ride</h1>
-  <p class="lede">Four steps, in order. Each button switches on when the one
-     above it is done. Keep the puck plugged in — or, over Bluetooth, keep the
-     phone next to it — the whole time.</p>
+  <p class="lede">Three steps, in order — then stop. Each button switches on
+     when the one above it is done. Keep the puck plugged in — or, over
+     Bluetooth, keep the phone next to it — the whole time.</p>
 
   <p class="status" id="status" data-testid="status" role="status" aria-live="polite">Not connected yet.</p>
 
@@ -38,8 +38,9 @@
     <p class="hint" id="usb-hint">Plug the puck into this computer with its USB
        cable — the one it charges on — and click <b>Connect with the cable</b>.
        Pick the entry that mentions <b>XIAO</b>, <b>JumpHeight</b> or
-       <b>usbmodem</b>. (The first time, the Mac may ask to allow the accessory
-       — click Allow.)</p>
+       <b>usbmodem</b>. (Newer Macs may ask to allow the accessory the first
+       time — click Allow if you see it. Most don’t ask at all; not seeing it
+       is normal.)</p>
     <button class="btn btn-primary" id="btn-connect-usb" data-testid="btn-connect-usb" type="button" hidden>Connect with the cable</button>
     <p class="hint" id="ble-hint">Or, with the puck switched on and next to
        you, tap <b>Connect over Bluetooth</b> and pick the one whose name
@@ -57,9 +58,11 @@
   <!-- 2 ------------------------------------------------------------------ -->
   <section class="step">
     <h2><span class="num">2</span> Copy the ride off the puck</h2>
-    <p class="hint" id="pull-hint">This is the slow one — a long session can
-       take a few minutes. Keep the puck plugged in (or, over Bluetooth, keep
-       the phone next to it with the screen on) while it runs.</p>
+    <p class="hint" id="pull-hint">This is the slow one. Over Bluetooth, a puck
+       that has been filling up over several rides can take <b>20–30 minutes</b>
+       (an estimate — nobody has timed a real one yet); the cable is expected to
+       be much faster. Keep the puck plugged in (or, over Bluetooth, keep the
+       phone next to it with the screen on) while it runs.</p>
     <!-- Shown only when the browser refused the Screen Wake Lock: on those
          browsers the screen sleeps, the link goes quiet and the pull dies on
          its 30 s timer, so "leave the phone alone" would be advice the page
@@ -91,13 +94,24 @@
     <button class="btn btn-primary" id="btn-send" data-testid="btn-send" type="button" disabled>Send</button>
     <p class="hint" id="send-hint" hidden>Pick Messages, Mail, WhatsApp —
        whatever you'd normally use to send Josh a file.</p>
+    <!-- The page's last word, and the whole of step 4 for this loan. sync.js
+         (init) shows exactly one of this line and the section below it. -->
+    <p class="hint" id="finish-hint"><b>You’re finished. Josh empties the
+       puck.</b></p>
   </section>
 
   <!-- 4 ------------------------------------------------------------------ -->
-  <section class="step">
-    <h2><span class="num">4</span> Empty the puck</h2>
-    <p class="hint" id="clear-hint">This appears once the ride has been copied
-       in full and handed off — sent, or saved to your Downloads.</p>
+  <!-- OFF for this loan, and hidden in the markup itself: sync.js unhides
+       this whole section only when the URL carries ?allowclear=1 (ALLOW_CLEAR),
+       which nobody but Josh ever types. The verified-AND-delivered gate
+       underneath it is unchanged and still applies on top. The rider is asked
+       never to empty the puck — Josh does that on the bench, where a short
+       download can still be re-pulled off a puck that still holds the ride. -->
+  <section class="step" id="step-clear" hidden>
+    <h2><span class="num">4</span> Leave the puck alone</h2>
+    <p class="hint" id="clear-hint"><b>Don’t empty the puck — Josh does that.</b>
+       The button below switches on once the ride has been copied in full and
+       handed off. Ignore it; you’re finished after step 3.</p>
     <button class="btn btn-danger" id="btn-clear" data-testid="btn-clear" type="button" hidden>Empty the puck</button>
   </section>
 
@@ -105,8 +119,11 @@
 
   <footer>
     <p class="muted small">If anything here goes wrong, nothing is lost — the
-       puck keeps everything until step 4, and step 4 only appears once the
-       ride has been copied in full and handed off.</p>
+       ride is still on the puck. But the puck only holds about five hours of
+       riding: it keeps a ride until it is emptied <b>or until it fills up</b>,
+       whichever comes first, and once it is full the next ride wipes the old
+       detail to make room (your jump counts survive). So copy each ride off
+       before you go out again.</p>
     <p class="muted small" id="page-version"></p>
   </footer>
 

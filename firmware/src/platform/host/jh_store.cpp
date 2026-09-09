@@ -323,7 +323,7 @@ void close_read() {
 // would, and it is the only way a test can reach main.cpp's
 // `streamed != declared` arm — nothing else on this platform can come up
 // short, so without it the arm that stands between the rider and a truncated
-// export that self-verifies (CONTRACT.md §2's `verified`) would ship untested.
+// export that self-verifies (web/sync/CONTRACT.md §2's `verified`) would ship untested.
 // Unset — every ordinary run, and every build that isn't env:host — this is 0
 // and the store behaves exactly as before.
 static uint32_t raw_overreport_bytes() {   // internal linkage: not seam API
