@@ -83,8 +83,26 @@ The filing steps below are kept for the next update/resubmission:
 
 **Desk sequence once installed, in priority order** (everything after a cut
 evening recovers on the weekend; everything before it doesn't):
-1. Setup on his watch: Activities & Apps → **Wing Foil** → Data Screens →
-   add → Connect IQ → Jump Height, **as a single-field screen** (F-32:
+1. Setup on his watch: Activities & Apps → **Wing Foil** → Wing Foil
+   settings → Data Screens → pick a screen → Layout → **1 Field** → Data
+   Fields → Field 1 → **scroll to the bottom of the category list →
+   "Connect IQ Fields"** → Jump Height. **The Connect IQ entry is inside the
+   field-slot picker, one level deeper than the Data Screens menu** — the
+   Instinct 3 manual never mentions it in the data-screen flow (grepped,
+   5,702 lines, 2026-09-09), which is the likeliest reason the 2026-09-08
+   attempt found it nowhere. Do NOT apply the Instinct 2 "use a 3-field
+   layout, the subscreen can't take a CIQ field" workaround: the SDK's
+   `simulator.json` gives `instinct3solar45mm` no subscreen slot and a real
+   full-screen 1-field layout. Store-side compatibility is not in question —
+   Garmin's app API lists his part number `006-B4585-00` (8/8 of his FITs);
+   fw 15.18's release notes *fix* a CIQ-datafield display bug. If "Connect
+   IQ Fields" is absent from the list: Wing Foil settings → Restore Defaults,
+   then repeat; if it is still absent, the .prg never reached the watch —
+   re-install from the Connect IQ phone app with the Instinct selected, sync,
+   power-cycle. Proof is one photo: a running Wing Foil activity with the
+   full-screen field showing (`E2C4` in the header = installed, placed,
+   running, linked; "finding puck" = placed and running, BLE still open).
+   Single-field because of F-32:
    `NO REC` renders in the full tier only). "Wing Foil" is the profile he
    actually records — sport=generic, sub_sport=track_me in 8/8 of his
    archived FITs (`data/nick-sessions/fits/`); a field added to Windsurf
