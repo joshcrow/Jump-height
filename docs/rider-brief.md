@@ -1,36 +1,65 @@
 # Rider brief — read this before you go out
 
-Thanks for helping out with this — you're doing your brother a favor, not
-running a lab. "The puck" below just means the little box mounted on the
-board. Here's everything you need to know. One page.
+Thanks for doing this — you're doing your brother a favor, not running a
+lab. "The puck" below is the little box. You've got it for a while and I'm
+not there, so this page is a bit longer than last time. One page, still.
 
-1. **Once your watch connects, it'll show the puck's battery on the
-   screen.** Just worth a glance — nothing to do about it either way.
-2. **Start your watch's activity before you paddle out** — pick Windsurf,
-   with the jump screen showing. Do this every single time, even if you
-   did it five minutes ago.
-3. **The puck records everything that happens in the water regardless** —
-   but if you skip step 2, none of it ever reaches your watch. No
-   activity started = no jump data on your watch, ever. This is the one
-   step that actually matters.
-4. **Screen says "finding puck" or "reconnecting," or just looks
-   frozen?** Totally normal. It reconnects itself. Just keep riding.
+1. **Charge it after every session.** Plug it in (USB-C) when you get home,
+   same as your watch, and leave it plugged in between rides. It's always
+   on, it runs about two days on a charge, and there's nobody else to plug
+   it in — this is the one bit of looking-after it needs. The battery
+   number on your watch is fine to glance at, but charge on the rule, not
+   the number.
+2. **Two things before you paddle out, in this order.**
+   a) **Press the little reset button on the puck once.** Takes a second.
+      It makes the count start from today instead of from whenever the
+      puck last rebooted — skip it and yesterday's numbers ride along.
+   b) **Start your Wing Foil activity with the Jump Height screen
+      showing.** The puck records everything regardless, but nothing
+      reaches your watch without an activity running, and anything that
+      happens before you press start isn't in the watch file.
+3. **Jump Height needs a screen to itself** — one field, not sharing with
+   speed or time. On a shared screen the one warning that matters (item 6)
+   can't be shown.
+4. **Screen says "finding puck" or "reconnecting," or just looks frozen?**
+   Totally normal. It reconnects itself. Just keep riding.
 5. **See a small "!" with a number?** Not a problem. Keep riding, just
    mention it afterwards.
-6. **See the words "NO REC"? Come in and tell us.** This one is worth
-   interrupting your session for. It means the puck is powered and talking
-   to your watch but **not saving anything** — so everything from that
-   point on is lost. It takes us about a minute to fix on the beach, and
-   there is nothing you can do about it on the water.
+6. **See the words "NO REC"? It has stopped saving.** Give it two minutes —
+   it sometimes clears itself. If it's still there, that ride isn't being
+   recorded and there's genuinely nothing to do about it on the water, so
+   carry on and have your ride. When you're home: charge it for a couple of
+   hours, press the reset button once, and text me a photo of the watch
+   screen. If it's still NO REC after that it needs my laptop — no rush,
+   nothing's lost that wasn't already lost.
 7. **Never stop or discard the activity while you're out, no matter what
    the screen shows.** Only end and save it once you're completely done
    for the day.
-8. **The numbers update live as you go**; don't worry if they look
-   slightly different once you save — that's normal.
+8. **Don't take the jump count too seriously.** It counts hard landings
+   and heavy chop as jumps, so it reads high — one test day it said 16
+   when there hadn't been a single jump. The best-height number is the one
+   worth looking at, and even that hasn't been checked against a camera on
+   water yet. Don't post it, don't compare it to Surfr.
 9. **Feet or meters — whatever your watch is already set to.** Nothing
    for you to change.
 10. **If the whole thing looks dead — blank screen, nothing showing —
-   there's nothing to do about it on the water.** Just tell us when
-   you're back. We sort it out at home, never at the beach.
+    carry on and have your ride.** The puck records on its own whether or
+    not your watch ever sees it. At home: charge it, press reset once,
+    text me. Nothing to do about it at the beach, ever.
+
+**Between rides — the boring bits**
+
+- **After each ride, send me two things:** the activity exported from
+  Garmin Connect, same as the ones you sent in August, and one text line —
+  time in, time out, conditions, "N jumps, biggest felt like X." The watch
+  file tells me what you saw; the puck tells me what actually happened,
+  and I get that when it comes home.
+- **It holds about five hours of water on its own memory.** After that it
+  keeps only the newest ride's detail (the counts survive). So no rush,
+  but don't let ten rides stack up before I see it.
+- **Never "empty" or clear it.** I do that.
+- **Text me any time.** A photo of the watch screen tells me more than a
+  description. If it goes missing, tell me straight away — it's the only
+  one with a battery.
 
 That's it. Thanks again — go have a good ride.

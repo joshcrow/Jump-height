@@ -29,8 +29,9 @@ only route onto the rider's watch.** (The MTP procedure, `tools/mtp_send` +
 OpenMTP fallback, still works for the Epix dev bench, proven 2026-08-10 —
 it just never reaches the Instinct.)
 
-**Artifact:** `garmin/jumpfield/bin/JumpField.iq` — **79,145 bytes, built
-2026-08-23, 4 of 4 device variants clean.** Gitignored, so file size + mtime
+**Artifact:** `garmin/jumpfield/bin/JumpField.iq` — **79,136 bytes, built
+2026-08-24 18:29, 4 of 4 device variants clean** (the approved build; the
+earlier 79,145 B / 08-23 figure here was the pre-rebuild artifact). Gitignored, so file size + mtime
 is the only handle on which build is on disk. **Rebuild immediately before
 submitting, and after any change under `garmin/jumpfield/source/`** — review
 takes days and it's the rider's only way to get the app.
@@ -82,9 +83,13 @@ The filing steps below are kept for the next update/resubmission:
 
 **Desk sequence once installed, in priority order** (everything after a cut
 evening recovers on the weekend; everything before it doesn't):
-1. Setup on his watch: Activities & Apps → Windsurf → Data Screens → add →
-   Connect IQ → Jump Height. Let him drive it — a confusing setup is a
-   finding about the product.
+1. Setup on his watch: Activities & Apps → **Wing Foil** → Data Screens →
+   add → Connect IQ → Jump Height, **as a single-field screen** (F-32:
+   `NO REC` renders in the full tier only). "Wing Foil" is the profile he
+   actually records — sport=generic, sub_sport=track_me in 8/8 of his
+   archived FITs (`data/nick-sessions/fits/`); a field added to Windsurf
+   never runs. Let him drive it — a confusing setup is a finding about the
+   product.
 2. Layout, all three tiers, photographed — header shows the connected
    puck's id (see Puck identity), expect `E2C4` with the OG.
 3. Desk test untethered: three real tosses; `fakejump` over BLE (`!N`
@@ -208,8 +213,9 @@ isolated, so any fix must be automatic and silent, never a settings screen
 one puck, one watch — not blocking, since shore admin during a ride is out
 of range regardless.
 
-**Storage lifecycle:** the trace region holds ~5 h of recording and stops
-writing — silently, no watch symptom — once full; jumps (2048 records) are
+**Storage lifecycle:** the trace region (2,027,520 B physical) holds ~5 h
+of recording — measured 5.2 h at 937,644 samples, 2026-09-07 — and stops
+writing — silently, no watch symptom, no STATS key — once full; jumps (2048 records) are
 separately append-only. `jh_store::trace_clear()` (shipped 2026-08-20)
 auto-clears the trace **only** (jumps always preserved), and only when
 trace is already full, board has been still ≥1 h, and motion has just
