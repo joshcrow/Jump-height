@@ -459,9 +459,19 @@ hand — CLAUDE.md rule 5). What changed, all pinned by tests, suite 523 →
   own Mac. Send's branch was measured, not guessed: `canShare({files})` is
   **true** on Chrome 152, so it takes the **share sheet** and Downloads is the
   fallback — `rider-sync.md` step 6 is in the right order.
-  **Still unmeasured:** a multi-megabyte body through the browser (this was
-  455 KB, ~1/35th of a full region), `tracecheck` on a full region, and the
-  share sheet itself on Nick's own Mac.
+  **Multi-megabyte, measured 2026-09-10.** `fillstore` filled the Puck's
+  region (51 passes, 611 s) and the whole thing came off the cable:
+  **14,093,853 B in 220.3 s, 62.5 KB/s, flat from the 1 MB mark to 13 MB.**
+  So **a full puck is 3.7 minutes on the cable** — measured, not extrapolated.
+  Two things fell out of it. `trace_bytes` at exhaustion is **not a constant**:
+  this board read 14,093,819 where the OG read 15,917,153 on the same-sized
+  physical region, ~13 % apart — any check against a fixed MB figure is wrong
+  by construction. And **F-22 now has a second board**: delivered body ran
+  **15 B under** the device count here against **765 B** on the OG; both
+  negative, both inside the 1..800 B band the page and `ingest` apply.
+  **Still unmeasured:** that body through the BROWSER (Chrome's stream and the
+  page's main-thread parse at 14 MB), `tracecheck` on a full region (this
+  build has no such command), and the share sheet on Nick's own Mac.
 - **Simplified 2026-09-09 to `2026-09-09c`, after the owner read it and called
   it confusing.** It was written for "phone or computer, Bluetooth or cable",
   and Chrome on a Mac reports BOTH transports — so the rider met two competing

@@ -222,3 +222,43 @@ the sensor behind them was doing. Per CLAUDE.md rule 1 this is not a verdict on
 the board: nothing has established its configuration, and the known cause of
 exactly this shape on this project is GPIO drive strength, not a dead part.
 
+## Multi-megabyte, measured 2026-09-10 — a FULL region over the cable
+
+The 455 KB pull above was ~1/35th of a region, so "does it hold at scale" was
+open. It is not any more. `fillstore` filled the Puck's region — 51 passes,
+611 s — and the whole thing came back over USB CDC.
+
+**`fillstore` is dispatched on `15b2d468` but absent from its `help` string.**
+Confirmed on silicon, and it is the F-25 residue already noted for the current
+tree: `tools/jump:2626` reconciles help against `cmd == "..."` only, so the
+`startsWith`-dispatched commands (`fillstore`, `set`) are counted nowhere. The
+help string is not the command list.
+
+    region full   trace_bytes = 14,093,819   region_full=1
+    pull          14,093,853 B on the wire, 939,256 body lines, 220.3 s
+    throughput    62.5 KB/s sustained
+
+Throughput is **flat across the whole transfer** — 62.9 KB/s at the 1 MB mark,
+62.5 KB/s at 13 MB, every intermediate mark within 0.4 KB/s. No stall, no
+backpressure cliff, no degradation. Against 64.1 KB/s on the 204 KB body that
+is a 2.5 % difference over a 69× larger transfer.
+
+**So a full puck on the cable is 3.7 minutes, measured** — not the ~4 min
+extrapolated from the small body. The extrapolation was sound.
+
+**`trace_bytes` at exhaustion is not a constant, now measured twice.** This
+board reported **14,093,819** at `region_full=1`; the OG reported
+**15,917,153** on 2026-09-07. Same 2,027,520 B physical region, different
+content, ~13 % apart in CSV-equivalent terms. Any check that compares
+`trace_bytes` against a fixed MB figure is wrong by construction.
+
+**Audit F-22, measured on a second board.** A full region over-reports:
+device `14,093,819`, delivered body `14,093,804`, **delta −15 B**. Inside the
+1..800 B band, and a second independent shape for it — the OG's was **−765**.
+Two boards, two deltas, both negative, both inside. The band is no longer
+resting on one observation.
+
+**Still unmeasured after this:** the same body through the BROWSER (Chrome's
+stream and the page's main-thread parse at 14 MB — separate work), and
+`tracecheck` on a full region, which this build does not have the command for.
+

@@ -42,6 +42,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import os
 import re
 import sys
 import threading
@@ -178,6 +179,276 @@ def traceraw_frame(raw: bytes, *, drop_tail_lines: int = 0, crc: int | None = No
            f" bytes={len(raw)}",
            "OK traceraw"]
     )
+
+
+# ------------------------------------------------- the full-region fixture
+#
+# 455 KB went through this page over a real cable on 2026-09-09
+# (docs/serial-parity-2026-09-09.md). A FULL trace region is ~35x that, and
+# nothing had ever put one through the page. 15,917,153 is not a round number
+# invented here: it is what the OG's own `tracecheck` answered on 2026-09-07
+# for a full region — "fast=15917918 slow=15917153 DISAGREE — the slow number
+# is the correct one" (docs/STATUS.md, F-22). `trace_bytes` is a CSV byte
+# count (firmware/src/platform/nrf52/jh_store.cpp:472), so that figure IS the
+# size of the body the csv fallback carries, and the csv fallback is the only
+# path today's OG (src=5c80a436) can take.
+FULL_REGION_CSV_BYTES = 15_917_153
+
+# What the DEFAULT run measures. Sized from the full-region run's own measured
+# throughput so the 500 ms progress timer fires several times and the
+# assertions below are about a bar that really moved — not a pull that
+# finished before the first tick.
+DEFAULT_LARGE_CSV_BYTES = 3_000_000
+
+# Opt-in, with the reason attached and the command in it: the full-region run
+# is minutes of browser work, and a suite nobody runs because it is slow is a
+# suite that stops catching things. The DEFAULT run still drives
+# DEFAULT_LARGE_CSV_BYTES through the same code, so the page is never
+# unmeasured at scale — only less measured.
+FULL_REGION_ENV = "JH_WEB_SYNC_FULL_REGION"
+RUN_FULL_REGION = os.environ.get(FULL_REGION_ENV) == "1"
+FULL_REGION_SKIP = (
+    f"the OG's full {FULL_REGION_CSV_BYTES:,}-byte region measured 15.9 s on "
+    f"this bench (Apple M3, headless Chromium 151, 2026-09-10) and would more "
+    f"than double this file's run; enable it with {FULL_REGION_ENV}=1 "
+    f"python3 -m pytest tools/tests/test_web_sync.py -k full_region -s "
+    f"(the default run still drives {DEFAULT_LARGE_CSV_BYTES:,} bytes through "
+    f"the same path)")
+
+
+def js_const(name):
+    """Read a numeric `const` out of sync.js rather than restating it here.
+
+    F-31 (commit 5941a37) was exactly this: a suite that did not read its own
+    constants pins nothing when the source moves.
+    """
+    src = (WEB_DIR / "sync" / "sync.js").read_text()
+    m = re.search(rf"^const {re.escape(name)} = (\d+);", src, re.M)
+    assert m, f"{name} is no longer a plain numeric const in web/sync/sync.js"
+    return int(m.group(1))
+
+
+INACTIVITY_MS = js_const("INACTIVITY_MS")
+
+
+def plan_csv_body(total_bytes, log_hz=LOG_HZ):
+    """(rows, wide) for a trace.csv body of EXACTLY total_bytes.
+
+    The puck prints one trace sample as "%.3f,%.3f\\n"
+    (firmware/src/platform/nrf52/jh_store.cpp:559) and t = i/log_hz, so a row
+    costs digits(int(t)) + 11 bytes and the body length is a function of the
+    row count alone — predictable here without formatting a single float.
+    The header "t,mag\\n" is 6 more, counted once (jh_store.cpp:1059).
+
+    Whatever is left over (0..15 bytes) is spent on `wide` rows whose mag is
+    >= 10 g, one character each. Those are samples, not padding: a hard
+    landing reads over 10 g, and it is precisely that mix of field widths that
+    stops a real region's byte count from being a multiple of anything.
+    """
+    remaining = total_bytes - 6
+    rows, digits = 0, 1
+    while True:
+        lo = 0 if digits == 1 else 10 ** (digits - 1)
+        count = (10 ** digits - lo) * log_hz     # rows whose t has `digits` digits
+        width = digits + 11
+        if count * width <= remaining:
+            rows += count
+            remaining -= count * width
+            digits += 1
+            continue
+        rows += remaining // width
+        remaining -= (remaining // width) * width
+        break
+    assert 0 <= remaining < digits + 11, remaining
+    assert remaining <= rows, "no room to spend the remainder on wide-mag rows"
+    return rows, remaining
+
+
+# The in-page bench. It exists because the alternative corrupts the number
+# being taken: pushing ~16 MB of device lines across Playwright's evaluate RPC
+# would time the RPC, not the page. So the BODY IS GENERATED INSIDE THE
+# BROWSER and handed to window.__mock.feed() one line at a time — the same
+# entry point a real line takes (MockTransport.receive -> onLine,
+# web/sync/sync.js:355) — and the clock is performance.now() in the page.
+#
+# What this models, and what it does not:
+#  * It feeds in chunks and yields between them, because SerialTransport's
+#    _readLoop (web/sync/sync.js:326) yields to the event loop between reads.
+#    A single synchronous loop would report a frozen UI that the real link
+#    would never produce.
+#  * feedCpuMs sums ONLY the chunk loops, so the yields, the DOM sampling and
+#    anything Python does are outside it. That is the page's own cost.
+#  * bodyWallMs is the whole body including those yields and samples — the
+#    harness's clock, stated as such, never as the page's cost.
+#  * genCpuMs is measured separately by GENERATE_ONLY_JS: the same loop with
+#    the feed() call removed. feedCpuMs - genCpuMs is what the PAGE did.
+BENCH_JS = """
+(cfg) => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const B = {
+    done: false, error: null,
+    rows: 0, bodyBytes: 0, chunks: 0,
+    feedCpuMs: 0, bodyWallMs: 0, maxChunkMs: 0, maxYieldMs: 0,
+    tailMs: null, phase: null,
+    perfMemPresent: false, perfMem: [],
+    rafIdle: 0, rafBody: 0, rafIdleMs: cfg.rafIdleMs,
+    progress: [], bar: [],
+  };
+  window.__bench = B;
+
+  (async () => {
+    const feed = window.__mock.feed;
+    const sent = window.__mock.sent;
+    let answered = cfg.answeredSoFar;
+    const pt = document.getElementById('progress-text');
+    const bf = document.getElementById('bar-fill');
+    const mem = performance.memory;
+    B.perfMemPresent = !!(mem && typeof mem.usedJSHeapSize === 'number');
+
+    // A requestAnimationFrame control FIRST: how many frames this browser
+    // hands an idle page. Without it a low frame count during the transfer
+    // would be read as a freeze when it only ever meant "headless".
+    let raf = 0, rafOn = true;
+    const tick = () => { raf++; if (rafOn) requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
+    await sleep(cfg.rafIdleMs);
+    B.rafIdle = raf;
+    raf = 0;
+
+    if (sent[answered] !== 'trace') {
+      B.error = 'expected the page to be waiting on `trace`, found '
+              + JSON.stringify(sent[answered]);
+      B.done = true; rafOn = false; return;
+    }
+    answered++;
+
+    let lastText = null, lastWidth = null, lastMem = null;
+    const sample = (elapsed) => {
+      const t = pt.textContent;
+      if (t !== lastText) { lastText = t; B.progress.push([Math.round(elapsed), t]); }
+      const w = bf.style.width;
+      if (w !== lastWidth) { lastWidth = w; B.bar.push([Math.round(elapsed), w]); }
+      if (B.perfMemPresent) {
+        const u = mem.usedJSHeapSize;
+        if (u !== lastMem) { lastMem = u; B.perfMem.push([Math.round(elapsed), u]); }
+      }
+    };
+
+    const N = cfg.rows, wideFrom = cfg.rows - cfg.wide, hz = cfg.logHz;
+    const t0 = performance.now();
+    feed('FILE trace.csv BEGIN');
+    feed('t,mag');
+    B.bodyBytes = 6;
+    let i = 0;
+    while (i < N) {
+      const end = Math.min(N, i + cfg.chunkRows);
+      const c0 = performance.now();
+      for (; i < end; i++) {
+        const s = (i / hz).toFixed(3);
+        const m = i >= wideFrom ? (10 + (i % 7) / 10).toFixed(3)
+                                : (1 + 0.01 * (i % 20)).toFixed(3);
+        const line = s + ',' + m;
+        B.bodyBytes += line.length + 1;
+        feed(line);
+      }
+      const c1 = performance.now();
+      const dt = c1 - c0;
+      B.feedCpuMs += dt;
+      if (dt > B.maxChunkMs) B.maxChunkMs = dt;
+      B.chunks++;
+      sample(c1 - t0);
+      await sleep(0);
+      const y = performance.now() - c1;
+      if (y > B.maxYieldMs) B.maxYieldMs = y;
+    }
+    B.rows = i;
+    feed('FILE trace.csv END');
+    feed('OK trace');
+    B.bodyWallMs = performance.now() - t0;
+    B.rafBody = raf;
+    sample(B.bodyWallMs);
+
+    // The rest of the pull, answered from the SAME FakePuck replies Python
+    // built — only the delivery is in here, so the puck stays in Python.
+    let mark = null;
+    const settled = () => {
+      const p = window.__sync.state().phase;
+      return (p === 'pulled' || p === 'failed') ? p : null;
+    };
+    const deadline = performance.now() + cfg.tailTimeoutMs;
+    for (;;) {
+      while (answered < sent.length) {
+        const cmd = sent[answered++];
+        const reply = cfg.replies[cmd];
+        if (!reply) {
+          B.error = 'the page sent a command the bench has no canned reply for: ' + cmd;
+          break;
+        }
+        for (const l of reply) feed(l);
+        mark = performance.now();     // last line of the last reply
+      }
+      if (B.error) break;
+      // endPullOk runs in the microtask right behind the reply that finished
+      // the last capture, so spin microtasks before spending a 1 ms timer
+      // clamp on it: this is the number that says whether the page freezes
+      // after the bar reaches the end.
+      for (let k = 0; k < 200 && !settled(); k++) await Promise.resolve();
+      const p = settled();
+      if (p) {
+        B.phase = p;
+        if (mark !== null) B.tailMs = performance.now() - mark;
+        break;
+      }
+      if (performance.now() > deadline) { B.error = 'the pull never settled'; break; }
+      await sleep(0);
+    }
+    rafOn = false;
+    B.done = true;
+  })().catch((e) => {
+    B.error = String((e && e.stack) || e);
+    B.done = true;
+  });
+  return true;
+}
+"""
+
+# The control: byte-for-byte the same row generation with feed() removed, so
+# the fixture's own cost can be subtracted from feedCpuMs instead of being
+# reported as the page's. It also recomputes the body length independently of
+# plan_csv_body().
+GENERATE_ONLY_JS = """
+(cfg) => {
+  const N = cfg.rows, wideFrom = cfg.rows - cfg.wide, hz = cfg.logHz;
+  let bytes = 6, sink = 0;
+  const t0 = performance.now();
+  for (let i = 0; i < N; i++) {
+    const s = (i / hz).toFixed(3);
+    const m = i >= wideFrom ? (10 + (i % 7) / 10).toFixed(3)
+                            : (1 + 0.01 * (i % 20)).toFixed(3);
+    const line = s + ',' + m;
+    bytes += line.length + 1;
+    sink += line.charCodeAt(0);
+  }
+  return { ms: performance.now() - t0, bytes: bytes, sink: sink };
+}
+"""
+
+# Step 3, timed in the page for the same reason: the click, the zip build and
+# the hand-off to the browser's downloader, with no Python in the loop.
+SEND_JS = """
+async (timeoutMs) => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const t0 = performance.now();
+  document.querySelector('[data-testid=btn-send]').click();
+  while (!window.__sync.state().delivered) {
+    if (performance.now() - t0 > timeoutMs) return { ms: null, size: null };
+    await sleep(5);
+  }
+  const b = window.__sync.lastBundle();
+  return { ms: performance.now() - t0, size: b ? b.blob.size : null,
+           name: b ? b.name : null };
+}
+"""
 
 
 class FakePuck:
@@ -1342,6 +1613,239 @@ class TestWebSync(_WebSyncCase):
         self.assertTrue(man["cleared"],
                         "a bundle built after the erase must say so")
         self.assertIn("OK clear", z.read("device.log").decode())
+
+
+
+class TestWebSyncAtRegionScale(_WebSyncCase):
+    """The csv fallback at the size a REAL full trace region actually is.
+
+    Everything measured before this went through the page at 455 KB — the real
+    cable pull on 2026-09-09 (docs/serial-parity-2026-09-09.md). A full region
+    is 15,917,153 bytes, ~35x that, and at the 64.9 KB/s that pull measured it
+    is about four minutes of steady streaming. Nothing had ever put a body
+    that size through the page's main-thread line handling, so its cost per
+    line, its heap, its progress updates and its zip step were all unmeasured.
+    No board is needed to find out: the mock transport feeds the same lines a
+    puck would.
+
+    The csv path, not traceraw, because that is the only path Nick's OG can
+    take (src=5c80a436 predates `traceraw`, docs/STATUS.md).
+
+    WHAT IS TIMED, AND BY WHOSE CLOCK. Read BENCH_JS's header first. The short
+    version: the body is generated inside the browser and fed one line at a
+    time to window.__mock.feed, `feed_cpu_ms` sums only the chunk loops, and
+    `generate_only_ms` is the same generation with feed() removed, so
+    `page_line_handling_ms` is the page's own work and nothing else. The wall
+    figures are labelled as wall and include the yields and the sampling.
+    """
+
+    # ~8 KB of wire text per yield, which is the shape SerialTransport's read
+    # loop has: read a CDC burst, push its lines, go back to the event loop
+    # (web/sync/sync.js:326). Feeding all of it in one synchronous loop would
+    # manufacture a freeze the real link never produces.
+    CHUNK_ROWS = 512
+    POLL_S = 0.25
+
+    def _measure_csv_pull(self, total_bytes):
+        rows, wide = plan_csv_body(total_bytes)
+        puck = FakePuck(traceraw="unknown", trace_bytes=total_bytes)
+        console = []
+        self.page.on("console", lambda m: console.append(f"{m.type}: {m.text}"))
+        # performance.memory is the API the brief names; Runtime.getHeapUsage
+        # is here because that one turned out not to be a measurement at all
+        # in this browser — see the assertion on perf_memory_moved below.
+        cdp = self.context.new_cdp_session(self.page)
+
+        self._connect(puck)
+        self.page.click("[data-testid=btn-pull]")
+        self._answer_until(puck, "trace")
+
+        cfg = {"answeredSoFar": self._answered, "rows": rows, "wide": wide,
+               "chunkRows": self.CHUNK_ROWS, "logHz": LOG_HZ,
+               "rafIdleMs": 300, "tailTimeoutMs": 120000,
+               "replies": {c: puck.reply(c) for c in ("stats", "selftest")}}
+
+        heap_start = cdp.send("Runtime.getHeapUsage")["usedSize"]
+        self.page.evaluate(BENCH_JS, cfg)
+        began = time.monotonic()
+        outside, heap_peak = [], heap_start
+        while True:
+            time.sleep(self.POLL_S)
+            # Sampled from OUTSIDE the page, which is the only observer that
+            # can tell a moving bar from a frozen one: if the main thread were
+            # blocked, this evaluate would not return either.
+            snap = self.page.evaluate(
+                "() => ({ done: window.__bench.done,"
+                " text: document.getElementById('progress-text').textContent,"
+                " bar: document.getElementById('bar-fill').style.width,"
+                " hidden: document.getElementById('progress').hidden })")
+            used = cdp.send("Runtime.getHeapUsage")["usedSize"]
+            heap_peak = max(heap_peak, used)
+            outside.append({"t_s": round(time.monotonic() - began, 2),
+                            "progress_text": snap["text"], "bar": snap["bar"],
+                            "hidden": snap["hidden"],
+                            "heap_mb": round(used / 1e6, 1)})
+            if snap["done"]:
+                break
+            self.assertLess(time.monotonic() - began, 900,
+                            f"the in-page bench never finished. last={outside[-1]}")
+        b = self.page.evaluate("() => window.__bench")
+        self.assertIsNone(b["error"], f"the in-page bench failed: {b['error']}")
+        self._answered = len(self._sent())
+        heap_peak = max(heap_peak, cdp.send("Runtime.getHeapUsage")["usedSize"])
+
+        # Step 3, timed by the page's own clock, then read back through the
+        # existing helper so Python's zipfile has to accept what it produced.
+        send = self.page.evaluate(SEND_JS, 180000)
+        self.assertIsNotNone(send["ms"], "Send never reported delivered")
+        heap_peak = max(heap_peak, cdp.send("Runtime.getHeapUsage")["usedSize"])
+        name, z = self._bundle()
+        trace_csv = z.read("trace.csv")
+        manifest = json.loads(z.read("manifest.json"))
+        device_log = z.read("device.log").decode()
+
+        # The fixture's own cost, measured the same way with feed() removed,
+        # and an independent recount of the body length.
+        gen = self.page.evaluate(GENERATE_ONLY_JS, cfg)
+
+        st = self._state()
+        m = {
+            "body_bytes": b["bodyBytes"],
+            "rows": b["rows"],
+            "wide_mag_rows": wide,
+            "lines_fed": b["rows"] + 2,          # + the header + the BEGIN line
+            "chunks": b["chunks"],
+            "body_wall_ms": round(b["bodyWallMs"], 1),
+            "feed_cpu_ms": round(b["feedCpuMs"], 1),
+            "generate_only_ms": round(gen["ms"], 1),
+            "page_line_handling_ms": round(b["feedCpuMs"] - gen["ms"], 1),
+            "max_chunk_ms": round(b["maxChunkMs"], 2),
+            "max_yield_ms": round(b["maxYieldMs"], 2),
+            "tail_ms": None if b["tailMs"] is None else round(b["tailMs"], 1),
+            "send_ms": round(send["ms"], 1),
+            "bundle_bytes": send["size"],
+            "bundle_name": send["name"],
+            "trace_csv_in_zip": len(trace_csv),
+            "heap_start_bytes": heap_start,
+            "heap_peak_bytes": heap_peak,
+            "perf_memory_present": b["perfMemPresent"],
+            "perf_memory_distinct_values": sorted({v for _t, v in b["perfMem"]}),
+            "raf_idle": b["rafIdle"],
+            "raf_idle_ms": b["rafIdleMs"],
+            "raf_during_body": b["rafBody"],
+            "progress_in_page": b["progress"],
+            "bar_in_page": b["bar"],
+            "outside_samples": outside,
+            "console": console,
+            "pull_seconds_page": manifest["transfer"]["seconds"],
+            "bytes_received_page": manifest["transfer"]["bytes_received"],
+            "verified": st["verified"],
+            "reasons": st["reasons"],
+            "phase": b["phase"],
+            "f22_band_applied": st["f22_band_applied"],
+            "inactivity_ms": INACTIVITY_MS,
+        }
+
+        # ---- 1/3: the body is the size claimed, and it verified -------------
+        self.assertEqual(b["bodyBytes"], total_bytes,
+                         "the fed body is not the size this test claims to measure")
+        self.assertEqual(gen["bytes"], total_bytes,
+                         "plan_csv_body and the generator disagree about the body length")
+        self.assertEqual(b["phase"], "pulled", f"the pull did not finish: {st}")
+        self.assertEqual(st["trace_format"], "csv")
+        self.assertEqual(st["reasons"], [],
+                         f"verifyPull objected at {total_bytes:,} bytes: {st['reasons']}")
+        self.assertTrue(st["verified"])
+        self.assertEqual(st["trace_bytes_got"], total_bytes,
+                         "the page counted a different number of bytes than were fed")
+        self.assertFalse(st["f22_band_applied"],
+                         "this is the byte-EXACT case; F-22's band must not be what passed it")
+
+        # ---- 4: the progress UI moved while the data flowed ----------------
+        # Sampled from outside the page, more than once, and required to show
+        # at least two different readings AND a percentage that is neither 0
+        # nor 100 — a bar that only ever showed its endpoints would satisfy a
+        # weaker assertion while looking frozen to the rider.
+        texts = [s["progress_text"] for s in outside]
+        self.assertGreater(len(set(texts)), 1,
+                           f"the progress text never changed during the pull: {texts}")
+        pcts = sorted({int(g.group(1)) for t in texts
+                       for g in [re.search(r"(\d+)\s*%", t)] if g})
+        self.assertTrue([p for p in pcts if 0 < p < 100],
+                        f"no partial percentage was ever on screen: {texts}")
+        bars = sorted({s["bar"] for s in outside if s["bar"]})
+        self.assertGreater(len(bars), 1, f"the bar never moved: {bars}")
+        m["percentages_seen"] = pcts
+        m["bar_widths_seen"] = bars
+
+        # ---- 5: the 30 s inactivity timer -----------------------------------
+        # It resets on EVERY line (armCaptureTimer, web/sync/sync.js:661), so
+        # it can only trip on a gap between lines. The longest gap this run
+        # produced is the longest chunk plus the longest yield; assert the
+        # headroom rather than just "it did not trip", which a lucky run also
+        # satisfies.
+        worst_gap_ms = b["maxChunkMs"] + b["maxYieldMs"]
+        m["worst_line_gap_ms"] = round(worst_gap_ms, 2)
+        self.assertLess(worst_gap_ms, INACTIVITY_MS / 10,
+                        f"a gap between lines came within 10x of INACTIVITY_MS "
+                        f"({INACTIVITY_MS} ms): {worst_gap_ms:.1f} ms")
+
+        # ---- 6: the bundle ---------------------------------------------------
+        self.assertIsNone(z.testzip(), "the page wrote a zip with a bad CRC")
+        self.assertEqual(len(trace_csv), total_bytes,
+                         "trace.csv in the zip is not the body that was fed")
+        self.assertTrue(trace_csv.startswith(b"t,mag\n0.000,1.000\n"),
+                        f"trace.csv starts wrong: {trace_csv[:40]!r}")
+        self.assertTrue(trace_csv.endswith(b"\n"))
+        self.assertEqual(manifest["trace_format"], "csv")
+        self.assertEqual(manifest["trace_bytes_got"], total_bytes)
+        self.assertEqual(manifest["trace_bytes_device"], total_bytes)
+        self.assertTrue(manifest["verified"])
+        self.assertFalse(manifest["f22_band_applied"])
+        # device.log stays readable at this scale: the body must not be in it.
+        self.assertIn("FILE trace.csv BEGIN", device_log)
+        self.assertNotIn("0.000,1.000", device_log,
+                         "device.log carried the trace body (CONTRACT.md §2)")
+        m["device_log_bytes"] = len(device_log)
+
+        # ---- 7: nothing on the console, nothing blocked ----------------------
+        errors = [c for c in console if c.startswith("error")]
+        self.assertEqual(errors, [], f"the page logged console errors: {errors}")
+        self.assertEqual(self._blocked, [], "the page reached outside localhost")
+        return m
+
+    @staticmethod
+    def _report(label, m):
+        print(f"\n--- {label} ---")
+        for k in ("body_bytes", "rows", "lines_fed", "chunks", "body_wall_ms",
+                  "feed_cpu_ms", "generate_only_ms", "page_line_handling_ms",
+                  "max_chunk_ms", "max_yield_ms", "worst_line_gap_ms",
+                  "inactivity_ms", "tail_ms", "send_ms", "bundle_bytes",
+                  "trace_csv_in_zip", "device_log_bytes", "heap_start_bytes",
+                  "heap_peak_bytes", "perf_memory_present",
+                  "perf_memory_distinct_values", "raf_idle", "raf_idle_ms",
+                  "raf_during_body", "pull_seconds_page", "bytes_received_page",
+                  "verified", "reasons", "f22_band_applied",
+                  "percentages_seen", "bar_widths_seen", "console"):
+            print(f"  {k} = {m.get(k)!r}")
+        print("  progress text, sampled from outside the page:")
+        for s in m["outside_samples"]:
+            print(f"    t={s['t_s']:>7.2f}s  bar={s['bar']:>5}  "
+                  f"heap={s['heap_mb']:>6.1f} MB  {s['progress_text']!r}")
+
+    def test_csv_pull_at_three_megabytes(self):
+        """The default run: 3 MB of trace.csv, ~205k lines, every check the
+        full-region test makes. Sized so the 500 ms progress timer fires
+        several times — at 1 MB the pull can finish before its first tick, and
+        then "the bar moved" would be asserting nothing."""
+        m = self._measure_csv_pull(DEFAULT_LARGE_CSV_BYTES)
+        self._report("csv pull, 3,000,000 B", m)
+
+    @unittest.skipUnless(RUN_FULL_REGION, FULL_REGION_SKIP)
+    def test_csv_pull_at_the_ogs_full_region(self):
+        """15,917,153 bytes — the OG's own full-region figure, 2026-09-07."""
+        m = self._measure_csv_pull(FULL_REGION_CSV_BYTES)
+        self._report(f"csv pull, {FULL_REGION_CSV_BYTES:,} B (OG full region)", m)
 
 
 if __name__ == "__main__":
