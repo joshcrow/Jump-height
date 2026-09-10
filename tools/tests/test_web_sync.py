@@ -961,6 +961,32 @@ class TestWebSync(_WebSyncCase):
         self.assertTrue(self.page.locator("[data-testid=btn-clear]").is_hidden())
 
     # ------------------------------------------------- the header-only case --
+    def test_a_ride_with_no_jumps_is_not_called_nothing(self):
+        """"No jumps" and "nothing recorded" are different states.
+
+        MEASURED 2026-09-09, driving the real page over Web Serial against
+        JumpHeight-8673: 455 KB of ride data, 0 stored jumps, and the page
+        said "Nothing was recorded on the puck." False, and expensive — that
+        is the exact shape of the 2026-09-06 water session (47 minutes on the
+        water, a full trace, not one real jump in it, docs/STATUS.md), which
+        is the most valuable capture this project has. A rider told nothing
+        was recorded has every reason not to send it."""
+        # A real ride's worth of trace with no jumps detected in it, on the
+        # csv path — the only one Nick's OG can take. CSV_ROWS/CSV_BYTES are
+        # the module's own body; the fake emits the "t,mag" header itself.
+        puck = FakePuck(traceraw="unknown", stored_jumps=0, jumps_rows=[],
+                        trace_bytes=CSV_BYTES)
+        self._connect(puck)
+        self._pull(puck)
+        st = self.page.locator("[data-testid=status]").inner_text()
+        res = self.page.locator("[data-testid=result]").inner_text()
+        self.assertIn("No jumps were detected", st)
+        self.assertIn("the whole ride is here", st)
+        self.assertNotIn("nothing was recorded", st.lower(),
+                         "a full trace is not 'nothing recorded'")
+        self.assertNotIn("nothing was recorded", res.lower())
+        self.assertTrue(self.page.evaluate("() => window.__sync.state().verified"))
+
     def test_header_only_trace_region_reads_as_an_empty_puck(self):
         """A real nrf52 puck ALWAYS emits the 6-byte "t,mag\\n" header when it
         dumps trace.csv — read_chunk() sends it before it looks at whether
@@ -987,7 +1013,7 @@ class TestWebSync(_WebSyncCase):
         self.assertEqual(st["jump_rows"], 0)
 
         status = self._status()
-        self.assertIn("no jumps saved on it", status,
+        self.assertIn("nothing saved on it", status,
                       f"the empty-puck sentence must be reachable: {status!r}")
         self.assertIn("send it so Josh can see why", status)
 

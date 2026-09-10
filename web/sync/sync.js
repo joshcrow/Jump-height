@@ -39,7 +39,7 @@
 // Baked into the page and copied into every manifest.json, so Josh can tell
 // which build of this page produced a bundle without asking the rider
 // anything (CONTRACT.md §2 `page_version`). Bump it when the page changes.
-const PAGE_VERSION = '2026-09-09c';
+const PAGE_VERSION = '2026-09-09d';
 
 // ------------------------------------------------------------------ protocol
 
@@ -1031,6 +1031,11 @@ function onLinkLost() {
 // amount of retrying can change.
 const STORAGE_DOWN_RE = /\bstorage_down\b/;
 
+// "t,mag\n". A real nrf52 puck emits this header even when it has nothing
+// stored (firmware/src/platform/nrf52/jh_store.cpp:1119-1126), so a delivered
+// body of 6 bytes or fewer is an empty region, not a recorded ride.
+const TRACE_HEADER_BYTES = 6;
+
 /** True when retrying — closer, watch out of an activity — could plausibly
  *  change the outcome. A store that never mounted cannot be fixed by moving
  *  the phone, and telling him otherwise is telling him to keep trying until he
@@ -1206,14 +1211,31 @@ function endPullOk() {
     // An empty puck is a perfectly good outcome (he cleared it last time and
     // this ride recorded nothing), and saying "got it all" about nothing reads
     // like a success that isn't one.
-    setStatus(S.jumpRows === 0
-      ? 'The puck has no jumps saved on it — nothing was recorded. You can '
-        + 'still send it so Josh can see why.'
-      : `Got it all — ${S.jumpRows} jumps and the whole ride, checked and `
-        + 'complete. Now send it in step 3.', 'ok');
-    showResult(S.jumpRows === 0 ? 'Nothing was recorded on the puck.'
-                                : 'Everything on the puck is now on your phone.',
-               'ok', okDetail());
+    // Three outcomes, not two. "No jumps" and "nothing recorded" are
+    // DIFFERENT states and conflating them cost real data on 2026-09-09,
+    // when a puck holding 455 KB of ride and zero detected jumps said
+    // "Nothing was recorded on the puck." That is exactly the shape of the
+    // 2026-09-06 water session — 47 minutes on the water, a full trace, and
+    // not one real jump in it (docs/STATUS.md) — the most valuable capture
+    // this project has. A rider told nothing was recorded has every reason
+    // not to bother sending it.
+    const gotTrace = traceBytesGot();
+    const nothingAtAll = S.jumpRows === 0 && gotTrace <= TRACE_HEADER_BYTES;
+    setStatus(
+      nothingAtAll
+        ? 'The puck has nothing saved on it — no jumps and no ride data. You '
+          + 'can still send it so Josh can see why.'
+        : S.jumpRows === 0
+          ? `No jumps were detected, but the whole ride is here — ${human(gotTrace)} `
+            + 'of it, checked and complete. Send it in step 3: a ride with no '
+            + 'jumps in it is still worth having.'
+          : `Got it all — ${S.jumpRows} jumps and the whole ride, checked and `
+            + 'complete. Now send it in step 3.', 'ok');
+    showResult(
+      nothingAtAll ? 'Nothing was recorded on the puck.'
+                   : S.jumpRows === 0 ? 'The whole ride is here — no jumps detected in it.'
+                                      : 'Everything on the puck is now on your phone.',
+      'ok', okDetail());
   } else {
     // The cruellest failure this product can have is "recorded perfectly,
     // downloaded incompletely, then erased". Say plainly that the puck is
@@ -1229,6 +1251,15 @@ function endPullOk() {
                'bad', S.reasons);
   }
   setEnabled();
+}
+
+/** Bytes of ride data actually delivered, whichever format came across. The
+ *  CSV arm is the same joinBody() the byte check uses, so this can never
+ *  disagree with what was verified. */
+function traceBytesGot() {
+  if (S.trace.format === 'jhtrace-v2-b64') return S.trace.len || 0;
+  if (S.trace.format === 'csv') return byteLen(joinBody(S.traceCsvLines));
+  return 0;
 }
 
 function okDetail() {

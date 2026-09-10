@@ -160,3 +160,32 @@ command sequence.
 itself — the picker, the permission grant, and whether Chrome's stream keeps up
 with a multi-megabyte body. Everything above was driven from Python over the
 same port Chrome would use, so the protocol is proven and the transport is not.
+
+## The browser, measured 2026-09-09 — Web Serial met a real port
+
+The owner picked the port by hand (Chrome's picker is a native sheet; no
+automation reaches it). Everything after that was driven and read
+programmatically, on `2026-09-09c`, against `JumpHeight-8673`.
+
+| | Result |
+|---|---|
+| `navigator.serial.requestPort()` → open → `info`/`stats` | **Connected.** Facts row read `JumpHeight-8673`, 455 KB of ride data, 0 jumps. |
+| The old-firmware fallback, in the browser | **Fired.** "This puck has the older software, so the ride comes across the slow way." — `ERR unknown_command traceraw` → `trace`, exactly Nick's path. |
+| Throughput, browser vs Python | **64.9 KB/s** in Chrome vs **64.1 KB/s** from pyserial — independent agreement on the same board. |
+| The whole pull | **455 KB in 9.1 s, verified**, `verifyPull()` returned no reasons. Zero console messages, zero page errors. |
+| The cancelled picker | Confirmed earlier the same evening: dismissing the sheet gives "No puck picked", button re-enabled. |
+
+**What it caught that no fixture had.** The puck held 455 KB of ride and zero
+detected jumps, and the page said **"Nothing was recorded on the puck."** That
+is false, and it is the exact shape of the 2026-09-06 water session — 47
+minutes on the water, a full trace, not one real jump in it — the most
+valuable capture this project has. A rider told nothing was recorded has every
+reason not to send it. Now three outcomes instead of two: nothing at all (a
+delivered body ≤ the 6-byte header), a ride with no jumps in it, and a ride
+with jumps. Pinned by
+`test_a_ride_with_no_jumps_is_not_called_nothing`.
+
+**Still unmeasured:** a multi-megabyte body through the browser (this was
+455 KB, ~9 s; a full region is ~35× that), `tracecheck`'s walk on a full
+region, and the Send/share-sheet step on Nick's own Mac.
+
