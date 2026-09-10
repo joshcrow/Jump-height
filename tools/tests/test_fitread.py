@@ -20,6 +20,7 @@ Run via ./tools/jump simtest, or directly:
 
 from __future__ import annotations
 
+import tempfile
 import csv
 import json
 import subprocess
@@ -181,6 +182,35 @@ class TestEpixWithDeveloperFields(unittest.TestCase):
                      "max enhanced_speed    6.168 m/s"):
             self.assertIn(want, self.screen)
         self.assertIn("jump_height     ft        1213 non-null   [record x1404]", self.screen)
+
+
+@unittest.skipUnless(HAVE_NICK, NICK_REASON)
+class TestLapGroundTruth(unittest.TestCase):
+    """The lap button is the cheapest ground truth this project can get.
+
+    The 2026-09-09 ride could only be anchored to +-3.5 min, by inferring that
+    all ten stored detections must fall inside the activity — which is why
+    F-33/F-35 rest on a bracket rather than a measurement. A rider pressing the
+    lap button after each jump stamps the FIT to the second, with gear he
+    already wears. This pins that we can READ them, and that we never mistake
+    Garmin's own activity-closing lap for a press.
+    """
+
+    def test_the_09_09_ride_has_no_rider_presses(self):
+        """Nobody pressed it that day. The tool must say so plainly rather than
+        counting the automatic wrap-up lap as ground truth."""
+        screen, s, _ = summarise(NICK_FIT, Path(tempfile.mkdtemp(prefix="fitread-lap-")))
+        self.assertEqual(s["manual_laps"], 0)
+        self.assertEqual(len(s["laps"]), 1, "Garmin writes one lap to close the activity")
+        self.assertNotEqual(s["laps"][0].get("trigger"), "manual")
+        self.assertIn("rider lap presses", screen)
+        self.assertIn("none", screen)
+
+    def test_every_lap_carries_a_timestamp(self):
+        """A press with no time on it would be useless as ground truth."""
+        _, s, _ = summarise(NICK_FIT, Path(tempfile.mkdtemp(prefix="fitread-lap2-")))
+        for l in s["laps"]:
+            self.assertTrue(l["end_utc"], l)
 
 
 @unittest.skipUnless(HAVE_NICK, NICK_REASON)

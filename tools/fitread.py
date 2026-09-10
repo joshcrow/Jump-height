@@ -176,6 +176,7 @@ def scan(blob: bytes, source_name: str) -> dict:
     dev_decls = {}       # (dev_data_index, field_definition_number) -> declaration
     dev_counts = {}      # same key -> {"non_null": int, "messages": {name: int}}
     records = []
+    laps = []
     warnings = []
 
     reader = fitdecode.FitReader(io.BytesIO(blob))
@@ -219,6 +220,20 @@ def scan(blob: bytes, source_name: str) -> dict:
                 sport_msg = _as_dict(frame)
             elif frame.name == "file_id" and file_id is None:
                 file_id = _as_dict(frame)
+            elif frame.name == "lap":
+                # THE GROUND-TRUTH CHANNEL. A rider pressing the lap button
+                # after each jump stamps the FIT with a wall-clock time to the
+                # second, using gear he already wears and no app. On the
+                # 2026-09-09 ride nobody pressed it and the trace could only be
+                # anchored to +-3.5 min by inference (docs/audit F-33/F-35);
+                # one press per jump replaces all of that with a measurement.
+                d = _as_dict(frame)
+                laps.append({
+                    "start_time": d.get("start_time"),
+                    "timestamp": d.get("timestamp"),
+                    "total_elapsed_time": d.get("total_elapsed_time"),
+                    "trigger": d.get("lap_trigger"),
+                })
             elif frame.name == "record":
                 d = _as_dict(frame)
                 records.append({
@@ -236,6 +251,7 @@ def scan(blob: bytes, source_name: str) -> dict:
 
     return {
         "source": source_name,
+        "laps": laps,
         "session": session,
         "activity": activity,
         "sport_msg": sport_msg,
@@ -407,6 +423,21 @@ def summarise(scanned: dict) -> dict:
         "duration_s": span,
         "session_total_elapsed_time_s": session.get("total_elapsed_time"),
         "record_count": len(scanned["records"]),
+        # A lap the RIDER pressed is ground truth; the one Garmin writes to
+        # close the activity is not. Distinguish them by trigger:
+        # lap_trigger "manual" is a button press, "session_end" is the wrap-up.
+        "laps": [
+            {
+                "start_utc": (l["start_time"].astimezone(datetime.timezone.utc).isoformat()
+                              if l.get("start_time") else None),
+                "end_utc": (l["timestamp"].astimezone(datetime.timezone.utc).isoformat()
+                            if l.get("timestamp") else None),
+                "elapsed_s": l.get("total_elapsed_time"),
+                "trigger": str(l.get("trigger")) if l.get("trigger") is not None else None,
+            }
+            for l in scanned.get("laps") or []
+        ],
+        "manual_laps": sum(1 for l in (scanned.get("laps") or []) if str(l.get("trigger")) == "manual"),
         "developer_fields_present": bool(dev),
         "developer_fields": dev,
         "session_jumps": session.get("jumps"),
@@ -464,6 +495,15 @@ def render(s: dict) -> str:
     row("duration", ABSENT if s["duration_s"] is None
         else f"{fmt_duration(s['duration_s'])}  ({s['duration_s']:.0f} s, first to last record)")
     row("records", str(s["record_count"]))
+    nlap = len(s.get("laps") or [])
+    nman = s.get("manual_laps", 0)
+    if nman:
+        row("rider lap presses", f"{nman}  <- ground truth, one per press")
+        for i, l in enumerate([l for l in (s.get("laps") or [])
+                               if l.get("trigger") == "manual"], 1):
+            row(f"  press {i}", l.get("end_utc") or "?")
+    else:
+        row("rider lap presses", f"none  ({nlap} lap message(s), all automatic)")
 
     out.append("")
     if not s["developer_fields_present"]:
