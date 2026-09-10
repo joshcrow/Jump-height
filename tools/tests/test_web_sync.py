@@ -1651,9 +1651,10 @@ class TestWebSyncAtRegionScale(_WebSyncCase):
         puck = FakePuck(traceraw="unknown", trace_bytes=total_bytes)
         console = []
         self.page.on("console", lambda m: console.append(f"{m.type}: {m.text}"))
-        # performance.memory is the API the brief names; Runtime.getHeapUsage
-        # is here because that one turned out not to be a measurement at all
-        # in this browser — see the assertion on perf_memory_moved below.
+        # performance.memory is the obvious API for a heap peak;
+        # Runtime.getHeapUsage is here because that one turned out not to be
+        # a measurement at all in this browser. Both are read, and the
+        # assertions at the bottom pin which of them is real.
         cdp = self.context.new_cdp_session(self.page)
 
         self._connect(puck)
@@ -1778,6 +1779,40 @@ class TestWebSyncAtRegionScale(_WebSyncCase):
         m["percentages_seen"] = pcts
         m["bar_widths_seen"] = bars
 
+        # ---- 2: which heap number is real ------------------------------------
+        # performance.memory.usedJSHeapSize is present here and NEVER MOVES: it
+        # reported 10,000,000 flat while Runtime.getHeapUsage went 2.8 MB ->
+        # 100+ MB across the same run (measured 2026-09-10, headless Chromium
+        # 151). Chrome quantises it hard outside a cross-origin-isolated page.
+        # A peak taken from it would be a fabricated number, so the heap figure
+        # this test reports comes from CDP — and BOTH facts are asserted, so
+        # neither can quietly stop being true.
+        m["perf_memory_moves"] = len(m["perf_memory_distinct_values"]) > 1
+        self.assertFalse(
+            m["perf_memory_moves"],
+            "performance.memory.usedJSHeapSize now moves in this browser "
+            f"({m['perf_memory_distinct_values']}) — it did not on 2026-09-10. "
+            "Switch the heap figure to it and delete this assertion.")
+        self.assertGreater(
+            heap_peak, 4 * heap_start,
+            f"Runtime.getHeapUsage never moved either ({heap_start} -> "
+            f"{heap_peak}) — then no heap here was measured at all")
+
+        # ---- 4, the other half: the page kept painting ------------------------
+        # requestAnimationFrame is evidence of "not frozen" ONLY if this
+        # browser hands an idle page frames at all, which is what rafIdle is
+        # for. Compare RATES: the body runs far longer than the idle window.
+        idle_fps = b["rafIdle"] / (b["rafIdleMs"] / 1000.0)
+        body_fps = b["rafBody"] / (b["bodyWallMs"] / 1000.0)
+        m["raf_idle_fps"] = round(idle_fps, 1)
+        m["raf_body_fps"] = round(body_fps, 1)
+        self.assertGreater(idle_fps, 10,
+                           "this browser gives an idle page no animation frames, "
+                           "so rAF says nothing here about a freeze")
+        self.assertGreater(body_fps, idle_fps * 0.5,
+                           f"the page fell to {body_fps:.0f} fps while the body "
+                           f"streamed, against {idle_fps:.0f} idle — a freeze")
+
         # ---- 5: the 30 s inactivity timer -----------------------------------
         # It resets on EVERY line (armCaptureTimer, web/sync/sync.js:661), so
         # it can only trip on a gap between lines. The longest gap this run
@@ -1808,6 +1843,16 @@ class TestWebSyncAtRegionScale(_WebSyncCase):
                          "device.log carried the trace body (CONTRACT.md §2)")
         m["device_log_bytes"] = len(device_log)
 
+        # Item 6's comparison, stated with its caveat rather than as a
+        # prediction. The real cable pull on 2026-09-09 zipped a 466,154-byte
+        # trace.csv into a bundle the run recorded as "91 KB"
+        # (docs/serial-parity-2026-09-09.md) — ~20% of the body. THIS fixture's
+        # rows cycle through 20 mag values and deflate far better than a real
+        # puck's noise, so the ratio below is a FLOOR for what Nick's full
+        # region will produce, never an estimate of it.
+        m["bundle_over_body_pct"] = round(100.0 * send["size"] / total_bytes, 2)
+        m["real_09_09_body_and_bundle"] = (466154, "91 KB, as printed")
+
         # ---- 7: nothing on the console, nothing blocked ----------------------
         errors = [c for c in console if c.startswith("error")]
         self.assertEqual(errors, [], f"the page logged console errors: {errors}")
@@ -1823,9 +1868,12 @@ class TestWebSyncAtRegionScale(_WebSyncCase):
                   "inactivity_ms", "tail_ms", "send_ms", "bundle_bytes",
                   "trace_csv_in_zip", "device_log_bytes", "heap_start_bytes",
                   "heap_peak_bytes", "perf_memory_present",
-                  "perf_memory_distinct_values", "raf_idle", "raf_idle_ms",
-                  "raf_during_body", "pull_seconds_page", "bytes_received_page",
+                  "perf_memory_distinct_values", "perf_memory_moves",
+                  "raf_idle", "raf_idle_ms", "raf_during_body",
+                  "raf_idle_fps", "raf_body_fps",
+                  "pull_seconds_page", "bytes_received_page",
                   "verified", "reasons", "f22_band_applied",
+                  "bundle_over_body_pct", "real_09_09_body_and_bundle",
                   "percentages_seen", "bar_widths_seen", "console"):
             print(f"  {k} = {m.get(k)!r}")
         print("  progress text, sampled from outside the page:")
@@ -1848,8 +1896,6 @@ class TestWebSyncAtRegionScale(_WebSyncCase):
         self._report(f"csv pull, {FULL_REGION_CSV_BYTES:,} B (OG full region)", m)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TestWebSyncCable(_WebSyncCase):
@@ -2095,3 +2141,12 @@ class TestWebSyncCable(_WebSyncCase):
         manifest = json.loads(zf.read("manifest.json"))
         self.assertEqual(manifest["transfer"]["transport"], "usb")
         self.assertFalse(manifest["verified"])
+
+
+# Last in the file, deliberately. This sat at line 1899 with TestWebSyncCable
+# defined at :1903, so `python3 tools/tests/test_web_sync.py` ran unittest.main()
+# before that class existed: 8 cable tests never ran and the file reported OK
+# (24 tests where pytest collects 32). CLAUDE.md rule 3 — a reading that did
+# not happen must never look like a pass. Found 2026-09-10.
+if __name__ == "__main__":
+    unittest.main()

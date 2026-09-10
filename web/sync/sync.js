@@ -39,7 +39,7 @@
 // Baked into the page and copied into every manifest.json, so Josh can tell
 // which build of this page produced a bundle without asking the rider
 // anything (CONTRACT.md §2 `page_version`). Bump it when the page changes.
-const PAGE_VERSION = '2026-09-09d';
+const PAGE_VERSION = '2026-09-10a';
 
 // ------------------------------------------------------------------ protocol
 
@@ -1097,6 +1097,7 @@ async function doPull() {
   S.slowShown = false;
   S.jumpsLines = [];
   S.traceCsvLines = [];
+  csvBodyCache = null;          // a retry must never inherit the last pull's body
   S.selftestLines = [];
   S.trace = freshTrace();
   // The retry poison. fileSection was reset in exactly two places —
@@ -1258,14 +1259,14 @@ function endPullOk() {
  *  disagree with what was verified. */
 function traceBytesGot() {
   if (S.trace.format === 'jhtrace-v2-b64') return S.trace.len || 0;
-  if (S.trace.format === 'csv') return byteLen(joinBody(S.traceCsvLines));
+  if (S.trace.format === 'csv') return csvBody().bytes;
   return 0;
 }
 
 function okDetail() {
   const d = [`${S.jumpRows} jumps`];
   if (S.trace.format === 'jhtrace-v2-b64') d.push(`${human(S.trace.len)} of ride data, check number matches`);
-  else if (S.trace.format === 'csv') d.push(`${human(byteLen(joinBody(S.traceCsvLines)))} of ride data`);
+  else if (S.trace.format === 'csv') d.push(`${human(csvBody().bytes)} of ride data`);
   // Said out loud, not swallowed: the check did NOT come out even, and the
   // rider (and Josh, reading the same sentence in the bundle) is told why it
   // still counts as complete.
@@ -1348,7 +1349,7 @@ function verifyPull() {
     // reading taken minutes earlier on a puck that never stopped recording,
     // so it is a floor, not a ceiling — see the surplus branch below.
     const devBytesAfter = numOrNull((S.statsAfterKV || {}).trace_bytes);
-    const got = byteLen(joinBody(S.traceCsvLines));
+    const got = csvBody().bytes;
     S.traceBytesDevice = devBytes;
     S.traceBytesAfter = devBytesAfter;
     S.traceBytesGot = got;
@@ -1427,6 +1428,26 @@ function verifyPull() {
 // ------------------------------------------------------------------- bundle
 
 function joinBody(lines) { return lines.length ? lines.join('\n') + '\n' : ''; }
+
+// The CSV body is joined and TextEncoder'd FOUR separate times at the end of a
+// pull — traceBytesGot(), okDetail(), verifyPull()'s `got`, and buildBundle().
+// At fixture scale that is invisible; measured at a real full region
+// (15,917,153 B, 1,029,542 lines) it is a 116-144 ms synchronous freeze on an
+// Apple M3, and it lands right after the bar reads 100 %. Nick is on an older
+// Intel MacBook. One pass, cached, is all any of them needed.
+//
+// Keyed on the line count AND cleared explicitly in doPull's reset, because
+// length alone would hand a retry that produced exactly the same number of
+// lines the PREVIOUS pull's text.
+let csvBodyCache = null;
+function csvBody() {
+  const lines = S.traceCsvLines;
+  if (!csvBodyCache || csvBodyCache.n !== lines.length) {
+    const text = joinBody(lines);
+    csvBodyCache = { n: lines.length, text: text, bytes: byteLen(text) };
+  }
+  return csvBodyCache;
+}
 
 /** PUCK4: the 4 characters after 'JumpHeight-' in the advertised name
  *  (CONTRACT.md §2/§4). 'xxxx' keeps the filename's shape when the puck never
@@ -1613,7 +1634,7 @@ async function buildBundle() {
     // Sliced, not the doubling buffer: the zip must carry exactly N bytes.
     files.push({ name: 'trace.bin', text: false, bytes: S.trace.bytes.slice() });
   } else if (S.trace.format === 'csv') {
-    files.push({ name: 'trace.csv', text: true, bytes: TEXT_ENCODER.encode(joinBody(S.traceCsvLines)) });
+    files.push({ name: 'trace.csv', text: true, bytes: TEXT_ENCODER.encode(csvBody().text) });
   }
   files.push({ name: 'notes.txt', text: true, bytes: TEXT_ENCODER.encode(notesText(now)) });
   files.push({ name: 'device.log', text: true,

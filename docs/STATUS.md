@@ -469,9 +469,19 @@ hand — CLAUDE.md rule 5). What changed, all pinned by tests, suite 523 →
   by construction. And **F-22 now has a second board**: delivered body ran
   **15 B under** the device count here against **765 B** on the OG; both
   negative, both inside the 1..800 B band the page and `ingest` apply.
-  **Still unmeasured:** that body through the BROWSER (Chrome's stream and the
-  page's main-thread parse at 14 MB), `tracecheck` on a full region (this
-  build has no such command), and the share sheet on Nick's own Mac.
+  **And the browser half, same day:** a full 15,917,153 B region driven
+  through the real page (generated in-browser, fed line by line through the
+  production handler). The page's own cost is **3.5 µs/line, 3.4–4.3 s total
+  — a 1.5 % duty cycle against a 249 s transfer, ~70× more headroom than the
+  cable needs.** Bar moved through 28 distinct percentages at **59.8 fps**;
+  worst line gap 49 ms against a 30 s timer; `verifyPull()` exact; peak heap
+  106 MB; zero console errors. **It found one real freeze** — the page joined
+  and encoded the whole 16 MB body **four times** at the end of a pull, a
+  116–144 ms stall on an M3 and worse on Nick's Intel. Cached to one pass:
+  **144 ms → 51.5 ms**, bundle byte-identical (`2026-09-10a`).
+  **Still unmeasured:** Nick's own Intel MacBook (every browser number is an
+  M3), the F-22 *band* arm at 16 MB, the `traceraw` path at scale,
+  `tracecheck` on a full region, and the share sheet on his Mac.
 - **Simplified 2026-09-09 to `2026-09-09c`, after the owner read it and called
   it confusing.** It was written for "phone or computer, Bluetooth or cable",
   and Chrome on a Mac reports BOTH transports — so the rider met two competing

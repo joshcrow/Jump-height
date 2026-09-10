@@ -262,3 +262,53 @@ resting on one observation.
 stream and the page's main-thread parse at 14 MB — separate work), and
 `tracecheck` on a full region, which this build does not have the command for.
 
+## The browser at full-region scale, 2026-09-10 — the other half of the answer
+
+The cable half above is the puck's print rate. This is the page's own cost, and
+it needs no board: the body is generated **inside the browser** and handed to
+`window.__mock.feed(line)` one line at a time, the same entry point a real line
+takes, in 512-row chunks with a yield between them (a real `SerialTransport`
+yields between CDC reads; one synchronous loop would manufacture a freeze the
+link never produces). Three clocks kept apart, all inside the page, with the
+generation cost measured separately and **subtracted**.
+
+Bench: Apple M3, headless Chromium 151. **Not Nick's Intel MacBook.**
+Fixture: 15,917,153 B / 1,029,542 lines — the OG's own `tracecheck slow=`
+figure, in the firmware's real `"%.3f,%.3f\n"` row format.
+
+| | Measured |
+|---|---|
+| The page's own line handling | **3.4–4.3 s** for 1,029,542 lines = **3.5 µs/line**, linear (3.51 µs/line at 3 MB) |
+| Page-limited ingest rate | **4.39 MB/s** — against the cable's measured 62.5 KB/s, **~70× of margin**; the page's share of a 249 s transfer is ~1.5 % |
+| Longest synchronous block during the body | **3.8–5.1 ms** — against the 2 s the firmware waits for CDC room before counting bytes dropped, ~400× under |
+| The 30 s inactivity timer | Worst line-to-line gap **49 ms** vs `INACTIVITY_MS` 30000 (read out of `sync.js` by the test, not restated) = **~610× headroom** |
+| Progress UI | **28 distinct percentages** on screen, sampled from outside the page; **59.8 fps** during the body against 60.0 fps idle on the same page |
+| `verifyPull()` at that size | No reasons, `verified` true, `trace_bytes_got` exact — the byte-**exact** arm, not F-22's band |
+| Peak heap | **2.76 → 106 MB** (CDP `Runtime.getHeapUsage`, 250 ms sampling, so a high-water mark, not a ceiling) |
+| Console / page errors | None |
+
+`performance.memory.usedJSHeapSize` **is not a measurement here** — it returned
+`10,000,000` flat on every sample while CDP moved 2.76 → 106 MB. Both facts are
+now asserted so neither can quietly stop being true.
+
+**The one real freeze, found and fixed.** After the bar reads 100 % the page
+was joining and TextEncoder-ing the whole 16 MB body **four separate times** —
+`traceBytesGot()`, `okDetail()`, `verifyPull()`'s `got`, and `buildBundle()`,
+uncached. Measured 116–144 ms on an M3, linear in size, and Nick's machine is
+slower. Now computed once (`csvBody()`, keyed on line count and cleared in
+`doPull`'s reset so a retry can never inherit the last pull's body):
+**144 ms → 51.5 ms**, with `verified`, `reasons` and the bundle byte-identical.
+
+**Also fixed, and it is rule 3's exact shape:** `unittest.main()` sat at
+`test_web_sync.py:1899` with `class TestWebSyncCable` defined at `:1903`, so
+running the file directly executed `unittest.main()` before that class existed
+— **24 tests ran where pytest collects 32**, and the file reported OK. Eight
+cable tests, including every real-port one, silently never ran. The guard now
+sits last: `Ran 32 tests ... OK`.
+
+**Still unmeasured:** Nick's actual Intel MacBook (every number here is M3; the
+51 ms tail and 106 MB heap scaled to it are extrapolations), the F-22 *band*
+arm at 16 MB (the exact-match arm is what passed here; the band is pinned at
+fixture scale), the `traceraw`/base64 path at scale, and whether the compositor
+actually painted each new bar width — rAF proves the frames were served.
+
