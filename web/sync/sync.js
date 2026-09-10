@@ -39,7 +39,7 @@
 // Baked into the page and copied into every manifest.json, so Josh can tell
 // which build of this page produced a bundle without asking the rider
 // anything (CONTRACT.md §2 `page_version`). Bump it when the page changes.
-const PAGE_VERSION = '2026-09-10a';
+const PAGE_VERSION = '2026-09-10b';
 
 // ------------------------------------------------------------------ protocol
 
@@ -1692,8 +1692,30 @@ async function doSend() {
         delivered = true; how = 'share';
         notes.push('Sent from the share sheet.');
       } catch (e) {
-        if (e && e.name === 'AbortError') notes.push('You closed the share sheet — tap Send again when you’re ready.');
-        else notes.push('The share sheet failed: ' + ((e && e.message) || e));
+        if (e && e.name === 'AbortError') {
+          notes.push('You closed the share sheet — tap Send again when you’re ready.');
+        } else {
+          // FALL BACK TO THE DOWNLOAD. Measured on the rider's own Mac,
+          // 2026-09-10, first real use: navigator.share() rejected with
+          // "Permission denied" and this was an if/else with no catch below
+          // it, so he was left holding a finished 2.1 MB bundle and no way to
+          // get it out of the page. The ride was never at risk — it stays on
+          // the puck — but the only thing he could do was tell Josh.
+          //
+          // AbortError is deliberately NOT here: that is the rider closing
+          // the sheet on purpose, and shoving a file into his Downloads
+          // because he changed his mind is not a fix.
+          //
+          // Why share() failed is NOT established — desktop Chrome on macOS
+          // reports NotAllowedError for several reasons, including a lost
+          // transient activation after the zip. The fallback is correct
+          // whichever it was, so it ships now and the cause is chased after.
+          notes.push('The share sheet didn’t work: ' + ((e && e.message) || e));
+          delivered = downloadBlob(name, blob);
+          how = 'download';
+          notes.push(`Saved to your Downloads as ${name} instead — send that `
+                   + 'file to Josh from there. Nothing was lost.');
+        }
       }
     } else if (IS_IOS) {
       // Plainly, and WITHOUT claiming delivery — the ride is still only here,

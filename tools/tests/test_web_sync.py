@@ -1547,6 +1547,62 @@ class TestWebSync(_WebSyncCase):
         self.page.set_default_timeout(8000)
         self.page.on("pageerror", lambda e: self._page_errors.append(str(e)))
 
+    def test_a_failed_share_sheet_falls_back_to_the_download(self):
+        """MEASURED ON THE RIDER'S OWN MAC, 2026-09-10, first real use of the
+        page: navigator.share() rejected with "Permission denied" and the
+        share/download arms were an if/else with nothing catching it. He was
+        left holding a finished 2.1 MB bundle with no way to get it out of the
+        page. The ride was never at risk — it stays on the puck — but the only
+        move he had was to tell Josh.
+
+        A share that FAILS must fall through to the download."""
+        self.page.add_init_script("""
+            navigator.share = () => Promise.reject(
+                Object.assign(new Error('Permission denied'),
+                              {name: 'NotAllowedError'}));
+            navigator.canShare = () => true;
+        """)
+        self._open()
+        puck = FakePuck()
+        self._connect(puck)
+        self._pull(puck)
+        with self.page.expect_download() as dl:
+            self.page.click("[data-testid=btn-send]")
+            self._drive(puck, lambda: self._state()["delivered"],
+                        "the download fallback to fire")
+        self.assertTrue(dl.value.suggested_filename.endswith(".zip"),
+                        dl.value.suggested_filename)
+        st = self._state()
+        self.assertTrue(st["delivered"], "the fallback must count as delivered")
+        res = self.page.locator("[data-testid=result]").inner_text()
+        self.assertIn("Saved to your Downloads", res)
+        self.assertIn("Nothing was lost", res)
+
+    def test_a_cancelled_share_sheet_does_not_force_a_download(self):
+        """The other half, and the reason the fallback is not unconditional:
+        AbortError is the rider closing the sheet on purpose. Shoving the file
+        into his Downloads because he changed his mind is not a fix."""
+        self.page.add_init_script("""
+            navigator.share = () => Promise.reject(
+                Object.assign(new Error('share canceled'), {name: 'AbortError'}));
+            navigator.canShare = () => true;
+        """)
+        self._open()
+        puck = FakePuck()
+        self._connect(puck)
+        self._pull(puck)
+        self.page.click("[data-testid=btn-send]")
+        self._drive(puck, lambda: self.page.evaluate(
+            "() => !!window.__sync.lastBundle()"), "the bundle to be built")
+        self.assertFalse(self._state()["delivered"],
+                         "a cancelled share must not count as delivered")
+        st = self.page.locator("[data-testid=status]").inner_text()
+        res = self.page.locator("[data-testid=result]").inner_text()
+        self.assertIn("Not sent yet", st)
+        self.assertIn("closed the share sheet", res)
+        self.assertNotIn("Saved to your Downloads", res,
+                         "a deliberate cancel must not push a file at him")
+
     def test_iphone_with_no_share_sheet_is_given_something_to_do(self):
         """The dead end: an iPhone rider who has connected, pulled and tapped
         Send is standing in Bluefy already, so "open this page in Bluefy" is

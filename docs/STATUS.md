@@ -479,9 +479,22 @@ hand — CLAUDE.md rule 5). What changed, all pinned by tests, suite 523 →
   and encoded the whole 16 MB body **four times** at the end of a pull, a
   116–144 ms stall on an M3 and worse on Nick's Intel. Cached to one pass:
   **144 ms → 51.5 ms**, bundle byte-identical (`2026-09-10a`).
-  **Still unmeasured:** Nick's own Intel MacBook (every browser number is an
-  M3), the F-22 *band* arm at 16 MB, the `traceraw` path at scale,
-  `tracecheck` on a full region, and the share sheet on his Mac.
+  **2026-09-10 — the rider used it, on the OG, and Send dead-ended.** The
+  part that had been flagged unmeasured is the part that broke. His pull
+  worked: `jumpheight-E2C4-20260910-0950.zip`, **2.1 MB, built**. Then
+  `navigator.share()` rejected with **"Permission denied"** — and the share
+  and download arms were an `if`/`else` with nothing catching the failure, so
+  he was left holding a finished bundle with no way to get it out of the
+  page. The ride was never at risk (it stays on the puck) but his only move
+  was to tell the owner. **Fixed in `2026-09-10b`: a failed share now falls
+  through to the download.** `AbortError` deliberately does not — that is the
+  rider closing the sheet on purpose. **Why `share()` failed is NOT
+  established**; desktop Chrome on macOS reports `NotAllowedError` for several
+  reasons including a lost transient activation after the zip. The fallback is
+  right whichever it was, so it shipped first.
+  **Still unmeasured:** the root cause of that `share()` rejection, the F-22
+  *band* arm at 16 MB, the `traceraw` path at scale, and `tracecheck` on a
+  full region.
 - **Simplified 2026-09-09 to `2026-09-09c`, after the owner read it and called
   it confusing.** It was written for "phone or computer, Bluetooth or cable",
   and Chrome on a Mac reports BOTH transports — so the rider met two competing
