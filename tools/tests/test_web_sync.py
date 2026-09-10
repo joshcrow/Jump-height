@@ -1463,7 +1463,14 @@ class TestWebSyncCable(_WebSyncCase):
             timeout=8000)
         status = self._status()
         self.assertIn("cable", status)
-        self.assertIn("usbmodem", status)
+        # The string Chrome actually shows, measured off the board with ioreg
+        # 2026-09-09: USB Product Name "XIAO nRF52840 Sense". It is NOT
+        # "JumpHeight" — that is the BLE advertised name and cannot appear in
+        # a USB port picker, so telling him to look for it sent him hunting
+        # for something that does not exist.
+        self.assertIn("XIAO nRF52840 Sense", status)
+        self.assertNotIn("JumpHeight", status,
+                         "the BLE name cannot appear in a USB port picker")
         # It must name the button by the label the button actually carries.
         # That label became "Connect" on 2026-09-09 when the cable became the
         # only path on a computer; this sentence said 'tap "Connect with the

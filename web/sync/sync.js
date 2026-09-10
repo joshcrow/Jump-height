@@ -892,7 +892,7 @@ async function doConnectUsb() {
     // case: retire an identifier, fix what pointed at it).
     setStatus('No puck picked. Check the cable is plugged into the puck and the '
             + 'computer, then tap "Connect" and choose the entry '
-            + 'that mentions XIAO, JumpHeight or usbmodem.');
+            + 'called XIAO nRF52840 Sense.');
     return;
   }
   const t = new SerialTransport(port);
