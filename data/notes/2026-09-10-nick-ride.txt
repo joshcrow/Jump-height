@@ -1,0 +1,34 @@
+# 2026-09-10 — Nick's first real ride with the OG. Notes for tools/label.py (local, EDT = UTC-4).
+# The bundle has not arrived yet: jumpheight-E2C4-20260910-1031.zip, 2.1 MB, sitting in
+# Nick's Downloads. Everything below is from his own words and screenshots, recorded now so
+# it is not lost, and so the comparison can be made the moment the zip lands.
+#
+# MOUNT: vest pocket, chest height (unchanged from 09-06). Not on the board.
+# GEAR:  5 m wing. SW winds, light. Sea state: swell. (His own chips: swell / light.)
+# PLACE: Kitty Hawk Bay — SOUND side, not the ocean. E15's worst accuracy class is a windy
+#        sound (short chop); this was light wind, so expect the better end of that range.
+#
+# THE THREE COUNTS FOR THIS ONE SESSION — the first time this project has had all three:
+#   Nick, from memory:        4 jumps
+#   Surfr (wrist):            3 jumps
+#   The puck (page readout):  10 stored jumps
+#
+# SURFR'S OWN NUMBERS ARE INTERNALLY INCONSISTENT, and that matters because Surfr is this
+# project's standing comparison (docs/watch.md; Marcis '21 benchmarked it at 0.51 m RMSE,
+# kite, video-validated). Ballistic flight gives h = g*T^2/8:
+#   highest jump 1.8 m  -> implies 1.21 s of airtime
+#   max airtime  4.4 s  -> implies 23.7 m of height
+#   the two differ by 3.63x in time and cannot describe the same event.
+# Its other two numbers side with the height, not the airtime:
+#   max speed 39 km/h = 10.83 m/s; max distance 15 m -> 1.38 s of flight, near the 1.21 s
+#   the 1.8 m implies.
+# So height/distance/speed hang together for a ~1.2-1.4 s jump, and the 4.4 s is the
+# outlier — and it is the number Surfr flagged as a PR. Treat 4.4 s as spurious until
+# something independent supports it. NOT a verdict on Surfr: one session, no video.
+#
+# WHAT TO DO WHEN THE ZIP ARRIVES:
+#   ./tools/jump ingest ~/Downloads/jumpheight-E2C4-20260910-1031.zip
+#   then compare the 10 stored jumps' airtime_s and med_a_g against the above. The open
+#   question is F-28: how many of the 10 are real. Nick says 4, Surfr says 3.
+#   No labels.csv here — no timestamped notes were taken, so per-jump matching is not
+#   possible for this session. Region-level only.
