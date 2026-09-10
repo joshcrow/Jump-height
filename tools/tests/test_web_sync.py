@@ -695,6 +695,15 @@ class _WebSyncCase(unittest.TestCase):
     # the point — the rider's URL never does.
     ALLOW_CLEAR = "?allowclear=1"
 
+    def _as_mobile(self):
+        """The share branch is mobile-only since 2026-09-10c, so a test that
+        wants to reach it has to look like a phone."""
+        ua = ("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36")
+        self.page.add_init_script(
+            "Object.defineProperty(Navigator.prototype, 'userAgent', "
+            "{ get: () => " + repr(ua).replace("'", '"') + ", configurable: true });")
+
     def _open(self, query=""):
         self.page.goto(f"http://127.0.0.1:{self._port}/sync/{query}#mock",
                        wait_until="domcontentloaded")
@@ -1547,6 +1556,37 @@ class TestWebSync(_WebSyncCase):
         self.page.set_default_timeout(8000)
         self.page.on("pageerror", lambda e: self._page_errors.append(str(e)))
 
+    def test_a_desktop_never_opens_the_share_sheet(self):
+        """The rider is on a MacBook, and on macOS Chrome the share sheet is
+        not merely unnecessary — it does not work. Measured on his machine
+        twice, 2026-09-10: canShare({files}) returns TRUE and share() then
+        rejects with NotAllowedError "Permission denied". canShare is not a
+        promise that share will succeed.
+
+        A desktop must go straight to the download and never call share()."""
+        self.page.add_init_script("""
+            window.__shareCalls = 0;
+            navigator.share = () => { window.__shareCalls++;
+                return Promise.reject(Object.assign(
+                    new Error('Permission denied'), {name: 'NotAllowedError'})); };
+            navigator.canShare = () => true;
+        """)
+        self._open()
+        self.assertFalse(self.page.evaluate("() => /Android|Mobi/i.test(navigator.userAgent)"),
+                         "this UA looks mobile, so the desktop branch never ran")
+        puck = FakePuck()
+        self._connect(puck)
+        self._pull(puck)
+        with self.page.expect_download() as dl:
+            self.page.click("[data-testid=btn-send]")
+            self._drive(puck, lambda: self._state()["delivered"], "the download")
+        self.assertTrue(dl.value.suggested_filename.endswith(".zip"))
+        self.assertEqual(self.page.evaluate("() => window.__shareCalls"), 0,
+                         "a desktop must not call navigator.share() at all")
+        res = self.page.locator("[data-testid=result]").inner_text()
+        self.assertIn("Saved to your Downloads", res)
+        self.assertNotIn("share sheet", res)
+
     def test_a_failed_share_sheet_falls_back_to_the_download(self):
         """MEASURED ON THE RIDER'S OWN MAC, 2026-09-10, first real use of the
         page: navigator.share() rejected with "Permission denied" and the
@@ -1556,6 +1596,7 @@ class TestWebSync(_WebSyncCase):
         move he had was to tell Josh.
 
         A share that FAILS must fall through to the download."""
+        self._as_mobile()
         self.page.add_init_script("""
             navigator.share = () => Promise.reject(
                 Object.assign(new Error('Permission denied'),
@@ -1582,6 +1623,7 @@ class TestWebSync(_WebSyncCase):
         """The other half, and the reason the fallback is not unconditional:
         AbortError is the rider closing the sheet on purpose. Shoving the file
         into his Downloads because he changed his mind is not a fix."""
+        self._as_mobile()
         self.page.add_init_script("""
             navigator.share = () => Promise.reject(
                 Object.assign(new Error('share canceled'), {name: 'AbortError'}));

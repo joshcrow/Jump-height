@@ -486,8 +486,15 @@ hand — CLAUDE.md rule 5). What changed, all pinned by tests, suite 523 →
   and download arms were an `if`/`else` with nothing catching the failure, so
   he was left holding a finished bundle with no way to get it out of the
   page. The ride was never at risk (it stays on the puck) but his only move
-  was to tell the owner. **Fixed in `2026-09-10b`: a failed share now falls
-  through to the download.** `AbortError` deliberately does not — that is the
+  was to tell the owner. **Fixed in two steps.** `2026-09-10b`: a failed share
+  falls through to the download, so the page can no longer dead-end.
+  `2026-09-10c`, after he hit it a second time: **a desktop never calls
+  `share()` at all** — it goes straight to the download, and the share sheet
+  is used on a phone only. `canShare({files})` returning **true** on macOS
+  Chrome is not a promise that `share()` will work, and treating it as one is
+  the whole bug. The owner's own bench never caught it because the earlier
+  test forced the download branch to avoid a blocking modal — so `share()`
+  had never actually been called on any Mac, here or there. `AbortError` deliberately does not — that is the
   rider closing the sheet on purpose. **Why `share()` failed is NOT
   established**; desktop Chrome on macOS reports `NotAllowedError` for several
   reasons including a lost transient activation after the zip. The fallback is

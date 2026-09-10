@@ -39,7 +39,7 @@
 // Baked into the page and copied into every manifest.json, so Josh can tell
 // which build of this page produced a bundle without asking the rider
 // anything (CONTRACT.md §2 `page_version`). Bump it when the page changes.
-const PAGE_VERSION = '2026-09-10b';
+const PAGE_VERSION = '2026-09-10c';
 
 // ------------------------------------------------------------------ protocol
 
@@ -117,6 +117,18 @@ const MOCK_KIND = location.hash === '#mock-usb' ? 'usb' : 'mock';
 // iPadOS masquerades as MacIntel, hence the maxTouchPoints check.
 const IS_IOS = /iP(hone|ad|od)/.test(navigator.userAgent)
   || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+// The share sheet is a PHONE affordance, and on a desktop it is worse than
+// the download in every way that matters here: it is an extra modal, and on
+// macOS Chrome it does not work. Measured on the rider's own MacBook,
+// 2026-09-10, twice: canShare({files}) returns TRUE and share() then rejects
+// with NotAllowedError "Permission denied". canShare is not a promise that
+// share will succeed, and taking it as one is what dead-ended him.
+//
+// So: share only where it is the better answer — a phone, where "Saved to
+// your Downloads" means almost nothing. Everywhere else, download, which is
+// one click and always works. The catch below still falls back either way.
+const IS_MOBILE = IS_IOS || /Android|Mobi/i.test(navigator.userAgent);
 
 const CHIPS = {
   sea:  ['flat', 'small chop', 'big chop', 'swell'],
@@ -1686,7 +1698,8 @@ async function doSend() {
     // here rather than fall through to a path that still works.
     let file = null;
     try { file = new File([blob], name, { type: 'application/zip' }); } catch (_e) {}
-    if (file && navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+    if (file && IS_MOBILE && navigator.share && navigator.canShare
+        && navigator.canShare({ files: [file] })) {
       try {
         await navigator.share({ files: [file], title: name });
         delivered = true; how = 'share';

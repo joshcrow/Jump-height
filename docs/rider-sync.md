@@ -27,19 +27,16 @@ up](#the-pucks-memory-fills-up--the-one-thing-to-know) below.
    was doing, anything that felt off. This isn't busywork — Josh reads the
    notes as much as the numbers, and "flat and glassy" vs. "victory at sea"
    changes what a jump number even means.
-6. **Click Send**, then see what actually happens. *(The order below is
-   measured on Josh's Mac; not yet on yours. If yours does something else,
-   that's worth telling him.)*
-   - **A share sheet slides up** (same as sharing a photo) — this is what
-     Chrome tries first. Pick Josh in it and you're done. **If you close the
-     sheet, nothing was saved anywhere** — no file in Downloads, nothing
-     sent. Just click Send again.
-   - **The page says it saved to your Downloads** — that's the fallback when
-     Chrome can't offer a share sheet. Find the file in your Downloads folder
-     and send it to Josh yourself — Messages, Mail, or AirDrop all work.
+6. **Click Send. The file saves to your Downloads** — that is the whole
+   step on a Mac. Find it there and send it to Josh however you like:
+   Messages, Mail, AirDrop.
+   *(Measured on the rider's own MacBook 2026-09-10: the page used to try
+   macOS's share sheet first, and Chrome rejected it with "Permission
+   denied" — twice, leaving a finished 2.1 MB file with no way out of the
+   page. On a computer the page now goes straight to the download. The
+   share sheet is used on a phone only, where it is the better answer.)*
    - **The page says the ride "hasn't gone anywhere yet"** — nothing was
-     sent anywhere. The ride is still safe on the puck (and in your
-     Downloads, if it got that far). Tell Josh.
+     sent. The ride is still safe on the puck. Tell Josh.
 7. **Nothing. You're finished at step 6.** There is no "empty the puck"
    button on your page any more — it isn't hidden or switched off, it isn't
    there. Josh empties the puck when it comes home, and he'd rather have a
