@@ -48,10 +48,14 @@
          buttons and two hints — the confusion the owner read on 2026-09-09.
          Bluetooth appears only where there is no serial port at all: a phone.
          sync.js init() is where that choice is made. -->
+    <!-- The picker string is MEASURED off the real board (2026-09-09, ioreg:
+         USB Product Name "XIAO nRF52840 Sense", Vendor "Seeed"), not guessed.
+         It never says "JumpHeight" — that is the BLE advertised name and has
+         nothing to do with the USB descriptor; offering it as a thing to look
+         for sent the rider hunting for a string that cannot appear. -->
     <p class="hint" id="usb-hint">Plug the puck into your Mac with its USB
        cable — the one it charges on — then click the button below. Chrome asks
-       which device: pick the entry that mentions <b>XIAO</b>,
-       <b>JumpHeight</b> or <b>usbmodem</b>.</p>
+       which device: pick <b>XIAO nRF52840 Sense</b>.</p>
     <!-- No "Newer Macs may ask to allow the accessory" parenthetical: that
          prompt is Apple-silicon only and Nick's MacBook is Intel (DECISIONS
          #42, corrected 2026-09-09), so it was advice about something he will

@@ -15,8 +15,10 @@ up](#the-pucks-memory-fills-up--the-one-thing-to-know) below.
    `https://joshcrow.github.io/Jump-height/sync/`
    - Don't have Chrome? It's a free one-time install — google.com/chrome.
 3. **Click "Connect"** and pick the puck from the list Chrome
-   shows you — it's the one whose name mentions "XIAO", "JumpHeight", or
-   "usbmodem".
+   shows you — it is called **"XIAO nRF52840 Sense"** (measured off the
+   real board 2026-09-09; older listings may show it as "usbmodem" plus
+   some digits). It will not say "JumpHeight" — that is its Bluetooth name,
+   not its cable name.
 4. **Click "Copy the ride"** (step 2 on the page). The page reads everything
    off the puck — jump count, the full trace, battery, all of it. There's a
    progress bar; just leave it alone until it says it's done.

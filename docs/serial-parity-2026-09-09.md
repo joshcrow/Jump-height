@@ -131,3 +131,32 @@ pull 2: verified=false  jump_rows=0
 Every retry after a mid-frame stall fails this way until the page is reloaded
 or the link is re-established. Note the second reason: 290 > 65, a surplus
 printed as a shortfall (`sync.js:1201-1202`, and the same wording at `:1186`).
+
+---
+
+## Measured 2026-09-09 on real silicon — the Puck (`JumpHeight-8673`), `src=15b2d468`
+
+First time any of this project's serial assumptions met a real port. The board
+is USB-only (`./tools/jump boards` flagged its floating divider: 424 mV across
+four reads) and runs a build **older than the OG's** — no `traceraw`, no
+`tracecheck` — which is exactly why it is the right board for this: it takes
+the **same CSV fallback path Nick's OG (`5c80a436`) will take.**
+
+Probe: `scratchpad/portprobe.py`, pyserial 3.5, 115200, driving the page's own
+command sequence.
+
+| Assumption | Measured | Verdict |
+|---|---|---|
+| "Board resets when the port opens" (`tools/jump` `drain_boot`) | **Nothing arrived in 6 s.** No reset, no banner, no POST. | **FALSE on this board.** That comment is ESP32-era; the nRF52's native USB CDC does not reset on open. The page's fixed 400 ms drain is safe — there is nothing to drain. |
+| The page waits 400 ms then talks (`sync.js`) | `info` answered in **55 ms**, `stats` 55 ms, `jumps` 53 ms | Fine, with ~7× margin. |
+| `traceraw` falls back cleanly on old firmware | `ERR unknown_command traceraw`, and the page's `/^ERR unknown_command\b/` matches it | **CONFIRMED on silicon.** The CSV fallback fires — Nick's path works. |
+| CSV throughput over USB CDC — *never measured* | **64.1 KB/s** (65,593 B/s): 204,048 wire bytes in 3.11 s | A full region's CSV (15.9 MB, the OG's 09-07 read) is **≈ 4 minutes** on the cable. Extrapolated from a 204 KB body — not measured at full size. Bluetooth's 20–30 min estimate stands unmeasured. |
+| Byte accounting: page vs device | device `trace_bytes=203,999`; `byteLen(joinBody(lines))` = 203,999 **exactly** | Clean. `joinBody` (`sync.js:1398`) appends the trailing newline, which is what makes it come out even. |
+| The counter drifts while connected | **0 B/s at rest** over 46 s. Earlier, while the board was being handled, it grew 203,999 → 466,154. | The growth window (`trace_bytes_after`) guards a real case, but only while the puck is moving; `idle_timeout_s=20` closes the gate. On a Mac, plugged in and still, drift is zero. |
+| Chrome's port-picker entry | `ioreg`: USB Product Name **"XIAO nRF52840 Sense"**, Vendor "Seeed" | The docs told the rider to look for "JumpHeight" — the **BLE** name, which cannot appear in a USB picker. Corrected in the page and `rider-sync.md`. |
+| `tracecheck` walk time vs the 300 s floor | `ERR unknown_command tracecheck` — **absent on this build** | **NOT MEASURED.** This board cannot answer it. The OG has the command (used 2026-09-07: `fast=15917918 slow=15917153`), so the floor stays unvalidated until a full region is walked on a board that has it. |
+
+**Still not measured, and only a browser can:** `navigator.serial.requestPort()`
+itself — the picker, the permission grant, and whether Chrome's stream keeps up
+with a multi-megabyte body. Everything above was driven from Python over the
+same port Chrome would use, so the protocol is proven and the transport is not.
