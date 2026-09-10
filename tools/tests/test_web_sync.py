@@ -1379,16 +1379,25 @@ class TestWebSyncCable(_WebSyncCase):
         Bluetooth (and its 20-30 minute estimate) appears only where there is
         no serial port at all: a phone.
 
-        Both halves are asserted here, and the environment assumption is
-        stated rather than assumed: if this browser ever loses Web Bluetooth,
-        hiding it would prove nothing."""
-        self._open_plain()
+        Both halves are asserted here, and neither depends on what this
+        particular browser happens to support. The first version of this test
+        DID depend on it — it asserted the browser had Web Bluetooth, which is
+        true of Chrome on the owner's Mac and false of CI's headless Chromium
+        on Linux, so it failed in CI for a reason that had nothing to do with
+        the page (run 34421541968, 2026-09-09). Refusing to pass vacuously was
+        right; depending on the environment to supply the shape was not. The
+        page branches on `!!navigator.bluetooth`, so a stub exercises exactly
+        the branch a Mac takes, on any machine."""
+        self._open_plain("if (!navigator.bluetooth) Object.defineProperty("
+                         "Navigator.prototype, 'bluetooth', "
+                         "{ get: () => ({ requestDevice: () => {} }), "
+                         "configurable: true });")
         self.assertTrue(self.page.evaluate("() => !!navigator.serial"),
                         "no Web Serial in this browser — the computer case "
                         "below was never exercised")
         self.assertTrue(self.page.evaluate("() => !!navigator.bluetooth"),
-                        "no Web Bluetooth in this browser, so hiding the "
-                        "Bluetooth button proves nothing")
+                        "the two-transport shape was not established, so "
+                        "hiding the Bluetooth button would prove nothing")
 
         self.assertEqual(self._visible_connect_buttons(), ["btn-connect-usb"],
                          "with a serial port the cable button must be the only "
