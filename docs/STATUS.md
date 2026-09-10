@@ -69,9 +69,10 @@ Ordered by what blocks what.
    Instinct↔puck connection has ever been recorded. Mount for this loan is
    the **vest pocket** (owner, 2026-09-08), the one configuration ever run
    on water. Two things the brief now tells him
-   that this repo measured: his profile is **"Wing Foil"** (sport=generic,
-   sub_sport=track_me in 8/8 of his archived FITs, `data/nick-sessions/fits/`),
-   not Windsurf; and **`NO REC` renders only in the single-field layout**
+   that this repo measured: his profile was **"Wing Foil"** in the 8 archived
+   August FITs (sport=generic, sub_sport=track_me) but the 2026-09-09 ride came
+   back as **"Windsurf"** (sport=windsurfing, sub_sport=generic) — he uses both,
+   so the field has to be on both; and **`NO REC` renders only in the single-field layout**
    (F-32). Until his first watch photo arrives, treat the watch side as
    UNKNOWN, not working.
 1b. **Nick's data-return path is the FIT export + a text line** — the one
