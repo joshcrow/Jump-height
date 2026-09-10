@@ -438,8 +438,21 @@ hand — CLAUDE.md rule 5). What changed, all pinned by tests, suite 523 →
   has no step 4;
   `?allowclear=1` shows step 4 and the button; zero console messages over
   two fresh loads. The root now serves the landing page, not the retired
-  08-23 app. **Still unmeasured: a real port.** The page has been loaded,
-  never connected.
+  08-23 app. **2026-09-09: a real port, at last.** The owner
+  attached the Puck (`JumpHeight-8673`, `src=15b2d468` — older than the OG,
+  so it takes the same CSV fallback Nick's will) and picked it in Chrome's
+  native sheet by hand. The page connected, fell back to CSV exactly as
+  designed, and pulled **455 KB in 9.1 s, verified, zero console errors**.
+  Browser throughput **64.9 KB/s** against **64.1 KB/s** measured
+  independently from pyserial — so a full region's CSV is **~4 min on the
+  cable**, the figure the rider docs had called unmeasured since the page
+  shipped. Full assumption table: `docs/serial-parity-2026-09-09.md`.
+  **It immediately caught a defect no fixture had:** 455 KB of ride data
+  with zero detected jumps rendered as "Nothing was recorded on the puck" —
+  the exact shape of the 09-06 water session, the most valuable capture this
+  project has. Fixed to three outcomes (`2026-09-09d`).
+  **Still unmeasured:** a multi-megabyte body through the browser (this was
+  455 KB), `tracecheck` on a full region, and Send on Nick's own Mac.
 - **Simplified 2026-09-09 to `2026-09-09c`, after the owner read it and called
   it confusing.** It was written for "phone or computer, Bluetooth or cable",
   and Chrome on a Mac reports BOTH transports — so the rider met two competing
