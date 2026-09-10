@@ -451,8 +451,17 @@ hand — CLAUDE.md rule 5). What changed, all pinned by tests, suite 523 →
   with zero detected jumps rendered as "Nothing was recorded on the puck" —
   the exact shape of the 09-06 water session, the most valuable capture this
   project has. Fixed to three outcomes (`2026-09-09d`).
+  **The whole chain then ran with no owner in it:** the page built a 91 KB
+  bundle, `./tools/jump ingest` verified it (`466,154 bytes = manifest
+  trace_bytes_device`, `forced=false`) and wrote
+  `data/sessions/20260909-224641-8673`. The bundle carries `trace_epoch_utc`,
+  so `label.py` can convert Nick's wall-clock notes on a bundle sent from his
+  own Mac. Send's branch was measured, not guessed: `canShare({files})` is
+  **true** on Chrome 152, so it takes the **share sheet** and Downloads is the
+  fallback — `rider-sync.md` step 6 is in the right order.
   **Still unmeasured:** a multi-megabyte body through the browser (this was
-  455 KB), `tracecheck` on a full region, and Send on Nick's own Mac.
+  455 KB, ~1/35th of a full region), `tracecheck` on a full region, and the
+  share sheet itself on Nick's own Mac.
 - **Simplified 2026-09-09 to `2026-09-09c`, after the owner read it and called
   it confusing.** It was written for "phone or computer, Bluetooth or cable",
   and Chrome on a Mac reports BOTH transports — so the rider met two competing

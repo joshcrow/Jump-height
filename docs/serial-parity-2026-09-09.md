@@ -189,3 +189,36 @@ with jumps. Pinned by
 455 KB, ~9 s; a full region is ~35× that), `tracecheck`'s walk on a full
 region, and the Send/share-sheet step on Nick's own Mac.
 
+## The whole chain, 2026-09-09 — puck to session folder
+
+After the pull, the rest was driven without the owner. Send's branch was
+measured rather than guessed: on this Mac's Chrome 152,
+`navigator.canShare({files:[<zip File>]})` is **true**, so `doSend()` takes the
+**share sheet**, and Downloads is the fallback — `docs/rider-sync.md` step 6 is
+in the right order. A native share sheet is a modal that would block the
+extension, so the download branch was forced (`canShare` stubbed false, then
+restored) purely to get the artifact out.
+
+    bundle   jumpheight-8673-20260909-2246.zip, 91 KB
+             manifest.json / jumps.csv / trace.csv (466,154 B) / notes.txt / device.log
+    ingest   ./tools/jump ingest <zip>
+             ✅ trace.csv verified: 466,154 bytes = manifest trace_bytes_device
+             -> data/sessions/20260909-224641-8673  (verified, forced=false)
+
+`trace_bytes_device` == `trace_bytes_got` == `trace_bytes_after` == 466,154,
+`f22_band_applied: false`, `transfer.transport: "usb"`, 9.1 s, 467,275 bytes on
+the wire. **`trace_epoch_utc` is in the bundle**, so `tools/label.py` can
+convert Nick's wall-clock notes on a bundle he sends from his own Mac — the
+thing that makes a remote session scoreable at all.
+
+**Unrelated finding, recorded because it is a measurement:** this Puck's
+`accel_fail` ran 97,935 -> 109,415 in 65 s — ~178 dropped accelerometer reads
+per second against a 200 Hz loop, ~88%, while `selftest accel` still PASSes on
+a single read (and reports gravity at 1.055 g). The STATS key only appears when
+the counter is non-zero, and **the OG's 2026-09-07 STATS carried no such key**,
+so the OG's counter is zero and this is this board's problem, not the fleet's.
+It does not touch anything above — bytes moved over the wire regardless of what
+the sensor behind them was doing. Per CLAUDE.md rule 1 this is not a verdict on
+the board: nothing has established its configuration, and the known cause of
+exactly this shape on this project is GPIO drive strength, not a dead part.
+
