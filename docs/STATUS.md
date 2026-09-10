@@ -499,7 +499,13 @@ hand — CLAUDE.md rule 5). What changed, all pinned by tests, suite 523 →
   established**; desktop Chrome on macOS reports `NotAllowedError` for several
   reasons including a lost transient activation after the zip. The fallback is
   right whichever it was, so it shipped first.
-  **Still unmeasured:** the root cause of that `share()` rejection, the F-22
+  **CLOSED 2026-09-10: the rider completed the loop on his own machine.**
+  On `2026-09-10c`, unaided: connect → copy → Send → *"Saved to your
+  Downloads as `jumpheight-E2C4-20260910-1031.zip`"*, 2.1 MB, from the OG
+  with 10 stored jumps. The remote data-return path now works end to end
+  with no owner present — the thing open gate 1b was about.
+  **Still unmeasured:** the root cause of the `share()` rejection itself
+  (routed around, not diagnosed — the desktop no longer calls it), the F-22
   *band* arm at 16 MB, the `traceraw` path at scale, and `tracecheck` on a
   full region.
 - **Simplified 2026-09-09 to `2026-09-09c`, after the owner read it and called
