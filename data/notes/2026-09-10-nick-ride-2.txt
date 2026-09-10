@@ -1,0 +1,50 @@
+# 2026-09-10 — Nick's SECOND session. Festival Park, 1h54m, SW. Data not yet received.
+# Surfr screenshot only, recorded now so the prediction below is on the record BEFORE
+# the puck data arrives. That ordering is the point: it makes this a test, not a story.
+#
+# SURFR SAYS: 12 jumps. Highest 7.9 ft (2.408 m). Max airtime 3.4 s. Max distance 92 ft
+# (a PR). Max speed 20 mph (8.94 m/s). Wingfoiling. Three jumps visible without Plus:
+#     #1  7.90 ft  3.28 s  39 ft  at  6m29s
+#     #2  6.13 ft  3.17 s  72 ft  at 14m48s
+#     #3  7.43 ft  2.33 s  59 ft  at 18m23s
+#
+# A CORRECTION TO 2026-09-10's EARLIER NOTE. That note said Surfr's numbers were
+# "internally inconsistent" because 1.8 m implies 1.21 s of ballistic airtime while it
+# reported 4.4 s. That argument ASSUMED BALLISTIC FLIGHT. If a wing rider is partly
+# supported by the wing, flight is NOT ballistic and the two numbers are not required to
+# agree. The inconsistency claim is withdrawn; what replaces it is stronger.
+#
+# THE RATIO IS SYSTEMATIC, NOT RANDOM. For each jump, T_ballistic = sqrt(8h/g):
+#     #1  ballistic 1.402 s vs reported 3.28 s   ratio 2.34
+#     #2  ballistic 1.235 s vs reported 3.17 s   ratio 2.57
+#     #3  ballistic 1.359 s vs reported 2.33 s   ratio 1.71
+#     mean 2.21     (earlier session's 1.8 m / 4.4 s: ratio 3.63)
+# Random inconsistency does not sit in a band like that. Two readings, both pointing the
+# same way, and this session's data can separate them:
+#   (a) the flight really is non-ballistic — the wing carries 66-85% of his weight, so he
+#       hangs up there far longer than a thrown object would; or
+#   (b) Surfr's airtime is systematically long — it counts the unweighting ramp and the
+#       landing settle, not just the flight.
+#
+# WHAT IT MEANS FOR THE PUCK, EITHER WAY. The firmware computes h = g*T^2/8 from the
+# airtime it measures. Under (a) the formula is simply invalid; under (b) the input is
+# inflated. Height goes as T^2, so a 2.2x airtime error is a ~4.9x height error.
+#   the 09-09 "3.02 m" detection came from 1.57 s of measured airtime.
+#   3.02 / 4.9 = 0.62 m — which is where a real small hop would sit.
+#
+# THE PREDICTION, WRITTEN BEFORE THE DATA (this is the falsifiable part):
+#   If (a) holds and these 12 jumps are real, the trace should contain roughly TWELVE
+#   runs of 2-3 s where |a| sits well below 0.35 g — because 66-85% support means ~0.15
+#   to 0.34 g. The 09-09 session had NO run longer than 0.26 s, which is consistent with
+#   it containing no real jumps at all rather than with the detector being blind.
+#   If instead today's trace also tops out near 0.26 s, then (b) is the better reading and
+#   the airtimes are an artefact of how the unweighting is timed.
+#
+# THIS REVISES THE GLOOMIER READ. If real jumps do sit under 0.35 g for seconds, the
+# free-fall GATE is fine and it was the 09-09 session that had nothing in it. What is
+# broken then is only the height CONVERSION — which is a calibration problem, not a
+# sensing one, and a far cheaper thing to fix.
+#
+# GROUND TRUTH AVAILABLE WITHOUT THE LAP BUTTON: Surfr's three elapsed offsets plus the
+# Garmin activity start time give three jump wall-clocks. Ask for the session start (the
+# FIT carries it) and, if he will, a screenshot of the full 12 (needs Surfr Plus).
