@@ -14,11 +14,7 @@ up](#the-pucks-memory-fills-up--the-one-thing-to-know) below.
    can't do this step):
    `https://joshcrow.github.io/Jump-height/sync/`
    - Don't have Chrome? It's a free one-time install — google.com/chrome.
-   - Newer Macs may ask **"Allow accessory to connect?"** the first time —
-     click **Allow** if you see it. Yours is an older Intel MacBook, which
-     doesn't ask, so almost certainly you won't see this at all. Not seeing
-     it is normal, not a problem.
-3. **Click "Connect with the cable"** and pick the puck from the list Chrome
+3. **Click "Connect"** and pick the puck from the list Chrome
    shows you — it's the one whose name mentions "XIAO", "JumpHeight", or
    "usbmodem".
 4. **Click "Copy the ride"** (step 2 on the page). The page reads everything
@@ -66,14 +62,15 @@ Josh rather than assuming they're all still in there.
 
 ## No Mac handy? Use your phone
 
-Same page, same steps 4-7 above — just tap **"Connect over Bluetooth"**
-instead of "Connect with the cable" in step 3:
+Same page, same steps 4-7 above — the page offers **"Connect over
+Bluetooth"** instead of the cable button in step 3:
 
 - **iPhone:** open the link in the free **Bluefy** app (App Store) — regular
   Safari can't talk to the puck over Bluetooth, Bluefy can.
 - **Android:** open it in Chrome, same as any web page.
-- **A Mac without the cable handy also works this way** — same "Connect
-  over Bluetooth" button, from Chrome.
+- **Not from a Mac, though.** Chrome on a Mac always reports a cable port
+  whether or not anything is plugged in, so the page offers the cable there
+  and nothing else. On a Mac, use the cable.
 - **Make sure your watch is NOT in the middle of an activity first.** If
   Wing Foil is still running from your ride, end it — it's fighting the puck
   for the same Bluetooth connection, and that's the most common cause of a

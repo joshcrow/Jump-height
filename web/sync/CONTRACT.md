@@ -40,9 +40,11 @@ Three consequences of being a reconstruction, stated plainly:
 
 ## §0 — The situation, and what follows from it
 
-The rider has **a phone, no laptop, no repo, no bench**
-(`web/sync/index.html:8`). The puck holds the only copy of the ride until a
-bundle reaches Josh. Everything below exists because of that.
+The rider has **a phone and an older Intel MacBook — no repo, no toolchain,
+no bench** (`web/sync/index.html:8-9`). This document said "a phone, no laptop"
+until 2026-09-09; DECISIONS #42 corrected that on 2026-09-07, which is what put
+the cable path on the page in the first place. The puck holds the only copy of
+the ride until a bundle reaches Josh. Everything below exists because of that.
 
 **Item 1 — the puck's copy is the only copy until it is not.** No path may
 erase the puck on an inference. `clear` is offered only behind §3 step 4's two
@@ -66,7 +68,7 @@ it.
 > **Numbering note.** Only **item 3** is fixed by a citation
 > (`tools/jump:1559`, `tools/tests/test_ingest.py:162`, `:396` all say "§0 item
 > 3"). Items 1 and 2 are reconstructed from code that cites `§0` without an
-> item number (`web/sync/index.html:8`). Their *content* is implemented; their
+> item number (`web/sync/index.html:8-9`). Their *content* is implemented; their
 > *numbers* are this document's.
 
 ---
@@ -521,23 +523,50 @@ Pinned by `test_header_only_trace_region_reads_as_an_empty_puck`.
 ### §3.1 Shape
 
 Static files only — **no build step, no CDN, no framework**
-(`web/sync/index.html:12`, `web/sync/sync.js:1-3`), which is also why the zip
+(`web/sync/index.html:17`, `web/sync/sync.js:1-3`), which is also why the zip
 writer is hand-rolled (`web/sync/sync.js:1288-1290`). **Zero external
 requests**, enforced by aborting every non-localhost route in the acceptance
 test (`tools/tests/test_web_sync.py:34-37`). **One theme**, light and
 high-contrast, deliberately not `prefers-color-scheme`-aware
 (`web/sync/sync.css:4-9`): read on a beach, in daylight, on a borrowed browser,
 once. Device text never reaches `innerHTML` — text nodes only
-(`web/sync/sync.js:32`, `web/sync/index.html:13-14`).
+(`web/sync/sync.js:32`, `web/sync/index.html:17-19`).
 
 Transport is one interface — `{ sendLine, onLine, onClose, disconnect }` — over
-Web Serial or Web Bluetooth (NUS UUIDs at `web/sync/sync.js:49-52`). Only the
-links the browser can actually make are shown (`web/sync/sync.js:1619-1622`).
+Web Serial or Web Bluetooth (NUS UUIDs at `web/sync/sync.js:49-52`).
+
+**Working tree, 2026-09-09 (`PAGE_VERSION` `2026-09-09c`): ONE way in per
+device.** The rule used to be "show every link this browser can make", and
+Chrome on a Mac reports **both** `navigator.serial` and `navigator.bluetooth`
+— so the rider saw two competing Connect buttons and a hint each, with nothing
+on the page saying which to press. Now `init()` (`web/sync/sync.js:1844-1850`)
+shows the cable button and `#usb-hint` wherever `navigator.serial` exists and
+hides `#btn-connect`, `#ble-hint` and `#ble-time-hint` entirely; Bluetooth is
+offered **only** where there is no serial port at all. This is **visibility
+only** — `doConnect()` stays bound and reachable, the mock seam does not go
+through either button, and neither transport implementation changed. The cable
+button's label is now `Connect` (it was `Connect with the cable`), and the two
+sentences that named it were updated with it (`web/sync/sync.js:893-895`,
+`:1022-1024`). Pinned by
+`test_web_sync.py::TestWebSyncCable::test_only_one_way_in_is_ever_offered`,
+which asserts both halves and states its environment assumptions.
+
+**Step 1's facts list lost two rows in the same pass** (`web/sync/index.html`,
+`#facts`): **Ride data waiting** (`#waiting`, a byte count) and **Puck
+software** (`#fw`, a version plus a build hash) — diagnostics, not news to a
+rider. Both figures still reach Josh in `manifest.json` (`trace_bytes_device`,
+`fw`, `src`) and in `device.log`, so nothing is lost downstream. The one
+*condition* those rows carried is the unmounted store, and it still reaches the
+rider twice: `#stored-jumps` reads "unknown — not saving"
+(`renderFacts()`, `web/sync/sync.js:748-758`) and the status line says NO REC
+in his own words (`afterConnect()`, `web/sync/sync.js:1000-1003`). `verified`
+and every check behind it are untouched.
 
 ### §3.2 Four steps, in order
 
-**Step 1 — Connect.** Cable (Web Serial) or Bluetooth (Web Bluetooth).
-`web/sync/index.html:33-56`.
+**Step 1 — Connect.** Cable (Web Serial) or Bluetooth (Web Bluetooth), but
+only one of them on screen at a time — see the one-way-in paragraph in §3.1.
+`web/sync/index.html:38-75`.
 
 **Step 2 — Copy the ride.** The command order is fixed
 (`doPull()`, `web/sync/sync.js:1025-1053`): `jumps` → `traceraw` (→ `trace` on
@@ -620,7 +649,7 @@ window.__sync = { state(), lastBundle() }
 changes both the advice the page gives and what `manifest.json` records
 (`web/sync/sync.js:76-80`).
 
-**`data-testid` hooks are contract** (`web/sync/index.html:16-18`):
+**`data-testid` hooks are contract** (`web/sync/index.html:21-23`):
 `btn-connect`, `btn-connect-usb`, `btn-pull`, `btn-send`, `btn-clear`,
 `status`, `progress`, `puck-name`, `battery`, `result`, `note`. Rename one and
 `tools/tests/test_web_sync.py` fails loudly.

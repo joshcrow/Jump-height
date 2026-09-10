@@ -57,7 +57,9 @@ that actually fires.
 3. `./tools/jump status` and `stats` — record `stored_jumps`, `trace_bytes`, `uptime_s`, whether `fs=down` appears.
 4. `tracecheck` — record `fast=` and `slow=`. **This is the number rows 14/15 exist for.**
 5. Serve the page (`python3 -m http.server` from `web/`), open Chrome, connect with the cable.
-   Compare the page's "Ride data waiting" against step 3's `trace_bytes`.
+   The page no longer shows a byte count before the pull (the "Ride data
+   waiting" row was cut 2026-09-09). Compare `trace_bytes_device` in the
+   bundle's `manifest.json` against step 3's `trace_bytes` instead.
 6. Wait 5 minutes between Connect and Copy, then Copy. Row 13 predicts a
    `got > devBytes` message worded as a shortfall. Record the exact sentence.
 7. Fill the region (`fillstore`, `main.cpp:1015`), then repeat 4-6. Row 14

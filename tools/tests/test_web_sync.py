@@ -1145,9 +1145,18 @@ class TestWebSync(_WebSyncCase):
         puck = FakePuck(traceraw="unknown", fs_down=True, jumps_rows=[], csv_rows=[])
         self._connect(puck)
 
-        # Step 1 must not print zeros it did not read.
+        # Step 1 must not print zeros it did not read. The byte-count row
+        # ("Ride data waiting", #waiting) was cut 2026-09-09 along with "Puck
+        # software" (#fw) — diagnostics, not news to a rider — so this test
+        # asserts the row is GONE rather than quietly passing against an
+        # element that no longer exists (CLAUDE.md rule 3), and then checks
+        # the two places that still carry the condition.
+        self.assertEqual(self.page.locator("#waiting").count(), 0,
+                         "the byte-count row was cut; a test still reading it "
+                         "would be asserting on nothing")
+        self.assertEqual(self.page.locator("#fw").count(), 0,
+                         "the firmware/build row was cut")
         self.assertIn("unknown", self.page.locator("#stored-jumps").inner_text().lower())
-        self.assertIn("unknown", self.page.locator("#waiting").inner_text().lower())
         self.assertIn("NO REC", self._status(),
                       "the rider already has a word for this (docs/rider-brief.md item 6)")
 
@@ -1354,12 +1363,82 @@ class TestWebSyncCable(_WebSyncCase):
                          "{ get: () => undefined, configurable: true });")
         self.assertTrue(self.page.locator("[data-testid=btn-connect-usb]").is_hidden())
 
+    def _visible_connect_buttons(self):
+        return [b for b in ("btn-connect-usb", "btn-connect")
+                if self.page.locator(f"#{b}").is_visible()]
+
+    def test_only_one_way_in_is_ever_offered(self):
+        """ONE path per device — the change the owner asked for on 2026-09-09.
+
+        Chrome on a Mac reports BOTH navigator.serial and navigator.bluetooth,
+        and the page used to show every link the browser could make: two
+        competing black Connect buttons, a hint each, and an unmeasured
+        Bluetooth time estimate, with nothing on the page saying which to
+        press. Nick has one configuration — that Mac, Chrome, the USB cable —
+        so where there is a serial port the cable is the ONLY thing offered.
+        Bluetooth (and its 20-30 minute estimate) appears only where there is
+        no serial port at all: a phone.
+
+        Both halves are asserted here, and the environment assumption is
+        stated rather than assumed: if this browser ever loses Web Bluetooth,
+        hiding it would prove nothing."""
+        self._open_plain()
+        self.assertTrue(self.page.evaluate("() => !!navigator.serial"),
+                        "no Web Serial in this browser — the computer case "
+                        "below was never exercised")
+        self.assertTrue(self.page.evaluate("() => !!navigator.bluetooth"),
+                        "no Web Bluetooth in this browser, so hiding the "
+                        "Bluetooth button proves nothing")
+
+        self.assertEqual(self._visible_connect_buttons(), ["btn-connect-usb"],
+                         "with a serial port the cable button must be the only "
+                         "Connect button on screen")
+        self.assertEqual(
+            self.page.locator("[data-testid=btn-connect-usb]").inner_text().strip(),
+            "Connect")
+        self.assertTrue(self.page.locator("#ble-hint").is_hidden(),
+                        "the Bluetooth hint must go with its button")
+        self.assertTrue(self.page.locator("#ble-time-hint").is_hidden(),
+                        "the 20-30 minute figure is a BLUETOOTH estimate and "
+                        "must not appear on the cable path")
+        self.assertFalse(self.page.locator("#usb-hint").is_hidden())
+        # The rows cut in the same pass: a byte count and a build hash.
+        self.assertEqual(self.page.locator("#waiting").count(), 0)
+        self.assertEqual(self.page.locator("#fw").count(), 0)
+
+        # The phone: no serial port, so Bluetooth is the one way in. doConnect
+        # stays reachable — this change is visibility, not wiring.
+        self._open_plain("Object.defineProperty(Navigator.prototype, 'serial', "
+                         "{ get: () => undefined, configurable: true });")
+        # The second goto has no fragment, so it is a real navigation and the
+        # init script above really ran. Checked, not assumed: if it did not,
+        # every assertion below would be re-reading the FIRST page and passing
+        # for the wrong reason (CLAUDE.md rule 3 — the shape _padding_case
+        # already got caught by).
+        self.assertFalse(self.page.evaluate("() => !!navigator.serial"),
+                         "the page did not reload without Web Serial — the "
+                         "phone case below was never exercised")
+        self.assertEqual(self._visible_connect_buttons(), ["btn-connect"],
+                         "without a serial port Bluetooth must be offered")
+        self.assertFalse(self.page.locator("#ble-hint").is_hidden())
+        self.assertFalse(self.page.locator("#ble-time-hint").is_hidden(),
+                         "the Bluetooth estimate belongs on the Bluetooth path")
+        self.assertTrue(self.page.locator("#usb-hint").is_hidden())
+
     def test_no_link_at_all_says_which_browser_to_use(self):
         self._open_plain("Object.defineProperty(Navigator.prototype, 'serial', "
                          "{ get: () => undefined, configurable: true });"
                          "Object.defineProperty(Navigator.prototype, 'bluetooth', "
                          "{ get: () => undefined, configurable: true });")
         status = self._status()
+        # The Mac leads: it is the rider's ONE configuration and the remedy he
+        # can act on in ten seconds. The Android and iPhone sentences stay
+        # behind it — this page is also the phone fallback, and Bluefy is the
+        # only iPhone browser that reaches the puck at all.
+        self.assertIn("On a Mac, open this page in Chrome and use the cable",
+                      status, f"the Mac case must lead: {status!r}")
+        self.assertLess(status.index("Mac"), status.index("Android"),
+                        f"Android must not come before the Mac: {status!r}")
         self.assertIn("Chrome", status)
         self.assertIn("cable", status)
         self.assertIn("Bluefy", status)
@@ -1376,7 +1455,14 @@ class TestWebSyncCable(_WebSyncCase):
         status = self._status()
         self.assertIn("cable", status)
         self.assertIn("usbmodem", status)
-        # Both connect buttons come back: he can try again.
+        # It must name the button by the label the button actually carries.
+        # That label became "Connect" on 2026-09-09 when the cable became the
+        # only path on a computer; this sentence said 'tap "Connect with the
+        # cable"', which now names nothing on screen (CLAUDE.md §4, the mirror
+        # case).
+        self.assertIn('tap "Connect" and choose', status,
+                      f"the retry sentence names a button that is not there: {status!r}")
+        # The connect button comes back: he can try again.
         self.assertFalse(self.page.locator("[data-testid=btn-connect-usb]").is_disabled())
 
     def test_a_cable_that_will_not_open_says_to_reload(self):
@@ -1420,6 +1506,8 @@ class TestWebSyncCable(_WebSyncCase):
         status = self._status()
         self.assertIn("cable", status, "over USB he must not be told to move closer")
         self.assertNotIn("out of range", status)
+        self.assertIn('tap "Connect" and start again', status,
+                      f"the retry sentence names a button that is not there: {status!r}")
         self.assertIn("reload this page", status,
                       f"the last-resort remedy must be offered: {status!r}")
         self.assertFalse(self.page.evaluate("() => window.__sync.state().connected"))
@@ -1432,7 +1520,19 @@ class TestWebSyncCable(_WebSyncCase):
         self._open_mock_usb()
         self._drive(puck, lambda: self._state()["phase"] == "connected",
                     "the page to finish reading the puck on connect")
-        self._pull(puck)
+
+        # The instruction while it copies has to name the thing he is holding.
+        # doPull's line said "Keep the phone next to the puck" on EVERY
+        # transport; over the cable the puck is plugged into a Mac and there is
+        # no phone in the loop at all. Read here rather than in _pull() because
+        # setStatus runs synchronously in doPull before the first command.
+        self.page.click("[data-testid=btn-pull]")
+        copying = self._status()
+        self.assertIn("Leave the puck plugged in", copying,
+                      f"the cable copy must not send him looking for a phone: {copying!r}")
+        self.assertNotIn("phone", copying)
+        self._drive(puck, lambda: self._state()["phase"] in ("pulled", "failed"),
+                    "the pull to finish")
         st = self._state()
         self.assertFalse(st["verified"])
         status = self._status()

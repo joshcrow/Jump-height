@@ -53,21 +53,17 @@ not there, so this page is a bit longer than last time. One page, still.
 
 **Between rides — the boring bits**
 
-- **After each ride, three things, all at home on the MacBook:**
-  1. Save the activity, export it from Garmin Connect and send it — same as
-     the ones you sent in August. That file tells me what you saw.
-  2. Plug the puck into the MacBook with its USB-C cable (it charges at the
-     same time — leave it plugged in). Open
-     `https://joshcrow.github.io/Jump-height/sync/` in **Chrome** (not
-     Safari). **Connect with the cable** → pick the entry that says XIAO,
-     JumpHeight or usbmodem. **Copy the ride** and leave it alone till it's
-     done — "older software, the slow way" is normal for your puck. Type one
-     line (time in, time out, conditions, "N jumps, biggest felt like X"),
-     tap the Sea and Wind chips, hit **Send** and send me the file. That
-     tells me what actually happened. The page ends there — you're finished.
-  3. If the page says the copy came up short by a *tiny* amount (under
-     about a thousand bytes), that's the puck being full, not broken. Send
-     it anyway.
+- **After each ride, two things at home on the MacBook:**
+  1. Save the activity, export it from Garmin Connect, send it to me — same
+     as the ones you sent in August. That's what you saw.
+  2. Plug the puck in (it charges at the same time) and open
+     `https://joshcrow.github.io/Jump-height/sync/` in **Chrome** — not
+     Safari. The page walks you through it in three steps and tells you when
+     you're finished. That's what actually happened.
+
+  If the page ever says the copy came up short by a *tiny* amount — under
+  about a thousand bytes — that's the puck being full, not broken. Send it
+  anyway and tell me.
 - **It holds about five hours of water on its own memory.** After that it
   keeps only the newest ride's detail (the counts survive). So no rush,
   but don't let ten rides stack up before I see it.

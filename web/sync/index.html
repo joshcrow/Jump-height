@@ -5,9 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Send your ride — JumpHeight</title>
 <!--
-  The rider's page. He has a phone, no laptop, no repo, no bench (CONTRACT.md §0).
+  The rider's page. He has an older Intel MacBook and a phone — no repo, no
+  toolchain, no bench (CONTRACT.md §0; DECISIONS #42, corrected 2026-09-07).
   Everything on screen is written for him: no MTU, no base64, no "NUS", no
   byte counts unless a byte count is the actual news.
+
+  He uses ONE configuration — that Mac, Chrome, the USB cable — so the page
+  shows ONE way in (sync.js init): the cable wherever there is a serial port,
+  Bluetooth only where there isn't one. Both paths stay wired.
 
   Static files only — no build step, no CDN, no framework (CONTRACT.md §3). The
   markup is the whole skeleton; sync.js only ever fills in text nodes, never
@@ -23,26 +28,39 @@
 <main class="wrap">
 
   <h1>Send your ride</h1>
-  <p class="lede">Three steps, in order — then stop. Each button switches on
-     when the one above it is done. Keep the puck plugged in — or, over
-     Bluetooth, keep the phone next to it — the whole time.</p>
+  <!-- Worded for the Mac, which is the only shape Nick will ever see. sync.js
+       init() rewrites this and the step-1 heading for the phone/Bluetooth
+       shape, where "your Mac" and "plugged in" are both wrong. -->
+  <p class="lede" id="lede">Plug the puck into your Mac, copy the ride off, and
+     send it to Josh. Three steps — then you’re done. Leave the puck plugged in
+     the whole time.</p>
 
   <p class="status" id="status" data-testid="status" role="status" aria-live="polite">Not connected yet.</p>
 
   <!-- 1 ------------------------------------------------------------------ -->
   <section class="step">
-    <h2><span class="num">1</span> Connect to the puck</h2>
-    <!-- Both links are wired; sync.js hides whichever this browser cannot
-         make (Chrome on a computer: both, cable first; a phone: Bluetooth
-         only). The hints are per link for the same reason. -->
-    <p class="hint" id="usb-hint">Plug the puck into this computer with its USB
-       cable — the one it charges on — and click <b>Connect with the cable</b>.
-       Pick the entry that mentions <b>XIAO</b>, <b>JumpHeight</b> or
-       <b>usbmodem</b>. (Newer Macs may ask to allow the accessory the first
-       time — click Allow if you see it. Most don’t ask at all; not seeing it
-       is normal.)</p>
-    <button class="btn btn-primary" id="btn-connect-usb" data-testid="btn-connect-usb" type="button" hidden>Connect with the cable</button>
-    <p class="hint" id="ble-hint">Or, with the puck switched on and next to
+    <h2><span class="num">1</span> <span id="step1-title">Plug in the puck</span></h2>
+    <!-- ONE way in per device. Both links stay wired, but only one is ever on
+         screen: where the browser has a serial port (Chrome on his Mac) the
+         cable is the only thing offered, and Bluetooth is hidden entirely.
+         Chrome on a Mac reports BOTH transports, so the old "hide whichever
+         this browser cannot make" rule showed two competing black Connect
+         buttons and two hints — the confusion the owner read on 2026-09-09.
+         Bluetooth appears only where there is no serial port at all: a phone.
+         sync.js init() is where that choice is made. -->
+    <p class="hint" id="usb-hint">Plug the puck into your Mac with its USB
+       cable — the one it charges on — then click the button below. Chrome asks
+       which device: pick the entry that mentions <b>XIAO</b>,
+       <b>JumpHeight</b> or <b>usbmodem</b>.</p>
+    <!-- No "Newer Macs may ask to allow the accessory" parenthetical: that
+         prompt is Apple-silicon only and Nick's MacBook is Intel (DECISIONS
+         #42, corrected 2026-09-09), so it was advice about something he will
+         never see. -->
+    <button class="btn btn-primary" id="btn-connect-usb" data-testid="btn-connect-usb" type="button" hidden>Connect</button>
+    <!-- No longer "Or, with the puck…": this hint is now shown ONLY when the
+         cable hint above it is hidden, so there is nothing for the "Or" to
+         refer to. -->
+    <p class="hint" id="ble-hint">With the puck switched on and next to
        you, tap <b>Connect over Bluetooth</b> and pick the one whose name
        starts with <b>JumpHeight</b>.</p>
     <button class="btn btn-primary" id="btn-connect" data-testid="btn-connect" type="button" hidden>Connect over Bluetooth</button>
@@ -50,19 +68,29 @@
       <div><dt>Puck</dt><dd id="puck-name" data-testid="puck-name">–</dd></div>
       <div><dt>Battery</dt><dd id="battery" data-testid="battery">–</dd></div>
       <div><dt>Jumps saved on it</dt><dd id="stored-jumps">–</dd></div>
-      <div><dt>Ride data waiting</dt><dd id="waiting">–</dd></div>
-      <div><dt>Puck software</dt><dd id="fw">–</dd></div>
+      <!-- "Ride data waiting" (a byte count) and "Puck software" (a version
+           and a build hash) were diagnostics, not news to a rider. The one
+           condition they carried is the unmounted store, and that still
+           reaches him twice: "Jumps saved on it" reads "unknown — not saving"
+           (renderFacts) and the status line says NO REC in his own words
+           (afterConnect). Cut 2026-09-09. -->
     </dl>
   </section>
 
   <!-- 2 ------------------------------------------------------------------ -->
   <section class="step">
     <h2><span class="num">2</span> Copy the ride off the puck</h2>
-    <p class="hint" id="pull-hint">This is the slow one. Over Bluetooth, a puck
-       that has been filling up over several rides can take <b>20–30 minutes</b>
-       (an estimate — nobody has timed a real one yet); the cable is expected to
-       be much faster. Keep the puck plugged in (or, over Bluetooth, keep the
-       phone next to it with the screen on) while it runs.</p>
+    <p class="hint" id="pull-hint">Leave the puck plugged in while this runs. It
+       can take a while — that is normal.</p>
+    <!-- No number on the cable path: the cable has never been timed on real
+         hardware (docs/STATUS.md, "Still unmeasured: a real port"), and the
+         20–30 minutes below is a BLUETOOTH estimate nobody has timed either.
+         So it travels with the Bluetooth path and nowhere else — sync.js
+         init() shows this line exactly where it shows #ble-hint. -->
+    <p class="hint" id="ble-time-hint" hidden>Over Bluetooth, a puck that has
+       been filling up over several rides can take <b>20–30 minutes</b> (an
+       estimate — nobody has timed a real one yet). Keep the phone next to the
+       puck with the screen on while it runs.</p>
     <!-- Shown only when the browser refused the Screen Wake Lock: on those
          browsers the screen sleeps, the link goes quiet and the pull dies on
          its 30 s timer, so "leave the phone alone" would be advice the page
@@ -74,6 +102,9 @@
     <div class="progress" id="progress" data-testid="progress" hidden>
       <div class="bar"><div class="bar-fill" id="bar-fill"></div></div>
       <p class="progress-text" id="progress-text">Starting…</p>
+      <!-- The two-central BLE problem (docs/watch.md), so Bluetooth only: a
+           watch cannot slow a cable. updateProgress() already gates this on
+           !isUsb(), which is the only place it is ever unhidden. -->
       <p class="warn" id="slow-hint" hidden>This is slow — is your watch in an
          activity right now? End it and try again.</p>
     </div>
@@ -82,8 +113,8 @@
   <!-- 3 ------------------------------------------------------------------ -->
   <section class="step">
     <h2><span class="num">3</span> Send it to Josh</h2>
-    <p class="hint">Anything worth mentioning? Type it here — it goes with the
-       ride. Optional.</p>
+    <p class="hint">Anything worth mentioning? Optional — it goes with the
+       ride.</p>
     <textarea id="note" data-testid="note" rows="3" placeholder="e.g. big one around the middle, board felt loose after"></textarea>
 
     <p class="chips-label" id="sea-label">Sea</p>
@@ -118,12 +149,13 @@
   <div class="result" id="result" data-testid="result"></div>
 
   <footer>
-    <p class="muted small">If anything here goes wrong, nothing is lost — the
-       ride is still on the puck. But the puck only holds about five hours of
-       riding: it keeps a ride until it is emptied <b>or until it fills up</b>,
-       whichever comes first, and once it is full the next ride wipes the old
-       detail to make room (your jump counts survive). So copy each ride off
-       before you go out again.</p>
+    <!-- "Don't empty the puck" is said ONCE, in #finish-hint. It used to be
+         here as well ("it keeps a ride until it is emptied…") and in step 4;
+         three sayings of one instruction is how a page stops being read. -->
+    <p class="muted small">Nothing here can lose the ride — it stays on the
+       puck either way. But the puck only holds about five hours of riding, and
+       once it is full the next ride wipes the old detail (your jump counts
+       survive). So copy each ride off before you go out again.</p>
     <p class="muted small" id="page-version"></p>
   </footer>
 

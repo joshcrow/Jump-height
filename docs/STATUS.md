@@ -433,13 +433,26 @@ hand — CLAUDE.md rule 5). What changed, all pinned by tests, suite 523 →
   merge `aa9d86e`, run `34361217565`: test / firmware / pages all success).
   Verified live, not assumed: `/`, `/sync/`, `/sync/sync.js`,
   `/sync/CONTRACT.md` all HTTP 200 with that last-modified; the served
-  `sync.js` carries `PAGE_VERSION = '2026-09-09b'`; a real Chrome load
-  shows the footer `page version 2026-09-09b`, ends at "You're finished.
-  Josh empties the puck.", offers both Connect buttons, and has no step 4;
+  `sync.js` carried `PAGE_VERSION = '2026-09-09b'`; a real Chrome load
+  shows the footer, ends at "You're finished. Josh empties the puck.", and
+  has no step 4;
   `?allowclear=1` shows step 4 and the button; zero console messages over
   two fresh loads. The root now serves the landing page, not the retired
   08-23 app. **Still unmeasured: a real port.** The page has been loaded,
   never connected.
+- **Simplified 2026-09-09 to `2026-09-09c`, after the owner read it and called
+  it confusing.** It was written for "phone or computer, Bluetooth or cable",
+  and Chrome on a Mac reports BOTH transports — so the rider met two competing
+  Connect buttons, two hints, a Bluetooth time estimate nobody has measured,
+  phone advice during a cable copy, and a build hash. Now **one way in per
+  device**: the cable wherever a serial port exists, Bluetooth only where one
+  does not (`sync.js` init, `hasSerial`). Cut: the second button and hint, the
+  Apple-silicon accessory prompt (Nick's Mac is Intel), the `Ride data waiting`
+  byte count and `Puck software` build-hash rows, and the duplicate "don't
+  empty the puck". The copying status now says "Leave the puck plugged in" on
+  the cable. **Consequence, deliberate: Bluetooth is no longer reachable from
+  a Mac at all** — `rider-sync.md` and DECISION #42 said it was, and were
+  corrected in the same commit. Suite 592 → 593 (29 Playwright).
 
 **How each part is verified today — all off real silicon:**
 - The store side of `traceraw`: `firmware/test/store_host/` runs the real,

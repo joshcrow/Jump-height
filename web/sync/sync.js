@@ -39,7 +39,7 @@
 // Baked into the page and copied into every manifest.json, so Josh can tell
 // which build of this page produced a bundle without asking the rider
 // anything (CONTRACT.md §2 `page_version`). Bump it when the page changes.
-const PAGE_VERSION = '2026-09-09b';
+const PAGE_VERSION = '2026-09-09c';
 
 // ------------------------------------------------------------------ protocol
 
@@ -744,14 +744,18 @@ function renderFacts() {
   // reading that could not be taken must never be dressed up as a reading of
   // zero" — and on this page it would also read as a puck with nothing worth
   // keeping, one screen before an erase button.
+  //
+  // The "Ride data waiting" (trace_bytes) and "Puck software" (fw/src) rows
+  // were cut 2026-09-09: a byte count and a build hash are diagnostics, not
+  // news to a rider, and both still travel to Josh inside manifest.json
+  // (trace_bytes_device, fw, src) and device.log. What must NOT be lost with
+  // them is the fs=down condition, and it is not: this row says "unknown — not
+  // saving" and afterConnect's status line says NO REC in his own words. Two
+  // places, neither of them a number he has to interpret.
   const down = !!S.storageDown;
   const stored = numOrNull(kvS.stored_jumps);
   $('stored-jumps').textContent = down ? 'unknown — not saving'
                                        : (stored === null ? '–' : String(stored));
-  const tb = numOrNull(kvS.trace_bytes);
-  $('waiting').textContent = down ? 'unknown — not saving'
-                                  : (tb === null ? '–' : human(tb));
-  $('fw').textContent = kvI.fw ? `v${kvI.fw} (${kvI.src || 'unknown build'})` : '–';
 }
 
 function showResult(headText, kind, lines) {
@@ -881,8 +885,13 @@ async function doConnectUsb() {
     port = await navigator.serial.requestPort();
   } catch (_e) {
     busy = false; setEnabled();
+    // Names the button by the label it actually carries. It read "Connect with
+    // the cable" until 2026-09-09; the cable is now the only path on a
+    // computer, so the button is just "Connect" and a sentence pointing at the
+    // old name would point at nothing on screen (CLAUDE.md §4, the mirror
+    // case: retire an identifier, fix what pointed at it).
     setStatus('No puck picked. Check the cable is plugged into the puck and the '
-            + 'computer, then tap "Connect with the cable" and choose the entry '
+            + 'computer, then tap "Connect" and choose the entry '
             + 'that mentions XIAO, JumpHeight or usbmodem.');
     return;
   }
@@ -1012,7 +1021,7 @@ function onLinkLost() {
   setEnabled();
   setStatus((isUsb()
     ? 'The cable connection dropped. Nothing was lost — check the cable at '
-      + 'both ends, tap "Connect with the cable" and start again.'
+      + 'both ends, tap "Connect" and start again.'
     : 'The puck dropped out of range. Nothing was lost — move closer, '
       + 'tap Connect and start again.') + '\n' + RELOAD_HINT, 'bad');
 }
@@ -1106,7 +1115,13 @@ async function doPull() {
   $('progress-text').textContent = 'Starting…';
   showProgress(true);
   setEnabled();
-  setStatus('Copying the ride across. Keep the phone next to the puck.', 'busy');
+  // The instruction has to name the thing he is actually holding. Over the
+  // cable there is no phone in the loop at all — the puck is plugged into a
+  // Mac — and "keep the phone next to the puck" sent him looking for a link
+  // that does not exist. Same rule as retryAdvice() and the slow hint.
+  setStatus(isUsb()
+    ? 'Copying the ride across. Leave the puck plugged in.'
+    : 'Copying the ride across. Keep the phone next to the puck.', 'busy');
   progressTimer = setInterval(updateProgress, 500);
 
   try {
@@ -1814,13 +1829,36 @@ function init() {
   $('page-version').textContent = 'page version ' + PAGE_VERSION;
   $('btn-connect').addEventListener('click', doConnect);
   $('btn-connect-usb').addEventListener('click', doConnectUsb);
-  // Offer only the links this browser can actually make. Chrome on a
-  // computer has both (the cable first: faster, and no watch can slow it);
-  // Android Chrome and Bluefy have Bluetooth only; Safari has neither.
-  $('btn-connect-usb').hidden = !navigator.serial;
-  $('btn-connect').hidden = !navigator.bluetooth;
-  $('usb-hint').hidden = !navigator.serial;
-  $('ble-hint').hidden = !navigator.bluetooth;
+  // ONE way in per device — visibility only; both code paths stay wired and
+  // reachable (doConnect is still bound above, and the mock/test seam does not
+  // go through either button).
+  //
+  // The old rule was "offer every link this browser can make", and Chrome on a
+  // Mac can make both: the rider saw two competing black Connect buttons, two
+  // hints, and had to choose between them with nothing on the page saying
+  // which. He has one configuration — a Mac, Chrome, the USB cable — so where
+  // there is a serial port, the cable IS the path and Bluetooth is hidden
+  // entirely. Bluetooth (and its 20–30 minute estimate) appears only where
+  // there is no serial port at all: a phone. Safari has neither, and falls
+  // through to the last-resort sentence at the bottom of init().
+  const hasSerial = !!navigator.serial;
+  $('btn-connect-usb').hidden = !hasSerial;
+  $('usb-hint').hidden = !hasSerial;
+  const offerBle = !hasSerial && !!navigator.bluetooth;
+  $('btn-connect').hidden = !offerBle;
+  $('ble-hint').hidden = !offerBle;
+  $('ble-time-hint').hidden = !offerBle;
+  if (offerBle) {
+    // The page's default copy is written for the Mac — "your Mac", "plugged
+    // in", "Plug in the puck". On the phone shape none of that is true, and
+    // #pull-hint would sit directly above #ble-time-hint telling him to keep
+    // the puck plugged in while it tells him to keep the phone next to it.
+    $('lede').textContent = 'Copy the ride off the puck and send it to Josh. '
+      + 'Three steps — then you’re done. Keep your phone next to the puck the '
+      + 'whole time.';
+    $('step1-title').textContent = 'Connect to the puck';
+    $('pull-hint').hidden = true;
+  }
   $('btn-pull').addEventListener('click', doPull);
   $('btn-send').addEventListener('click', doSend);
   $('btn-clear').addEventListener('click', doClear);
@@ -1842,8 +1880,13 @@ function init() {
   setEnabled();
   if (IS_MOCK) setupMock();
   else if (!navigator.bluetooth && !navigator.serial) {
-    setStatus('This browser can’t reach the puck. On a computer, open this page '
-            + 'in Chrome and use the cable. On Android, use Chrome. On an iPhone, '
+    // The last-resort branch: neither transport exists, so this is Safari (or
+    // something older). The Mac case leads because it is the rider's ONE
+    // configuration and the one remedy he can act on in ten seconds; the
+    // Android and iPhone sentences stay because this page is also the phone
+    // fallback and Bluefy is the only iPhone browser that reaches the puck.
+    setStatus('This browser can’t reach the puck. On a Mac, open this page in '
+            + 'Chrome and use the cable. On Android, use Chrome. On an iPhone, '
             + 'open it in the free Bluefy app.', 'bad');
   }
 }
