@@ -94,6 +94,36 @@ static const uint32_t IDLE_TIMEOUT_MS    = (uint32_t)JH_IDLE_TIMEOUT_S * 1000UL;
 // and well below the gap between outings. Only ever consulted when the trace
 // is already full — see the rule in loop().
 static const uint32_t AUTO_CLEAR_IDLE_MS = 3600UL * 1000UL;  // 1 h
+// F-36: the idle span above is NOT sufficient on its own, and the cost of
+// believing it was is on record. On 2026-09-11 a rider's entire 1 h 54 m
+// session was destroyed by this rule: the trace filled during the ride, the
+// puck then sat overnight (satisfying the hour), and the FIRST MOTION after
+// that idle was him picking it up to plug it in. At the instant motion
+// resumes, "a new session is starting" and "someone is retrieving this to
+// sync it" are the same signal. Handling is not.
+//
+// So the clear now also requires the motion gate to have been OPEN for this
+// long since the session boundary — summed over runs, using the same
+// IDLE_TIMEOUT_MS break that closes `active`, so "the gate was open" means
+// exactly what STATE recording/idle already means.
+//
+// Five minutes, from the only two real traces that exist:
+//   * the retrieval that caused F-36 accumulated 142.8 s of gate-open time
+//     IN TOTAL — data/sessions/20260911-112017-E2C4/trace.csv is 166.3 s of
+//     recording, a single run of 142.8 s, and then he set the puck down.
+//     300 s is 2.1x that, so the episode would have had to more than double.
+//   * a real ride reaches 300 s of accumulated motion 7.4 min after the
+//     boundary — data/sessions/20260910-103108-E2C4, the 1 h 54 m boot
+//     segment, replayed through this exact rule.
+// Run length alone does NOT separate the two cases (that ride's first run
+// after the overnight idle was itself only 120-180 s, against retrieval's
+// 142.8 s) — it is the SUM over the session that pulls them apart.
+//
+// The cost of being wrong, stated plainly: the first ~7 minutes of a new
+// session's raw trace are not recorded, out of ~114. That is vastly better
+// than losing the whole previous ride, which is what the un-gated rule
+// actually did.
+static const uint32_t AUTO_CLEAR_MOTION_MS = 300UL * 1000UL;  // 5 min
 
 jump::Detector detector;
 jump::GyroBias gyro_bias;
@@ -817,6 +847,13 @@ static void handleCommand(const String& cmd) {
     // — either direction, nothing else on this line may move.
     const int vbat = jh_power::vbat_mv();
     const char* fs_key = fs_ok ? "" : " fs=down";
+    // Trace fullness, same adder rule: absent unless true, so a healthy puck's
+    // line is byte-identical to before. A FULL region records nothing while
+    // every other number here looks perfectly healthy — trace_bytes just stops
+    // growing, which nobody watches. F-36's forensics: "Nothing tells the
+    // rider the trace is full — no STATS key, no watch field, and the one-shot
+    // serial line already fired hours ago." This is the STATS key.
+    const char* full_key = jh_store::trace_is_full() ? " trace_full=1" : "";
     // Adder keys, present only when non-zero, so a healthy line is unchanged
     // for every existing client — and a session that quietly lost a sensor
     // cannot be mistaken for a session that simply had no jumps.
@@ -846,15 +883,15 @@ static void handleCommand(const String& cmd) {
                (unsigned long)jh_link::tx_drops());
     }
     if (vbat >= 0) {
-      emitf("STATS session_jumps=%lu session_best_m=%.3f session_best_airtime_s=%.3f stored_jumps=%lu stored_best_m=%.3f trace_bytes=%lu vbat_mv=%d batt_pct=%d chg=%d%s%s%s%s\n",
+      emitf("STATS session_jumps=%lu session_best_m=%.3f session_best_airtime_s=%.3f stored_jumps=%lu stored_best_m=%.3f trace_bytes=%lu vbat_mv=%d batt_pct=%d chg=%d%s%s%s%s%s\n",
             (unsigned long)session_jumps, session_best, session_best_airtime,
             (unsigned long)stored_jumps, stored_best, (unsigned long)jh_store::trace_bytes(),
-            vbat, jh_power::batt_pct(), jh_power::charging(), fs_key, fail_key, drop_key, up_key);
+            vbat, jh_power::batt_pct(), jh_power::charging(), fs_key, full_key, fail_key, drop_key, up_key);
     } else {
-      emitf("STATS session_jumps=%lu session_best_m=%.3f session_best_airtime_s=%.3f stored_jumps=%lu stored_best_m=%.3f trace_bytes=%lu%s%s%s%s\n",
+      emitf("STATS session_jumps=%lu session_best_m=%.3f session_best_airtime_s=%.3f stored_jumps=%lu stored_best_m=%.3f trace_bytes=%lu%s%s%s%s%s\n",
             (unsigned long)session_jumps, session_best, session_best_airtime,
             (unsigned long)stored_jumps, stored_best, (unsigned long)jh_store::trace_bytes(),
-            fs_key, fail_key, drop_key, up_key);
+            fs_key, full_key, fail_key, drop_key, up_key);
     }
     emitLine("OK stats");
   } else if (cmd == "jumps") {
@@ -1416,6 +1453,38 @@ static void pollSerial() {
   }
 }
 
+// F-36 signal (b): is a host actually TALKING to this puck right now?
+//
+// What it reads, verified in the installed framework rather than assumed: on
+// this board `Serial` is TinyUSB's CDC (Adafruit_USBD_CDC.h:88-91, `#if
+// defined(USE_TINYUSB)`, and the platform builder defines USE_TINYUSB for
+// every nRF52 board but adafruit_feather_nrf52832 —
+// platform-nordicnrf52 builder/frameworks/arduino/adafruit.py:222-229). Its
+// `operator bool()` is `tud_cdc_n_connected()` (Adafruit_USBD_CDC.cpp:151-164),
+// which is
+//     return tud_ready() && tu_bit_test(_cdcd_itf[itf].line_state, 0);
+//   (cdc_device.c:115-119) — enumerated, not suspended, and DTR asserted.
+// That is precisely "a host has this port OPEN", which is what the sync page
+// and ./tools/jump both do. A dumb charger never enumerates, so charging on
+// its own does not read as attached.
+//
+// DELIBERATELY NOT INCLUDED: a connected BLE central. The watch is the
+// product's only user-facing interface and it holds the link for the WHOLE
+// ride — docs/watch.md:301-305, "Glanceable state during a session, writes
+// the FIT activity; read-only by design, sends exactly one command, `stats`,
+// per connect" — so "a central is connected" means RIDING at least as often
+// as it means retrieval, and gating on it would disable the auto-clear
+// outright for every watch user. USB is different: docs/watch.md:324-326 says
+// the sync page "runs at home while the puck charges, never on the water".
+// One of the two signals is sound and the other is not, so only one ships.
+//
+// COST, which is why the caller puts this last in its && chain:
+// operator bool() calls yield() when it returns false
+// (Adafruit_USBD_CDC.cpp:158-162), and yield() on this core flushes the CDC
+// and taskYIELDs (cores/nRF5/rtos.cpp:75-82). Fine once per armed session
+// boundary; not something to run on every 200 Hz sample.
+static bool hostPortOpen() { return (bool)Serial; }
+
 // ---------------- Setup ----------------
 void setup() {
   jh_link::watchdog_init();   // FIRST — no pre-watchdog hang window, ever
@@ -1701,7 +1770,38 @@ void loop() {
   // the auto-clear rule below needs the idle span that just ended, and after
   // the update it would always read zero.
   const uint32_t idle_ms = now_ms - last_motion_ms;
+  // F-36: the same motion, measured as RUNS, so the auto-clear below can tell
+  // a session from a handling episode. A run breaks after IDLE_TIMEOUT_MS of
+  // stillness — the same span that closes `active` a few lines down.
+  static bool     boundary_armed    = false;  // a >= AUTO_CLEAR_IDLE_MS still
+                                              // span has ended AND the trace
+                                              // was already dead when it did
+  static uint32_t session_motion_ms = 0;      // gate-open time since it ended
   if (moved_now) {
+    if (!motion_seen || idle_ms >= IDLE_TIMEOUT_MS) {
+      // A new run of motion starts on this sample. If a full session-boundary
+      // idle is what preceded it, arm the auto-clear and start counting from
+      // zero. motion_seen excludes power-on: (now_ms - 0) is not an idle span
+      // anybody observed, it is just uptime (the same reason the gate itself
+      // has this flag).
+      if (motion_seen && idle_ms >= AUTO_CLEAR_IDLE_MS) {
+        // Armed ONLY if the region was already dead when this session began.
+        // The state has to be sampled HERE, not at the clear: a region that
+        // fills DURING a ride holds that ride's own data, and clearing it
+        // would delete the session in progress to make room for the tail of
+        // it. That is the one trade this rule must never make — and a latch
+        // that only checked fullness later would make it. Storage down counts
+        // as not armed: an unreadable flag is not a reason to erase.
+        boundary_armed    = jh_store::ok() && jh_store::trace_is_full();
+        session_motion_ms = 0;
+      }
+    } else if (boundary_armed) {
+      // Inside a run: charge the gap since the previous moving sample to this
+      // session. Summed, this is how long the GATE has been open — not how
+      // many samples crossed the threshold — which is the quantity both
+      // measurements in AUTO_CLEAR_MOTION_MS's comment are stated in.
+      session_motion_ms += now_ms - last_motion_ms;
+    }
     last_motion_ms = now_ms;
     motion_seen    = true;
   }
@@ -1713,15 +1813,28 @@ void loop() {
   // user who never opens a laptop would silently stop keeping raw data.
   //
   // The rule is deliberately narrow, because auto-clearing is auto-DELETING.
-  // All three must hold:
+  // All FIVE must hold:
   //   1. the trace is ALREADY FULL — so it is recording nothing, and clearing
   //      it cannot make the present worse. This is what makes the whole thing
-  //      safe: we never delete a trace that is still doing its job.
+  //      safe: we never delete a trace that is still doing its job. It must
+  //      have been full AT THE BOUNDARY as well as now (`boundary_armed` is
+  //      latched from the store's own flag up in the motion gate): a region
+  //      that fills mid-ride holds THIS ride, and is not old data at all.
   //   2. the board has been still for AUTO_CLEAR_IDLE_MS — a session boundary,
   //      not a pause. An hour is far longer than sitting on the board between
-  //      runs and far shorter than the gap between outings.
-  //   3. motion has just resumed — a new session is actually starting, so the
-  //      space is about to be needed.
+  //      runs and far shorter than the gap between outings. (Also
+  //      `boundary_armed`, latched when such a still span ends.)
+  //   3. motion has resumed — a new session may be starting, so the space is
+  //      about to be needed.
+  //   4. F-36: and it has KEPT GOING for AUTO_CLEAR_MOTION_MS. Conditions 2+3
+  //      alone fire on the act of RETRIEVAL — picking the puck up after it sat
+  //      overnight is a session boundary followed by motion, and on 2026-09-11
+  //      that destroyed a rider's entire 1 h 54 m session at the instant he
+  //      lifted it to plug it in. Handling is minutes at most; a session is
+  //      hours. See AUTO_CLEAR_MOTION_MS for both measurements.
+  //   5. F-36: and no host has the USB console open. If someone is talking to
+  //      this puck, they are retrieving data, not riding — see hostPortOpen(),
+  //      which also says why a connected BLE central is NOT used here.
   // And it clears the TRACE ONLY: jumps are the user's history and the watch's
   // reconnect source (jh_store::trace_clear()).
   //
@@ -1729,9 +1842,32 @@ void loop() {
   // CURRENT session records. Losing the session you are actually riding is
   // worse than losing one you already had a chance to sync. Sync first (phone
   // or laptop) if the old trace matters.
+  //
+  // And the trade condition 4 makes, equally plainly: when this is wrong, the
+  // first ~7 minutes of a NEW session are not recorded. That is a far better
+  // failure than the one it replaces — losing the whole previous ride.
   static uint32_t auto_clears = 0;
-  if (moved_now && motion_seen && idle_ms >= AUTO_CLEAR_IDLE_MS &&
-      jh_store::ok() && jh_store::trace_is_full()) {
+  // hostPortOpen() is LAST on purpose: it is the only test here that costs
+  // anything (see its comment), and && short-circuits, so it runs at most once
+  // per armed session boundary rather than at 200 Hz.
+  // Disarm the moment the region stops being full. Armed state is decided at
+  // the session boundary, and without this it would outlive the condition that
+  // justified it: empty the region by hand mid-session (a `clear` during a
+  // sync) and refill it inside that same session, and the rule would fire on
+  // the ride IN PROGRESS — deleting the hours already recorded to make room
+  // for the minutes left. That is the one trade this code must never make.
+  // Remote (it needs a single session past ~5 h of recording that also began
+  // with a manual clear), but it costs one comparison to remove.
+  if (boundary_armed && !(jh_store::ok() && jh_store::trace_is_full())) {
+    boundary_armed = false;
+  }
+  if (moved_now && motion_seen && boundary_armed &&
+      session_motion_ms >= AUTO_CLEAR_MOTION_MS &&
+      jh_store::ok() && jh_store::trace_is_full() && !hostPortOpen()) {
+    // One attempt per session boundary. Disarmed BEFORE the clear, not after:
+    // a wedged region leaves trace_is_full() true, and without this the retry
+    // would repeat on every sample for the rest of the session.
+    boundary_armed = false;
     emitLine("# trace region was FULL and a new session is starting —");
     emitLine("# clearing the trace to make room. Stored jumps are untouched.");
     jh_store::trace_clear();
@@ -1854,6 +1990,11 @@ void loop() {
   if (jumped) {
     session_jumps++;
     if (ev.height_m > session_best) session_best = ev.height_m;
+    // F-29: the same line for airtime. Until this existed, session_best_airtime
+    // was written ONLY by `fakejump`, so STATS reported 0.000 after every real
+    // session and the watch's best-airtime reseed was wired to a key that was
+    // always zero (Model.mc, "adder key, firmware >= 2026-08-18").
+    if (ev.airtime_s > session_best_airtime) session_best_airtime = ev.airtime_s;
     // stored_jumps/stored_best move only if the store actually kept it —
     // updated after logJump() below (F-10).
     emitf("JUMP n=%lu airtime_raw_s=%.3f airtime_s=%.3f height_m=%.3f height_ft=%.1f best_m=%.3f\n",

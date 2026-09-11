@@ -128,6 +128,20 @@ class HostSerial {
  public:
   int availableForWrite() { return 4096; }  // host never backpressures
 
+  // "Is a host talking to this console?" — main.cpp's hostPortOpen() asks the
+  // console itself rather than #ifdef'ing on the platform, exactly as it asks
+  // the seams elsewhere. On the device this is TinyUSB's
+  // `tud_cdc_n_connected()` (enumerated + DTR asserted). Here the console IS
+  // this process's stdin/stdout, attached by whoever launched the binary and
+  // never disconnecting for its lifetime, so the honest answer is always yes.
+  //
+  // Consequence, stated so nobody has to rediscover it: the host build can
+  // never take main.cpp's F-36 auto-clear branch. That path was already out of
+  // reach here — it needs a FULL trace region and an hour of millis() — so
+  // this costs no coverage that existed. See tools/tests/test_hostdev.py's
+  // TestTraceFullIsOnTheWire for what IS reachable.
+  explicit operator bool() const { return true; }
+
   void begin(unsigned long baud);
   int available();
   int read();

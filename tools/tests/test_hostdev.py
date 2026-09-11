@@ -589,6 +589,129 @@ class TestOffCommand(HostDevTestCase):
             dev.close()
 
 
+class TestTraceFullIsOnTheWire(HostDevTestCase):
+    """The trace region being FULL must be visible to a client.
+
+    A full region records NOTHING while every other number on the STATS line
+    looks healthy — `trace_bytes` simply stops growing, which nobody watches.
+    The 2026-09-11 forensics put it exactly: "Nothing tells the rider the trace
+    is full — no STATS key, no watch field, and the one-shot serial line
+    already fired hours ago."
+
+    Reachable here because the host store resumes its cap state from the file
+    already on disk (`firmware/src/platform/host/jh_store.cpp:172-176`:
+    `if (s_trace_bytes >= JH_TRACE_MAX_BYTES) s_trace_full = true;`), so a
+    pre-seeded trace.csv boots the core straight into the full state.
+
+    NOT reachable from this harness, and deliberately not claimed: the F-36
+    auto-clear branch itself (`firmware/src/main.cpp`, the
+    `boundary_armed && session_motion_ms >= AUTO_CLEAR_MOTION_MS` rule). It
+    needs an hour of `millis()` idle followed by five minutes of motion, and
+    host `millis()` is real wall-clock time from process start
+    (`firmware/src/platform/host/arduino_compat/Arduino.cpp:84-87`) with no
+    seam to fake it. The host console also always answers "a host is attached"
+    (`Arduino.h`'s `HostSerial::operator bool`), which the same rule now gates
+    on. That branch has no host coverage — it was verified by building both
+    environments and by replaying the two real traces through the rule
+    offline, not by a test in this file.
+    """
+
+    TRACE_CAP = 2_000_000  # JH_TRACE_MAX_BYTES, firmware/include/params.gen.h
+
+    def _seed_full_trace(self, host_dir: Path) -> int:
+        """Write a valid, oversized trace.csv — real rows, not padding, so the
+        file the device would dump is the file a client could actually read."""
+        host_dir.mkdir(parents=True, exist_ok=True)
+        row = "1.000,1.000\n"
+        n_rows = (self.TRACE_CAP // len(row)) + 64
+        (host_dir / "trace.csv").write_text("t,mag\n" + row * n_rows)
+        size = (host_dir / "trace.csv").stat().st_size
+        self.assertGreaterEqual(size, self.TRACE_CAP,
+                                "seed must exceed the cap or the test proves nothing")
+        return size
+
+    def test_healthy_puck_has_no_trace_full_key(self) -> None:
+        script = write_script(self.tmp_path / "script.txt", "rest 5.0\n")
+        dev = HostDevice(self.host_binary, self.tmp_path / "hostdir", script)
+        try:
+            dev.drain_boot()
+            stats_line = next((ln for ln in dev.command("stats")
+                               if ln.startswith("STATS ")), None)
+            self.assertIsNotNone(stats_line)
+            kv = parse_kv(stats_line)
+            # Adder-key rule: absent when false, so every existing client's
+            # line is byte-identical to what it has always been.
+            self.assertNotIn("trace_full", kv, stats_line)
+        finally:
+            dev.close()
+
+    def test_full_region_says_so_on_stats(self) -> None:
+        host_dir = self.tmp_path / "hostdir"
+        size = self._seed_full_trace(host_dir)
+        script = write_script(self.tmp_path / "script.txt", "rest 5.0\n")
+        dev = HostDevice(self.host_binary, host_dir, script)
+        try:
+            dev.drain_boot()
+            stats_line = next((ln for ln in dev.command("stats")
+                               if ln.startswith("STATS ")), None)
+            self.assertIsNotNone(stats_line)
+            kv = parse_kv(stats_line)
+            self.assertEqual(kv.get("trace_full"), "1",
+                             "a full trace region must say so on STATS: " + stats_line)
+            # The rest of the line still reports normally — this is an ADDER,
+            # not a replacement, and `fs=down` must not appear: storage is up,
+            # it is merely out of room.
+            self.assertEqual(int(kv["trace_bytes"]), size, stats_line)
+            self.assertNotIn("fs", kv, stats_line)
+        finally:
+            dev.close()
+
+
+class TestSessionBestAirtimeReachesStats(HostDevTestCase):
+    """F-29: `session_best_airtime` was assigned ONLY in the `fakejump` handler,
+    so STATS reported `session_best_airtime_s=0.000` after every real session
+    (seen in the field on 2026-09-06 with 16 detections, and again in
+    `data/sessions/20260911-112017-E2C4/device.log`:
+    `session_jumps=10 session_best_m=3.393 session_best_airtime_s=0.000`).
+
+    The watch reseeds its best airtime from that key on reconnect
+    (`garmin/jumpfield/source/Model.mc`), so it was reseeding from a constant
+    zero.
+    """
+
+    def test_real_jump_sets_session_best_airtime(self) -> None:
+        freefall_s = 0.65
+        script = write_script(self.tmp_path / "script.txt",
+                              f"rest 2.0\njump {freefall_s}\nrest 2.0\n")
+        dev = HostDevice(self.host_binary, self.tmp_path / "hostdir", script)
+        try:
+            boot = dev.drain_boot()
+            self.assertTrue(boot and boot[-1].strip() == "READY")
+
+            jump_line = dev.wait_for("JUMP", timeout=10.0)
+            self.assertIsNotNone(jump_line, "no JUMP from the scripted toss")
+            jump_airtime = float(parse_kv(jump_line)["airtime_s"])
+            self.assertGreater(jump_airtime, 0.0)
+
+            stats_line = next((ln for ln in dev.command("stats")
+                               if ln.startswith("STATS ")), None)
+            self.assertIsNotNone(stats_line)
+            kv = parse_kv(stats_line)
+            best_airtime = float(kv["session_best_airtime_s"])
+            # The defect's exact signature: jumps counted, height carried,
+            # airtime stuck at zero.
+            self.assertGreater(int(kv["session_jumps"]), 0, stats_line)
+            self.assertGreater(best_airtime, 0.0,
+                               "session_best_airtime_s is still 0 after a real "
+                               "jump (F-29): " + stats_line)
+            # And it is the SAME airtime the JUMP line reported — the
+            # calibrated one the watch displays, not the raw one.
+            self.assertAlmostEqual(best_airtime, jump_airtime, places=3,
+                                   msg=f"{stats_line}\n{jump_line}")
+        finally:
+            dev.close()
+
+
 if __name__ == "__main__":
     unittest.main()
 
