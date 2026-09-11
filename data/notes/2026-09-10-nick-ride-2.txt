@@ -48,3 +48,42 @@
 # GROUND TRUTH AVAILABLE WITHOUT THE LAP BUTTON: Surfr's three elapsed offsets plus the
 # Garmin activity start time give three jump wall-clocks. Ask for the session start (the
 # FIT carries it) and, if he will, a screenshot of the full 12 (needs Surfr Plus).
+
+# ---- DATA RECEIVED 2026-09-11. WHAT SURVIVED, AND WHAT DID NOT ----
+#
+# The trace is GONE (F-36: the auto-clear fired when he picked the puck up to sync it).
+# 20 jump records survived, 9 of them inside this session. The pre-registered prediction
+# above — ~12 runs of 2-3 s below 0.35 g — CANNOT BE TESTED. Say so rather than reaching.
+#
+# TRIED AND FAILED, recorded so nobody retries it: aligning Surfr's three visible jumps
+# (6m29s / 14m48s / 18m23s) to the 9 puck detections by fitting the session start. Best fit
+# put the start at 15:55:29 EDT with residuals 0 / 12 / 58 s, and Surfr's own app displays
+# "15:54", which looked like corroboration. It is not. A permutation null — 9 detections
+# placed at random in the same 56-minute span, 20,000 trials — matches that well or better
+# 34% of the time (p = 0.34). Three points against nine candidates with a free offset is
+# not an identification. THE CORRESPONDENCE IS NOT ESTABLISHED.
+#
+# WHAT DOES SURVIVE, needing no clock, no alignment and no trace:
+#
+# 1. THE TWO INSTRUMENTS DISAGREE IN OPPOSITE DIRECTIONS.
+#         jumps   max airtime   max height
+#    Surfr   12        3.40 s       2.41 m
+#    puck     9        1.66 s       3.39 m     (0.49x the airtime, 1.41x the height)
+#    Under h = g*T^2/8 less airtime MUST mean less height. The puck reports half the
+#    airtime and 40% more height than Surfr, which its own formula forbids. At least one
+#    instrument is not measuring what it reports, and this needs no matching to say.
+#
+# 2. EVERY DETECTION SHOWS FULL BODY LOAD. med_a_g for the 9: 0.867 to 1.600, mean 1.120 g.
+#    The prediction was 0.15-0.34 g if the wing carries 66-85% of him. Nothing is close.
+#    EITHER none of these 9 is one of his 12 real jumps, OR a real wing jump reads ~1 g at
+#    the chest and the wing-support reading is wrong. This session cannot separate those,
+#    and without a trace nothing can. Do not quote either as settled.
+#
+# 3. #20 (19:59 EDT, after the session, med_a 0.290 g) is the ONLY detection in 20 that
+#    sits below the 0.35 g gate on its own median. One point, off the water, uninterpreted.
+#
+# 4. His notes are the best field record this project has had: "15-20 knots out of SW.
+#    Gusts up to 26. Wind would drop out of nowhere. Lots of jumps. Attempted a few pump
+#    foil runs where I would drop the hand wing and head straight downwind then loop back
+#    to grab wing." Ask for that every time; it costs him nothing and it is the only record
+#    of what he was actually doing.
