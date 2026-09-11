@@ -562,22 +562,40 @@ rider twice: `#stored-jumps` reads "unknown — not saving"
 in his own words (`afterConnect()`, `web/sync/sync.js:1000-1003`). `verified`
 and every check behind it are untouched.
 
-### §3.2 Four phases, in order — TWO of them are presses
+### §3.2 Four phases, in order — THREE of them are presses
 
-**Working tree, 2026-09-11b (`PAGE_VERSION` `2026-09-11b`): the four phases
+**Working tree, 2026-09-11c (`PAGE_VERSION` `2026-09-11c`): the four phases
 below are the PAGE's, not the rider's.** They still happen, still in this
 order, and every gate in them is unchanged. What changed is who performs them:
-`afterConnect()` now ends by calling `autoChain()` (`web/sync/sync.js`), which
-runs `doPull()` and then `doSend()` with no press in between, so connect →
-copy → build → save is one gesture.
+`afterConnect()` ends by calling `autoChain()` (`web/sync/sync.js`), which runs
+`doPull()` and then builds the bundle, with no press in between — so connect →
+copy → verify → build is one gesture.
 
-**Two presses is the floor the browser permits**, and the page is at it:
+**CORRECTED 2026-09-11c — this section said "TWO of them are presses" and
+"two presses is the floor".** For one day the chain also called `doSend()`,
+with no user gesture anywhere in the session. It was removed in review:
+`downloadBlob()` returns `true` unconditionally — a page gets no completion
+callback for `<a download>`, which is exactly why `delivered` is defined as a
+hand-off below — so a Chrome that silently declined a gesture-free download
+would have left the page reading "Saved to your Downloads", `delivered` true,
+and **Empty the puck** live over a ride that never left the machine. Harmless
+behind a human click; not behind a chain. `showSaveFilePicker()` would have
+made the save confirmable, and was rejected because `typeof
+window.showSaveFilePicker` is `undefined` in the test browser (Chromium
+151.0.7922.34) — it would ship untested, which is how the broken share sheet
+reached the rider.
+
+**Three presses on a Mac: Connect → Save → Empty the puck.**
 `navigator.serial.requestPort()` requires a user gesture, so Connect is
-forced, and the erase is destructive so it stays deliberate. `downloadBlob()`
-does **not** require one — it is a programmatic `a.click()` and was already
-used that way (`web/sync/sync.js`, `downloadBlob`).
+forced; the save is a press so that `delivered` means something; the erase is
+destructive so it stays deliberate. What the chain does on its own is
+everything that can be CHECKED — the copy, `verifyPull()`, and the zip — so
+the press hands over a bundle that is already built (measured at 3 MB on the
+test bench, two runs: 51 and 59 ms to build in the chain, 6.6 and 6.7 ms for
+the press; `tools/tests/test_web_sync.py`, `bundle_build_ms` /
+`save_press_ms`).
 
-Two paths cost one more press, both deliberately:
+Two paths word that press differently, both deliberately:
 
 - **A phone.** `navigator.share()` needs transient activation, and macOS
   Chrome has been **measured** rejecting it with `NotAllowedError` after the
@@ -588,8 +606,16 @@ Two paths cost one more press, both deliberately:
   again behind one **Save it again with your note** button, which appears only
   when the note or a chip changed after delivery.
 
+Pinned by `test_the_chain_never_saves_by_itself`: it drives a whole
+connect-and-chain, asserts **no download fired**, `delivered` false and the
+erase off screen, and then presses Save and asserts that it works.
+
 **The one-button rule.** At any moment exactly one button is on screen: a
-button is either the thing to do, or it is not there. `setEnabled()`
+button is either the thing to do, or it is not there. **One stated exception
+(2026-09-11c):** a copy that ARRIVED and did not verify shows **Try again**
+and **Send** together — the ride is still on the puck to re-copy, and that
+failed bundle is the only thing that can tell Josh why (until 2026-09-11c the
+chain had already saved it for him). `setEnabled()`
 (`web/sync/sync.js`) still computes every `.disabled` exactly as before — the
 gates — and `setVisible()` is a presentation layer **that only ever hides**.
 Nothing on the page is ever visible-and-greyed. The numbered step headings, the
@@ -674,17 +700,18 @@ the code; it is corrected here. What is true now:
 - **The erase names the saved file in its own sentence** — "Once you can see
   `jumpheight-E2C4-…zip` in your Downloads:" (`setVisible()`,
   `web/sync/sync.js`). That is copy, not a gate, and it exists because
-  `downloadBlob()` returns `true` whether or not Chrome wrote the file: with
-  the save now automatic, a human click no longer stands between `delivered`
-  and the erase, so a human *look* does.
+  `downloadBlob()` returns `true` whether or not Chrome wrote the file: a
+  human click stands between `delivered` and the erase again (2026-09-11c),
+  and a human *look* stands there as well.
 
 Pinned by `test_step_four_is_offered_to_the_rider_once_the_ride_has_gone`
-(plain URL: offered once verified AND delivered, and the sentence names the
-file), `test_clear_is_never_sent_before_the_bundle_is_delivered` and
-`test_the_owner_flag_lifts_the_delivered_requirement` — the last two driven as
-a PHONE, because on a Mac the chain delivers on every verified ride and
-"verified but not delivered" would be unobservable, i.e. a test that passes
-without testing.
+(plain URL: the erase stays off screen on a verified-but-unsaved ride, and is
+offered once he has pressed Save — with the sentence naming the file),
+`test_clear_is_never_sent_before_the_bundle_is_delivered` and
+`test_the_owner_flag_lifts_the_delivered_requirement`. The last two are driven
+as a PHONE: that was once the only shape in which "verified but not delivered"
+could be observed at all, and since 2026-09-11c it is simply where the OTHER
+delivery path — `navigator.share()` — lives.
 
 ### §3.3 The test seam
 
@@ -698,9 +725,10 @@ window.__sync = { state(), lastBundle() }
 
 `state()` gained **`auto`** on 2026-09-11b: true while the page is still
 running the chain itself. A driver cannot read `phase` alone any more —
-`pulled` is a RESTING state on a phone, where the chain stops before the send,
-and a PASSING one on a Mac. `tools/tests/test_web_sync.py::_settled` is the
-reference reading.
+`pulled` is where the chain RESTS on every device (it waits there for the
+rider's Save press), and it is also what a chain still in flight looks like
+from outside. `tools/tests/test_web_sync.py::_settled` is the reference
+reading; `_save_press()` beside it is how a driver gets a DELIVERED ride.
 
 `#mock-usb` plays a cable-shaped session instead, because transport kind
 changes both the advice the page gives and what `manifest.json` records

@@ -39,7 +39,7 @@
 // Baked into the page and copied into every manifest.json, so Josh can tell
 // which build of this page produced a bundle without asking the rider
 // anything (CONTRACT.md §2 `page_version`). Bump it when the page changes.
-const PAGE_VERSION = '2026-09-11b';
+const PAGE_VERSION = '2026-09-11c';
 
 // ------------------------------------------------------------------ protocol
 
@@ -869,14 +869,49 @@ function foundSentence() {
       + `${human(tb || 0)} of ride data.`;
 }
 
+/** The label on whichever Connect button setVisible() puts back on screen when
+ *  the link is gone — READ OFF the button, not repeated here.
+ *
+ *  This page's advice has now named a button that was not on screen twice:
+ *  "Copy the ride" (retired 2026-09-11b) and "Connect with the cable" (retired
+ *  2026-09-09). A label copied into a sentence is a label that drifts, so this
+ *  one is looked up (CLAUDE.md §4, the mirror case: when you retire an
+ *  identifier, fix what pointed at it). The two buttons carry DIFFERENT words
+ *  — "Connect" on the cable, "Connect over Bluetooth" on the phone — and
+ *  `connectKind` is the same thing setVisible() branches on, so this names
+ *  exactly the one he can see. */
+function connectLabel() {
+  const b = connectKind === 'ble' ? $('btn-connect') : $('btn-connect-usb');
+  return (b && b.textContent || 'Connect').trim();
+}
+
+/** The one thing to do after a failure — and it must name a button that is
+ *  ACTUALLY ON SCREEN at the moment the sentence is written.
+ *
+ *  TWO AXES, not one:
+ *   * the TRANSPORT decides the remedy (a cable cannot be fixed by moving
+ *     closer, and a watch cannot slow a cable);
+ *   * the LINK decides the button. setVisible() takes #btn-pull off screen
+ *     whenever the transport is gone — setEnabled() shuts it on `!transport`
+ *     and setVisible() only ever hides a shut button — and puts the Connect
+ *     button back in its place.
+ *
+ *  Measured 2026-09-11: with the cable yanked mid-pull, the result panel read
+ *  'press "Try again"' while the only button on screen was #btn-connect-usb.
+ *  onLinkLost()'s own status line already said the right thing; this sentence,
+ *  written underneath it by endPullFailed(), did not. */
 function retryAdvice() {
-  // Names the button by the label it actually carries. It read 'tap "Copy the
-  // ride" again' until 2026-09-11b; the page copies the ride by itself now and
-  // the only button on a failure screen says "Try again", so the old sentence
-  // pointed at nothing on screen (CLAUDE.md §4, the mirror case: retire an
-  // identifier, fix what pointed at it).
+  const cable = 'Check the cable is pushed in properly at both ends (some '
+              + 'cables only charge — use one that carries data), then ';
+  if (!transport) {
+    const reconnect = 'press "' + connectLabel() + '" and start again.';
+    return isUsb()
+      ? cable + reconnect
+      : 'Move closer to the puck, take your watch out of its activity, then '
+        + reconnect;
+  }
   return isUsb()
-    ? 'Check the cable is pushed in properly at both ends (some cables only charge — use one that carries data), then press "Try again".'
+    ? cable + 'press "Try again".'
     : 'Press "Try again" — closer to the puck, and with your watch out of an activity.';
 }
 
@@ -974,8 +1009,12 @@ function setVisible(offerClear) {
              && (phase === 'failed' || (arrived && !S.verified));
   $('btn-pull').hidden = !retry;
 
-  // ---- Save/Send. On the Mac this never appears — the page saved the ride
-  // itself. Three cases need a press, and each one gets its own words:
+  // ---- Save/Send. THE THIRD PRESS, and on a Mac it is the normal one: the
+  // chain builds the bundle and stops, because downloadBlob() cannot report
+  // failure and a gesture-free save that Chrome quietly declined would leave
+  // this page claiming a file that is not there (autoChain). Four cases, each
+  // with its own words:
+  //   * a Mac, where the chain stopped at a built bundle and this is the save;
   //   * a phone, where navigator.share() needs a gesture the chain cannot give
   //     it (measured rejecting with NotAllowedError on macOS Chrome after the
   //     zip build, 2026-09-10), so the chain stops before the send;
@@ -998,12 +1037,13 @@ function setVisible(offerClear) {
   const showClear = (ALLOW_CLEAR || OFFER_CLEAR_TO_RIDER) && !!offerClear;
   $('step-clear').hidden = !showClear;
   if (showClear) {
-    // Naming the file in the button's own sentence is the safety net for the
-    // one thing this flow gives up: downloadBlob() returns true whether or not
-    // Chrome actually wrote anything (CONTRACT.md §3 defines `delivered` that
-    // way on purpose), and auto-saving widens the gap a human click used to
-    // close. Making him LOOK for the filename before he erases anything puts a
-    // person back at the only point where being wrong is expensive.
+    // Naming the file in the button's own sentence is the second half of the
+    // safety net around `delivered`: downloadBlob() returns true whether or
+    // not Chrome actually wrote anything (CONTRACT.md §3 defines `delivered`
+    // that way on purpose). The first half is that the save is his press at
+    // all; this is the other one — making him LOOK for the filename before he
+    // erases anything puts a person at the only point where being wrong is
+    // expensive.
     $('clear-hint').textContent = S.deliveredName
       ? 'One last thing — this is the bit that protects your next ride. Once '
         + 'you can see ' + S.deliveredName + ' in your Downloads:'
@@ -1231,10 +1271,35 @@ async function autoChain() {
     // activation, and macOS Chrome has been measured rejecting it with
     // NotAllowedError after the zip build (2026-09-10, doSend below), so a
     // chain that called share() by itself would reject every time and land
-    // him in the fallback. Three presses on a phone; two on the Mac, which is
-    // the rider's one configuration.
+    // him in the fallback, so the phone stops here with its Send press.
+    // (This read "three presses on a phone; two on the Mac" until the line
+    // below stopped being true: it is three on both now.)
+    // DO NOT auto-save. The chain builds the bundle and stops here.
+    //
+    // The two-click design called doSend() from this point with no user
+    // gesture anywhere in the session, and downloadBlob() cannot report
+    // failure. A Chrome that silently declined that download would have left
+    // the page claiming a save that never happened, with the erase button
+    // live. Measured in review, not theorised.
+    //
+    // A save he presses is one the browser honours and — through
+    // showSaveFilePicker — one the page can confirm. One press is a cheap
+    // price for `delivered` meaning something.
     if (IS_MOBILE) return;
-    await doSend();
+    // Build the zip now so his press is instant. A failure here MUST be said
+    // out loud: an empty catch left the rider looking at a finished screen
+    // with a Send button and no hint anything was wrong, and the error only
+    // surfaced if he happened to press it. That is CLAUDE.md rule 3 — a
+    // silent failure must never look like a pass — and it was my line.
+    // Send still works afterwards: doSend() rebuilds and reports properly.
+    try {
+      if (!lastBundle) lastBundle = await buildBundle();
+    } catch (e) {
+      setStatus('The ride came off the puck, but packing it up failed: '
+              + ((e && e.message) || e) + '\nPress Send to try that part again — '
+              + 'nothing was lost, and the puck still has everything.', 'bad');
+    }
+    setEnabled();
   } finally {
     if (S) S.auto = false;
     setEnabled();
@@ -1361,11 +1426,17 @@ async function doPull() {
   // cable there is no phone in the loop at all — the puck is plugged into a
   // Mac — and "keep the phone next to the puck" sent him looking for a link
   // that does not exist. Same rule as retryAdvice() and the slow hint.
+  // It must also promise only what the page will actually do. It said "this
+  // page saves the ride to your Downloads by itself when it's done" while the
+  // chain auto-saved; the chain now stops at a built bundle and waits for his
+  // Save press (autoChain), so that sentence would leave him watching a
+  // finished page for a file that is never coming — the same "a save that did
+  // not happen looks like one that did" failure the press exists to prevent.
   $('pull-hint').textContent = (isUsb()
     ? 'Leave the puck plugged in. '
     : 'Keep the phone next to the puck. ')
-    + 'You don’t have to do anything — this page saves the ride to your '
-    + 'Downloads by itself when it’s done.';
+    + 'You don’t have to do anything while this runs — when it’s finished the '
+    + 'page will ask you to save the ride.';
   progressTimer = setInterval(updateProgress, 500);
   updateProgress();   // start the clock at 0 s rather than at "Starting…"
 
@@ -1994,13 +2065,20 @@ async function doSend() {
       notes.push('If nothing happens, ask Josh for the version of this link '
                + 'that sends the ride by itself, open that, and tap Send again.');
     } else {
-      // The Mac path, and the one the chain takes on its own: downloadBlob()
-      // is a programmatic a.click() and needs no user gesture.
+      // downloadBlob() behind HIS press — the path that has actually worked
+      // on the rider's own Mac twice (2026-09-10 and -09-11).
+      //
+      // It returns true unconditionally, because a page gets no completion
+      // callback for <a download>. That was harmless while a human click
+      // preceded it and dangerous the moment the chain called it by itself:
+      // a Chrome that silently declined a gesture-free download would leave
+      // this page claiming a save that never happened with the erase button
+      // live. The fix is not a cleverer API — showSaveFilePicker() could
+      // confirm the write, but it does not exist in the test browser, so it
+      // would ship untested, which is how the share sheet got here. The fix
+      // is to keep the press.
       delivered = downloadBlob(name, blob);
       how = 'download';
-      // Two different sentences, because "send it whenever you like" is the
-      // wrong instruction for a copy that did not check out — that one he
-      // should send AND retry, and the file is evidence rather than a ride.
       notes.push(S.verified
         ? 'Send that file to Josh whenever you like — Messages, Mail, AirDrop, '
           + 'whatever you’d normally use.'
@@ -2169,9 +2247,10 @@ window.__sync = {
   state: () => (S ? {
     phase: S.phase,
     // True while the page is still working on its own — connect -> pull ->
-    // build -> save. A driver that wants to know the page has STOPPED moving
-    // has to read this as well as `phase`: `pulled` is a resting state on a
-    // phone and a passing one on a Mac.
+    // build. A driver that wants to know the page has STOPPED moving has to
+    // read this as well as `phase`: `pulled` is where the chain RESTS on
+    // every device (it waits there for the rider's Save press), and it is
+    // also what a chain still in flight looks like from outside.
     auto: S.auto,
     connected: !!transport,
     verified: S.verified,

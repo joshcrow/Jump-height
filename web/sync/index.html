@@ -15,15 +15,24 @@
   Bluetooth only where there isn't one. Both paths stay wired.
 
   THE RULE THIS MARKUP IS ARRANGED AROUND (2026-09-11b). At any moment there
-  is exactly ONE button on screen. A button is either the thing to do, or it
-  is not there — nothing here is ever visible-and-greyed. There are no step
-  numbers, because the rider no longer performs the steps: he presses Connect,
-  and the page pulls the ride, packs it and saves it to his Downloads on its
-  own. The only other press is the destructive one, which must stay his.
+  is exactly ONE button on screen — with one stated exception below. A button
+  is either the thing to do, or it is not there — nothing here is ever
+  visible-and-greyed. There are no step numbers, because the rider no longer
+  performs the steps: he presses Connect, and the page pulls the ride, packs
+  it and has the zip ready. The presses that remain are the ones a browser or
+  a rider must make: Save, and the destructive one.
 
-  That is TWO clicks, which is the floor the browser permits:
-  navigator.serial.requestPort() needs a user gesture, and emptying the puck
-  must never fire by itself.
+  THREE clicks on a Mac (2026-09-11c): Connect -> Save -> Empty the puck.
+  navigator.serial.requestPort() needs a user gesture; emptying the puck must
+  never fire by itself; and the save is a press because downloadBlob() returns
+  true whether or not Chrome wrote anything, so a gesture-free save that
+  Chrome quietly declined would leave this page reading "Saved to your
+  Downloads" over a ride that never left the machine, with the erase button
+  live (sync.js autoChain, doSend).
+
+  THE ONE EXCEPTION to the one-button rule: a copy that ARRIVED but did not
+  check out. Two different things are then worth doing — save the evidence for
+  Josh, and try the copy again — so "Try again" and "Send" are both on screen.
 
   MECHANICALLY: sync.js setEnabled() still computes every `.disabled` exactly
   as it did — every gate (verified, delivered, the stats anchor, ALLOW_CLEAR)
@@ -117,8 +126,8 @@
          in the loop at all, and "keep the phone next to the puck" sent him
          looking for a link that does not exist. -->
     <p class="hint" id="pull-hint">Leave the puck plugged in. You don’t have to
-       do anything — this page saves the ride to your Downloads by itself when
-       it’s done.</p>
+       do anything while this runs — when it’s finished the page will ask you
+       to save the ride.</p>
     <!-- Shown only when the browser refused the Screen Wake Lock: on those
          browsers the screen sleeps, the link goes quiet and the pull dies on
          its 30 s timer, so "leave the phone alone" would be advice the page
@@ -162,10 +171,11 @@
        "Copy the ride" would be describing something the page already did. -->
   <button class="btn btn-primary" id="btn-pull" data-testid="btn-pull" type="button" disabled hidden>Try again</button>
 
-  <!-- Save/Send. On a Mac this never appears: the page saves the ride by
-       itself. It exists for the three cases where a press is genuinely
-       needed — a phone (navigator.share() requires transient activation), a
-       note typed AFTER the save already fired, and a re-save once the puck
+  <!-- Save/Send. THE THIRD PRESS, and on a Mac it is the normal one: the
+       chain builds the bundle and stops there, because downloadBlob() cannot
+       tell the page whether Chrome actually wrote the file (2026-09-11c). It
+       also covers a phone (navigator.share() requires transient activation),
+       a note typed AFTER the save already fired, and a re-save once the puck
        has been emptied and this machine holds the only copy. sync.js
        setVisible() writes the label for the case. -->
   <button class="btn btn-primary" id="btn-send" data-testid="btn-send" type="button" disabled hidden>Send</button>

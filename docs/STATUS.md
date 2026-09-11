@@ -534,8 +534,10 @@ hand — CLAUDE.md rule 5). What changed, all pinned by tests, suite 523 →
   the cable. **Consequence, deliberate: Bluetooth is no longer reachable from
   a Mac at all** — `rider-sync.md` and DECISION #42 said it was, and were
   corrected in the same commit. Suite 592 → 593 (29 Playwright).
-- **Cut to TWO CLICKS 2026-09-11 (`2026-09-11b`), after the owner said "the
-  website is not clear, and I am not even sure what the user flow is".** It
+- **Cut to TWO CLICKS 2026-09-11 (`2026-09-11b`) — the click count is
+  SUPERSEDED by `2026-09-11c`, the next bullet; everything else here stands.**
+  Written after the owner said "the website is not clear, and I am not even
+  sure what the user flow is". It
   was four numbered steps and four buttons, three of them disabled at any
   moment. Now: **Connect, then the page copies the ride, packs it and saves it
   to Downloads by itself**, and the only other press is the destructive one.
@@ -554,16 +556,45 @@ hand — CLAUDE.md rule 5). What changed, all pinned by tests, suite 523 →
   **ticking clock** — a percentage can sit still on a slow link and look dead.
   A phone keeps one Send press (`share()` needs transient activation). Suite
   601 passed, 1 skipped, 1 xfailed (35 Playwright + 1 opt-in).
-  **UNMEASURED, and the check to run before this reaches him:** that a
-  gesture-free `<a download>` actually saves in **his** Chrome on **his** Intel
-  Mac. It fires in headless Chromium 151 on this bench
-  (`test_a_desktop_saves_by_itself_and_never_opens_the_share_sheet` takes that
-  reading with `expect_download`), and that proves nothing about his machine.
-  `downloadBlob()` returns `true` either way, so a blocked save would set
-  `delivered` on a ride that never left — which is why the erase button now
-  names the file and asks him to see it in Downloads first. If it comes back
-  "blocked", the honest fix is a third click: a **Save the ride** button on the
-  finished screen, still auto-built, still one press.
+  It left ONE thing unmeasured — that a gesture-free `<a download>` actually
+  saves in **his** Chrome on **his** Intel Mac — and named the fix if it came
+  back blocked: "a third click: a **Save the ride** button on the finished
+  screen, still auto-built, still one press". That is the next bullet.
+- **Corrected to THREE PRESSES the same day (`2026-09-11c`): Connect → Save →
+  Empty the puck.** The auto-save was removed in review, before the reading
+  above was ever taken, because the reading cannot be taken by the page:
+  `downloadBlob()` returns `true` unconditionally — a page gets no completion
+  callback for `<a download>` — so a Chrome that silently declined a
+  gesture-free save would leave the page reading "Saved to your Downloads",
+  `delivered` true and **Empty the puck** live over a ride that never left the
+  machine. Harmless behind a human click; not behind a chain. **The chain
+  stays** and still does everything that can be checked: `info`/`stats`/
+  `jumps`/`traceraw`/`stats`/`selftest`, verify, and build the zip — so his
+  press hands over a bundle that is already made (measured on this bench at
+  3 MB, two runs: 51 and 59 ms to build inside the chain, **6.6 and 6.7 ms**
+  for the press).
+  `showSaveFilePicker()` was considered and rejected: `typeof
+  window.showSaveFilePicker` is `undefined` in this bench's Chromium
+  (151.0.7922.34, read 2026-09-11), so it would ship untested — which is how
+  the broken share sheet reached him.
+  The one-button rule keeps one stated exception: a copy that ARRIVED and did
+  not verify shows **Try again** and **Send** together, because the failed
+  bundle is the only thing that can tell Josh why. No gate moved again:
+  `verifyPull()`, the F-22 band, `trace_bytes_after`, the header-only arm, the
+  verified+delivered clear gate and `ALLOW_CLEAR` are untouched. Pinned by
+  `test_the_chain_never_saves_by_itself` (drives the whole chain, asserts **no
+  download fired**, `delivered` false and the erase off screen, then presses
+  Save and asserts it works). Also fixed in the same pass: `retryAdvice()` said
+  `press "Try again"` after a **lost link**, where that button is off screen and
+  Connect is back in its place (measured — cable yanked mid-copy); it now names
+  whichever button `setVisible()` actually shows, read off the button itself
+  (`test_a_cable_yanked_mid_copy_names_a_button_on_screen`). Suite 603 passed,
+  1 skipped, 1 xfailed, 39 subtests (37 Playwright + 1 opt-in).
+  **STILL UNMEASURED:** that the download behind **his press** works in his
+  Chrome. `sync.js` records it working on his own Mac twice (2026-09-10 and
+  2026-09-11) — that is the note in `doSend()`, not a reading taken here.
+  `delivered` remains a hand-off, not a receipt, which is why the erase button
+  still names the file and asks him to see it in Downloads first.
 
 **How each part is verified today — all off real silicon:**
 - The store side of `traceraw`: `firmware/test/store_host/` runs the real,
