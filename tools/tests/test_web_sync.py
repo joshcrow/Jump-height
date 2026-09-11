@@ -1098,12 +1098,13 @@ class TestWebSync(_WebSyncCase):
         """Ordering, asserted at every stage — this is the one command on the
         wire that cannot be undone.
 
-        Run under ?allowclear=1: without the flag there is no step 4 at all
-        and this ordering has nothing to say. The flag does NOT weaken the
-        gate — verified AND delivered still both have to hold, and that is
-        what the middle of this test measures."""
+        Run WITHOUT the flag, as the rider sees it. Since 2026-09-11a step 4
+        is offered to him (not emptying is what lost a session — see
+        OFFER_CLEAR_TO_RIDER in sync.js), so this ordering now guards the
+        rider's own page rather than an admin corner. verified AND delivered
+        must both hold."""
         puck = FakePuck()
-        self._connect(puck, self.ALLOW_CLEAR)
+        self._connect(puck)
         self.assertNotIn("clear", self._sent())
         self.assertTrue(self.page.locator("[data-testid=btn-clear]").is_hidden())
 
@@ -1123,64 +1124,51 @@ class TestWebSync(_WebSyncCase):
         self.assertNotIn("clear", self._sent(),
                          "the page must not send `clear` on its own")
 
-    def test_step_four_is_hidden_for_this_loan(self):
-        """The rider's URL carries no ?allowclear=1, so there is no step 4 at
-        all: no section, no heading, no button — and the page's last word is
-        that he is finished.
+    def test_step_four_is_offered_to_the_rider_once_the_ride_has_gone(self):
+        """REVERSED 2026-09-11, by a session it cost.
 
-        The puck is out on loan and the brief is that he must NEVER empty it;
-        Josh does that on the bench, where a short download can still be
-        re-pulled off a puck that still holds the ride. The verified-AND-
-        delivered gate is not what is being measured here: both hold by the
-        end of this test and the button is still gone."""
+        Step 4 used to be hidden from the rider: the brief said "never empty
+        it, Josh does that", and the button only appeared under ?allowclear=1.
+        That guard lost 1 h 54 m of trace. The region filled during the ride,
+        and the firmware's own auto-clear (main.cpp:1733 — motion, after an
+        hour idle, with the region full) wiped it the moment he picked the puck
+        up TO SYNC IT. Fetching the data is what destroyed it.
+
+        Not emptying is not the safe option. The verified AND delivered gate
+        still stands — test_clear_is_never_sent_before_the_bundle_is_delivered
+        pins that, now without the flag — but once a ride has checked out and
+        actually left the machine, the rider is offered the button."""
         puck = FakePuck()
         self._connect(puck)
-        self.assertTrue(self.page.locator("#step-clear").is_hidden(),
-                        "step 4 must not be on the rider's page at all")
-        self.assertIn("Josh empties the puck",
-                      self.page.locator("#finish-hint").inner_text())
-
+        self.assertTrue(self.page.locator("[data-testid=btn-clear]").is_hidden(),
+                        "nothing sent yet, so nothing to offer")
         self._pull(puck)
         self._send(puck)
         st = self._state()
+        self.assertTrue(st["verified"] and st["delivered"], st)
+        self.assertFalse(self.page.locator("[data-testid=btn-clear]").is_hidden(),
+                         "a delivered ride must offer the rider the empty button")
+        self.assertTrue(self.page.locator("#finish-hint").is_hidden(),
+                        "the 'Josh empties the puck' line must not sit beside it")
+        hint = self.page.locator("#clear-hint").inner_text()
+        self.assertIn("protects the next session", hint,
+                      "he must be told WHY, or he will skip it: " + hint)
+
+    def test_the_owner_flag_lifts_the_delivered_requirement(self):
+        """?allowclear=1 is Josh asserting he already holds the ride. Before
+        2026-09-11a the admin path still demanded a redundant multi-MB
+        pull-and-send before it would erase a file he had in hand, so on
+        2026-09-10 the puck was simply left full — and the auto-clear then ate
+        the session. The flag now lifts `delivered` and nothing else: verified
+        still has to hold."""
+        puck = FakePuck()
+        self._connect(puck, self.ALLOW_CLEAR)
+        self._pull(puck)
+        st = self._state()
         self.assertTrue(st["verified"])
-        self.assertTrue(st["delivered"])
-        self.assertTrue(self.page.locator("#step-clear").is_hidden(),
-                        "verified AND delivered must not bring step 4 back "
-                        "without ?allowclear=1")
-        self.assertTrue(self.page.locator("[data-testid=btn-clear]").is_hidden())
-
-        # The sentence he is left with names who empties the puck. The one it
-        # replaced — "Last step: empty the puck so it has room for your next
-        # ride" — told him to do the one thing the brief forbids, on the
-        # success path, where he is most likely to follow it.
-        status = self._status()
-        self.assertIn("finished", status)
-        self.assertIn("leave the puck to Josh", status)
-        self.assertNotIn("empty the puck so it has room", status)
-        self.assertNotIn("Last step", status)
-
-        # Belt and braces: doClear() re-checks the flag, so a button un-hidden
-        # by hand still writes nothing to the wire.
-        self.page.evaluate(
-            "() => { document.getElementById('step-clear').hidden = false;"
-            "        const b = document.getElementById('btn-clear');"
-            "        b.hidden = false; b.disabled = false; }")
-        self.page.click("[data-testid=btn-clear]")
-        # `clear` would be on the wire synchronously inside doClear; give the
-        # page a round-trip anyway before believing it isn't.
-        time.sleep(0.3)
-        self.assertNotIn("clear", self._sent(),
-                         "doClear must re-check ALLOW_CLEAR, not just the button")
-
-    # ------------------------------------------- the stale denominator (3) --
-    # `trace_bytes` comes off the CONNECT-time `stats`, latched once. The puck
-    # does not stop recording because someone plugged it in, so minutes later
-    # the copy can legitimately be BIGGER than that first reading — and the
-    # surplus arm turned that into a hard failure that every retry reproduced,
-    # because every retry starts by taking the same stale reading again. The
-    # pull's own second `stats` is the honest ceiling.
-
+        self.assertFalse(st["delivered"], "nothing has been sent in this session")
+        self.assertFalse(self.page.locator("[data-testid=btn-clear]").is_hidden(),
+                         "the owner flag must offer Clear on a verified ride")
     def _csv_pull_with_growth(self, before_gap, growth):
         """A csv pull where the puck reports `CSV_BYTES - before_gap` at
         connect and `CSV_BYTES - before_gap + growth` on the second `stats`,

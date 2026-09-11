@@ -39,7 +39,7 @@
 // Baked into the page and copied into every manifest.json, so Josh can tell
 // which build of this page produced a bundle without asking the rider
 // anything (CONTRACT.md §2 `page_version`). Bump it when the page changes.
-const PAGE_VERSION = '2026-09-10c';
+const PAGE_VERSION = '2026-09-11a';
 
 // ------------------------------------------------------------------ protocol
 
@@ -101,6 +101,22 @@ const ALLOW_CLEAR = (() => {
   try { return new URLSearchParams(location.search).get('allowclear') === '1'; }
   catch (_e) { return false; }
 })();
+
+// Emptying the puck is part of the RIDER's normal flow again, not hidden from
+// it. It was hidden on 2026-09-09 because the brief said "never empty it, Josh
+// does that" — protecting him from erasing a ride that had not arrived. That
+// guard cost a session.
+//
+// Measured 2026-09-11: the region filled during a 1 h 54 m ride, and the
+// firmware's own auto-clear (main.cpp:1733 — motion, after an hour idle, with
+// the region full) then wiped the entire trace the moment he PICKED THE PUCK
+// UP TO SYNC IT. The act of fetching the data is what destroyed it. Twenty
+// jump records survived; 1 h 54 m of trace did not.
+//
+// So not emptying is not the safe option — it is the one that loses data. The
+// verified AND delivered gate still stands, so this can only ever fire on a
+// ride that checked out and actually left the machine.
+const OFFER_CLEAR_TO_RIDER = true;
 
 // '#mock' plays a Bluetooth-shaped session, '#mock-usb' a cable-shaped one:
 // the transport kind changes the advice the page gives on a slow or failed
@@ -828,7 +844,11 @@ function setEnabled() {
   $('btn-send').disabled = busy || !sendable;
   // Step 4 exists only after verified AND delivered (CONTRACT.md §3 step 4) —
   // and, for this loan, only when the URL asked for it at all (ALLOW_CLEAR).
-  const offerClear = ALLOW_CLEAR && !!(S && S.verified && S.delivered && !S.cleared);
+  // The owner's flag lifts `delivered`: when Josh sends that URL he is saying
+  // he already holds the ride. Without the lift the admin path demanded a
+  // redundant multi-MB pull before it would erase a file he had in hand.
+  const offerClear = !!(S && S.verified && !S.cleared
+                        && (S.delivered || ALLOW_CLEAR));
   $('btn-clear').hidden = !offerClear;
   $('btn-clear').disabled = busy || !offerClear;
   $('clear-hint').hidden = offerClear;
@@ -1805,7 +1825,8 @@ async function doClear() {
   // Belt and braces on top of the hidden button: nothing erases the puck
   // unless the ride was both verified AND delivered (CONTRACT.md §3 step 4) —
   // and, on this loan, unless the URL asked for step 4 at all.
-  if (busy || !ALLOW_CLEAR || !S || !S.verified || !S.delivered || !transport) return;
+  if (busy || !S || !S.verified || !transport) return;
+  if (!S.delivered && !ALLOW_CLEAR) return;
   busy = true; setEnabled();
   setStatus('Emptying the puck…', 'busy');
   try {
@@ -1954,8 +1975,9 @@ function init() {
   // wonder about. ?allowclear=1 puts it back for Josh — still gated on
   // verified AND delivered underneath. The step-3 closing line is the
   // complement: exactly one of the two is ever on screen.
-  $('step-clear').hidden = !ALLOW_CLEAR;
-  $('finish-hint').hidden = ALLOW_CLEAR;
+  const showClear = ALLOW_CLEAR || OFFER_CLEAR_TO_RIDER;
+  $('step-clear').hidden = !showClear;
+  $('finish-hint').hidden = showClear;
   buildChips('sea', $('chips-sea'));
   buildChips('wind', $('chips-wind'));
   // A typed note changes the bundle, so a note edited after Send must not
