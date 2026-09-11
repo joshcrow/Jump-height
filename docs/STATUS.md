@@ -505,10 +505,22 @@ hand — CLAUDE.md rule 5). What changed, all pinned by tests, suite 523 →
   Downloads as `jumpheight-E2C4-20260910-1031.zip`"*, 2.1 MB, from the OG
   with 10 stored jumps. The remote data-return path now works end to end
   with no owner present — the thing open gate 1b was about.
+  **2026-09-11 — flashing from the page is PROVEN, and `traceraw`/`tracecheck`
+  ran on silicon for the first time.** Detail in
+  `docs/serial-parity-2026-09-09.md`. `uf2` (`main.cpp:1269`) reboots the board
+  into `/Volumes/XIAO-SENSE`; a .uf2 written there flashes and reboots it, and
+  the Puck came back at `src=ae67dc8d` matching the tree. **A UF2 write cannot
+  brick it the way the retracted OTA path could** — it replaces the app, not the
+  bootloader, so a double-tap reset always recovers. The trap: the drive
+  unmounts mid-write, so the copy reports an error on success and any client
+  must read that as completion. `traceraw` moved a 7.46 MB region as **1.45 MB
+  in 10.8 s (130.8 KB/s) — 5.1× less data at 2.1× the CSV throughput, ~10×
+  quicker end to end** (the branch estimated ~6× and never measured it).
+  `tracecheck` answered in **106 s**, first evidence the 300 s floor holds.
   **Still unmeasured:** the root cause of the `share()` rejection itself
   (routed around, not diagnosed — the desktop no longer calls it), the F-22
-  *band* arm at 16 MB, the `traceraw` path at scale, and `tracecheck` on a
-  full region.
+  *band* arm at 16 MB, and a web page actually driving the flash —
+  `showDirectoryPicker()` is the only untested link in that chain.
 - **Simplified 2026-09-09 to `2026-09-09c`, after the owner read it and called
   it confusing.** It was written for "phone or computer, Bluetooth or cable",
   and Chrome on a Mac reports BOTH transports — so the rider met two competing
