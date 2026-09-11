@@ -39,7 +39,7 @@
 // Baked into the page and copied into every manifest.json, so Josh can tell
 // which build of this page produced a bundle without asking the rider
 // anything (CONTRACT.md §2 `page_version`). Bump it when the page changes.
-const PAGE_VERSION = '2026-09-11a';
+const PAGE_VERSION = '2026-09-11b';
 
 // ------------------------------------------------------------------ protocol
 
@@ -397,6 +397,14 @@ let busy = false;             // a command sequence is running
 let activeCapture = null;     // the in-flight command capture
 let lastBundle = null;        // {name, blob} — kept so Send can be retried
 let progressTimer = null;
+// Which way in this device gets — 'usb' | 'ble' | null. Decided once in
+// init() from what the browser has, and read by setVisible(), so the
+// one-way-in rule and the one-button rule cannot drift apart.
+let connectKind = null;
+// The note or a chip was edited AFTER the ride had already been saved, so the
+// file in his Downloads does not contain it. That, and only that, puts a
+// second button on the finished screen.
+let noteDirtySinceSave = false;
 const chosenChips = { sea: null, wind: null };
 
 /** Everything captured from the puck this session. Reset on connect. */
@@ -437,6 +445,10 @@ function freshSession(kind) {
     pullBytes: 0,
     slowShown: false,
     verified: false,
+    // Whether "Try again" can plausibly change the outcome. Set by
+    // endPullFailed()/endPullOk() from retryCouldHelp(); read by setVisible()
+    // so a button that cannot work is never on screen.
+    retryable: true,
     reasons: [],
     // The trace_bytes cross-check's own working, recorded whether it passed,
     // failed, or was forgiven — CLAUDE.md rule 3: a reading that goes
@@ -453,6 +465,21 @@ function freshSession(kind) {
                               // puck logging on between the two stats reads
     delivered: false,
     cleared: false,
+    // The name the bundle ACTUALLY went out under, kept once delivered. It is
+    // named in the Empty button's own sentence, which is the human
+    // confirmation standing where downloadBlob() cannot give us a real one
+    // (it returns true whether or not Chrome wrote the file).
+    deliveredName: null,
+    // The one sentence that says how the copy came out — set by endPullOk and
+    // re-shown by doSend, so the save does not overwrite the news with its own
+    // receipt. Screen C says both: what happened, then where the file is.
+    outcome: null,
+    outcomeKind: null,
+    // True while the page is doing the chain — connect -> pull -> build ->
+    // save — on its own. Screen B has no buttons at all, and this is what
+    // setVisible() keys that off; the test seam reads it to know when the page
+    // has stopped moving.
+    auto: false,
     phase: 'connecting',
   };
 }
@@ -747,6 +774,10 @@ function setStatus(text, kind) {
   const n = $('status');
   n.textContent = text;
   n.className = 'status' + (kind ? ' is-' + kind : '');
+  // An empty status box is not news, so it is not on screen. It used to sit
+  // there saying "Not connected yet.", which teaches a rider to stop reading
+  // the one element that will later carry the only thing he needs.
+  n.hidden = !text;
 }
 
 function renderFacts() {
@@ -782,8 +813,11 @@ function renderFacts() {
   // places, neither of them a number he has to interpret.
   const down = !!S.storageDown;
   const stored = numOrNull(kvS.stored_jumps);
+  // One caption line since 2026-09-11b — "JumpHeight-E2C4 · charging (86%) ·
+  // 3 jumps saved" — so the row label has to move into the value.
   $('stored-jumps').textContent = down ? 'unknown — not saving'
-                                       : (stored === null ? '–' : String(stored));
+                                       : (stored === null ? 'jumps unknown'
+                                          : stored + (stored === 1 ? ' jump saved' : ' jumps saved'));
 }
 
 function showResult(headText, kind, lines) {
@@ -813,10 +847,37 @@ function isUsb() { return !!S && S.transportKind === 'usb'; }
  *  connect" sentence, so the advice cannot drift between them. */
 const RELOAD_HINT = 'If it still won’t connect, reload this page.';
 
+/** What the connect-time `stats` found, in one sentence.
+ *
+ *  On a NO REC puck this is the whole of what he needs to know, in his own
+ *  word for it (docs/rider-brief.md item 6: "it means the puck is powered and
+ *  talking to your watch but not saving anything"), and it must NOT be
+ *  "0 jumps, 0 bytes" — the store never mounted, so nothing was read
+ *  (firmware/src/main.cpp, `stats`). */
+function foundSentence() {
+  if (S.storageDown) {
+    return 'The puck is NOT saving anything. That is the "NO REC" problem: '
+         + 'powered, talking, recording nothing.\n'
+         + 'Nothing you can do on the beach fixes it. Copying and saving what '
+         + 'is there so Josh can see it — and do NOT empty the puck.';
+  }
+  const stored = numOrNull(S.statsBeforeKV.stored_jumps);
+  const tb = numOrNull(S.statsBeforeKV.trace_bytes);
+  return stored === null
+    ? 'The puck is ready.'
+    : `Found ${stored} ${stored === 1 ? 'jump' : 'jumps'} and `
+      + `${human(tb || 0)} of ride data.`;
+}
+
 function retryAdvice() {
+  // Names the button by the label it actually carries. It read 'tap "Copy the
+  // ride" again' until 2026-09-11b; the page copies the ride by itself now and
+  // the only button on a failure screen says "Try again", so the old sentence
+  // pointed at nothing on screen (CLAUDE.md §4, the mirror case: retire an
+  // identifier, fix what pointed at it).
   return isUsb()
-    ? 'Check the cable is pushed in properly at both ends (some cables only charge — use one that carries data), then tap "Copy the ride" again.'
-    : 'Tap "Copy the ride" again — closer to the puck, and with your watch out of an activity.';
+    ? 'Check the cable is pushed in properly at both ends (some cables only charge — use one that carries data), then press "Try again".'
+    : 'Press "Try again" — closer to the puck, and with your watch out of an activity.';
 }
 
 function setEnabled() {
@@ -851,7 +912,104 @@ function setEnabled() {
                         && (S.delivered || ALLOW_CLEAR));
   $('btn-clear').hidden = !offerClear;
   $('btn-clear').disabled = busy || !offerClear;
-  $('clear-hint').hidden = offerClear;
+  // Everything above computes `.disabled` — the gates. Everything in
+  // setVisible() is presentation on top of it, and it only ever HIDES.
+  setVisible(offerClear);
+}
+
+/** THE ONE-BUTTON RULE (2026-09-11b).
+ *
+ *  At any moment there is exactly one button on screen: a button is either the
+ *  thing to do, or it is not there. Nothing on this page is ever
+ *  visible-and-greyed — a disabled control is an instruction the rider cannot
+ *  follow and cannot see the reason for, and there were three of them on
+ *  screen at once.
+ *
+ *  This function NEVER enables anything and never un-hides a button
+ *  setEnabled() left disabled. Every gate — the stats anchor, verified,
+ *  delivered, ALLOW_CLEAR, cleared — is computed above and read here as
+ *  `.disabled`, which is why the is_disabled() assertions in
+ *  tools/tests/test_web_sync.py still hold unchanged. */
+function setVisible(offerClear) {
+  const phase = S ? S.phase : 'boot';
+  const auto = !!(S && S.auto);
+
+  // ---- Screen A. One Connect button, its hint, and the sentence above it.
+  // Gone the moment the link is up: there is nothing left to connect. It
+  // comes BACK if the link drops, which is exactly what onLinkLost() tells
+  // him to press.
+  const showConnect = !transport;
+  $('lede').hidden = !showConnect;
+  const usb = showConnect && connectKind === 'usb';
+  const ble = showConnect && connectKind === 'ble';
+  $('btn-connect-usb').hidden = !usb;
+  $('usb-hint').hidden = !usb;
+  $('btn-connect').hidden = !ble;
+  $('ble-hint').hidden = !ble;
+  $('ble-time-hint').hidden = !ble;
+
+  // ---- The note and the chips. They appear the moment the copy starts —
+  // during the minutes he is doing nothing — and stay editable afterwards, so
+  // they are never between him and finishing.
+  $('note-block').hidden = !(S && phase !== 'connecting' && phase !== 'connected');
+
+  // ---- Screen B has no buttons at all. While the page is working the answer
+  // to "what do I do" is "nothing", and a button on screen would contradict it.
+  if (auto) {
+    $('btn-pull').hidden = true;
+    $('btn-send').hidden = true;
+    $('btn-clear').hidden = true;
+    $('step-clear').hidden = true;
+    $('send-hint').hidden = true;
+    return;
+  }
+
+  // ---- Try again. This is #btn-pull — same button, same gate — on screen
+  // only where trying again is the thing to do: a copy that stopped part-way,
+  // or one that arrived and did not check out. `disabled` is consulted rather
+  // than recomputed, so a lost link (which shuts the button) also takes it off
+  // screen instead of leaving a dead control behind.
+  const arrived = phase === 'pulled' || phase === 'sent';
+  const retry = !!S && !$('btn-pull').disabled && S.retryable
+             && (phase === 'failed' || (arrived && !S.verified));
+  $('btn-pull').hidden = !retry;
+
+  // ---- Save/Send. On the Mac this never appears — the page saved the ride
+  // itself. Three cases need a press, and each one gets its own words:
+  //   * a phone, where navigator.share() needs a gesture the chain cannot give
+  //     it (measured rejecting with NotAllowedError on macOS Chrome after the
+  //     zip build, 2026-09-10), so the chain stops before the send;
+  //   * a note typed AFTER the save already fired;
+  //   * a re-save once the puck has been emptied and this machine holds the
+  //     only copy of the ride.
+  let sendLabel = null;
+  if (!$('btn-send').disabled) {
+    if (!S.delivered && !S.cleared) sendLabel = 'Send';
+    else if (noteDirtySinceSave) sendLabel = 'Save it again with your note';
+    else if (S.cleared) sendLabel = 'Save the ride again';
+  }
+  $('btn-send').hidden = !sendLabel;
+  if (sendLabel) $('btn-send').textContent = sendLabel;
+  $('send-hint').hidden = !(sendLabel && S.delivered);
+
+  // ---- The destructive press. The gate is offerClear, computed above and
+  // unchanged; this only decides whether the section around it is in the
+  // page's flow at all, and writes the sentence that names the saved file.
+  const showClear = (ALLOW_CLEAR || OFFER_CLEAR_TO_RIDER) && !!offerClear;
+  $('step-clear').hidden = !showClear;
+  if (showClear) {
+    // Naming the file in the button's own sentence is the safety net for the
+    // one thing this flow gives up: downloadBlob() returns true whether or not
+    // Chrome actually wrote anything (CONTRACT.md §3 defines `delivered` that
+    // way on purpose), and auto-saving widens the gap a human click used to
+    // close. Making him LOOK for the filename before he erases anything puts a
+    // person back at the only point where being wrong is expensive.
+    $('clear-hint').textContent = S.deliveredName
+      ? 'One last thing — this is the bit that protects your next ride. Once '
+        + 'you can see ' + S.deliveredName + ' in your Downloads:'
+      : 'One last thing — this is the bit that protects your next ride. Once '
+        + 'you have the bundle safe:';
+  }
 }
 
 function showProgress(on) {
@@ -859,20 +1017,33 @@ function showProgress(on) {
   if (!on) { $('slow-hint').hidden = true; }
 }
 
+/** "47 s", "1 min 12 s". The clock is the load-bearing half of the progress
+ *  readout: a percentage can sit still for a minute on a slow link and look
+ *  dead, and a ticking clock cannot look dead without being obviously dead. */
+function elapsedWords(seconds) {
+  const s = Math.max(0, Math.floor(seconds));
+  if (s < 60) return s + ' s';
+  return Math.floor(s / 60) + ' min ' + (s % 60) + ' s';
+}
+
 function updateProgress() {
   if (!S || !S.pulling) return;
   const elapsed = (Date.now() - S.pullStartMs) / 1000;
   const kbps = elapsed > 0 ? (S.pullBytes / 1024) / elapsed : 0;
   const exp = S.trace.expectedText;
-  let pctText;
+  const clock = elapsedWords(elapsed);
   if (exp !== null && exp > 0) {
     const pct = Math.max(0, Math.min(99, Math.floor((S.trace.textBytes / exp) * 100)));
     $('bar-fill').style.width = pct + '%';
-    pctText = `Copying… ${pct}%`;
+    $('bar-pct').textContent = pct + '%';
+    $('progress-text').textContent =
+      `${human(S.trace.textBytes)} of ${human(exp)}  ·  ${clock} so far`;
   } else {
-    pctText = `Copying… ${human(S.pullBytes)} so far`;
+    // The CSV fallback on a puck that never said how much to expect. No
+    // denominator, so no percentage is invented — same clock, no fake bar.
+    $('bar-pct').textContent = '';
+    $('progress-text').textContent = `${human(S.pullBytes)} so far  ·  ${clock}`;
   }
-  $('progress-text').textContent = `${pctText} · ${kbps.toFixed(1)} KB/s`;
 
   // The known cause is a second BLE central — his watch, mid-activity — which
   // drops the link to a 23-byte MTU (docs/watch.md, "Two-central policy").
@@ -993,7 +1164,7 @@ async function afterConnect(t, kind, advertisedName) {
   // stop a USB transfer, and "tap the screen every so often" is phone advice.
   $('wake-hint').hidden = !!wakeLock || kind === 'usb';
   busy = true; setEnabled();
-  setStatus('Connected. Reading the puck…', 'busy');
+  setStatus('Reading the puck…', 'busy');
 
   const info = await runCommand('info');
   if (info.err) {
@@ -1023,24 +1194,51 @@ async function afterConnect(t, kind, advertisedName) {
     return;
   }
   renderFacts();
-  if (S.storageDown) {
-    // Not "0 jumps, 0 bytes": the store never mounted, so nothing was read.
-    // His own word for it is NO REC (docs/rider-brief.md item 6: "it means the
-    // puck is powered and talking to your watch but not saving anything"), and
-    // that brief tells him it is worth interrupting a session for and that
-    // there is nothing he can do about it on the water.
-    setStatus('Connected — but the puck is NOT saving anything. That is the '
-            + '"NO REC" problem: powered, talking, recording nothing.\n'
-            + 'Nothing you can do on the beach fixes it. Copy and send what is '
-            + 'there so Josh can see it, and do NOT empty the puck.', 'bad');
-    return;
+  // From here there is nothing left for him to decide, so the page stops
+  // asking. This is the whole of the 2026-09-11b change: the copy, the zip and
+  // the save chain off the one press he already made. The condition is exactly
+  // the one setEnabled() uses to open #btn-pull — a live transport and a
+  // `stats` that really answered — so nothing that could not be started by
+  // hand is started automatically.
+  //
+  // The NO REC puck is INCLUDED on purpose. That bundle is the one Josh most
+  // needs to see, `verified` stays false on it so the erase is never offered,
+  // and the words below survive the chain: doPull() leads its status with
+  // them, and endPullOk()/endPullFailed() say them again at the end.
+  await autoChain();
+}
+
+/** The chain: pull -> build -> save, with no press in between.
+ *
+ *  Two clicks is the floor the browser permits.
+ *  navigator.serial.requestPort() requires a user gesture, so Connect is
+ *  forced; emptying the puck is destructive and stays deliberate. Everything
+ *  between them is the page's work, not his.
+ *
+ *  It stops at the first thing that does not come off cleanly: doPull() ends
+ *  in `failed` on a broken transfer and nothing is saved, so the page can
+ *  never report a save that did not happen. */
+async function autoChain() {
+  if (!S || !transport || busy) return;
+  S.auto = true;
+  setEnabled();
+  try {
+    await doPull();
+    // A pull that stopped part-way has no bundle to build. Its own failure
+    // screen is already up and it names a Try again button.
+    if (!S || S.phase !== 'pulled') return;
+    // A PHONE keeps its one Send press. navigator.share() needs transient
+    // activation, and macOS Chrome has been measured rejecting it with
+    // NotAllowedError after the zip build (2026-09-10, doSend below), so a
+    // chain that called share() by itself would reject every time and land
+    // him in the fallback. Three presses on a phone; two on the Mac, which is
+    // the rider's one configuration.
+    if (IS_MOBILE) return;
+    await doSend();
+  } finally {
+    if (S) S.auto = false;
+    setEnabled();
   }
-  const stored = numOrNull(S.statsBeforeKV.stored_jumps);
-  const tb = numOrNull(S.statsBeforeKV.trace_bytes);
-  const what = stored === null
-    ? 'The puck is ready.'
-    : `The puck is holding ${stored} jumps and ${human(tb || 0)} of ride data.`;
-  setStatus('Connected. ' + what + ' Now tap "Copy the ride".', 'ok');
 }
 
 function onLinkLost() {
@@ -1153,14 +1351,23 @@ async function doPull() {
   $('progress-text').textContent = 'Starting…';
   showProgress(true);
   setEnabled();
+  // The first real news of the session, and it replaces the four-row facts
+  // table: what is on the puck, and that the page is now getting it. On a NO
+  // REC puck this leads with that instead, verbatim — the chain still copies
+  // and still saves, because that bundle is the one Josh most needs.
+  setStatus(foundSentence() + '\n' + 'Copying it now — this can take a few minutes.',
+            S.storageDown ? 'bad' : 'busy');
   // The instruction has to name the thing he is actually holding. Over the
   // cable there is no phone in the loop at all — the puck is plugged into a
   // Mac — and "keep the phone next to the puck" sent him looking for a link
   // that does not exist. Same rule as retryAdvice() and the slow hint.
-  setStatus(isUsb()
-    ? 'Copying the ride across. Leave the puck plugged in.'
-    : 'Copying the ride across. Keep the phone next to the puck.', 'busy');
+  $('pull-hint').textContent = (isUsb()
+    ? 'Leave the puck plugged in. '
+    : 'Keep the phone next to the puck. ')
+    + 'You don’t have to do anything — this page saves the ride to your '
+    + 'Downloads by itself when it’s done.';
   progressTimer = setInterval(updateProgress, 500);
+  updateProgress();   // start the clock at 0 s rather than at "Starting…"
 
   try {
     let r = await runCommand('jumps');
@@ -1214,6 +1421,11 @@ function endPullFailed(what, err) {
   stopPullClock();
   showProgress(false);
   S.phase = 'failed';
+  // Whether "Try again" is a button at all. Same predicate as the sentence
+  // below it, read once and kept: a store that never mounted cannot be fixed
+  // by pressing anything, and a button that cannot work is an instruction to
+  // keep trying until he gives up.
+  S.retryable = retryCouldHelp(err);
   setStatus('Couldn’t get ' + what + ' off the puck.\n'
           + failWord(err, 'The copy stopped part-way.'), 'bad');
   // The generic remedy is offered only where it can work. On a store that
@@ -1239,6 +1451,7 @@ function endPullOk() {
 
   S.reasons = verifyPull();
   S.verified = S.reasons.length === 0;
+  S.retryable = true;
 
   if (S.verified) {
     // An empty puck is a perfectly good outcome (he cleared it last time and
@@ -1254,31 +1467,45 @@ function endPullOk() {
     // not to bother sending it.
     const gotTrace = traceBytesGot();
     const nothingAtAll = S.jumpRows === 0 && gotTrace <= TRACE_HEADER_BYTES;
-    setStatus(
-      nothingAtAll
-        ? 'The puck has nothing saved on it — no jumps and no ride data. You '
-          + 'can still send it so Josh can see why.'
-        : S.jumpRows === 0
-          ? `No jumps were detected, but the whole ride is here — ${human(gotTrace)} `
-            + 'of it, checked and complete. Send it in step 3: a ride with no '
-            + 'jumps in it is still worth having.'
-          : `Got it all — ${S.jumpRows} jumps and the whole ride, checked and `
-            + 'complete. Now send it in step 3.', 'ok');
+    // Kept on S, because the save that follows must not overwrite the news
+    // with its own receipt. Screen C says both, in this order: what happened,
+    // then where the file is (doSend).
+    S.outcome = nothingAtAll
+      ? 'The puck has nothing saved on it — no jumps and no ride data. It is '
+        + 'being saved anyway so Josh can see why.'
+      : S.jumpRows === 0
+        ? `No jumps were detected, but the whole ride is here — ${human(gotTrace)} `
+          + 'of it, checked and complete. A ride with no jumps in it is still '
+          + 'worth having.'
+        : `Got it all — ${S.jumpRows} ${S.jumpRows === 1 ? 'jump' : 'jumps'} and `
+          + 'the whole ride, checked and complete.';
+    S.outcomeKind = 'ok';
+    setStatus(S.outcome, 'ok');
     showResult(
       nothingAtAll ? 'Nothing was recorded on the puck.'
                    : S.jumpRows === 0 ? 'The whole ride is here — no jumps detected in it.'
-                                      : 'Everything on the puck is now on your phone.',
+                                      : 'Everything on the puck is now on this machine.',
       'ok', okDetail());
   } else {
     // The cruellest failure this product can have is "recorded perfectly,
     // downloaded incompletely, then erased". Say plainly that the puck is
-    // untouched, and do not offer step 4 at all.
-    setStatus(S.storageDown
-      ? 'The puck is not saving anything, so nothing that came across can be '
-        + 'trusted.\nSend it to Josh anyway — it tells him why — and do NOT '
-        + 'empty the puck.'
-      : 'That didn’t come across cleanly, so it is not ready to send.\n'
-        + 'The puck still has everything. ' + retryAdvice(), 'bad');
+    // untouched, and never offer the erase — `verified` is false, so
+    // offerClear cannot open.
+    //
+    // The bundle is still built and still saved: an unverified bundle is
+    // exactly the one Josh most wants to look at, and it is the only thing
+    // that can tell him WHY. That is the same rule setEnabled() has always
+    // applied to Send ("offered on any COMPLETED pull, verified or not") —
+    // the chain simply presses what was already enabled.
+    S.outcome = S.storageDown
+      ? 'The puck is not saving anything — the "NO REC" problem — so nothing '
+        + 'that came across can be trusted.\nIt has been saved anyway: send it '
+        + 'to Josh, it tells him why, and do NOT empty the puck.'
+      : 'That didn’t come across cleanly.\n'
+        + 'The puck still has everything — nothing was lost. ' + retryAdvice();
+    S.outcomeKind = 'bad';
+    S.retryable = !S.storageDown;
+    setStatus(S.outcome, 'bad');
     showResult(S.storageDown ? 'The puck recorded nothing — do not empty it.'
                              : 'Not complete — the puck still has everything.',
                'bad', S.reasons);
@@ -1767,9 +1994,18 @@ async function doSend() {
       notes.push('If nothing happens, ask Josh for the version of this link '
                + 'that sends the ride by itself, open that, and tap Send again.');
     } else {
+      // The Mac path, and the one the chain takes on its own: downloadBlob()
+      // is a programmatic a.click() and needs no user gesture.
       delivered = downloadBlob(name, blob);
       how = 'download';
-      notes.push(`Saved to your Downloads as ${name} — send that file to Josh.`);
+      // Two different sentences, because "send it whenever you like" is the
+      // wrong instruction for a copy that did not check out — that one he
+      // should send AND retry, and the file is evidence rather than a ride.
+      notes.push(S.verified
+        ? 'Send that file to Josh whenever you like — Messages, Mail, AirDrop, '
+          + 'whatever you’d normally use.'
+        : 'Send Josh that file too — it is the only thing that can tell him '
+          + 'what went wrong.');
     }
 
     if (DROP_URL) {
@@ -1787,30 +2023,34 @@ async function doSend() {
     }
 
     S.delivered = S.delivered || delivered;
-    $('send-hint').hidden = false;
     if (S.delivered) {
       S.phase = 'sent';
-      // A download is not a send: the file is on this computer, not with
-      // Josh, and step 4 is about to be offered. Say exactly where the ride
-      // is and what is still his to do (docs/rider-sync.md step 6/7).
-      const where = how === 'download'
-        ? 'Saved to your Downloads. Send that file to Josh (Messages, Mail or AirDrop)'
-        : 'Sent';
-      // There is no step 4 for the rider on this loan (ALLOW_CLEAR): the last
-      // thing he is told to do is nothing. The old sentence here — "Last step:
-      // empty the puck so it has room for your next ride" — was an instruction
-      // to do the one thing the brief says he must never do, printed on the
-      // success path where he is most likely to follow it.
-      setStatus(S.verified
-        ? `${where}. You’re finished — leave the puck to Josh.`
-        : `${where} — but it wasn’t a clean copy, so do NOT empty the puck. `
-          + 'Tell Josh and copy the ride again.', S.verified ? 'ok' : 'busy');
+      S.deliveredName = name;
+      // Whatever was in the note box went into THIS zip, so the second button
+      // stands down until he edits it again.
+      noteDirtySinceSave = false;
+      // SCREEN C says two things, in this order: what happened to the ride
+      // (endPullOk's sentence, kept on S so the save does not overwrite the
+      // news with its own receipt), then where the file is. The old sentence
+      // here — "You're finished — leave the puck to Josh." — contradicted the
+      // Empty button sitting directly underneath it, and is gone.
+      setStatus(S.outcome || (how === 'download' ? 'Saved to your Downloads.' : 'Sent.'),
+                S.verified ? 'ok' : 'bad');
     } else {
-      setStatus('Not sent yet. Tap Send again and pick where it should go.');
+      setStatus('Not sent yet. Press Send again and pick where it should go.');
     }
-    showResult(S.delivered ? `Bundle: ${name} (${human(blob.size)})`
-                           : `Bundle ready: ${name} (${human(blob.size)})`,
-               S.delivered ? 'ok' : null, notes);
+    // A download is not a send: the file is on this machine, not with Josh.
+    // Naming it here is also what the Empty button's sentence points at.
+    const head = S.delivered
+      ? (how === 'download'
+          ? (S.verified
+              ? `Saved to your Downloads: ${name} (${human(blob.size)})`
+              : `Saved to your Downloads anyway, so Josh can see what happened: `
+                + `${name} (${human(blob.size)})`)
+          : `Sent: ${name} (${human(blob.size)})`)
+      : `Bundle ready: ${name} (${human(blob.size)})`;
+    showResult(head, S.delivered ? (S.verified ? 'ok' : 'bad') : null,
+               notes.concat(S.verified ? okDetail() : S.reasons));
   } catch (e) {
     setStatus('Couldn’t pack the ride up: ' + ((e && e.message) || e)
             + '\nNothing was erased — the puck still has everything.', 'bad');
@@ -1853,11 +2093,18 @@ async function doClear() {
       // is now empty. Same bundle name — the later file supersedes the
       // earlier one, which is the honest ordering.
       lastBundle = null;
-      $('pull-hint').textContent = 'The puck is empty now — there is nothing '
-        + 'left to copy. Your ride is still on this phone, so you can send it '
-        + 'again if you need to.';
       setStatus('Puck is empty and ready for your next ride.', 'ok');
-      showResult('All done. Thanks — that’s everything.', 'ok', []);
+      // The last screen, and the last thing that needs saying: where the file
+      // is. #pull-hint used to carry this sentence, but it lives inside the
+      // progress block now and that block is long hidden by here — a line
+      // nobody can read is a line that was not written (CLAUDE.md rule 3).
+      showResult('That’s everything — thanks.', 'ok',
+        [S.deliveredName
+          ? 'Your ride is in your Downloads as ' + S.deliveredName
+            + '. Send it to Josh when you get a chance.'
+          : 'Your ride is on this machine. Send it to Josh when you get a chance.',
+         'The puck holds nothing now, so this copy is the only one — the button '
+         + 'below will save it again if you need it.']);
     } else {
       // Never call a wipe done on a reading that says otherwise.
       setStatus('The puck still reports '
@@ -1873,6 +2120,18 @@ async function doClear() {
 
 // -------------------------------------------------------------------- chips
 
+/** The note or a chip changed. The bundle is rebuilt on the next save either
+ *  way; what this adds is the case where the ride has ALREADY gone to his
+ *  Downloads, so the file he has does not contain what he just typed. That —
+ *  and only that — puts a second button on the finished screen. */
+function noteChanged() {
+  lastBundle = null;
+  if (S && S.delivered && !noteDirtySinceSave) {
+    noteDirtySinceSave = true;
+    setEnabled();
+  }
+}
+
 function buildChips(group, host) {
   for (const label of CHIPS[group]) {
     const b = el('button', {
@@ -1887,7 +2146,7 @@ function buildChips(group, host) {
         }
         // The note travels inside the bundle, so a chip tapped after Send
         // must rebuild it rather than ship the previous text.
-        lastBundle = null;
+        noteChanged();
       },
     }, label);
     b.dataset.value = label;
@@ -1909,6 +2168,11 @@ function setupMock() {
 window.__sync = {
   state: () => (S ? {
     phase: S.phase,
+    // True while the page is still working on its own — connect -> pull ->
+    // build -> save. A driver that wants to know the page has STOPPED moving
+    // has to read this as well as `phase`: `pulled` is a resting state on a
+    // phone and a passing one on a Mac.
+    auto: S.auto,
     connected: !!transport,
     verified: S.verified,
     delivered: S.delivered,
@@ -1923,7 +2187,7 @@ window.__sync = {
     f22_note: S.f22Note,
     growth_note: S.growthNote,
     bundle: lastBundle ? lastBundle.name : null,
-  } : { phase: 'boot', connected: false, verified: false, delivered: false,
+  } : { phase: 'boot', auto: false, connected: false, verified: false, delivered: false,
         cleared: false, trace_format: null, jump_rows: 0, reasons: [],
         trace_bytes_device: null, trace_bytes_after: null, trace_bytes_got: null,
         f22_band_applied: false, f22_note: null, growth_note: null,
@@ -1950,39 +2214,24 @@ function init() {
   // there is no serial port at all: a phone. Safari has neither, and falls
   // through to the last-resort sentence at the bottom of init().
   const hasSerial = !!navigator.serial;
-  $('btn-connect-usb').hidden = !hasSerial;
-  $('usb-hint').hidden = !hasSerial;
-  const offerBle = !hasSerial && !!navigator.bluetooth;
-  $('btn-connect').hidden = !offerBle;
-  $('ble-hint').hidden = !offerBle;
-  $('ble-time-hint').hidden = !offerBle;
-  if (offerBle) {
-    // The page's default copy is written for the Mac — "your Mac", "plugged
-    // in", "Plug in the puck". On the phone shape none of that is true, and
-    // #pull-hint would sit directly above #ble-time-hint telling him to keep
-    // the puck plugged in while it tells him to keep the phone next to it.
-    $('lede').textContent = 'Copy the ride off the puck and send it to Josh. '
-      + 'Three steps — then you’re done. Keep your phone next to the puck the '
-      + 'whole time.';
-    $('step1-title').textContent = 'Connect to the puck';
-    $('pull-hint').hidden = true;
+  connectKind = hasSerial ? 'usb' : (navigator.bluetooth ? 'ble' : null);
+  if (connectKind === 'ble') {
+    // The page's default copy is written for the Mac — "your Mac", "charging
+    // cable". On the phone shape none of that is true.
+    $('lede').textContent = 'With the puck switched on and next to you, press '
+      + 'Connect over Bluetooth. Everything after that happens on its own.';
   }
-  $('btn-pull').addEventListener('click', doPull);
+  // #btn-pull is the "Try again" button now; it runs the whole chain again,
+  // not just the copy, so a retry ends where the first attempt was going to.
+  $('btn-pull').addEventListener('click', autoChain);
   $('btn-send').addEventListener('click', doSend);
   $('btn-clear').addEventListener('click', doClear);
-  // Step 4 is not part of the rider's page on this loan: the whole section
-  // goes, so there is no heading to read, no button to find, and nothing to
-  // wonder about. ?allowclear=1 puts it back for Josh — still gated on
-  // verified AND delivered underneath. The step-3 closing line is the
-  // complement: exactly one of the two is ever on screen.
-  const showClear = ALLOW_CLEAR || OFFER_CLEAR_TO_RIDER;
-  $('step-clear').hidden = !showClear;
-  $('finish-hint').hidden = showClear;
   buildChips('sea', $('chips-sea'));
   buildChips('wind', $('chips-wind'));
-  // A typed note changes the bundle, so a note edited after Send must not
-  // ship the stale zip.
-  $('note').addEventListener('input', () => { lastBundle = null; });
+  // A typed note changes the bundle, so a note edited after the save must not
+  // ship the stale zip — and, if the ride has already gone, must offer to
+  // save it again.
+  $('note').addEventListener('input', noteChanged);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && transport && !wakeLock) acquireWakeLock();
   });

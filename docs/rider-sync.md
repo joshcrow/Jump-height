@@ -19,36 +19,44 @@ up](#the-pucks-memory-fills-up--the-one-thing-to-know) below.
    real board 2026-09-09; older listings may show it as "usbmodem" plus
    some digits). It will not say "JumpHeight" — that is its Bluetooth name,
    not its cable name.
-4. **Click "Copy the ride"** (step 2 on the page). The page reads everything
-   off the puck — jump count, the full trace, battery, all of it. There's a
-   progress bar; just leave it alone until it says it's done.
-5. **Type one line about the ride, and tap the Sea / Wind chips that
-   match** — they ride along with your note. Where you rode, what the water
-   was doing, anything that felt off. This isn't busywork — Josh reads the
-   notes as much as the numbers, and "flat and glassy" vs. "victory at sea"
-   changes what a jump number even means.
-6. **Click Send. The file saves to your Downloads** — that is the whole
-   step on a Mac. Find it there and send it to Josh however you like:
-   Messages, Mail, AirDrop.
+4. **Now do nothing.** The page copies the ride off the puck, packs it up and
+   **saves it to your Downloads by itself** — no further clicking. A bar and
+   a running clock show it working; a big ride can take a few minutes. Leave
+   the puck plugged in.
+   - *While that runs*, there is a box asking if anything is worth
+     mentioning, and Sea / Wind chips to tap. Optional, and you have the time:
+     Josh reads the notes as much as the numbers, and "flat and glassy" vs.
+     "victory at sea" changes what a jump number even means. Whatever is in
+     the box when the copy finishes goes into the file. Type it afterwards and
+     a **"Save it again with your note"** button appears — press it and send
+     the newer of the two files.
+5. **Find the file in your Downloads and send it to Josh** — Messages, Mail,
+   AirDrop, however you like. The page names it for you, e.g.
+   `jumpheight-E2C4-20260911-1432.zip`.
    *(Measured on the rider's own MacBook 2026-09-10: the page used to try
    macOS's share sheet first, and Chrome rejected it with "Permission
    denied" — twice, leaving a finished 2.1 MB file with no way out of the
-   page. On a computer the page now goes straight to the download. The
-   share sheet is used on a phone only, where it is the better answer.)*
-   - **The page says the ride "hasn't gone anywhere yet"** — nothing was
-     sent. The ride is still safe on the puck. Tell Josh.
-7. **Nothing. You're finished at step 6.** There is no "empty the puck"
-   button on your page any more — it isn't hidden or switched off, it isn't
-   there. Josh empties the puck when it comes home, and he'd rather have a
-   full puck than a wrongly emptied one.
+   page. On a computer the page goes straight to the download. The share
+   sheet is used on a phone only, where it is the better answer.)*
+6. **Once you can SEE that file in your Downloads, press "Empty the puck".**
+   That is the second and last press. Look for the file first — the page
+   names it in the button's own sentence — because the page can tell you it
+   saved something and be wrong about whether the browser wrote it, and
+   emptying is the one thing that cannot be undone.
+   - **Why bother:** a full puck wipes its own recording the next time it is
+     picked up. Not emptying it is what lost 1 h 54 m of trace on 2026-09-11.
 
 That's it. Go charge your watch too.
+
+**On a phone there is one more press:** the page stops after the copy and
+shows a **Send** button, because phones need you to press something before
+they will open the share sheet.
 
 ## The puck's memory fills up — the one thing to know
 
 The puck holds **about five hours of riding**, and that's the whole of it.
-It keeps a ride until Josh empties it **or until it runs out of room** —
-whichever happens first.
+It keeps a ride until you empty it (step 6) **or until it runs out of room**
+— whichever happens first.
 
 Once it's full it records no more detail at all. And the next ride you start
 after it's been sitting still for an hour or so, it **wipes the old ride** to
@@ -61,8 +69,10 @@ Josh rather than assuming they're all still in there.
 
 ## No Mac handy? Use your phone
 
-Same page, same steps 4-7 above — the page offers **"Connect over
-Bluetooth"** instead of the cable button in step 3:
+Same page, same steps above — the page offers **"Connect over Bluetooth"**
+instead of the cable button in step 3, and adds one press: it stops after the
+copy and shows **Send**, because a phone will not open its share sheet unless
+you press something.
 
 - **iPhone:** open the link in the free **Bluefy** app (App Store) — regular
   Safari can't talk to the puck over Bluetooth, Bluefy can.
@@ -74,7 +84,9 @@ Bluetooth"** instead of the cable button in step 3:
   Wing Foil is still running from your ride, end it — it's fighting the puck
   for the same Bluetooth connection, and that's the most common cause of a
   slow copy.
-- Bluetooth is slower than the cable — see "How long does this take?" below.
+- Bluetooth is slower than the cable — a puck that has been filling up over
+  several rides can take 20-30 minutes. Keep the phone next to the puck with
+  the screen on; see "How long does this take?" below.
 
 ## If the screen says something's wrong
 
@@ -85,10 +97,11 @@ Bluetooth"** instead of the cable button in step 3:
 | "No puck picked. Tap Connect and choose the one whose name starts with JumpHeight." | It didn't find (or you didn't pick) the puck | Make sure the puck is on and either plugged in (cable) or nearby (Bluetooth), then try Connect again |
 | "Couldn't connect: …" | The puck didn't answer | Check the cable is plugged in all the way (or the puck is charged and nearby, for Bluetooth); give it a few seconds to wake up; try Connect again |
 | "The puck dropped out of range" (Bluetooth only) | The Bluetooth link dropped mid-copy | Nothing is lost — move closer, tap Connect, and start again |
-| "That didn't come across cleanly…" / "Not complete — the puck still has everything." | Something about the copy didn't check out — could be anything | Don't worry about diagnosing it — try "Copy the ride" again, closer to the puck if you're on Bluetooth, with your watch out of an activity. If it happens twice, just tell Josh — nothing is lost, the ride is still on the puck. Get it sent before you ride again |
+| "That didn't come across cleanly…" / "Not complete — the puck still has everything." | Something about the copy didn't check out — could be anything | Don't worry about diagnosing it — press **"Try again"**, closer to the puck if you're on Bluetooth, with your watch out of an activity. If it happens twice, just tell Josh — nothing is lost, the ride is still on the puck. Get it sent before you ride again |
 | It says the copy came up short — "N of M bytes" — but the gap is **tiny**, under about a thousand bytes | **The puck is full, not broken.** A full puck slightly over-states how much it's holding, so the page thinks a few hundred bytes went missing when nothing did | **Send it anyway — the ride is complete.** Tell Josh the two numbers so he knows it was the full-puck case, and get this one sent before your next ride |
-| The ride "hasn't gone anywhere yet" after Send | The share sheet was closed or never opened, and nothing downloaded | The ride is still on the puck (and maybe in your Downloads). Click Send again; if that does nothing, tell Josh |
-| Anything else that looks broken | — | Same as always: don't panic, tell Josh. Nothing on your page can empty the puck, so the ride is still on it — just don't let another ride or two go by before it's sent |
+| The ride "hasn't gone anywhere yet" (phone only) | The share sheet was closed or never opened, and nothing downloaded | The ride is still on the puck. Press Send again; if that does nothing, tell Josh — and do NOT empty the puck |
+| Nothing in your Downloads, but the page says it saved | Chrome can block a save the page starts by itself, and the page gets no way to find out | **Do not press "Empty the puck".** Tell Josh — the ride is still on the puck, which is the whole reason that button asks you to look for the file first |
+| Anything else that looks broken | — | Same as always: don't panic, tell Josh. **Don't press "Empty the puck" unless you can see the file in your Downloads** — while it's still on the puck, nothing is lost |
 
 ## How long does this take?
 

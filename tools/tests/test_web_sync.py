@@ -291,8 +291,9 @@ BENCH_JS = """
     feedCpuMs: 0, bodyWallMs: 0, maxChunkMs: 0, maxYieldMs: 0,
     tailMs: null, phase: null,
     perfMemPresent: false, perfMem: [],
+    sendMs: null, pulledAt: null,
     rafIdle: 0, rafBody: 0, rafIdleMs: cfg.rafIdleMs,
-    progress: [], bar: [],
+    progress: [], bar: [], pct: [],
   };
   window.__bench = B;
 
@@ -302,6 +303,10 @@ BENCH_JS = """
     let answered = cfg.answeredSoFar;
     const pt = document.getElementById('progress-text');
     const bf = document.getElementById('bar-fill');
+    // The numeric percentage beside the bar (2026-09-11b). The text line
+    // beside it now carries "2.4 MB of 5.9 MB · 1 min 12 s so far" — bytes and
+    // a ticking clock — so the percentage the rider reads lives here.
+    const bp = document.getElementById('bar-pct');
     const mem = performance.memory;
     B.perfMemPresent = !!(mem && typeof mem.usedJSHeapSize === 'number');
 
@@ -322,12 +327,14 @@ BENCH_JS = """
     }
     answered++;
 
-    let lastText = null, lastWidth = null, lastMem = null;
+    let lastText = null, lastWidth = null, lastMem = null, lastPct = null;
     const sample = (elapsed) => {
       const t = pt.textContent;
       if (t !== lastText) { lastText = t; B.progress.push([Math.round(elapsed), t]); }
       const w = bf.style.width;
       if (w !== lastWidth) { lastWidth = w; B.bar.push([Math.round(elapsed), w]); }
+      const p = bp.textContent;
+      if (p !== lastPct) { lastPct = p; B.pct.push([Math.round(elapsed), p]); }
       if (B.perfMemPresent) {
         const u = mem.usedJSHeapSize;
         if (u !== lastMem) { lastMem = u; B.perfMem.push([Math.round(elapsed), u]); }
@@ -370,10 +377,29 @@ BENCH_JS = """
 
     // The rest of the pull, answered from the SAME FakePuck replies Python
     // built — only the delivery is in here, so the puck stays in Python.
+    //
+    // Since 2026-09-11b the page does not stop at 'pulled': autoChain() goes
+    // straight on to build the zip and hand it to the browser, with no click.
+    // So this loop records BOTH edges — the copy landing (tailMs, endPullOk's
+    // own cost right after the bar reaches the end) and the save completing
+    // (sendMs, which is what the old SEND_JS used to time from a click).
     let mark = null;
-    const settled = () => {
-      const p = window.__sync.state().phase;
-      return (p === 'pulled' || p === 'failed') ? p : null;
+    const st = () => window.__sync.state();
+    const arrived = () => {
+      const s = st();
+      if (s.phase === 'failed') return 'failed';
+      return (s.phase === 'pulled' || s.phase === 'sent') ? 'pulled' : null;
+    };
+    const finished = () => {
+      const s = st();
+      return s.phase === 'failed' || s.delivered || (!s.auto && s.phase === 'pulled');
+    };
+    const noteArrival = () => {
+      if (B.phase === null && arrived()) {
+        B.phase = arrived();
+        B.pulledAt = performance.now();
+        if (mark !== null) B.tailMs = B.pulledAt - mark;
+      }
     };
     const deadline = performance.now() + cfg.tailTimeoutMs;
     for (;;) {
@@ -392,11 +418,10 @@ BENCH_JS = """
       // the last capture, so spin microtasks before spending a 1 ms timer
       // clamp on it: this is the number that says whether the page freezes
       // after the bar reaches the end.
-      for (let k = 0; k < 200 && !settled(); k++) await Promise.resolve();
-      const p = settled();
-      if (p) {
-        B.phase = p;
-        if (mark !== null) B.tailMs = performance.now() - mark;
+      for (let k = 0; k < 200 && !finished(); k++) { noteArrival(); await Promise.resolve(); }
+      noteArrival();
+      if (finished()) {
+        if (B.pulledAt !== null && st().delivered) B.sendMs = performance.now() - B.pulledAt;
         break;
       }
       if (performance.now() > deadline) { B.error = 'the pull never settled'; break; }
@@ -433,20 +458,16 @@ GENERATE_ONLY_JS = """
 }
 """
 
-# Step 3, timed in the page for the same reason: the click, the zip build and
-# the hand-off to the browser's downloader, with no Python in the loop.
-SEND_JS = """
-async (timeoutMs) => {
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const t0 = performance.now();
-  document.querySelector('[data-testid=btn-send]').click();
-  while (!window.__sync.state().delivered) {
-    if (performance.now() - t0 > timeoutMs) return { ms: null, size: null };
-    await sleep(5);
-  }
+# The finished bundle, read back by the page's own clock-free accessor. The
+# SEND_JS helper that used to live here clicked [data-testid=btn-send] and
+# timed the zip build from the click; since 2026-09-11b there is no click —
+# autoChain() runs the save itself — so the timing moved INTO BENCH_JS
+# (B.sendMs, measured from the moment `phase` reached 'pulled') and this is
+# all that is left: what came out.
+BUNDLE_FACTS_JS = """
+() => {
   const b = window.__sync.lastBundle();
-  return { ms: performance.now() - t0, size: b ? b.blob.size : null,
-           name: b ? b.name : null };
+  return { size: b ? b.blob.size : null, name: b ? b.name : null };
 }
 """
 
@@ -769,10 +790,29 @@ class _WebSyncCase(unittest.TestCase):
         self.fail(f"the page never sent {stop_before!r}. sent={self._sent()} "
                   f"state={self._state()}")
 
+    def _settled(self):
+        """The page has stopped moving on its own.
+
+        Since 2026-09-11b there is nothing to click between Connect and the
+        saved file: afterConnect() chains into doPull() and, on a desktop,
+        into doSend() (web/sync/sync.js autoChain). `phase` alone cannot say
+        the page is finished — 'pulled' is a RESTING state on a phone, where
+        the chain stops so the rider can press Send himself, and a PASSING one
+        on the Mac — so this reads the page's own `auto` flag beside it."""
+        st = self._state()
+        return st["phase"] not in ("boot", "connecting", "pulling") and not st["auto"]
+
     def _connect(self, puck, query=""):
+        """Open the page and be the puck until the chain has run itself out.
+
+        This is where the whole flow happens now. The old _pull() and _send()
+        helpers clicked #btn-pull and #btn-send; clicking #btn-pull after an
+        automatic pull would start a SECOND one, so they are gone rather than
+        left to coincidence. _send_press() below is what remains, for the two
+        places a press is still real: a phone, and a re-save."""
         self._open(query)
-        self._drive(puck, lambda: self._state()["phase"] == "connected",
-                    "the page to finish reading the puck on connect")
+        self._drive(puck, self._settled,
+                    "the page to connect, copy the ride and save it")
 
     def _wait_for(self, cond, what, timeout=10.0):
         """Poll a Python-side predicate. Used where page.wait_for_function
@@ -786,15 +826,29 @@ class _WebSyncCase(unittest.TestCase):
         self.fail(f"timed out waiting for {what}. state={self._state()} "
                   f"status={self._status()!r}")
 
-    def _pull(self, puck):
-        self.page.click("[data-testid=btn-pull]")
-        self._drive(puck, lambda: self._state()["phase"] in ("pulled", "failed"),
-                    "the pull to finish")
-
-    def _send(self, puck):
+    def _send_press(self, puck):
+        """Press the one Send button the page still offers — the phone path,
+        where navigator.share() needs a gesture the chain cannot give it."""
         self.page.click("[data-testid=btn-send]")
         self._drive(puck, lambda: self._state()["delivered"] is True,
                     "the bundle to be delivered")
+
+    def _retry_press(self, puck):
+        """Press "Try again" — #btn-pull, relabelled, on screen only where
+        trying again is the thing to do."""
+        self.page.click("[data-testid=btn-pull]")
+        self._drive(puck, self._settled, "the retry to run itself out")
+
+    def _one_button(self):
+        """Every action button currently ON SCREEN, in page order.
+
+        The rule the 2026-09-11b layout exists for: at any moment there is
+        exactly one. A list longer than one here is the page asking him to
+        choose; a disabled button in it is the page asking for something he
+        cannot do."""
+        return [b for b in ("btn-connect-usb", "btn-connect", "btn-pull",
+                            "btn-send", "btn-clear")
+                if self.page.locator(f"[data-testid={b}]").is_visible()]
 
     def _bundle(self):
         """Read lastBundle() out of the page as base64 and open it as a zip."""
@@ -820,32 +874,64 @@ class TestWebSync(_WebSyncCase):
 
     # --------------------------------------------------------------- tests --
     def test_happy_path_traceraw_bundle(self):
-        """Connect -> pull over traceraw -> note -> send -> clear, then the
-        bundle Josh receives is checked file by file against the fixture.
+        """ONE PRESS gets the ride into Downloads; the second empties the puck.
 
-        Driven with ?allowclear=1, because step 4 does not exist on the URL
-        the rider is given (test_step_four_is_hidden_for_this_loan below pins
-        that half). This is the flag half: with it, and only after verified
-        AND delivered, the button is there and the erase works."""
+        Rewritten 2026-09-11b. It used to be four clicks — Connect, Copy, Send,
+        Empty. Connect is forced (navigator.serial.requestPort() needs a user
+        gesture) and Empty is destructive, so those two are the floor; the copy,
+        the zip and the save chain off the first press with nothing in between.
+        Here the whole chain runs inside _connect(), and the bundle Josh
+        receives is then checked file by file against the fixture.
+
+        Driven with ?allowclear=1 for the same reason as before — the flag
+        half of the gate. The gate itself is unchanged: verified AND delivered
+        (or the flag standing in for delivered)."""
         puck = FakePuck()
-        self._connect(puck, self.ALLOW_CLEAR)
+        # THE READING THIS TEST EXISTS TO TAKE, and it is taken in this
+        # browser, not assumed: the save fires with NO user gesture anywhere
+        # in the session after the page loaded. It is headless Chromium 151 on
+        # this bench, NOT the rider's Chrome on his Intel Mac — that one is
+        # still unmeasured, and is the 30-second check before this ships.
+        with self.page.expect_download() as auto_dl:
+            self._connect(puck, self.ALLOW_CLEAR)
+        self.assertTrue(auto_dl.value.suggested_filename.endswith(".zip"),
+                        auto_dl.value.suggested_filename)
 
-        # Step 1 shows the puck the rider can recognise, without jargon.
+        # The caption line that replaced the four-row facts table still shows
+        # the puck the rider can recognise, without jargon.
         self.assertIn("JumpHeight-E2C4",
                       self.page.locator("[data-testid=puck-name]").inner_text())
         self.assertIn("charging", self.page.locator("[data-testid=battery]").inner_text())
 
-        self._pull(puck)
         st = self._state()
         self.assertTrue(st["verified"], f"a clean traceraw pull must verify: {st['reasons']}")
         self.assertEqual(st["trace_format"], "jhtrace-v2-b64")
         self.assertEqual(st["jump_rows"], 3)
+        self.assertEqual(st["phase"], "sent")
+        self.assertTrue(st["delivered"],
+                        "the page must save the ride without a second press")
+        # Exactly one pull. A chain that also left the old button live would
+        # copy the whole ride twice on one stray tap.
+        self.assertEqual(self._sent().count("jumps"), 1, self._sent())
 
-        # The note and one condition chip both have to reach notes.txt.
+        # ONE button on screen, and it is the destructive one — the only press
+        # left. No Copy, no Send, nothing greyed out beside it.
+        self.assertEqual(self._one_button(), ["btn-clear"],
+                         "the finished screen must offer exactly one thing to do")
+
+        # The note and the chips sit on screen through the copy and stay
+        # editable afterwards. Editing them AFTER the save is the one path
+        # that costs an extra press, and it has to be offered by name.
         self.page.fill("[data-testid=note]", "big one near the end, board felt loose")
         self.page.locator("#chips-sea button").filter(has_text="small chop").click()
-
-        self._send(puck)
+        resave = self.page.locator("[data-testid=btn-send]")
+        self.assertFalse(resave.is_hidden(),
+                         "a note typed after the save must offer to save again")
+        self.assertIn("Save it again", resave.inner_text())
+        with self.page.expect_download():
+            resave.click()
+            self._wait_for(lambda: resave.is_hidden(),
+                           "the re-save to finish and the button to stand down")
         name, z = self._bundle()
         self.assertRegex(name, r"^jumpheight-E2C4-\d{8}-\d{4}\.zip$")
 
@@ -934,13 +1020,20 @@ class TestWebSync(_WebSyncCase):
                          "the page reached outside localhost — it must be "
                          "self-contained, with no CDN and no framework")
 
-        # Step 4 only now, only under the flag, and it must confirm from the
-        # puck's own stats.
+        # The erase only now, and it must confirm from the puck's own stats.
         self.assertFalse(self.page.locator("#step-clear").is_hidden(),
-                         "?allowclear=1 must bring step 4 back for Josh")
+                         "the erase section must be in the page's flow now")
         self.assertFalse(self.page.locator("[data-testid=btn-clear]").is_hidden(),
                          "Clear must be offered once the ride is verified and "
                          "delivered AND the URL asked for it")
+        # THE SAFETY NET for the one thing this flow gives up. downloadBlob()
+        # returns true whether or not Chrome wrote the file, so `delivered` is
+        # a hand-off, not a receipt — and auto-saving widens the gap a human
+        # click used to close. The button's own sentence names the file, so he
+        # has to LOOK for it before he erases anything.
+        hint = self.page.locator("#clear-hint").inner_text()
+        self.assertIn(name, hint,
+                      f"the erase must name the file he should be able to see: {hint!r}")
         self.page.click("[data-testid=btn-clear]")
         self._drive(puck, lambda: self._state()["phase"] in ("cleared", "failed"),
                     "the puck to confirm it is empty")
@@ -955,7 +1048,6 @@ class TestWebSync(_WebSyncCase):
         flash lands."""
         puck = FakePuck(traceraw="unknown", trace_bytes=CSV_BYTES)
         self._connect(puck)
-        self._pull(puck)
 
         sent = self._sent()
         self.assertIn("traceraw", sent)
@@ -968,7 +1060,6 @@ class TestWebSync(_WebSyncCase):
         self.assertEqual(st["trace_format"], "csv")
         self.assertTrue(st["verified"], f"a byte-exact csv pull must verify: {st['reasons']}")
 
-        self._send(puck)
         name, z = self._bundle()
         names = set(z.namelist())
         self.assertIn("trace.csv", names)
@@ -1005,7 +1096,6 @@ class TestWebSync(_WebSyncCase):
         ABOVE the trace.csv it actually sends (negative = it sends more)."""
         puck = FakePuck(traceraw="unknown", trace_bytes=CSV_BYTES + gap)
         self._connect(puck)
-        self._pull(puck)
         st = self._state()
         self.assertEqual(st["trace_format"], "csv")
         return puck, st
@@ -1032,7 +1122,6 @@ class TestWebSync(_WebSyncCase):
         self.assertIn(note, self.page.locator("[data-testid=result]").inner_text(),
                       "the forgiveness must be shown, not just recorded")
 
-        self._send(puck)
         _name, z = self._bundle()
         man = json.loads(z.read("manifest.json"))
         self.assertTrue(man["verified"])
@@ -1074,13 +1163,20 @@ class TestWebSync(_WebSyncCase):
         not offer step 4, and must say the puck still has everything."""
         puck = FakePuck(traceraw="short")
         self._connect(puck)
-        self._pull(puck)
 
         st = self._state()
         self.assertFalse(st["verified"], "a short transfer must not verify")
         self.assertTrue(st["reasons"], "an unverified pull must name its reasons")
         self.assertTrue(self.page.locator("[data-testid=btn-clear]").is_hidden(),
                         "Clear must never be offered on an unverified ride")
+
+        # The failure screen obeys the same one-button rule: the one thing to
+        # do is try again, and it is the ONLY thing on screen.
+        self.assertEqual(self._one_button(), ["btn-pull"],
+                         "an unverified ride must offer exactly one thing: Try again")
+        self.assertEqual(
+            self.page.locator("[data-testid=btn-pull]").inner_text().strip(),
+            "Try again")
 
         status = self._status()
         self.assertIn("still has everything", status,
@@ -1098,28 +1194,40 @@ class TestWebSync(_WebSyncCase):
         """Ordering, asserted at every stage — this is the one command on the
         wire that cannot be undone.
 
-        Run WITHOUT the flag, as the rider sees it. Since 2026-09-11a step 4
-        is offered to him (not emptying is what lost a session — see
-        OFFER_CLEAR_TO_RIDER in sync.js), so this ordering now guards the
-        rider's own page rather than an admin corner. verified AND delivered
-        must both hold."""
+        Run WITHOUT the flag, as the rider sees it. Since 2026-09-11a the
+        erase is offered to him (not emptying is what lost a session — see
+        OFFER_CLEAR_TO_RIDER in sync.js), so this ordering guards the rider's
+        own page rather than an admin corner. verified AND delivered must both
+        hold.
+
+        Driven as a PHONE since 2026-09-11b. On a Mac the chain runs pull and
+        save together, so "verified but not yet delivered" is a state that
+        lasts a microtask and cannot be observed from here. On a phone the
+        chain stops before the send on purpose (navigator.share() needs
+        transient activation), which parks the page in exactly that state for
+        as long as the assertions need — a real configuration, not a contrived
+        one."""
+        self._as_mobile()
         puck = FakePuck()
         self._connect(puck)
-        self.assertNotIn("clear", self._sent())
-        self.assertTrue(self.page.locator("[data-testid=btn-clear]").is_hidden())
-
-        self._pull(puck)
+        self.assertTrue(self.page.evaluate(
+            "() => /Android|Mobi/i.test(navigator.userAgent)"),
+            "this UA is not mobile, so the chain did not stop before the send "
+            "and the state below was never reached")
+        self.assertEqual(self._state()["phase"], "pulled")
         self.assertTrue(self._state()["verified"])
-        # Verified but NOT yet delivered: still no step 4, still no clear.
+        # Verified but NOT yet delivered: still nothing to erase with.
         self.assertFalse(self._state()["delivered"])
         self.assertTrue(self.page.locator("[data-testid=btn-clear]").is_hidden(),
                         "verified alone must not unlock Clear — delivered too "
                         "(web/sync/CONTRACT.md §3 step 4)")
         self.assertNotIn("clear", self._sent())
+        # And the one thing on screen is the send he has to make himself.
+        self.assertEqual(self._one_button(), ["btn-send"])
 
-        self._send(puck)
-        # Delivered, and the flag is on: the button appears, but nothing has
-        # gone to the puck until the rider actually taps it.
+        self._send_press(puck)
+        # Delivered: the button appears, but nothing has gone to the puck
+        # until the rider actually taps it.
         self.assertFalse(self.page.locator("[data-testid=btn-clear]").is_hidden())
         self.assertNotIn("clear", self._sent(),
                          "the page must not send `clear` on its own")
@@ -1140,19 +1248,23 @@ class TestWebSync(_WebSyncCase):
         actually left the machine, the rider is offered the button."""
         puck = FakePuck()
         self._connect(puck)
-        self.assertTrue(self.page.locator("[data-testid=btn-clear]").is_hidden(),
-                        "nothing sent yet, so nothing to offer")
-        self._pull(puck)
-        self._send(puck)
         st = self._state()
         self.assertTrue(st["verified"] and st["delivered"], st)
         self.assertFalse(self.page.locator("[data-testid=btn-clear]").is_hidden(),
                          "a delivered ride must offer the rider the empty button")
-        self.assertTrue(self.page.locator("#finish-hint").is_hidden(),
-                        "the 'Josh empties the puck' line must not sit beside it")
+        # #finish-hint ("You're finished. Josh empties the puck.") was dead
+        # markup — showClear was unconditionally true, so its hidden flag could
+        # never be false — and it said the opposite of what the page now does.
+        # Assert it is GONE rather than quietly passing against an element that
+        # no longer exists (CLAUDE.md rule 3).
+        self.assertEqual(self.page.locator("#finish-hint").count(), 0,
+                         "the 'Josh empties the puck' line was cut; a test "
+                         "still reading it would be asserting on nothing")
         hint = self.page.locator("#clear-hint").inner_text()
-        self.assertIn("protects the next session", hint,
+        self.assertIn("protects your next ride", hint,
                       "he must be told WHY, or he will skip it: " + hint)
+        self.assertIn(st["bundle"], hint,
+                      "and he must be told WHICH FILE to look for first: " + hint)
 
     def test_the_owner_flag_lifts_the_delivered_requirement(self):
         """?allowclear=1 is Josh asserting he already holds the ride. Before
@@ -1160,10 +1272,18 @@ class TestWebSync(_WebSyncCase):
         pull-and-send before it would erase a file he had in hand, so on
         2026-09-10 the puck was simply left full — and the auto-clear then ate
         the session. The flag now lifts `delivered` and nothing else: verified
-        still has to hold."""
+        still has to hold.
+
+        Driven as a PHONE since 2026-09-11b, for the same reason as
+        test_clear_is_never_sent_before_the_bundle_is_delivered: on a Mac the
+        chain saves by itself, so `delivered` is true on every verified ride
+        and the lift would be unobservable — the test would pass without
+        testing (CLAUDE.md rule 3). The phone chain stops before the send, so
+        `delivered` is genuinely false here and only the flag can open the
+        gate."""
+        self._as_mobile()
         puck = FakePuck()
         self._connect(puck, self.ALLOW_CLEAR)
-        self._pull(puck)
         st = self._state()
         self.assertTrue(st["verified"])
         self.assertFalse(st["delivered"], "nothing has been sent in this session")
@@ -1176,7 +1296,6 @@ class TestWebSync(_WebSyncCase):
         puck = FakePuck(traceraw="unknown", trace_bytes=CSV_BYTES - before_gap,
                         trace_bytes_growth=growth)
         self._connect(puck)
-        self._pull(puck)
         st = self._state()
         self.assertEqual(st["trace_format"], "csv")
         return puck, st
@@ -1203,7 +1322,6 @@ class TestWebSync(_WebSyncCase):
         self.assertIn(note, self.page.locator("[data-testid=result]").inner_text(),
                       "the explanation must be shown, not just recorded")
 
-        self._send(puck)
         _name, z = self._bundle()
         man = json.loads(z.read("manifest.json"))
         self.assertTrue(man["verified"])
@@ -1245,7 +1363,6 @@ class TestWebSync(_WebSyncCase):
         puck = FakePuck(traceraw="unknown", stored_jumps=0, jumps_rows=[],
                         trace_bytes=CSV_BYTES)
         self._connect(puck)
-        self._pull(puck)
         st = self.page.locator("[data-testid=status]").inner_text()
         res = self.page.locator("[data-testid=result]").inner_text()
         self.assertIn("No jumps were detected", st)
@@ -1270,7 +1387,6 @@ class TestWebSync(_WebSyncCase):
         puck = FakePuck(traceraw="unknown", stored_jumps=0, trace_bytes=0,
                         jumps_rows=[], csv_rows=[])
         self._connect(puck)
-        self._pull(puck)
 
         st = self._state()
         self.assertTrue(st["verified"],
@@ -1283,9 +1399,8 @@ class TestWebSync(_WebSyncCase):
         status = self._status()
         self.assertIn("nothing saved on it", status,
                       f"the empty-puck sentence must be reachable: {status!r}")
-        self.assertIn("send it so Josh can see why", status)
+        self.assertIn("so Josh can see why", status)
 
-        self._send(puck)
         _name, z = self._bundle()
         self.assertEqual(z.read("trace.csv").decode(), "t,mag\n")
         self.assertTrue(json.loads(z.read("manifest.json"))["verified"])
@@ -1306,15 +1421,19 @@ class TestWebSync(_WebSyncCase):
         what fires is the page's own INACTIVITY_MS timer on the real timeout
         path. With the fake clock in place the DOM is clicked from script:
         Playwright's own actionability polling uses requestAnimationFrame,
-        which the clock stubs."""
-        puck = FakePuck(traceraw="unknown", trace_bytes=CSV_BYTES)
-        self._connect(puck)
-        self.page.clock.install()
+        which the clock stubs.
 
-        # First attempt: `jumps` and `traceraw` answered as usual, then a
-        # trace.csv frame that begins and never ends.
-        self.page.evaluate("() => document.getElementById('btn-pull').click()")
+        Re-sequenced 2026-09-11b: the first pull is no longer clicked, it
+        starts itself off the connect. The clock therefore goes in AFTER the
+        page has reached `trace` — every arm of the inactivity timer after
+        that point is a stubbed one, which is all this needs."""
+        puck = FakePuck(traceraw="unknown", trace_bytes=CSV_BYTES)
+        self._open()
+
+        # First attempt: it runs on its own. `jumps` and `traceraw` are
+        # answered as usual, then a trace.csv frame that begins and never ends.
         self._answer_until(puck, "trace")
+        self.page.clock.install()
         self._answered += 1                     # this one we play ourselves
         self._feed(["FILE trace.csv BEGIN", "t,mag"] + list(CSV_ROWS[:3]))
         self.page.clock.fast_forward(31_000)
@@ -1325,14 +1444,19 @@ class TestWebSync(_WebSyncCase):
         self.assertIn("went quiet for 30 seconds", first,
                       f"it must be the INACTIVITY_MS timer that ended it, not "
                       f"some other failure: {first!r}")
+        # And the failure screen offers him the one thing that can help.
+        self.assertEqual(self._one_button(), ["btn-pull"])
 
-        # Second attempt: the same puck, answering everything.
+        # Second attempt: the same puck, answering everything. "Try again"
+        # re-runs the WHOLE chain, so it ends where the first attempt was
+        # going to — saved, not merely copied.
         self.page.evaluate("() => document.getElementById('btn-pull').click()")
-        self._drive(puck, lambda: self._state()["phase"] in ("pulled", "failed"),
-                    "the retry to finish")
+        self._drive(puck, self._settled, "the retry to run itself out")
 
         st = self._state()
-        self.assertEqual(st["phase"], "pulled")
+        self.assertEqual(st["phase"], "sent",
+                         "a retry must carry on into the save, not stop at the copy")
+        self.assertTrue(st["delivered"])
         self.assertEqual(st["jump_rows"], 3,
                          "the retry's `FILE jumps.csv BEGIN` was swallowed as "
                          "trace body by the previous attempt's half-open frame")
@@ -1358,10 +1482,17 @@ class TestWebSync(_WebSyncCase):
         status = self._status()
         self.assertIn("answer its first question", status)
         self.assertIn("reload this page", status)
+        # The GATE is unchanged: setEnabled() still computes `.disabled` the
+        # same way, and the chain starts only where that computation would
+        # have opened the button. Both halves are asserted — the gate, and
+        # that the chain respected it.
         self.assertTrue(self.page.locator("[data-testid=btn-pull]").is_disabled(),
-                        "step 2 must be shut without the wall-clock anchor")
+                        "the copy must be shut without the wall-clock anchor")
         self.assertNotIn("jumps", self._sent(),
                          "no pull may start from a puck that did not answer `stats`")
+        self.assertFalse(self._state()["auto"],
+                         "the chain must not be left running on a puck it "
+                         "cannot pull from")
 
     def test_incomplete_warning_inside_the_jumps_frame_is_heard(self):
         """The puck's own complaint arrives INSIDE the FILE frame
@@ -1375,7 +1506,6 @@ class TestWebSync(_WebSyncCase):
         said "Got it all" and offered step 4."""
         puck = FakePuck(stored_jumps=3, jumps_rows=JUMPS_ROWS[:2], jumps_warning=True)
         self._connect(puck)
-        self._pull(puck)
 
         st = self._state()
         self.assertFalse(st["verified"],
@@ -1387,7 +1517,12 @@ class TestWebSync(_WebSyncCase):
                       f"check (a) must be the reason, by name: {st['reasons']}")
         self.assertTrue(self.page.locator("[data-testid=btn-clear]").is_hidden())
 
-        self._send(puck)
+        # The bundle is still built and still saved. An unverified bundle is
+        # exactly the one Josh most wants to look at — the same rule
+        # setEnabled() has always applied to Send ("offered on any COMPLETED
+        # pull, verified or not"); the chain presses what was already enabled.
+        self.assertTrue(self._state()["delivered"],
+                        "Josh must still get the evidence off an unclean copy")
         _name, z = self._bundle()
         # The warning belongs in device.log, where `jump ingest` re-runs the
         # same check (tools/jump _verify_ingest_bundle) — and NOT in the
@@ -1412,7 +1547,6 @@ class TestWebSync(_WebSyncCase):
         actionable."""
         puck = FakePuck(traceraw="warn")
         self._connect(puck)
-        self._pull(puck)
 
         st = self._state()
         self.assertFalse(st["verified"])
@@ -1424,7 +1558,6 @@ class TestWebSync(_WebSyncCase):
         # the ONLY reason is the puck's own complaint.
         self.assertEqual(len(st["reasons"]), 1, st["reasons"])
 
-        self._send(puck)
         _name, z = self._bundle()
         self.assertIn("INCOMPLETE", z.read("device.log").decode())
         self.assertEqual(z.read("trace.bin"), TRACE_RAW)
@@ -1439,7 +1572,7 @@ class TestWebSync(_WebSyncCase):
         puck = FakePuck(traceraw="unknown", fs_down=True, jumps_rows=[], csv_rows=[])
         self._connect(puck)
 
-        # Step 1 must not print zeros it did not read. The byte-count row
+        # The caption must not print zeros it did not read. The byte-count row
         # ("Ride data waiting", #waiting) was cut 2026-09-09 along with "Puck
         # software" (#fw) — diagnostics, not news to a rider — so this test
         # asserts the row is GONE rather than quietly passing against an
@@ -1451,18 +1584,20 @@ class TestWebSync(_WebSyncCase):
         self.assertEqual(self.page.locator("#fw").count(), 0,
                          "the firmware/build row was cut")
         self.assertIn("unknown", self.page.locator("#stored-jumps").inner_text().lower())
-        self.assertIn("NO REC", self._status(),
-                      "the rider already has a word for this (docs/rider-brief.md item 6)")
 
-        self._pull(puck)
         st = self._state()
         self.assertFalse(st["verified"], "nothing read from an unmounted store verifies")
         self.assertTrue(any("not saving" in r for r in st["reasons"]), st["reasons"])
+        # The chain pulls and saves a NO REC puck on purpose — that bundle is
+        # the one Josh most needs — and the rider's own word for the condition
+        # survives it, in the status line he is left looking at.
+        self.assertIn("NO REC", self._status(),
+                      "the rider already has a word for this (docs/rider-brief.md item 6)")
         self.assertIn("do NOT empty the puck", self._status())
+        self.assertTrue(st["delivered"], "Josh must get the NO REC evidence")
 
-        self._send(puck)
         self.assertTrue(self.page.locator("[data-testid=btn-clear]").is_hidden(),
-                        "step 4 must stay shut for a puck whose store never mounted")
+                        "the erase must stay shut for a puck whose store never mounted")
         self.assertNotIn("clear", self._sent())
         _name, z = self._bundle()
         self.assertIn("fs=down", z.read("device.log").decode())
@@ -1475,9 +1610,18 @@ class TestWebSync(_WebSyncCase):
         the activity" advice, which cannot affect a store that never mounted."""
         puck = FakePuck(traceraw="storage_down")
         self._connect(puck)
-        self._pull(puck)
 
         self.assertEqual(self._state()["phase"], "failed")
+        # A chain that half-runs must never report a save. Nothing came
+        # across, so nothing was built and nothing was handed to the browser.
+        self.assertFalse(self._state()["delivered"],
+                         "a pull that stopped part-way has no bundle to claim")
+        self.assertFalse(self.page.evaluate("() => !!window.__sync.lastBundle()"))
+        # And no button either: a retry cannot mount a store that never
+        # mounted, so "Try again" would be an instruction to keep trying
+        # something that cannot succeed.
+        self.assertEqual(self._one_button(), [],
+                         "nothing he can press can help here, so nothing is offered")
         status = self._status()
         self.assertNotIn("ERR traceraw storage_down", status,
                          f"protocol text reached the rider: {status!r}")
@@ -1503,10 +1647,8 @@ class TestWebSync(_WebSyncCase):
                             "of 3 produces no '=' at all")
         puck = FakePuck(raw=raw)
         self._connect(puck)
-        self._pull(puck)
         st = self._state()
         self.assertTrue(st["verified"], st["reasons"])
-        self._send(puck)
         _name, z = self._bundle()
         self.assertEqual(z.read("trace.bin"), raw, "trace.bin lost the padded tail")
         man = json.loads(z.read("manifest.json"))
@@ -1544,14 +1686,22 @@ class TestWebSync(_WebSyncCase):
         self.page.set_default_timeout(8000)
         self.page.on("pageerror", lambda e: self._page_errors.append(str(e)))
 
-    def test_a_desktop_never_opens_the_share_sheet(self):
+    def test_a_desktop_saves_by_itself_and_never_opens_the_share_sheet(self):
         """The rider is on a MacBook, and on macOS Chrome the share sheet is
         not merely unnecessary — it does not work. Measured on his machine
         twice, 2026-09-10: canShare({files}) returns TRUE and share() then
         rejects with NotAllowedError "Permission denied". canShare is not a
         promise that share will succeed.
 
-        A desktop must go straight to the download and never call share()."""
+        A desktop must go straight to the download, never call share(), and —
+        since 2026-09-11b — do it WITHOUT a second press. The whole session
+        below contains exactly one page interaction, and it is not a click at
+        all: the mock seam connects by itself.
+
+        WHAT THIS MEASURES AND WHAT IT DOES NOT: that a gesture-free
+        programmatic <a download> fires in headless Chromium 151 on this
+        bench. It says nothing about the rider's Chrome on his Intel Mac,
+        which is unmeasured and is the check to run before this ships."""
         self.page.add_init_script("""
             window.__shareCalls = 0;
             navigator.share = () => { window.__shareCalls++;
@@ -1559,18 +1709,15 @@ class TestWebSync(_WebSyncCase):
                     new Error('Permission denied'), {name: 'NotAllowedError'})); };
             navigator.canShare = () => true;
         """)
-        self._open()
+        puck = FakePuck()
+        with self.page.expect_download() as dl:
+            self._connect(puck)
         self.assertFalse(self.page.evaluate("() => /Android|Mobi/i.test(navigator.userAgent)"),
                          "this UA looks mobile, so the desktop branch never ran")
-        puck = FakePuck()
-        self._connect(puck)
-        self._pull(puck)
-        with self.page.expect_download() as dl:
-            self.page.click("[data-testid=btn-send]")
-            self._drive(puck, lambda: self._state()["delivered"], "the download")
         self.assertTrue(dl.value.suggested_filename.endswith(".zip"))
         self.assertEqual(self.page.evaluate("() => window.__shareCalls"), 0,
                          "a desktop must not call navigator.share() at all")
+        self.assertTrue(self._state()["delivered"])
         res = self.page.locator("[data-testid=result]").inner_text()
         self.assertIn("Saved to your Downloads", res)
         self.assertNotIn("share sheet", res)
@@ -1591,10 +1738,11 @@ class TestWebSync(_WebSyncCase):
                               {name: 'NotAllowedError'}));
             navigator.canShare = () => true;
         """)
-        self._open()
         puck = FakePuck()
         self._connect(puck)
-        self._pull(puck)
+        # A phone keeps its press: navigator.share() needs transient
+        # activation, so the chain stops here on purpose.
+        self.assertEqual(self._state()["phase"], "pulled")
         with self.page.expect_download() as dl:
             self.page.click("[data-testid=btn-send]")
             self._drive(puck, lambda: self._state()["delivered"],
@@ -1617,10 +1765,8 @@ class TestWebSync(_WebSyncCase):
                 Object.assign(new Error('share canceled'), {name: 'AbortError'}));
             navigator.canShare = () => true;
         """)
-        self._open()
         puck = FakePuck()
         self._connect(puck)
-        self._pull(puck)
         self.page.click("[data-testid=btn-send]")
         self._drive(puck, lambda: self.page.evaluate(
             "() => !!window.__sync.lastBundle()"), "the bundle to be built")
@@ -1632,6 +1778,8 @@ class TestWebSync(_WebSyncCase):
         self.assertIn("closed the share sheet", res)
         self.assertNotIn("Saved to your Downloads", res,
                          "a deliberate cancel must not push a file at him")
+        # The button stays, so he can change his mind.
+        self.assertEqual(self._one_button(), ["btn-send"])
 
     def test_iphone_with_no_share_sheet_is_given_something_to_do(self):
         """The dead end: an iPhone rider who has connected, pulled and tapped
@@ -1649,7 +1797,9 @@ class TestWebSync(_WebSyncCase):
 
         puck = FakePuck()
         self._connect(puck)
-        self._pull(puck)
+        # An iPhone is IS_MOBILE, so the chain stopped before the send and the
+        # press below is his.
+        self.assertEqual(self._state()["phase"], "pulled")
         self.page.click("[data-testid=btn-send]")
         self._drive(puck, lambda: self.page.evaluate(
             "() => !!window.__sync.lastBundle()"), "the bundle to be built")
@@ -1679,8 +1829,6 @@ class TestWebSync(_WebSyncCase):
         URL has no step 4 to reach."""
         puck = FakePuck()
         self._connect(puck, self.ALLOW_CLEAR)
-        self._pull(puck)
-        self._send(puck)
         self.assertFalse(json.loads(self._bundle()[1].read("manifest.json"))["cleared"])
 
         self.page.click("[data-testid=btn-clear]")
@@ -1688,10 +1836,18 @@ class TestWebSync(_WebSyncCase):
                     "the puck to confirm it is empty")
         self.assertTrue(self._state()["cleared"])
         self.assertTrue(self.page.locator("[data-testid=btn-pull]").is_disabled(),
-                        "step 2 must shut once the puck is empty — doPull drops "
-                        "the in-memory bundle, which is now the only copy")
+                        "the copy must shut once the puck is empty — doPull "
+                        "drops the in-memory bundle, which is now the only copy")
+        self.assertTrue(self.page.locator("[data-testid=btn-pull]").is_hidden(),
+                        "and a shut button is not on screen: nothing on this "
+                        "page is ever visible-and-greyed")
 
-        self.page.click("[data-testid=btn-send]")
+        # The one thing that could still need doing: this machine now holds
+        # the ONLY copy of the ride, so saving it again stays reachable.
+        save_again = self.page.locator("[data-testid=btn-send]")
+        self.assertEqual(self._one_button(), ["btn-send"])
+        self.assertIn("Save the ride again", save_again.inner_text())
+        save_again.click()
         self._drive(puck, lambda: self.page.evaluate(
             "() => !!window.__sync.lastBundle()"), "the bundle to be rebuilt")
         _name, z = self._bundle()
@@ -1743,8 +1899,10 @@ class TestWebSyncAtRegionScale(_WebSyncCase):
         # assertions at the bottom pin which of them is real.
         cdp = self.context.new_cdp_session(self.page)
 
-        self._connect(puck)
-        self.page.click("[data-testid=btn-pull]")
+        # No click: the pull starts itself off the connect (autoChain). Open
+        # the page and answer until the page is waiting on `trace`, which is
+        # where the in-page bench takes over.
+        self._open()
         self._answer_until(puck, "trace")
 
         cfg = {"answeredSoFar": self._answered, "rows": rows, "wide": wide,
@@ -1765,12 +1923,13 @@ class TestWebSyncAtRegionScale(_WebSyncCase):
                 "() => ({ done: window.__bench.done,"
                 " text: document.getElementById('progress-text').textContent,"
                 " bar: document.getElementById('bar-fill').style.width,"
+                " pct: document.getElementById('bar-pct').textContent,"
                 " hidden: document.getElementById('progress').hidden })")
             used = cdp.send("Runtime.getHeapUsage")["usedSize"]
             heap_peak = max(heap_peak, used)
             outside.append({"t_s": round(time.monotonic() - began, 2),
                             "progress_text": snap["text"], "bar": snap["bar"],
-                            "hidden": snap["hidden"],
+                            "pct": snap["pct"], "hidden": snap["hidden"],
                             "heap_mb": round(used / 1e6, 1)})
             if snap["done"]:
                 break
@@ -1781,10 +1940,14 @@ class TestWebSyncAtRegionScale(_WebSyncCase):
         self._answered = len(self._sent())
         heap_peak = max(heap_peak, cdp.send("Runtime.getHeapUsage")["usedSize"])
 
-        # Step 3, timed by the page's own clock, then read back through the
-        # existing helper so Python's zipfile has to accept what it produced.
-        send = self.page.evaluate(SEND_JS, 180000)
-        self.assertIsNotNone(send["ms"], "Send never reported delivered")
+        # The save ran inside the bench, timed by the page's own clock. Read
+        # what came out through the existing helper, so Python's zipfile has
+        # to accept what the page produced.
+        self.assertTrue(self._state()["delivered"],
+                        "the chain never reported the ride saved")
+        send = self.page.evaluate(BUNDLE_FACTS_JS)
+        send["ms"] = b["sendMs"]
+        self.assertIsNotNone(send["ms"], "the save was never timed")
         heap_peak = max(heap_peak, cdp.send("Runtime.getHeapUsage")["usedSize"])
         name, z = self._bundle()
         trace_csv = z.read("trace.csv")
@@ -1856,14 +2019,26 @@ class TestWebSyncAtRegionScale(_WebSyncCase):
         texts = [s["progress_text"] for s in outside]
         self.assertGreater(len(set(texts)), 1,
                            f"the progress text never changed during the pull: {texts}")
-        pcts = sorted({int(g.group(1)) for t in texts
-                       for g in [re.search(r"(\d+)\s*%", t)] if g})
+        # The percentage moved to its own label beside the bar (#bar-pct) when
+        # the text line became "N MB of M MB · T so far" (2026-09-11b), so
+        # that is where the number the rider reads is sampled from.
+        pcts = sorted({int(g.group(1)) for s in outside
+                       for g in [re.search(r"(\d+)\s*%", s["pct"] or "")] if g})
         self.assertTrue([p for p in pcts if 0 < p < 100],
-                        f"no partial percentage was ever on screen: {texts}")
+                        f"no partial percentage was ever on screen: "
+                        f"{[s['pct'] for s in outside]}")
+        # The ticking clock is the load-bearing half — a percentage can sit
+        # still on a slow link and look dead. Two different readings, both
+        # measured in-session.
+        clocks = sorted({g.group(0) for t in texts
+                         for g in [re.search(r"\d+ s so far", t)] if g})
+        self.assertGreater(len(clocks), 1,
+                           f"the elapsed clock never advanced: {texts}")
         bars = sorted({s["bar"] for s in outside if s["bar"]})
         self.assertGreater(len(bars), 1, f"the bar never moved: {bars}")
         m["percentages_seen"] = pcts
         m["bar_widths_seen"] = bars
+        m["elapsed_clocks_seen"] = clocks
 
         # ---- 2: which heap number is real ------------------------------------
         # performance.memory.usedJSHeapSize is present here and NEVER MOVES: it
@@ -1960,11 +2135,12 @@ class TestWebSyncAtRegionScale(_WebSyncCase):
                   "pull_seconds_page", "bytes_received_page",
                   "verified", "reasons", "f22_band_applied",
                   "bundle_over_body_pct", "real_09_09_body_and_bundle",
-                  "percentages_seen", "bar_widths_seen", "console"):
+                  "percentages_seen", "bar_widths_seen", "elapsed_clocks_seen",
+                  "console"):
             print(f"  {k} = {m.get(k)!r}")
         print("  progress text, sampled from outside the page:")
         for s in m["outside_samples"]:
-            print(f"    t={s['t_s']:>7.2f}s  bar={s['bar']:>5}  "
+            print(f"    t={s['t_s']:>7.2f}s  bar={s['bar']:>5} {s['pct']:>5}  "
                   f"heap={s['heap_mb']:>6.1f} MB  {s['progress_text']!r}")
 
     def test_csv_pull_at_three_megabytes(self):
@@ -2167,14 +2343,18 @@ class TestWebSyncCable(_WebSyncCase):
 
         The drop is taken while the page is IDLE on purpose: a drop during an
         in-flight command is reported by that command's own failure path
-        instead, which is a different sentence."""
-        replies = {"info": list(INFO_LINES),
-                   "stats": [stats_line(3, CSV_BYTES), "OK stats"]}
+        instead, which is a different sentence. Since 2026-09-11b the page is
+        never idle straight after connecting — the chain copies and saves on
+        its own — so the scripted port is taught the WHOLE conversation and
+        the drop is taken once that has run itself out."""
+        puck = FakePuck(traceraw="unknown", trace_bytes=CSV_BYTES)
+        replies = {c: puck.reply(c) for c in
+                   ("info", "stats", "jumps", "traceraw", "trace", "selftest")}
         self._open_plain("window.__replies = " + json.dumps(replies) + ";"
                          + FAKE_SERIAL_JS)
         self.page.click("[data-testid=btn-connect-usb]")
-        self._wait_for(lambda: "Now tap" in self._status(),
-                       "the cable session to finish reading the puck")
+        self._wait_for(lambda: self._state()["delivered"],
+                       "the cable session to copy and save the ride")
         self.assertTrue(self.page.evaluate("() => window.__sync.state().connected"))
 
         self.page.evaluate("() => window.__fakePort.drop()")
@@ -2196,21 +2376,18 @@ class TestWebSyncCable(_WebSyncCase):
         watch activity — neither of which can help over USB."""
         puck = FakePuck(traceraw="short")
         self._open_mock_usb()
-        self._drive(puck, lambda: self._state()["phase"] == "connected",
-                    "the page to finish reading the puck on connect")
+        self._drive(puck, self._settled, "the cable-shaped chain to run out")
 
-        # The instruction while it copies has to name the thing he is holding.
-        # doPull's line said "Keep the phone next to the puck" on EVERY
-        # transport; over the cable the puck is plugged into a Mac and there is
-        # no phone in the loop at all. Read here rather than in _pull() because
-        # setStatus runs synchronously in doPull before the first command.
-        self.page.click("[data-testid=btn-pull]")
-        copying = self._status()
+        # The instruction that sat under the bar while it copied has to name
+        # the thing he is holding. It said "Keep the phone next to the puck"
+        # on EVERY transport; over the cable the puck is plugged into a Mac and
+        # there is no phone in the loop at all. Read with text_content()
+        # because the progress block is hidden again by now — the assertion is
+        # about what was on screen DURING the copy, and doPull writes it once.
+        copying = self.page.locator("#pull-hint").text_content()
         self.assertIn("Leave the puck plugged in", copying,
                       f"the cable copy must not send him looking for a phone: {copying!r}")
         self.assertNotIn("phone", copying)
-        self._drive(puck, lambda: self._state()["phase"] in ("pulled", "failed"),
-                    "the pull to finish")
         st = self._state()
         self.assertFalse(st["verified"])
         status = self._status()
@@ -2218,11 +2395,9 @@ class TestWebSyncCable(_WebSyncCase):
         self.assertNotIn("watch", status)
         self.assertNotIn("closer", status)
         self.assertTrue(self.page.locator("[data-testid=btn-clear]").is_hidden())
-        # Send is still offered (an unverified bundle is the one Josh most
+        # The bundle still goes out (an unverified one is the bundle Josh most
         # wants to see); the manifest carries the transport.
-        self.page.click("[data-testid=btn-send]")
-        self._drive(puck, lambda: self.page.evaluate("() => !!window.__sync.lastBundle()"),
-                    "the bundle to be built")
+        self.assertTrue(st["delivered"])
         _name, zf = self._bundle()
         manifest = json.loads(zf.read("manifest.json"))
         self.assertEqual(manifest["transfer"]["transport"], "usb")

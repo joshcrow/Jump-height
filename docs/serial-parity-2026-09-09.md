@@ -312,3 +312,63 @@ arm at 16 MB (the exact-match arm is what passed here; the band is pinned at
 fixture scale), the `traceraw`/base64 path at scale, and whether the compositor
 actually painted each new bar width — rAF proves the frames were served.
 
+## Flashing from the web page — PROVEN END TO END on silicon, 2026-09-11
+
+The question was whether a remote rider could update the puck from the page.
+The answer is yes, over the CABLE, and every step is now measured on the Puck
+(`JumpHeight-8673`).
+
+**Not over Bluetooth.** Nordic's *legacy* DFU service UUID is on Chrome's Web
+Bluetooth GATT blocklist precisely because legacy DFU does not verify firmware
+signatures. No browser can reach it. `docs/watch.md` said so; confirmed.
+
+**Over USB it is open, and the firmware already had the hook.** `main.cpp:1269`
+implements `uf2`, which reboots into the bootloader's mass-storage drive.
+
+    1. send `uf2` over the existing Web Serial link
+       -> the CDC port drops instantly ("Device not configured"). That is the
+          reboot, not an error.
+    2. `/Volumes/XIAO-SENSE` mounts within ~3 s.
+       INFO_UF2.TXT: UF2 Bootloader 0.11.0, Board-ID nRF52840-SeeedXiaoSense-v1,
+       SoftDevice S140 7.3.0
+    3. write the .uf2 (610 blocks, 312,320 B, family 0xADA52840, app base 0x27000,
+       built with tools/uf2conv.py from the PlatformIO firmware.hex)
+    4. the bootloader flashes and reboots, which UNMOUNTS THE DRIVE MID-WRITE.
+       `cp` reports "could not copy extended attributes … Device not configured"
+       and exits 0. **THAT MESSAGE IS THE SUCCESS SIGNATURE.** Any client — the
+       page included — must treat the volume disappearing as completion, not
+       failure, or it will report a good flash as a bad one.
+    5. verified after: `src=ae67dc8d`, matching the tree exactly, name preserved,
+       and `help` now carries traceraw / tracecheck / pincensus / vbatscan.
+
+**Why this is SAFER than the OTA path this project retracted.** A UF2 write
+replaces the application, not the bootloader. An interrupted or bad write leaves
+a bad app behind a working bootloader, recoverable with a double-tap reset. The
+retracted BLE DFU failure mode — a dark bootloader needing a physical reset —
+does not arise here. NVS also survives (the 2026-08-24 reflash already showed
+the drop calibration surviving), which matters for the OG.
+
+**The only piece a web page still needs** is `showDirectoryPicker()` plus a
+write, both standard Chrome desktop APIs. Everything before it is proven. A
+zero-new-technology version also exists: host the .uf2, have the page send
+`uf2`, and let the rider drag the downloaded file onto the drive.
+
+## traceraw and tracecheck, first runs on silicon — 2026-09-11
+
+Both shipped in the diagnostic-export branch and neither had ever run on
+hardware (`docs/STATUS.md`: "traceraw has never run on silicon").
+
+| | Measured on a 7,463,504-byte region |
+|---|---|
+| `traceraw` | 1,073,664 raw bytes, base64-framed to **1,450,537 B on the wire in 10.8 s = 130.8 KB/s** |
+| vs the CSV the same region would have sent | 7,463,504 B — **5.1x less data**, at **2.1x the throughput** of CSV's measured 62.5 KB/s |
+| net effect on a transfer | **~10x quicker.** A full region took 220 s as CSV; as raw it is ~20-25 s |
+| `tracecheck` | `fast=7463504 slow=7463504 agree`, **106.1 s** |
+
+The branch's own estimate was "~6x smaller (the ratio is an estimate, not
+measured on silicon)". Measured on the wire: **5.1x**. Close, and now a number.
+
+`TRACECHECK_TIMEOUT_S = 300.0` in `tools/jump` was set as an unvalidated floor.
+At 106 s for 7.46 MB it holds, and scales to ~200 s for a full 14 MB region —
+still inside 300 with margin. **First evidence the floor is right.**
+

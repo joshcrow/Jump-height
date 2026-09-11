@@ -522,6 +522,36 @@ hand — CLAUDE.md rule 5). What changed, all pinned by tests, suite 523 →
   the cable. **Consequence, deliberate: Bluetooth is no longer reachable from
   a Mac at all** — `rider-sync.md` and DECISION #42 said it was, and were
   corrected in the same commit. Suite 592 → 593 (29 Playwright).
+- **Cut to TWO CLICKS 2026-09-11 (`2026-09-11b`), after the owner said "the
+  website is not clear, and I am not even sure what the user flow is".** It
+  was four numbered steps and four buttons, three of them disabled at any
+  moment. Now: **Connect, then the page copies the ride, packs it and saves it
+  to Downloads by itself**, and the only other press is the destructive one.
+  That is the floor the browser permits — `requestPort()` needs a user
+  gesture, `downloadBlob()` does not. **The rule that replaced the numbers:
+  at any moment exactly one button is on screen; a button is either the thing
+  to do or it is not there.** `setEnabled()` still computes every `.disabled`
+  identically and `setVisible()` only ever hides, so **no gate moved**:
+  `verifyPull()`, the F-22 band, the growth window, the header-only rule and
+  `doClear()`'s re-check are byte-identical to `2026-09-11a`. Cut: the step
+  numbers and headings, the facts table (now one caption line, same testids),
+  the footer reassurance (contradicted by F-36), `#finish-hint` (dead markup)
+  and "Not connected yet.". The note and the Sea/Wind chips moved onto the
+  *copying* screen, where he is waiting anyway, and never sit between him and
+  finishing. Progress now reads `2.3 MB of 2.9 MB · 2 s so far` with a
+  **ticking clock** — a percentage can sit still on a slow link and look dead.
+  A phone keeps one Send press (`share()` needs transient activation). Suite
+  601 passed, 1 skipped, 1 xfailed (35 Playwright + 1 opt-in).
+  **UNMEASURED, and the check to run before this reaches him:** that a
+  gesture-free `<a download>` actually saves in **his** Chrome on **his** Intel
+  Mac. It fires in headless Chromium 151 on this bench
+  (`test_a_desktop_saves_by_itself_and_never_opens_the_share_sheet` takes that
+  reading with `expect_download`), and that proves nothing about his machine.
+  `downloadBlob()` returns `true` either way, so a blocked save would set
+  `delivered` on a ride that never left — which is why the erase button now
+  names the file and asks him to see it in Downloads first. If it comes back
+  "blocked", the honest fix is a third click: a **Save the ride** button on the
+  finished screen, still auto-built, still one press.
 
 **How each part is verified today — all off real silicon:**
 - The store side of `traceraw`: `firmware/test/store_host/` runs the real,

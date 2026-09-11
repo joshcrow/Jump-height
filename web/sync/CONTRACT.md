@@ -562,11 +562,45 @@ rider twice: `#stored-jumps` reads "unknown — not saving"
 in his own words (`afterConnect()`, `web/sync/sync.js:1000-1003`). `verified`
 and every check behind it are untouched.
 
-### §3.2 Four steps, in order
+### §3.2 Four phases, in order — TWO of them are presses
+
+**Working tree, 2026-09-11b (`PAGE_VERSION` `2026-09-11b`): the four phases
+below are the PAGE's, not the rider's.** They still happen, still in this
+order, and every gate in them is unchanged. What changed is who performs them:
+`afterConnect()` now ends by calling `autoChain()` (`web/sync/sync.js`), which
+runs `doPull()` and then `doSend()` with no press in between, so connect →
+copy → build → save is one gesture.
+
+**Two presses is the floor the browser permits**, and the page is at it:
+`navigator.serial.requestPort()` requires a user gesture, so Connect is
+forced, and the erase is destructive so it stays deliberate. `downloadBlob()`
+does **not** require one — it is a programmatic `a.click()` and was already
+used that way (`web/sync/sync.js`, `downloadBlob`).
+
+Two paths cost one more press, both deliberately:
+
+- **A phone.** `navigator.share()` needs transient activation, and macOS
+  Chrome has been **measured** rejecting it with `NotAllowedError` after the
+  zip build (2026-09-10, §3.2 step 3 below). A chain that called `share()`
+  itself would reject every time, so on `IS_MOBILE` the chain stops after the
+  copy and offers one **Send**.
+- **A note typed after the save already fired.** The zip is rebuilt and saved
+  again behind one **Save it again with your note** button, which appears only
+  when the note or a chip changed after delivery.
+
+**The one-button rule.** At any moment exactly one button is on screen: a
+button is either the thing to do, or it is not there. `setEnabled()`
+(`web/sync/sync.js`) still computes every `.disabled` exactly as before — the
+gates — and `setVisible()` is a presentation layer **that only ever hides**.
+Nothing on the page is ever visible-and-greyed. The numbered step headings, the
+`#facts` table, `#finish-hint` (dead markup: `showClear` was unconditionally
+true) and the footer reassurance were cut in the same pass; `#status` starts
+empty and hidden rather than saying "Not connected yet.". The `data-testid`
+hooks in §3.3 all survive — `#puck-name`, `#battery` and `#stored-jumps` as
+spans in a one-line caption.
 
 **Step 1 — Connect.** Cable (Web Serial) or Bluetooth (Web Bluetooth), but
 only one of them on screen at a time — see the one-way-in paragraph in §3.1.
-`web/sync/index.html:38-75`.
 
 **Step 2 — Copy the ride.** The command order is fixed
 (`doPull()`, `web/sync/sync.js:1025-1053`): `jumps` → `traceraw` (→ `trace` on
@@ -619,21 +653,38 @@ that quietly does nothing, counted as delivered, would unlock step 4
 > Josh does that" with the button still present and still gated. A client must
 > key off the gate, never off the heading.
 
-**Working tree: step 4 is OFF unless the URL says otherwise.** For the loan the
-whole section — heading, hint and button — is hidden unless the URL carries
-`?allowclear=1` (`ALLOW_CLEAR`, `web/sync/sync.js` ~`:100`, applied at `init()`
-~`:1832-1833` and folded into `offerClear` ~`:815`); `doClear()` re-checks the
-same flag (~`:1706`), so a button un-hidden by hand still writes nothing to the
-wire. Without the flag the page ends at step 3 — "You're finished. Josh empties
-the puck." (`#finish-hint`, `web/sync/index.html`) — and the delivered-status
-line says the same ("You're finished — leave the puck to Josh.", `doSend()`
-~`:1682`) in place of the sentence it replaced, which told the rider to empty
-the puck. **The verified-AND-delivered gate above is unchanged and still
-applies on top of the flag.** Pinned in both directions by
-`test_step_four_is_hidden_for_this_loan` (no flag: hidden even when both hold,
-and `clear` never reaches the wire) and by the happy path plus
-`test_clear_is_never_sent_before_the_bundle_is_delivered`, which now run with
-`?allowclear=1`.
+**CORRECTED 2026-09-11b — this section said "step 4 is OFF unless the URL says
+otherwise", and that stopped being true on 2026-09-11a.** It described a loan
+rule: the whole section hidden unless the URL carried `?allowclear=1`, the page
+ending at step 3 with "You're finished. Josh empties the puck." The rule was
+reversed by a session it cost — the region filled during a 1 h 54 m ride and
+the firmware's own auto-clear (`main.cpp:1733`) wiped the trace the moment the
+puck was **picked up to be synced**, so not emptying is not the safe option
+(`OFFER_CLEAR_TO_RIDER`, `web/sync/sync.js`). The doc was not corrected with
+the code; it is corrected here. What is true now:
+
+- **The erase is part of the rider's flow**, offered on the plain URL, and
+  `#finish-hint` — the line that said Josh does it — is gone from the markup.
+- **`?allowclear=1` lifts `delivered`, and nothing else.** It is Josh asserting
+  he already holds the ride; without the lift the admin path demanded a
+  redundant multi-MB pull-and-send before it would erase a file he had in hand
+  (`ALLOW_CLEAR`, folded into `offerClear`; `doClear()` re-checks it, so a
+  button un-hidden by hand still writes nothing to the wire).
+- **`verified` still has to hold, on both paths.** The gate above is unchanged.
+- **The erase names the saved file in its own sentence** — "Once you can see
+  `jumpheight-E2C4-…zip` in your Downloads:" (`setVisible()`,
+  `web/sync/sync.js`). That is copy, not a gate, and it exists because
+  `downloadBlob()` returns `true` whether or not Chrome wrote the file: with
+  the save now automatic, a human click no longer stands between `delivered`
+  and the erase, so a human *look* does.
+
+Pinned by `test_step_four_is_offered_to_the_rider_once_the_ride_has_gone`
+(plain URL: offered once verified AND delivered, and the sentence names the
+file), `test_clear_is_never_sent_before_the_bundle_is_delivered` and
+`test_the_owner_flag_lifts_the_delivered_requirement` — the last two driven as
+a PHONE, because on a Mac the chain delivers on every verified ride and
+"verified but not delivered" would be unobservable, i.e. a test that passes
+without testing.
 
 ### §3.3 The test seam
 
@@ -644,6 +695,12 @@ and `clear` never reaches the wire) and by the happy path plus
 window.__mock = { feed(line), sent: [] }
 window.__sync = { state(), lastBundle() }
 ```
+
+`state()` gained **`auto`** on 2026-09-11b: true while the page is still
+running the chain itself. A driver cannot read `phase` alone any more —
+`pulled` is a RESTING state on a phone, where the chain stops before the send,
+and a PASSING one on a Mac. `tools/tests/test_web_sync.py::_settled` is the
+reference reading.
 
 `#mock-usb` plays a cable-shaped session instead, because transport kind
 changes both the advice the page gives and what `manifest.json` records

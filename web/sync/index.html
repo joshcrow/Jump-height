@@ -14,13 +14,31 @@
   shows ONE way in (sync.js init): the cable wherever there is a serial port,
   Bluetooth only where there isn't one. Both paths stay wired.
 
+  THE RULE THIS MARKUP IS ARRANGED AROUND (2026-09-11b). At any moment there
+  is exactly ONE button on screen. A button is either the thing to do, or it
+  is not there — nothing here is ever visible-and-greyed. There are no step
+  numbers, because the rider no longer performs the steps: he presses Connect,
+  and the page pulls the ride, packs it and saves it to his Downloads on its
+  own. The only other press is the destructive one, which must stay his.
+
+  That is TWO clicks, which is the floor the browser permits:
+  navigator.serial.requestPort() needs a user gesture, and emptying the puck
+  must never fire by itself.
+
+  MECHANICALLY: sync.js setEnabled() still computes every `.disabled` exactly
+  as it did — every gate (verified, delivered, the stats anchor, ALLOW_CLEAR)
+  is untouched — and setVisible() is a presentation layer that only ever HIDES
+  what was already computed. The verification behaviour of this page did not
+  move.
+
   Static files only — no build step, no CDN, no framework (CONTRACT.md §3). The
   markup is the whole skeleton; sync.js only ever fills in text nodes, never
   innerHTML, so a hostile or malformed device line can't become markup.
 
   data-testid hooks are contract (CONTRACT.md §3, test seam): btn-connect,
-  btn-pull, btn-send, btn-clear, status, progress, puck-name, battery,
-  result, note. Rename one and tools/tests/test_web_sync.py fails loudly.
+  btn-connect-usb, btn-pull, btn-send, btn-clear, status, progress, puck-name,
+  battery, result, note. Rename one and tools/tests/test_web_sync.py fails
+  loudly.
 -->
 <link rel="stylesheet" href="sync.css">
 </head>
@@ -28,73 +46,79 @@
 <main class="wrap">
 
   <h1>Send your ride</h1>
-  <!-- Worded for the Mac, which is the only shape Nick will ever see. sync.js
-       init() rewrites this and the step-1 heading for the phone/Bluetooth
-       shape, where "your Mac" and "plugged in" are both wrong. -->
-  <p class="lede" id="lede">Plug the puck into your Mac, copy the ride off, and
-     send it to Josh. Three steps — then you’re done. Leave the puck plugged in
-     the whole time.</p>
 
-  <p class="status" id="status" data-testid="status" role="status" aria-live="polite">Not connected yet.</p>
+  <!-- SCREEN A. Worded for the Mac, which is the only shape Nick will ever
+       see; sync.js init() rewrites it for the phone/Bluetooth shape, where
+       "your Mac" and "plugged in" are both wrong. It goes away the moment the
+       link is up — there is nothing left to connect. -->
+  <p class="lede" id="lede">Plug the puck into your Mac with its charging
+     cable, then press <b>Connect</b>. Everything after that happens on its
+     own.</p>
 
-  <!-- 1 ------------------------------------------------------------------ -->
-  <section class="step">
-    <h2><span class="num">1</span> <span id="step1-title">Plug in the puck</span></h2>
-    <!-- ONE way in per device. Both links stay wired, but only one is ever on
-         screen: where the browser has a serial port (Chrome on his Mac) the
-         cable is the only thing offered, and Bluetooth is hidden entirely.
-         Chrome on a Mac reports BOTH transports, so the old "hide whichever
-         this browser cannot make" rule showed two competing black Connect
-         buttons and two hints — the confusion the owner read on 2026-09-09.
-         Bluetooth appears only where there is no serial port at all: a phone.
-         sync.js init() is where that choice is made. -->
-    <!-- The picker string is MEASURED off the real board (2026-09-09, ioreg:
-         USB Product Name "XIAO nRF52840 Sense", Vendor "Seeed"), not guessed.
-         It never says "JumpHeight" — that is the BLE advertised name and has
-         nothing to do with the USB descriptor; offering it as a thing to look
-         for sent the rider hunting for a string that cannot appear. -->
-    <p class="hint" id="usb-hint">Plug the puck into your Mac with its USB
-       cable — the one it charges on — then click the button below. Chrome asks
-       which device: pick <b>XIAO nRF52840 Sense</b>.</p>
-    <!-- No "Newer Macs may ask to allow the accessory" parenthetical: that
-         prompt is Apple-silicon only and Nick's MacBook is Intel (DECISIONS
-         #42, corrected 2026-09-09), so it was advice about something he will
-         never see. -->
-    <button class="btn btn-primary" id="btn-connect-usb" data-testid="btn-connect-usb" type="button" hidden>Connect</button>
-    <!-- No longer "Or, with the puck…": this hint is now shown ONLY when the
-         cable hint above it is hidden, so there is nothing for the "Or" to
-         refer to. -->
-    <p class="hint" id="ble-hint">With the puck switched on and next to
-       you, tap <b>Connect over Bluetooth</b> and pick the one whose name
-       starts with <b>JumpHeight</b>.</p>
-    <button class="btn btn-primary" id="btn-connect" data-testid="btn-connect" type="button" hidden>Connect over Bluetooth</button>
-    <dl class="facts" id="facts" hidden>
-      <div><dt>Puck</dt><dd id="puck-name" data-testid="puck-name">–</dd></div>
-      <div><dt>Battery</dt><dd id="battery" data-testid="battery">–</dd></div>
-      <div><dt>Jumps saved on it</dt><dd id="stored-jumps">–</dd></div>
-      <!-- "Ride data waiting" (a byte count) and "Puck software" (a version
-           and a build hash) were diagnostics, not news to a rider. The one
-           condition they carried is the unmounted store, and that still
-           reaches him twice: "Jumps saved on it" reads "unknown — not saving"
-           (renderFacts) and the status line says NO REC in his own words
-           (afterConnect). Cut 2026-09-09. -->
-    </dl>
-  </section>
+  <!-- Starts EMPTY and hidden. It used to say "Not connected yet." — a box
+       whose only content is the absence of news, which is how a rider learns
+       to stop reading the status box. The element itself stays in the DOM: it
+       is a CONTRACT.md §3.3 test seam hook. -->
+  <p class="status" id="status" data-testid="status" role="status" aria-live="polite" hidden></p>
 
-  <!-- 2 ------------------------------------------------------------------ -->
-  <section class="step">
-    <h2><span class="num">2</span> Copy the ride off the puck</h2>
-    <p class="hint" id="pull-hint">Leave the puck plugged in while this runs. It
-       can take a while — that is normal.</p>
-    <!-- No number on the cable path: the cable has never been timed on real
-         hardware (docs/STATUS.md, "Still unmeasured: a real port"), and the
-         20–30 minutes below is a BLUETOOTH estimate nobody has timed either.
-         So it travels with the Bluetooth path and nowhere else — sync.js
-         init() shows this line exactly where it shows #ble-hint. -->
-    <p class="hint" id="ble-time-hint" hidden>Over Bluetooth, a puck that has
-       been filling up over several rides can take <b>20–30 minutes</b> (an
-       estimate — nobody has timed a real one yet). Keep the phone next to the
-       puck with the screen on while it runs.</p>
+  <!-- ONE way in per device. Both links stay wired, but only one is ever on
+       screen: where the browser has a serial port (Chrome on his Mac) the
+       cable is the only thing offered, and Bluetooth is hidden entirely.
+       Chrome on a Mac reports BOTH transports, so the old "hide whichever
+       this browser cannot make" rule showed two competing black Connect
+       buttons and two hints — the confusion the owner read on 2026-09-09.
+       Bluetooth appears only where there is no serial port at all: a phone.
+       sync.js init() is where that choice is made. -->
+  <button class="btn btn-primary" id="btn-connect-usb" data-testid="btn-connect-usb" type="button" hidden>Connect</button>
+  <!-- The picker string is MEASURED off the real board (2026-09-09, ioreg:
+       USB Product Name "XIAO nRF52840 Sense", Vendor "Seeed"), not guessed.
+       It never says "JumpHeight" — that is the BLE advertised name and has
+       nothing to do with the USB descriptor; offering it as a thing to look
+       for sent the rider hunting for a string that cannot appear. Under the
+       button, because it describes what happens after the press. -->
+  <p class="hint" id="usb-hint" hidden>Chrome will ask which device — pick
+     <b>XIAO nRF52840 Sense</b>.</p>
+
+  <button class="btn btn-primary" id="btn-connect" data-testid="btn-connect" type="button" hidden>Connect over Bluetooth</button>
+  <p class="hint" id="ble-hint" hidden>Pick the one whose name starts with
+     <b>JumpHeight</b>.</p>
+  <!-- No number on the cable path: the cable has never been timed on real
+       hardware (docs/STATUS.md, "Still unmeasured: a real port"), and the
+       20–30 minutes below is a BLUETOOTH estimate nobody has timed either. So
+       it travels with the Bluetooth path and nowhere else, and it belongs on
+       the first screen — it is a reason to sit down before starting. -->
+  <p class="hint" id="ble-time-hint" hidden>Over Bluetooth, a puck that has
+     been filling up over several rides can take <b>20–30 minutes</b> (an
+     estimate — nobody has timed a real one yet). Keep the phone next to the
+     puck with the screen on while it runs.</p>
+
+  <!-- SCREEN B. One caption line, not a table: "Ride data waiting" (a byte
+       count) and "Puck software" (a version and a build hash) were
+       diagnostics rather than news and were cut 2026-09-09; the four-row
+       facts table that carried the rest was cut 2026-09-11b for the same
+       reason. The three ids below are CONTRACT.md §3.3 hooks and survive as
+       spans — renderFacts() needed no logic change, only a different
+       container. The one CONDITION they carry is the unmounted store, and
+       that still reaches him twice: "unknown — not saving" here, and NO REC
+       in his own words in the status line. -->
+  <p class="facts" id="facts" hidden><span id="puck-name" data-testid="puck-name">–</span><span class="sep"> · </span><span id="battery" data-testid="battery">–</span><span class="sep"> · </span><span id="stored-jumps">–</span></p>
+
+  <div class="progress" id="progress" data-testid="progress" hidden>
+    <div class="bar-row">
+      <div class="bar"><div class="bar-fill" id="bar-fill"></div></div>
+      <span class="bar-pct" id="bar-pct"></span>
+    </div>
+    <!-- The elapsed clock in here is load-bearing, not decoration: a
+         percentage can sit still for a minute on a slow link and look dead,
+         and a ticking clock cannot look dead without being obviously dead.
+         Measured in-session (updateProgress), never estimated. -->
+    <p class="progress-text" id="progress-text">Starting…</p>
+    <!-- Rewritten per transport by doPull(): over the cable there is no phone
+         in the loop at all, and "keep the phone next to the puck" sent him
+         looking for a link that does not exist. -->
+    <p class="hint" id="pull-hint">Leave the puck plugged in. You don’t have to
+       do anything — this page saves the ride to your Downloads by itself when
+       it’s done.</p>
     <!-- Shown only when the browser refused the Screen Wake Lock: on those
          browsers the screen sleeps, the link goes quiet and the pull dies on
          its 30 s timer, so "leave the phone alone" would be advice the page
@@ -102,62 +126,77 @@
     <p class="warn" id="wake-hint" hidden>This browser won’t keep your screen
        awake — turn your screen timeout up, or tap the screen every so often
        while it copies.</p>
-    <button class="btn btn-primary" id="btn-pull" data-testid="btn-pull" type="button" disabled>Copy the ride</button>
-    <div class="progress" id="progress" data-testid="progress" hidden>
-      <div class="bar"><div class="bar-fill" id="bar-fill"></div></div>
-      <p class="progress-text" id="progress-text">Starting…</p>
-      <!-- The two-central BLE problem (docs/watch.md), so Bluetooth only: a
-           watch cannot slow a cable. updateProgress() already gates this on
-           !isUsb(), which is the only place it is ever unhidden. -->
-      <p class="warn" id="slow-hint" hidden>This is slow — is your watch in an
-         activity right now? End it and try again.</p>
-    </div>
-  </section>
+    <!-- The two-central BLE problem (docs/watch.md), so Bluetooth only: a
+         watch cannot slow a cable. updateProgress() already gates this on
+         !isUsb(), which is the only place it is ever unhidden. -->
+    <p class="warn" id="slow-hint" hidden>This is slow — is your watch in an
+       activity right now? End it and try again.</p>
+  </div>
 
-  <!-- 3 ------------------------------------------------------------------ -->
-  <section class="step">
-    <h2><span class="num">3</span> Send it to Josh</h2>
-    <p class="hint">Anything worth mentioning? Optional — it goes with the
-       ride.</p>
-    <textarea id="note" data-testid="note" rows="3" placeholder="e.g. big one around the middle, board felt loose after"></textarea>
+  <!-- THE NOTE LIVES HERE, on the screen where he is doing nothing for
+       minutes, and it stays editable afterwards. It is never between him and
+       finishing: buildBundle() reads this box live through notesText(), so
+       whatever is in it at the moment the copy ends is what ships. -->
+  <section class="notes" id="note-block" hidden>
+    <p class="hint" id="note-label">Anything worth mentioning?
+       <span class="muted">Optional — you’ve got a few minutes.</span></p>
+    <textarea id="note" data-testid="note" rows="3" placeholder="e.g. 15-20 knots SW, gusting 26, attempted pump foil runs"></textarea>
 
     <p class="chips-label" id="sea-label">Sea</p>
     <div class="chips" id="chips-sea" role="group" aria-labelledby="sea-label"></div>
     <p class="chips-label" id="wind-label">Wind</p>
     <div class="chips" id="chips-wind" role="group" aria-labelledby="wind-label"></div>
-
-    <button class="btn btn-primary" id="btn-send" data-testid="btn-send" type="button" disabled>Send</button>
-    <p class="hint" id="send-hint" hidden>Pick Messages, Mail, WhatsApp —
-       whatever you'd normally use to send Josh a file.</p>
-    <!-- The page's last word, and the whole of step 4 for this loan. sync.js
-         (init) shows exactly one of this line and the section below it. -->
-    <p class="hint" id="finish-hint"><b>You’re finished. Josh empties the
-       puck.</b></p>
   </section>
 
-  <!-- 4 ------------------------------------------------------------------ -->
-  <!-- OFF for this loan, and hidden in the markup itself: sync.js unhides
-       this whole section only when the URL carries ?allowclear=1 (ALLOW_CLEAR),
-       which nobody but Josh ever types. The verified-AND-delivered gate
-       underneath it is unchanged and still applies on top. The rider is asked
-       never to empty the puck — Josh does that on the bench, where a short
-       download can still be re-pulled off a puck that still holds the ride. -->
+  <!-- The receipt, and it must come BEFORE the erase: the Empty button's
+       own sentence tells him to look for the saved file, so the line that
+       names it cannot be underneath the button. On a failure screen this is
+       where the reasons land, above the Try again button for the same
+       reason — say what happened, then offer the one thing to do. -->
+  <div class="result" id="result" data-testid="result"></div>
+
+  <!-- The retry. This is the same #btn-pull the page has always had, with the
+       same gate on it (setEnabled) — it is simply only ON SCREEN where trying
+       again is the thing to do: a copy that stopped part-way, or one that
+       arrived and did not check out. Its label is "Try again" because by then
+       "Copy the ride" would be describing something the page already did. -->
+  <button class="btn btn-primary" id="btn-pull" data-testid="btn-pull" type="button" disabled hidden>Try again</button>
+
+  <!-- Save/Send. On a Mac this never appears: the page saves the ride by
+       itself. It exists for the three cases where a press is genuinely
+       needed — a phone (navigator.share() requires transient activation), a
+       note typed AFTER the save already fired, and a re-save once the puck
+       has been emptied and this machine holds the only copy. sync.js
+       setVisible() writes the label for the case. -->
+  <button class="btn btn-primary" id="btn-send" data-testid="btn-send" type="button" disabled hidden>Send</button>
+  <p class="hint" id="send-hint" hidden>If you end up with two files in your
+     Downloads, send the newer one.</p>
+
+  <!-- The destructive press, and the only other one on this page. The gate
+       underneath it is unchanged (verified AND delivered, CONTRACT.md §3 step
+       4; ALLOW_CLEAR lifts delivered for Josh) — this section is simply not
+       in the markup's flow until that gate opens, so there is no heading to
+       read and no greyed button to wonder about.
+
+       #clear-hint's sentence NAMES THE SAVED FILE, written by setVisible().
+       That is deliberate: downloadBlob() returns true unconditionally, so
+       `delivered` means "handed to the browser's downloader", not "a file
+       exists". Making him look for the filename before he erases anything
+       puts a human confirmation at the one point where being wrong is
+       expensive. -->
   <section class="step" id="step-clear" hidden>
-    <h2><span class="num">4</span> Empty the puck</h2>
-    <p class="hint" id="clear-hint">Once the ride has been sent, empty the puck so it starts your next ride with a clean slate. <b>This is the step that protects the next session</b> — a full puck wipes its own recording the next time it is picked up. The button switches on by itself once the ride has been checked and sent.</p>
+    <p class="hint" id="clear-hint">One last thing — this is the bit that
+       protects your next ride.</p>
     <button class="btn btn-danger" id="btn-clear" data-testid="btn-clear" type="button" hidden>Empty the puck</button>
   </section>
 
-  <div class="result" id="result" data-testid="result"></div>
-
   <footer>
-    <!-- "Don't empty the puck" is said ONCE, in #finish-hint. It used to be
-         here as well ("it keeps a ride until it is emptied…") and in step 4;
-         three sayings of one instruction is how a page stops being read. -->
-    <p class="muted small">Nothing here can lose the ride — it stays on the
-       puck either way. But the puck only holds about five hours of riding, and
-       once it is full the next ride wipes the old detail (your jump counts
-       survive). So copy each ride off before you go out again.</p>
+    <!-- The reassurance that used to sit here — "Nothing here can lose the
+         ride — it stays on the puck either way" — was cut 2026-09-11: it is
+         contradicted by a measurement in this repo (sync.js:107-116; the
+         firmware's own auto-clear wiped 1 h 54 m of trace the moment the puck
+         was picked up to be synced). page_version stays, because it travels
+         into manifest.json and is how Josh knows which build made a bundle. -->
     <p class="muted small" id="page-version"></p>
   </footer>
 
