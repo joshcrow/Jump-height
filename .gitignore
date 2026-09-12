@@ -27,8 +27,12 @@ data/logs/
 data/diagnostics/
 data/wizard_state.json
 
-# Flasher binaries staged by `./tools/jump web` (built locally or by CI)
-web/firmware/
+# web/firmware/ WAS ignored here — a Phase 3 rule for binaries that `./tools/jump
+# web` or CI would stage (archive/web-app). Nothing stages them any more, and on
+# 2026-09-11 that stale rule nearly shipped an "Update the puck" button pointing
+# at a 404: the .uf2 the page offers must be the exact bytes flashed and verified
+# on the bench (its sha256 is in latest.json), which is a release artifact, not a
+# build product. Tracked on purpose.
 
 # OS
 .DS_Store

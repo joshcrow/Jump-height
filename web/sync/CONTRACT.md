@@ -734,10 +734,88 @@ reading; `_save_press()` beside it is how a driver gets a DELIVERED ride.
 changes both the advice the page gives and what `manifest.json` records
 (`web/sync/sync.js:76-80`).
 
+`state()` gained **`update_offer`**, **`update_step`**, **`update_src_after`**,
+**`fw_src`** and **`fw_file`** on 2026-09-11d (§3.5). `update_offer` is the
+gate itself — `null` / `'current'` / `'stale'` — so a driver can tell "not
+offered because the ride is still on the puck" from "not offered because the
+puck is already on this build" without inferring either from pixels.
+
+`window.__mock` gained **`drop()`** on 2026-09-11d, which plays the link going
+away. It is not a convenience: the update's only proof that the puck really
+rebooted into its bootloader is the CDC port disappearing (§3.5), and a seam
+that could not play that drop could not tell a puck that restarted from one
+that answered `OK uf2` and sat there. `MockTransport.onClose` was ignored until
+this; it is honoured now.
+
 **`data-testid` hooks are contract** (`web/sync/index.html:21-23`):
 `btn-connect`, `btn-connect-usb`, `btn-pull`, `btn-send`, `btn-clear`,
-`status`, `progress`, `puck-name`, `battery`, `result`, `note`. Rename one and
-`tools/tests/test_web_sync.py` fails loudly.
+`btn-update`, `status`, `progress`, `puck-name`, `battery`, `result`,
+`update-result`, `note`. Rename one and `tools/tests/test_web_sync.py` fails
+loudly.
+
+### §3.5 The puck's own software — added 2026-09-11d
+
+A fifth thing the page can do, deliberately **off the end** of the four phases
+above: offer to flash the puck. It is maintenance, not the page's job, and
+every rule here exists to keep it from ever costing a ride.
+
+**Reachability — the safety gate.** The section is not in the page's flow at
+all unless `updateOffer()` (`web/sync/sync.js`) says so, and it says so only
+when all four hold:
+
+1. **The puck holds nothing unsaved** (`puckHoldsNothingUnsaved()`). Either
+   `S.cleared` — which `doClear()` sets only after the puck itself reported 0
+   jumps and 0 bytes back, so it is a measurement — or a puck that read a real
+   `stored_jumps=0 trace_bytes=0` off the connect-time `stats`. `fs=down`
+   disqualifies both: those zeros are readings that did not happen
+   (`firmware/src/main.cpp`, `stats`). **Whether a UF2 write survives the trace
+   region has never been measured on this hardware**, and the page must not be
+   where that gets found out.
+2. **The cable.** `isUsb()`. Nordic legacy DFU is on the Web Bluetooth
+   blocklist, so Chrome has no browser DFU path over Bluetooth at all, and the
+   flash is a file dragged onto a USB drive regardless.
+3. **A manifest.** `../firmware/latest.json` fetched at load, shape-checked
+   (`src` hex, `file` a bare `*.uf2`). Every failure — missing, 404, not JSON,
+   wrong shape — leaves `FW` null and the answer is silence. A broken manifest
+   must cost the rider nothing.
+4. **A difference.** INFO's `src=` (`classify()`, `S.infoKV`) against the
+   manifest's. Equal means one line saying so and no button.
+
+**The flow is one press, one drag, one answer.** `doUpdate()` spends his click
+on `downloadHref()` **synchronously, first** — the same `<a download>` proven
+on his Mac; no new Web API, and nothing on a promise chain that Chrome could
+decline unseen (same reasoning as the Save press, §3.2). Then it sends `uf2`.
+
+**`OK uf2` is NOT the confirmation.** `firmware/src/main.cpp:1306-1317` prints
+its chatter line, prints `OK uf2`, waits 250 ms and only then calls
+`jh_link::reboot_to_uf2()` — which on a build with no UF2 bootloader fails and
+prints `ERR uf2_unsupported` after the OK, where no capture can see it. So the
+reboot is measured as **the CDC port going away** (`onLinkLost()`,
+`S.updateLinkDropped`), which `onLinkLost()` therefore records rather than
+reporting as a lost cable. A puck that answers and stays put is reported as
+`norestart`, with its own last `ERR` line quoted — never as a drive to go
+looking for.
+
+**The result is read back off the puck.** `navigator.serial.getPorts()` returns
+already-granted ports with no picker, so `confirmUpdate()` re-opens the puck by
+itself and asks `info` what `src=` it is running now. That probe deliberately
+does **not** route through `onLine()`/`classify()`: those write `S.infoKV`,
+which `buildManifest()` ships as the bundle's `src`, and a re-saved bundle must
+not claim the ride came off firmware flashed afterwards. Outcomes: `done`,
+`mismatch`, or — with no `getPorts`, or nothing back inside five minutes —
+`unchecked`, which states plainly that it could not check.
+
+**Every failure path names the recovery**, from one constant
+(`PUCK_RECOVERY`): *"press the small button on the puck twice and it comes
+straight back."* It is also on the waiting screen, before anything has gone
+wrong — the rider who most needs it is the one whose puck never produced a
+drive at all.
+
+Pinned by eleven tests in `tools/tests/test_web_sync.py` (the safety gate, the
+Bluetooth refusal, the already-current puck, the offer's wording, the press,
+the self-check, a mismatch, two shapes of "never restarted", the unchecked
+path, and a 404 manifest). Each was checked to go red against the change
+reverted.
 
 ### §3.4 Rider-facing language
 

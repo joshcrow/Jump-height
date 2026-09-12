@@ -1,0 +1,10 @@
+{
+  "src": "54c6826d",
+  "file": "jumpheight-54c6826d.uf2",
+  "bytes": 312832,
+  "blocks": 611,
+  "sha256": "7457a1325fe8de21d2575745fd5fe79fa64d1d94eb904a482bed597de4905517",
+  "family": "0xADA52840",
+  "built_utc": "2026-09-11",
+  "note": "Flashed and verified on JumpHeight-8673 before publishing."
+}

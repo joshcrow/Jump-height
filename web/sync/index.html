@@ -45,9 +45,9 @@
   innerHTML, so a hostile or malformed device line can't become markup.
 
   data-testid hooks are contract (CONTRACT.md §3, test seam): btn-connect,
-  btn-connect-usb, btn-pull, btn-send, btn-clear, status, progress, puck-name,
-  battery, result, note. Rename one and tools/tests/test_web_sync.py fails
-  loudly.
+  btn-connect-usb, btn-pull, btn-send, btn-clear, btn-update, status, progress,
+  puck-name, battery, result, update-result, note. Rename one and
+  tools/tests/test_web_sync.py fails loudly.
 -->
 <link rel="stylesheet" href="sync.css">
 </head>
@@ -198,6 +198,42 @@
     <p class="hint" id="clear-hint">One last thing — this is the bit that
        protects your next ride.</p>
     <button class="btn btn-danger" id="btn-clear" data-testid="btn-clear" type="button" hidden>Empty the puck</button>
+  </section>
+
+  <!-- THE PUCK'S OWN SOFTWARE (2026-09-11d), and the three rules it obeys.
+       Everything here is off the end of the ride flow on purpose: this is
+       maintenance, not the page's job.
+
+       1. IT IS NEVER REACHABLE WHILE A RIDE IS AT RISK. A UF2 write replaces
+          the app; whether the trace region survives one has never been
+          measured, and the page must not find out at the rider's expense. So
+          the section is not in the flow at all until the puck holds nothing
+          unsaved — the ride sent AND the puck emptied (S.cleared), or a puck
+          that was already empty when he connected (sync.js
+          puckHoldsNothingUnsaved). An unsent ride on the puck hides the whole
+          thing: no heading, no button, nothing to wonder about.
+       2. IT IS NEVER OFFERED WHEN IT IS NOT NEEDED. The puck's build comes
+          off INFO's src= (sync.js classify -> S.infoKV) and the shipped one
+          off ../firmware/latest.json. Equal means #update-note says so and
+          there is no button.
+       3. CABLE ONLY. Chrome has no browser DFU over Bluetooth (Nordic legacy
+          DFU is on the Web Bluetooth blocklist), and the flash IS a file
+          dragged onto a USB drive — there is nothing for a phone to do here.
+
+       THE SECOND STATED EXCEPTION to the one-button rule (the first is a copy
+       that arrived and did not check out). On the emptied-puck screen "Save
+       the ride again" may still be standing, and "Update the puck" joins it.
+       They are never the same press and never about the same thing — one is
+       the RIDE, one is the PUCK — and the alternative was hiding a re-save
+       that is by then the rider's only remaining copy. WHILE a flash is
+       actually in flight every other button leaves the screen (sync.js
+       setVisible, `flashing`): between the press and the outcome there is
+       exactly one thing to do and it is a drag. They come back the moment the
+       update has an answer, for the same reason they were there before it. -->
+  <section class="step" id="step-update" hidden>
+    <p class="hint" id="update-note" hidden></p>
+    <button class="btn btn-primary" id="btn-update" data-testid="btn-update" type="button" hidden>Update the puck</button>
+    <div class="result" id="update-result" data-testid="update-result"></div>
   </section>
 
   <footer>

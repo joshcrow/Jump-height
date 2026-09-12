@@ -130,6 +130,57 @@ INFO_LINES = [
     "OK info",
 ]
 
+def info_lines(src: str) -> list[str]:
+    """INFO_LINES with a different build hash in `src=`.
+
+    A substitution on the module's own fixture, not a second copy of it: an
+    INFO line that grows a field must reach both the ordinary tests and the
+    update ones. The assert is the point — a regex that matched nothing would
+    hand back today's src= and every "the builds differ" test below would pass
+    while testing the opposite (CLAUDE.md rule 3).
+    """
+    out = [re.sub(r"\bsrc=\S+", f"src={src}", l) if l.startswith("INFO ") else l
+           for l in INFO_LINES]
+    assert any(f"src={src}" in l for l in out), \
+        f"the src= substitution matched nothing in {INFO_LINES[0]!r}"
+    return out
+
+
+# The shipped firmware, READ FROM THE FILE THE PAGE FETCHES — never restated
+# here. F-31 (commit 5941a37) was exactly this shape: a suite that does not
+# read its own constants pins nothing once the source moves. The page GETs
+# ../firmware/latest.json from /sync/, which is this file, and drags the .uf2
+# beside it.
+FW_MANIFEST = json.loads((WEB_DIR / "firmware" / "latest.json").read_text())
+FW_SRC = FW_MANIFEST["src"]
+FW_FILE = FW_MANIFEST["file"]
+assert (WEB_DIR / "firmware" / FW_FILE).is_file(), (
+    f"web/firmware/{FW_FILE} is not on disk — latest.json names a file the "
+    f"page would offer and the browser could not fetch")
+# The build today's OG actually runs (INFO_LINES, src=5c80a436). Asserted
+# different, because every "an update is offered" test below depends on it and
+# a day when they matched would turn those tests green for the wrong reason.
+OG_SRC = "5c80a436"
+assert f"src={OG_SRC}" in INFO_LINES[0], "INFO_LINES no longer carries src=5c80a436"
+assert OG_SRC != FW_SRC, (
+    "latest.json now ships the build the fixture puck already runs — the "
+    "update tests would be asserting on a puck that needs no update")
+
+# What the real puck answers `uf2` with: a chatter line, then OK — and only
+# 250 ms LATER does it try to reboot (firmware/src/main.cpp:1306-1317). So the
+# reply is not the confirmation; the CDC port going away is, and the tests play
+# that separately with window.__mock.drop().
+UF2_REPLY = [
+    "# rebooting to UF2 drive — copy update-*.uf2 there; reset to abort",
+    "OK uf2",
+]
+# A build that predates the command at all. Same shape as OLD_FW_TRACERAW:
+# help first, then the ERR terminator (main.cpp:1398-1402).
+UF2_UNKNOWN = [
+    "# commands: help info stats jumps trace dump clear selftest set cal off",
+    "ERR unknown_command uf2",
+]
+
 SELFTEST_LINES = [
     "SELFTEST BEGIN",
     "SELFTEST i2c PASS detail=0x68",
@@ -522,8 +573,16 @@ class FakePuck:
     def __init__(self, *, traceraw="ok", stored_jumps=3, jumps_rows=None,
                  trace_bytes=51234, stats_after_clear=(0, 0), raw=None,
                  jumps_warning=False, fs_down=False, csv_rows=None,
-                 trace_bytes_growth=0, stats_silent=False):
+                 trace_bytes_growth=0, stats_silent=False, src=None,
+                 uf2="ok"):
         self.traceraw = traceraw
+        # Which build this puck says it is running (INFO src=). None keeps the
+        # module fixture's own — today's OG, src=5c80a436.
+        self.src = src
+        # How it answers `uf2`: 'ok' as the real firmware does
+        # (main.cpp:1306-1317), or 'unknown' for a build that predates the
+        # command. Either way the port only goes away when a test says so.
+        self.uf2 = uf2
         self.stored_jumps = stored_jumps
         self.jumps_rows = JUMPS_ROWS if jumps_rows is None else jumps_rows
         self.trace_bytes = trace_bytes
@@ -551,7 +610,9 @@ class FakePuck:
 
     def reply(self, cmd: str):
         if cmd == "info":
-            return list(INFO_LINES)
+            return info_lines(self.src) if self.src else list(INFO_LINES)
+        if cmd == "uf2":
+            return list(UF2_UNKNOWN) if self.uf2 == "unknown" else list(UF2_REPLY)
         if cmd == "stats":
             self.stats_calls += 1
             if self.stats_silent:
@@ -655,6 +716,90 @@ FAKE_SERIAL_JS = """
     if (waiting) { const w = waiting; waiting = null; w({ value: undefined, done: true }); }
   } };
 })();
+"""
+
+
+# A navigator.serial whose getPorts() hands back an ALREADY-GRANTED port, which
+# is the API the update's self-check rests on: it returns previously-granted
+# ports with no picker, so the page can re-open the puck after the flash
+# without a press.
+#
+# MEASURED on this bench before any of it was written (2026-09-11, headless
+# Chromium 151.0.7922.34): navigator.serial and navigator.serial.getPorts both
+# exist on a secure context (http://127.0.0.1/sync/) and getPorts() resolves to
+# an EMPTY list — there is no real board here to grant. They are absent on
+# about:blank. So the capability is real in this browser and the list is the
+# only thing that has to be scripted.
+#
+# Unlike FAKE_SERIAL_JS this mints a FRESH port per call: the update opens a
+# port, reads `info`, closes it, and tries again on the next tick, and a single
+# shared port object that has already ended cannot be reopened.
+#
+# window.__probeOpens counts how many ports the page actually opened — proof
+# that the reconnect ran rather than a state reached some other way.
+FAKE_GRANTED_PORT_JS = """
+(() => {
+  const enc = new TextEncoder();
+  const dec = new TextDecoder();
+  window.__probeOpens = 0;
+  function makePort() {
+    const pending = []; let waiting = null; let ended = false; let inbuf = '';
+    const finish = () => {
+      ended = true;
+      if (waiting) { const w = waiting; waiting = null; w({ value: undefined, done: true }); }
+    };
+    const deliver = (text) => {
+      const chunk = enc.encode(text);
+      if (waiting) { const w = waiting; waiting = null; w({ value: chunk, done: false }); }
+      else pending.push(chunk);
+    };
+    return {
+      open: async () => { window.__probeOpens++; },
+      close: async () => finish(),
+      writable: { getWriter: () => ({
+        write: async (bytes) => {
+          inbuf += dec.decode(bytes);
+          let nl;
+          while ((nl = inbuf.indexOf('\\n')) >= 0) {
+            const cmd = inbuf.slice(0, nl).trim();
+            inbuf = inbuf.slice(nl + 1);
+            const reply = (window.__replies || {})[cmd];
+            if (reply) deliver(reply.join('\\n') + '\\n');
+          }
+        },
+        close: async () => {}, releaseLock: () => {},
+      }) },
+      readable: { getReader: () => ({
+        read: () => new Promise((resolve) => {
+          if (pending.length) { resolve({ value: pending.shift(), done: false }); return; }
+          if (ended) { resolve({ value: undefined, done: true }); return; }
+          waiting = resolve;
+        }),
+        cancel: async () => finish(), releaseLock: () => {},
+      }) },
+    };
+  }
+  Object.defineProperty(Navigator.prototype, 'serial', {
+    configurable: true,
+    get: () => ({
+      requestPort: async () => makePort(),
+      // window.__grantedPorts = 0 plays a browser that was never granted one,
+      // which is what a puck that never came back looks like from here.
+      getPorts: async () => (window.__grantedPorts === 0 ? [] : [makePort()]),
+    }),
+  });
+})();
+"""
+
+# Web Serial present, getPorts absent. The page must not assume the API it
+# needs for the self-check exists just because navigator.serial does — and this
+# is the only way to reach that branch, since this browser HAS getPorts
+# (measured above).
+FAKE_SERIAL_NO_GETPORTS_JS = """
+Object.defineProperty(Navigator.prototype, 'serial', {
+  configurable: true,
+  get: () => ({ requestPort: async () => { throw new Error('no picker here'); } }),
+});
 """
 
 
@@ -764,8 +909,8 @@ class _WebSyncCase(unittest.TestCase):
             "Object.defineProperty(Navigator.prototype, 'userAgent', "
             "{ get: () => " + repr(ua).replace("'", '"') + ", configurable: true });")
 
-    def _open(self, query=""):
-        self.page.goto(f"http://127.0.0.1:{self._port}/sync/{query}#mock",
+    def _open(self, query="", seam="#mock"):
+        self.page.goto(f"http://127.0.0.1:{self._port}/sync/{query}{seam}",
                        wait_until="domcontentloaded")
         self.page.wait_for_function(
             "() => window.__mock && typeof window.__mock.feed === 'function'"
@@ -857,6 +1002,24 @@ class _WebSyncCase(unittest.TestCase):
         self._drive(puck, self._settled,
                     "the page to connect and copy the ride")
 
+    def _to_empty_puck(self, puck, seam="#mock-usb"):
+        """The whole rider flow, to its end: connect, copy, save, empty.
+
+        An emptied puck is the ONLY state the firmware update is reachable
+        from, and it is deliberately expensive to reach in a test for the same
+        reason it is deliberately hard to reach on the page — a flash must
+        never be one stray tap away from a ride that is still on the puck.
+
+        `seam` because the update is CABLE-shaped ('#mock-usb'); driving the
+        same flow through '#mock' is how the Bluetooth refusal is measured."""
+        self._open(seam=seam)
+        self._drive(puck, self._settled, "the chain to connect and copy")
+        self._save_press()
+        self.page.click("[data-testid=btn-clear]")
+        self._drive(puck, lambda: self._state()["phase"] in ("cleared", "failed"),
+                    "the puck to confirm it is empty")
+        self.assertTrue(self._state()["cleared"], self._state())
+
     def _wait_for(self, cond, what, timeout=10.0):
         """Poll a Python-side predicate. Used where page.wait_for_function
         cannot be: its default polling is requestAnimationFrame, which the
@@ -934,13 +1097,24 @@ class _WebSyncCase(unittest.TestCase):
         choose; a disabled button in it is the page asking for something he
         cannot do.
 
-        ONE screen is a stated exception, and only one: a copy that ARRIVED
-        and did not check out offers both "Try again" and "Send", because both
-        are worth doing — the failed bundle is the only thing that can tell
-        Josh why, and the ride is still on the puck to re-copy. Pinned by
-        test_short_transfer_is_not_verified_and_offers_no_clear."""
+        TWO screens are stated exceptions, and only two.
+
+        (1) A copy that ARRIVED and did not check out offers both "Try again"
+        and "Send", because both are worth doing — the failed bundle is the
+        only thing that can tell Josh why, and the ride is still on the puck to
+        re-copy. Pinned by test_short_transfer_is_not_verified_and_offers_no_clear.
+
+        (2) An EMPTIED puck whose software is out of date offers both "Save the
+        ride again" and "Update the puck" (2026-09-11d). They are about
+        different things — one the ride, one the puck — and the alternative was
+        hiding a re-save that is by then the rider's only remaining copy.
+        Pinned by test_the_update_is_offered_once_the_puck_is_empty.
+
+        btn-update is in this list on purpose rather than left out of it: a
+        button excluded from the count is a button whose effect on the rule
+        nobody measures."""
         return [b for b in ("btn-connect-usb", "btn-connect", "btn-pull",
-                            "btn-send", "btn-clear")
+                            "btn-send", "btn-clear", "btn-update")
                 if self.page.locator(f"[data-testid={b}]").is_visible()]
 
     def _bundle(self):
@@ -2035,6 +2209,40 @@ class TestWebSync(_WebSyncCase):
                         "the link must point at the bundle already in memory")
         self.assertEqual(link.get_attribute("download"), st["bundle"])
 
+    def test_the_update_is_never_offered_over_bluetooth(self):
+        """CABLE ONLY, and this is the Bluetooth half — the class this test
+        lives in is the Bluetooth-shaped one for exactly that reason.
+
+        Chrome has no browser DFU path over Bluetooth at all: Nordic legacy DFU
+        is on the Web Bluetooth blocklist. And the flash itself is a file
+        dragged onto a USB drive, which a phone cannot do. Offering it here
+        would be an instruction the rider cannot follow, on the transport where
+        he is least able to ask anyone.
+
+        ONE VARIABLE. Every other condition the offer needs is satisfied and
+        asserted to be satisfied — the manifest loaded, the builds differ, the
+        puck is empty — so the only thing left to explain the refusal is the
+        transport. Without those three assertions this test would pass just as
+        well against a page whose manifest never loaded."""
+        puck = FakePuck()
+        self._to_empty_puck(puck, seam="#mock")
+
+        st = self._state()
+        self.assertEqual(st["fw_src"], FW_SRC,
+                         "the manifest never loaded, so the refusal below has "
+                         "nothing to do with the transport")
+        self.assertNotEqual(st["fw_src"], OG_SRC,
+                            "the builds match, so there was nothing to offer "
+                            "on any transport")
+        self.assertTrue(st["cleared"], "the puck is not empty, so the safety "
+                                       "gate would have refused this anyway")
+        self.assertIsNone(st["update_offer"],
+                          "the update was offered over Bluetooth, where there "
+                          "is no DFU path and no drive to drag onto")
+        self.assertTrue(self.page.locator("#step-update").is_hidden())
+        self.assertEqual(self._one_button(), ["btn-send"],
+                         "the Bluetooth end-of-flow offers the re-save alone")
+
     def test_resend_after_clearing_says_the_puck_is_empty(self):
         """`cleared` is how ingest knows whether the puck still holds a copy.
         After step 4 the phone holds the ONLY copy, so a re-send has to rebuild
@@ -2421,6 +2629,474 @@ class TestWebSyncCable(_WebSyncCase):
         self.page.wait_for_function(
             "() => window.__mock && window.__sync && typeof window.__sync.state === 'function'",
             timeout=15000)
+
+    # ------------------------------------------- the puck's own software --
+    #
+    # The update is CABLE-SHAPED by design (updateOffer() refuses anything but
+    # `usb`): Nordic legacy DFU is on the Web Bluetooth blocklist, so Chrome
+    # has no browser DFU over Bluetooth at all, and the flash itself is a file
+    # dragged onto a USB drive. So these live here, driven through '#mock-usb'.
+
+    def _connect_usb(self, puck):
+        """Connect and let the chain run itself out, cable-shaped."""
+        self._open(seam="#mock-usb")
+        self._drive(puck, self._settled, "the cable-shaped chain to run out")
+
+    def _update_panel(self):
+        return self.page.locator("[data-testid=update-result]").inner_text()
+
+    def _press_update_and_reboot(self, puck):
+        """Press Update, answer `uf2` the way the firmware does, then play the
+        port going away — which IS the reboot (proven on silicon 2026-09-11,
+        and the only confirmation the page ever gets). Returns the Download."""
+        with self.page.expect_download() as dl:
+            self.page.click("[data-testid=btn-update]")
+            self._wait_for(lambda: "uf2" in self._sent(),
+                           "the page to send `uf2` to the puck")
+        self.assertEqual(self._sent()[self._answered], "uf2", self._sent())
+        self._answered += 1
+        self._feed(puck.reply("uf2"))
+        self.page.evaluate("() => window.__mock.drop()")
+        return dl.value
+
+    def test_the_update_is_not_offered_while_the_puck_holds_the_ride(self):
+        """CONSTRAINT ONE, and the reason the whole section is off the end of
+        the flow: a UF2 write replaces the app, and whether the trace region
+        survives one has never been measured on this hardware. The page must
+        not be where that gets found out.
+
+        So the offer is gated on the puck holding nothing unsaved, and this
+        walks the two states where it does hold something — the ride copied but
+        still on the puck, and the ride SAVED but still on the puck — asserting
+        the section is not merely disabled but absent.
+
+        It then empties the puck and asserts the offer appears. That third
+        assertion is what makes the first two mean anything: without it this
+        test would pass just as well against a page where the update never
+        appears at all (CLAUDE.md rule 3)."""
+        puck = FakePuck(traceraw="unknown", trace_bytes=CSV_BYTES)
+        self._connect_usb(puck)
+
+        # The manifest really did load, and it really does disagree with this
+        # puck. Stated, because every assertion below is meaningless otherwise.
+        st = self._state()
+        self.assertEqual(st["fw_src"], FW_SRC,
+                         "the page never loaded ../firmware/latest.json, so "
+                         "nothing below is testing the gate")
+        self.assertEqual(st["fw_file"], FW_FILE)
+        self.assertTrue(st["verified"], st["reasons"])
+
+        # (1) Copied, verified, zipped — and still entirely on the puck.
+        self.assertIsNone(st["update_offer"],
+                          "the update was offered over a ride that is still "
+                          "only on the puck")
+        self.assertTrue(self.page.locator("#step-update").is_hidden(),
+                        "the update section must not be in the page's flow yet")
+        self.assertTrue(self.page.locator("[data-testid=btn-update]").is_hidden())
+        self.assertEqual(self._one_button(), ["btn-send"])
+
+        # (2) Saved to his Downloads — and STILL on the puck. `delivered` is a
+        # hand-off, not an erase: the ride is in two places and one of them is
+        # about to be rewritten.
+        self._save_press()
+        self.assertTrue(self._state()["delivered"])
+        self.assertIsNone(self._state()["update_offer"],
+                          "a saved ride is not an empty puck — the trace "
+                          "region is still holding it")
+        self.assertTrue(self.page.locator("#step-update").is_hidden())
+        self.assertEqual(self._one_button(), ["btn-clear"])
+
+        # (3) Emptied. NOW there is nothing on the puck to lose.
+        self.page.click("[data-testid=btn-clear]")
+        self._drive(puck, lambda: self._state()["phase"] in ("cleared", "failed"),
+                    "the puck to confirm it is empty")
+        self.assertEqual(self._state()["update_offer"], "stale")
+        self.assertFalse(self.page.locator("[data-testid=btn-update]").is_hidden(),
+                         "an emptied puck on an old build must be offered the "
+                         "update — without this the two assertions above pass "
+                         "against a page that never offers anything")
+
+    def test_the_update_is_not_offered_when_the_puck_already_has_this_build(self):
+        """CONSTRAINT THREE: only when it is needed. The puck's build comes off
+        INFO's `src=` and the shipped one off latest.json; equal means say so
+        and offer nothing.
+
+        Both halves are asserted. "No button" alone would pass on a page that
+        had simply failed to load the manifest — which is why the sentence is
+        checked too, and why `fw_src` is read off the seam."""
+        puck = FakePuck(traceraw="unknown", trace_bytes=CSV_BYTES, src=FW_SRC)
+        self._to_empty_puck(puck)
+
+        st = self._state()
+        self.assertEqual(st["fw_src"], FW_SRC)
+        self.assertEqual(st["update_offer"], "current",
+                         "a puck on the shipped build must read as current, "
+                         "not as 'no manifest'")
+        self.assertTrue(self.page.locator("[data-testid=btn-update]").is_hidden(),
+                        "there is nothing to update, so there is no button")
+        note = self.page.locator("#update-note").inner_text()
+        self.assertIn("up to date", note, note)
+        self.assertEqual(self._update_panel(), "",
+                         "nothing to do means nothing to read")
+        self.assertNotIn("uf2", self._sent())
+
+    def test_a_puck_that_never_said_what_it_runs_is_not_offered_an_update(self):
+        """NEVER FLASH ON A GUESS.
+
+        `have === FW.src` is false when `have` is the empty string too, so a
+        puck whose INFO carried no `src=` would read as "a different build" and
+        be offered the flash — on a comparison where one side was never read.
+        "The builds differ" is not a reading that was taken (CLAUDE.md rule 3),
+        and this is the one place on the page where acting on a non-reading
+        rewrites the device.
+
+        Everything else the offer needs holds here and is asserted to hold, so
+        the missing `src=` is the only variable."""
+        # Only the INFO line's own src=. The CAL line beside it carries
+        # off_src=/scale_src=/vbat_src= and must survive untouched — stripping
+        # those would be testing a puck nobody has.
+        no_src = [re.sub(r"\s*\bsrc=\S+", "", l) if l.startswith("INFO ") else l
+                  for l in INFO_LINES]
+        assert not any(re.search(r"(?<![a-z_])src=", l) for l in no_src
+                       if l.startswith("INFO ")), no_src
+        assert any("off_src=device" in l for l in no_src), \
+            "the CAL line lost fields it is supposed to keep"
+        puck = FakePuck(traceraw="unknown", trace_bytes=CSV_BYTES)
+        puck.reply = lambda cmd, _o=puck.reply: (
+            list(no_src) if cmd == "info" else _o(cmd))
+
+        self._to_empty_puck(puck)
+        st = self._state()
+        self.assertEqual(st["fw_src"], FW_SRC, "the manifest never loaded")
+        self.assertTrue(st["cleared"])
+        self.assertIsNone(st["update_offer"],
+                          "the page offered to reflash a puck whose build it "
+                          "never read")
+        self.assertTrue(self.page.locator("#step-update").is_hidden())
+        # And the bundle records the same gap rather than papering over it.
+        self.page.click("[data-testid=btn-send]")
+        self._drive(puck, lambda: self.page.evaluate(
+            "() => !!window.__sync.lastBundle()"), "the bundle to be rebuilt")
+        _name, z = self._bundle()
+        self.assertIsNone(json.loads(z.read("manifest.json"))["src"])
+
+    def test_the_update_is_offered_once_the_puck_is_empty(self):
+        """What he actually reads, and the one-button rule's second stated
+        exception.
+
+        The words are the test: the drive is NAMED (XIAO-SENSE), the file is
+        NAMED, and the recovery sentence is on screen before he has pressed
+        anything — because the rider who most needs it is the one whose puck
+        never produced a drive at all."""
+        puck = FakePuck(traceraw="unknown", trace_bytes=CSV_BYTES)
+        self._to_empty_puck(puck)
+
+        self.assertEqual(self._state()["update_offer"], "stale")
+        note = self.page.locator("#update-note").inner_text()
+        self.assertIn("older software", note, note)
+        self.assertIn("cannot break the puck", note, note)
+        self.assertIn("press the small button on the puck twice and it comes "
+                      "straight back", note,
+                      f"the recovery must be offered before he commits: {note!r}")
+        self.assertEqual(
+            self.page.locator("[data-testid=btn-update]").inner_text().strip(),
+            "Update the puck")
+
+        # THE SECOND STATED EXCEPTION. Two buttons, about two different things:
+        # the ride (this machine now holds the only copy, so re-saving stays
+        # reachable) and the puck. Asserted exactly, so a third can never
+        # arrive unnoticed.
+        self.assertEqual(self._one_button(), ["btn-send", "btn-update"],
+                         "the emptied-puck screen offers the re-save and the "
+                         "update, and nothing else")
+        self.assertIn("Save the ride again",
+                      self.page.locator("[data-testid=btn-send]").inner_text())
+
+    def test_pressing_update_saves_the_file_and_restarts_the_puck(self):
+        """THE PRESS: one click, one file in his Downloads, one `uf2` on the
+        wire, and then instructions for the one drag.
+
+        The download is asserted to be the file latest.json names, not merely
+        "a download" — the page builds that href out of the manifest, and a
+        page that offered the wrong file would flash the wrong firmware.
+
+        The self-check is stubbed out here (no granted ports) so this test is
+        about the press alone; test_the_update_confirms_itself_… drives the
+        other half."""
+        self.page.add_init_script("window.__grantedPorts = 0;"
+                                  + FAKE_GRANTED_PORT_JS)
+        puck = FakePuck(traceraw="unknown", trace_bytes=CSV_BYTES)
+        self._to_empty_puck(puck)
+
+        downloads = []
+        self.page.on("download", lambda d: downloads.append(d))
+        dl = self._press_update_and_reboot(puck)
+
+        self.assertEqual(dl.suggested_filename, FW_FILE,
+                         "the page saved a different file than latest.json names")
+        self.assertEqual(len(downloads), 1,
+                         f"one press, one file: "
+                         f"{[d.suggested_filename for d in downloads]}")
+        self.assertIn("uf2", self._sent(), self._sent())
+
+        self._wait_for(lambda: self._state()["update_step"] == "dragging",
+                       "the page to reach the drag instructions")
+        panel = self._update_panel()
+        self.assertIn(FW_FILE, panel, f"the file he must drag is unnamed: {panel!r}")
+        self.assertIn("XIAO-SENSE", panel,
+                      f"the drive he must drag it onto is unnamed: {panel!r}")
+        self.assertIn("may say the copy failed", panel,
+                      "the mid-write unmount is what success looks like, and "
+                      "he must be told before it happens")
+        self.assertIn("press the small button on the puck twice and it comes "
+                      "straight back", panel)
+        # Nothing else on screen: from here there is exactly one thing to do
+        # and it is a drag.
+        self.assertEqual(self._one_button(), [],
+                         "the drag screen must offer no buttons at all")
+        # And the link going away was not reported as a fault.
+        status = self._status()
+        self.assertNotIn("dropped", status, f"the expected reboot was reported "
+                                            f"as a lost cable: {status!r}")
+        self.assertIn("XIAO-SENSE", status)
+
+    def test_the_update_confirms_itself_when_the_puck_comes_back(self):
+        """CONSTRAINT FOUR: confirm the result.
+
+        navigator.serial.getPorts() hands back ports already granted with NO
+        picker, so the page re-opens the puck by itself after the flash and
+        asks `info` what it is running. MEASURED on this bench before this was
+        written: getPorts is a function on a secure context in headless
+        Chromium 151 and resolves to an empty list, so the capability is real
+        here and only the list is scripted (FAKE_GRANTED_PORT_JS).
+
+        __probeOpens is asserted because 'done' must be a READING, not a
+        state the page drifted into."""
+        self.page.add_init_script(
+            "window.__replies = " + json.dumps({"info": info_lines(FW_SRC)}) + ";"
+            + FAKE_GRANTED_PORT_JS)
+        puck = FakePuck(traceraw="unknown", trace_bytes=CSV_BYTES)
+        self._to_empty_puck(puck)
+        self._press_update_and_reboot(puck)
+
+        self._wait_for(lambda: self._state()["update_step"] == "done",
+                       "the page to re-open the puck and confirm the new build",
+                       timeout=20.0)
+        st = self._state()
+        self.assertEqual(st["update_src_after"], FW_SRC)
+        self.assertGreater(self.page.evaluate("() => window.__probeOpens"), 0,
+                           "the page never opened a port — 'done' was not a "
+                           "reading off the puck")
+        status = self._status()
+        self.assertIn("running the new software", status, status)
+        panel = self._update_panel()
+        self.assertIn(FW_SRC, panel,
+                      f"the confirmation must say what it actually read: {panel!r}")
+        self.assertIn("already saved", panel)
+
+        # The ride's own buttons come back once the flash has an answer —
+        # "Save the ride again" in particular, because doClear dropped the
+        # cached zip and this machine holds the only copy.
+        self.assertEqual(self._one_button(), ["btn-send"],
+                         "the re-save must return once the update is over")
+
+        # And the rebuilt bundle must NOT have been contaminated by the probe.
+        # manifest.json's `src` is the build the RIDE came off; the probe read
+        # a board that has been reflashed since, and it deliberately does not
+        # route through onLine()/classify() for exactly this reason. Rebuilt
+        # here rather than read from cache, because a cached zip would pass
+        # this whether or not S.infoKV had been overwritten.
+        self.page.click("[data-testid=btn-send]")
+        self._drive(puck, lambda: self.page.evaluate(
+            "() => !!window.__sync.lastBundle()"), "the bundle to be rebuilt")
+        _name, z = self._bundle()
+        man = json.loads(z.read("manifest.json"))
+        self.assertEqual(man["src"], OG_SRC,
+                         "the post-flash probe leaked into the session and the "
+                         "bundle now claims the ride came off the new build")
+        self.assertTrue(man["cleared"])
+
+    def test_an_update_that_did_not_take_names_the_recovery(self):
+        """The puck came back — and came back on the OLD build. The drag
+        missed, or the copy never landed.
+
+        Nothing is broken and nothing is lost, and the page has to say both,
+        then give him the one move that gets XIAO-SENSE back."""
+        self.page.add_init_script(
+            "window.__replies = " + json.dumps({"info": info_lines(OG_SRC)}) + ";"
+            + FAKE_GRANTED_PORT_JS)
+        puck = FakePuck(traceraw="unknown", trace_bytes=CSV_BYTES)
+        self._to_empty_puck(puck)
+        self._press_update_and_reboot(puck)
+
+        self._wait_for(lambda: self._state()["update_step"] == "mismatch",
+                       "the page to notice the build did not change",
+                       timeout=20.0)
+        self.assertEqual(self._state()["update_src_after"], OG_SRC)
+        panel = self._update_panel()
+        self.assertIn("press the small button on the puck twice and it comes "
+                      "straight back", panel,
+                      f"the failure path must name the recovery: {panel!r}")
+        self.assertIn("XIAO-SENSE", panel)
+        self.assertIn(FW_FILE, panel)
+        self.assertIn("Nothing is broken", panel)
+        self.assertIn("already saved", panel)
+
+    def test_a_puck_that_will_not_restart_says_so_instead_of_guessing(self):
+        """`uf2` predates nothing on the bench puck, but the rider's OG is on
+        src=5c80a436 and may not have the command at all
+        (firmware/src/main.cpp:1306 is current firmware). A page that sent the
+        command, assumed a reboot and then told him to look for XIAO-SENSE
+        would have him hunting for a drive that is never going to mount.
+
+        So the reboot is MEASURED — the CDC port going away — and this plays a
+        puck that refuses: the command errors, the link stays up, and the page
+        says nothing changed."""
+        self.page.add_init_script("window.__grantedPorts = 0;"
+                                  + FAKE_GRANTED_PORT_JS)
+        puck = FakePuck(traceraw="unknown", trace_bytes=CSV_BYTES, uf2="unknown")
+        self._to_empty_puck(puck)
+
+        with self.page.expect_download():
+            self.page.click("[data-testid=btn-update]")
+            self._wait_for(lambda: "uf2" in self._sent(), "the `uf2` command")
+        self._answered += 1
+        self._feed(puck.reply("uf2"))          # help, then ERR unknown_command
+
+        self._wait_for(lambda: self._state()["update_step"] == "norestart",
+                       "the page to report that the puck never restarted")
+        panel = self._update_panel()
+        self.assertIn("ERR unknown_command uf2", panel,
+                      f"the puck's own words are all Josh has here: {panel!r}")
+        self.assertIn("Nothing on the puck has changed", panel)
+        self.assertIn("harmless", panel,
+                      "the file he now has in Downloads must be accounted for")
+        self.assertIn("press the small button on the puck twice and it comes "
+                      "straight back", panel)
+        self.assertNotIn("XIAO-SENSE will appear", panel,
+                         "he must not be sent looking for a drive that is not "
+                         "coming")
+        self.assertTrue(self.page.evaluate("() => window.__sync.state().connected"),
+                        "the link never dropped, which is the whole finding")
+
+    def test_a_puck_that_answers_ok_but_never_reboots_is_not_called_restarted(self):
+        """THE OK-THEN-ERR SHAPE, and the reason `OK uf2` is not the
+        confirmation.
+
+        firmware/src/main.cpp:1306-1317 prints its chatter line, prints
+        `OK uf2`, waits 250 ms and THEN calls jh_link::reboot_to_uf2(). On a
+        build without a UF2 bootloader that call fails and the firmware prints
+        `ERR uf2_unsupported` — AFTER the OK, with no capture left to catch it
+        (the page's capture ended on the OK, sync.js feedCapture).
+
+        So a page that took `OK uf2` as proof would send the rider hunting
+        Finder for a XIAO-SENSE that is never going to mount, on a puck that is
+        working perfectly. The reboot is measured instead — the CDC port going
+        away — and here the port never goes away.
+
+        This is the other arm of
+        test_a_puck_that_will_not_restart_says_so_instead_of_guessing: there
+        the command itself errors, so the page never waits at all; here it
+        succeeds and the wait is the whole test."""
+        self.page.add_init_script("window.__grantedPorts = 0;"
+                                  + FAKE_GRANTED_PORT_JS)
+        puck = FakePuck(traceraw="unknown", trace_bytes=CSV_BYTES)
+        self._to_empty_puck(puck)
+
+        with self.page.expect_download():
+            self.page.click("[data-testid=btn-update]")
+            self._wait_for(lambda: "uf2" in self._sent(), "the `uf2` command")
+        self._answered += 1
+        # Exactly what the firmware emits, in order — and then nothing else
+        # happens: no reboot, so the port stays right where it is.
+        self._feed(UF2_REPLY)
+        self._feed(["ERR uf2_unsupported this build has no UF2 bootloader"])
+
+        # UPDATE_REBOOT_MS is 6 s, so this is a real wait on a real timer.
+        self._wait_for(lambda: self._state()["update_step"] == "norestart",
+                       "the page to notice the puck never went away",
+                       timeout=20.0)
+        self.assertTrue(self.page.evaluate("() => window.__sync.state().connected"),
+                        "the link dropped after all, so this is not the path "
+                        "the test claims to be on")
+        panel = self._update_panel()
+        self.assertIn("ERR uf2_unsupported", panel,
+                      f"the puck said why and the page swallowed it: {panel!r}")
+        self.assertIn("Nothing on the puck has changed", panel)
+        self.assertIn("press the small button on the puck twice and it comes "
+                      "straight back", panel)
+        self.assertNotIn("XIAO-SENSE will appear", panel,
+                         "he must not be sent looking for a drive that is not "
+                         "coming")
+
+    def test_an_update_the_page_cannot_check_still_says_what_to_do(self):
+        """The self-check needs navigator.serial.getPorts(). This browser has
+        it — measured — so the only way to reach the branch where it is missing
+        is to take it away, and the branch matters: the page must not throw,
+        must not claim success, and must hand him something to do.
+
+        Reached immediately rather than after the five-minute watch, which is
+        the point: there is nothing to wait for when the API is not there."""
+        self.page.add_init_script(FAKE_SERIAL_NO_GETPORTS_JS)
+        puck = FakePuck(traceraw="unknown", trace_bytes=CSV_BYTES)
+        self._to_empty_puck(puck)
+        self.assertFalse(
+            self.page.evaluate("() => typeof navigator.serial.getPorts === 'function'"),
+            "getPorts is still here, so this test never reached its branch")
+
+        self._press_update_and_reboot(puck)
+        self._wait_for(lambda: self._state()["update_step"] == "unchecked",
+                       "the page to report that it could not check")
+        status = self._status()
+        self.assertIn("could not check it afterwards", status, status)
+        panel = self._update_panel()
+        self.assertIn("reload this page and press Connect", panel,
+                      f"he must be told how to find out for himself: {panel!r}")
+        self.assertIn("press the small button on the puck twice and it comes "
+                      "straight back", panel)
+        self.assertIn("saved before any of this started", panel)
+        # It must NOT claim the update worked. Checked against the sentences
+        # the 'done' screen actually uses — "up to date" appears here on
+        # purpose, inside the instruction for finding out ("If it then says
+        # the software is up to date, the update worked"), so testing for that
+        # phrase would fail the page for saying the right thing.
+        self.assertIsNone(self._state()["update_src_after"])
+        self.assertNotIn("running the new software", panel)
+        self.assertNotIn("The puck is up to date.", panel)
+
+    def test_a_broken_firmware_manifest_never_blocks_the_ride(self):
+        """The manifest is a nicety on the end of the page's real job. A 404 —
+        a bad deploy, a half-pushed site — must cost the rider nothing: the
+        ride still copies, still verifies, still saves, and the update simply
+        is not offered.
+
+        Driven all the way to an emptied puck, which is precisely where the
+        offer WOULD have appeared, so "not offered" is measured at the one
+        moment it could have gone wrong."""
+        # Registered after setUp's catch-all, so it is the more recent route
+        # and wins for this URL.
+        self.context.route("**/firmware/latest.json",
+                           lambda route: route.fulfill(status=404, body="nope"))
+        puck = FakePuck(traceraw="unknown", trace_bytes=CSV_BYTES)
+        self._to_empty_puck(puck)
+
+        st = self._state()
+        self.assertIsNone(st["fw_src"], "the 404 was not served")
+        self.assertIsNone(st["update_offer"])
+        self.assertTrue(self.page.locator("#step-update").is_hidden(),
+                        "a broken manifest must leave no trace on screen")
+        # And the ride itself came through untouched.
+        self.assertTrue(st["verified"], st["reasons"])
+        self.assertTrue(st["delivered"])
+        self.assertTrue(st["cleared"])
+        # The ride flow's own last offer is intact too: doClear drops the
+        # cached zip, so "Save the ride again" is the only way back to a copy.
+        self.assertEqual(self._one_button(), ["btn-send"])
+        self.page.click("[data-testid=btn-send]")
+        self._drive(puck, lambda: self.page.evaluate(
+            "() => !!window.__sync.lastBundle()"), "the bundle to be rebuilt")
+        _name, z = self._bundle()
+        self.assertTrue(json.loads(z.read("manifest.json"))["verified"])
 
     def test_cable_button_is_offered_where_web_serial_exists(self):
         self._open_plain()

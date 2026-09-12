@@ -39,7 +39,7 @@
 // Baked into the page and copied into every manifest.json, so Josh can tell
 // which build of this page produced a bundle without asking the rider
 // anything (CONTRACT.md §2 `page_version`). Bump it when the page changes.
-const PAGE_VERSION = '2026-09-11c';
+const PAGE_VERSION = '2026-09-11e';
 
 // ------------------------------------------------------------------ protocol
 
@@ -117,6 +117,69 @@ const ALLOW_CLEAR = (() => {
 // verified AND delivered gate still stands, so this can only ever fire on a
 // ride that checked out and actually left the machine.
 const OFFER_CLEAR_TO_RIDER = true;
+
+// ------------------------------------------------- the puck's own software
+//
+// PROVEN ON SILICON 2026-09-11 (bench Puck, JumpHeight-8673) — none of this
+// is inferred:
+//  * the firmware has a `uf2` command (firmware/src/main.cpp:1306). Sending it
+//    drops the CDC port INSTANTLY: that drop IS the reboot, there is no reply
+//    to wait for, and /Volumes/XIAO-SENSE mounts within ~3 s.
+//  * writing a .uf2 onto that drive flashes and reboots the board. The volume
+//    unmounts MID-WRITE, so the Finder copy reports an error while succeeding
+//    — the drive disappearing is what completion looks like.
+//  * a UF2 write replaces the APP, not the bootloader. A bad or interrupted
+//    write leaves a working bootloader and a double-tap of the reset button
+//    always recovers. This cannot brick a puck.
+//  * the drop calibration SURVIVES a reflash (set 0.0333, reflashed, read back
+//    0.0333, off_src=device). Nick's puck keeps its calibration.
+//  * Chrome has no browser DFU path over Bluetooth — Nordic legacy DFU is on
+//    the Web Bluetooth blocklist. USB is the only route, which is why
+//    updateOffer() refuses anything but the cable.
+//
+// What is NOT established, and is the reason for every gate below: whether the
+// TRACE REGION survives a UF2 write. Nobody has measured it. So the update is
+// unreachable until the puck holds nothing that has not been saved.
+const FW_MANIFEST_URL = '../firmware/latest.json';
+const FW_DIR = '../firmware/';
+
+// Filled in by loadFirmwareManifest(), and null until (or unless) that lands.
+// null is the whole of the failure handling: updateOffer() returns "say
+// nothing", so a missing or malformed manifest costs the rider nothing. The
+// ride flow is this page's real job and must never wait on a maintenance
+// nicety (CONTRACT.md §3.1, static files only — this is one more static file).
+let FW = null;
+
+// How long the page keeps watching for the puck to come back after the flash,
+// and how often it looks. Five minutes is deliberately generous: he has to
+// find the file, find the drive and drag one onto the other, and a page that
+// gives up while he is still doing that would report a failure that did not
+// happen (CLAUDE.md rule 3, in the other direction). Nothing is destroyed by
+// waiting — the recovery sentence is on screen the whole time.
+const UPDATE_CONFIRM_MS = 300000;
+const UPDATE_POLL_MS = 2000;
+// One probe's budget: open the port, ask `info`, read src=. The bootloader
+// also presents a CDC port and will never answer, so this must be short
+// enough to retry inside the window above rather than the 30 s a transfer gets.
+const UPDATE_PROBE_MS = 4000;
+// A port that will not close must not hang the watch loop.
+const UPDATE_CLOSE_MS = 1500;
+// How long `OK uf2` gets to become an actual reboot. The firmware flushes for
+// 250 ms and then calls reboot_to_uf2() (main.cpp:1313-1316); if the link is
+// still up well after that, the reboot did not happen and the page must say so
+// rather than send him hunting for a drive that is never going to mount.
+const UPDATE_REBOOT_MS = 6000;
+
+// The one sentence every failure path here has to carry, verbatim and from one
+// place (CLAUDE.md §4 — a sentence copied is a sentence that drifts). It is
+// also on the waiting screen, before anything has gone wrong: the rider who
+// most needs it is the one staring at a puck that never produced a drive.
+const PUCK_RECOVERY = 'press the small button on the puck twice and it comes '
+                    + 'straight back';
+
+// The drive the bootloader mounts. Named, never described: "a USB drive" sent
+// nobody anywhere.
+const UF2_VOLUME = 'XIAO-SENSE';
 
 // '#mock' plays a Bluetooth-shaped session, '#mock-usb' a cable-shaped one:
 // the transport kind changes the advice the page gives on a slow or failed
@@ -218,6 +281,19 @@ function human(bytes) {
 }
 
 function pad2(n) { return String(n).padStart(2, '0'); }
+
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+/** Poll a predicate until it holds or the budget runs out. Returns whether it
+ *  held — a timeout is an answer here, never an exception. */
+async function waitFor(pred, ms, stepMs) {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    if (pred()) return true;
+    if (Date.now() >= deadline) return false;
+    await sleep(stepMs || 100);
+  }
+}
 
 /** Local wall clock as 'YYYY-MM-DDTHH:MM:SS' — no zone suffix, because the
  *  zone travels separately as tz_offset_min (CONTRACT.md §2). */
@@ -381,12 +457,23 @@ class SerialTransport {
  *  the exact list of command strings this page wrote. Deliberately tiny and
  *  stable — tools/tests/test_web_sync.py drives the whole flow through it. */
 class MockTransport {
-  constructor() { this.sent = []; this._onLine = null; }
+  constructor() { this.sent = []; this._onLine = null; this._onClose = null; }
   onLine(cb) { this._onLine = cb; }
-  onClose(_cb) {}
+  // HONOURED since 2026-09-11d, where it used to be ignored. The update flow's
+  // only proof that the puck really rebooted into its bootloader is the link
+  // going away (firmware/src/main.cpp:1306-1317 prints `OK uf2`, waits 250 ms
+  // and only THEN reboots — so the reply says nothing about whether the reboot
+  // happened). A seam that cannot play the drop cannot test the difference
+  // between a puck that restarted and one that answered and sat there.
+  onClose(cb) { this._onClose = cb; }
   sendLine(s) { this.sent.push(s); }
   receive(line) { if (this._onLine) this._onLine(String(line).replace(/\r?\n$/, '')); }
-  async disconnect() { this._onLine = null; }
+  drop() {
+    const cb = this._onClose;
+    this._onLine = null; this._onClose = null;
+    if (cb) cb();
+  }
+  async disconnect() { this._onLine = null; this._onClose = null; }
 }
 
 // -------------------------------------------------------------------- state
@@ -475,6 +562,22 @@ function freshSession(kind) {
     // receipt. Screen C says both: what happened, then where the file is.
     outcome: null,
     outcomeKind: null,
+    // ---- the puck's own software (2026-09-11d).
+    // `updating` means "the update flow owns the screen" and is one-way: once
+    // the rider has pressed Update the ride flow is over — the ride is saved
+    // and the puck is empty, which is the precondition for the button existing
+    // at all — and putting a Save button back beside a drag instruction would
+    // be asking him to do two things at the moment he must do one.
+    updating: false,
+    // null | 'restarting' | 'dragging' | 'done' | 'mismatch' | 'unchecked'
+    //      | 'norestart'
+    updateStep: null,
+    // The ONLY proof the page ever gets that the reboot happened: the link
+    // going away. `OK uf2` is printed 250 ms BEFORE the reboot is attempted
+    // and says nothing about whether it worked (main.cpp:1306-1317).
+    updateLinkDropped: false,
+    updateSrcAfter: null,     // src= read back off the puck after the flash
+    updateWhy: null,          // the puck's own words, when it refused
     // True while the page is doing the chain — connect -> pull -> build ->
     // save — on its own. Screen B has no buttons at all, and this is what
     // setVisible() keys that off; the test seam reads it to know when the page
@@ -821,7 +924,15 @@ function renderFacts() {
 }
 
 function showResult(headText, kind, lines) {
-  const host = $('result');
+  showPanel('result', headText, kind, lines);
+}
+
+/** The result panel's builder, with the host named — #result for the ride,
+ *  #update-result for the puck's software. Same rule either way: text nodes
+ *  only, so nothing that arrives from a device or a manifest can become
+ *  markup. */
+function showPanel(hostId, headText, kind, lines) {
+  const host = $(hostId);
   host.textContent = '';
   const panel = el('div');
   panel.append(el('p', { class: 'head' + (kind ? ' is-' + kind : ''), text: headText }));
@@ -947,9 +1058,65 @@ function setEnabled() {
                         && (S.delivered || ALLOW_CLEAR));
   $('btn-clear').hidden = !offerClear;
   $('btn-clear').disabled = busy || !offerClear;
+  // The puck's own software. A separate gate from everything above, and it
+  // touches none of them: updateOffer() reads the session, never writes it.
+  // `!transport` is in here for the same reason it is in #btn-pull's line —
+  // the press sends `uf2` down the wire, and a button that cannot reach the
+  // puck is not a thing to do.
+  $('btn-update').disabled = busy || !transport || updateOffer() !== 'stale';
   // Everything above computes `.disabled` — the gates. Everything in
   // setVisible() is presentation on top of it, and it only ever HIDES.
   setVisible(offerClear);
+}
+
+/** Does the puck hold anything that is not already safely off it?
+ *
+ *  THE WHOLE OF THE UPDATE'S SAFETY. A UF2 write replaces the app; whether the
+ *  trace region survives one has never been measured on this hardware, and the
+ *  page must not be where that gets found out. So "no" is the default and only
+ *  two readings say otherwise:
+ *
+ *   * S.cleared — the ride was verified, delivered, and the puck then reported
+ *     0 jumps and 0 bytes back to doClear(). That is a MEASUREMENT, not an
+ *     assumption: doClear refuses to set it on any other reading.
+ *   * a puck that was already empty when he connected — stored_jumps and
+ *     trace_bytes both read a real zero off the connect-time `stats`.
+ *
+ *  fs=down disqualifies both. The store never mounted, so those zeros are
+ *  readings that did not happen (firmware/src/main.cpp, `stats`: "A reading
+ *  that could not be taken must never be dressed up as a reading of zero") —
+ *  and "the counts are unknown" is the last state in which to start a flash. */
+function puckHoldsNothingUnsaved() {
+  if (!S) return false;
+  if (S.storageDown) return false;
+  if (S.cleared) return true;
+  const jumps = numOrNull(S.statsBeforeKV.stored_jumps);
+  const bytes = numOrNull(S.statsBeforeKV.trace_bytes);
+  return jumps === 0 && bytes === 0;
+}
+
+/** Three answers about the puck's software, and "say nothing" is the default:
+ *
+ *    null      — say nothing at all. No manifest, not the cable, a ride still
+ *                on the puck, or a puck whose own build we never read.
+ *    'current' — it is already running the shipped build. One line, no button.
+ *    'stale'   — a different build is shipped and the puck is safe to flash.
+ *
+ *  CABLE ONLY. Nordic legacy DFU is on the Web Bluetooth blocklist, so Chrome
+ *  has no browser DFU path over Bluetooth at all, and the flash itself is a
+ *  file dragged onto a USB drive — there is nothing a phone can do with any of
+ *  it. Offering it there would be an instruction that cannot be followed.
+ *
+ *  A puck whose src= never arrived returns null rather than 'stale': "the
+ *  builds differ" is not a reading that was taken, and a flash is the wrong
+ *  thing to start on a guess. */
+function updateOffer() {
+  if (!S || !FW) return null;
+  if (!isUsb()) return null;
+  if (!puckHoldsNothingUnsaved()) return null;
+  const have = String((S.infoKV || {}).src || '').trim();
+  if (!have) return null;
+  return have === FW.src ? 'current' : 'stale';
 }
 
 /** THE ONE-BUTTON RULE (2026-09-11b).
@@ -973,7 +1140,22 @@ function setVisible(offerClear) {
   // Gone the moment the link is up: there is nothing left to connect. It
   // comes BACK if the link drops, which is exactly what onLinkLost() tells
   // him to press.
-  const showConnect = !transport;
+  // A flash takes the link away on purpose (the `uf2` reboot), so `!transport`
+  // must not put Screen A back up in the middle of one: he would be looking at
+  // "Plug the puck into your Mac" while the drag instructions sat underneath.
+  const updating = !!(S && S.updating);
+  // Only the two steps where something is actually in flight own the screen.
+  // Once the flash has an outcome the page is at rest again and the ride's own
+  // buttons come back — "Save the ride again" in particular, which after a
+  // clear is the rider's only remaining way to get another copy out of this
+  // machine (doClear drops lastBundle; S still holds the ride). Hiding it for
+  // good would have removed a safety net to tidy a screen.
+  const flashing = updating && (S.updateStep === 'restarting'
+                             || S.updateStep === 'dragging');
+  // Screen A stays gone for the whole update session either way: "Plug the
+  // puck into your Mac with its charging cable" under a finished flash is
+  // noise, and during one it is a contradiction.
+  const showConnect = !transport && !updating;
   $('lede').hidden = !showConnect;
   const usb = showConnect && connectKind === 'usb';
   const ble = showConnect && connectKind === 'ble';
@@ -996,6 +1178,24 @@ function setVisible(offerClear) {
     $('btn-clear').hidden = true;
     $('step-clear').hidden = true;
     $('send-hint').hidden = true;
+    $('step-update').hidden = true;
+    return;
+  }
+
+  // ---- A flash IN PROGRESS owns the screen, and it has no buttons either.
+  // Between the press and the outcome there is exactly ONE thing for him to do
+  // and it is a drag: a Save button beside those instructions would be a
+  // second thing, and one he does not need — the precondition for this screen
+  // existing is that the ride is already saved and the puck already empty
+  // (puckHoldsNothingUnsaved). renderUpdate() writes what is inside.
+  if (flashing) {
+    $('btn-pull').hidden = true;
+    $('btn-send').hidden = true;
+    $('btn-clear').hidden = true;
+    $('step-clear').hidden = true;
+    $('send-hint').hidden = true;
+    $('note-block').hidden = true;
+    renderUpdate();
     return;
   }
 
@@ -1050,6 +1250,8 @@ function setVisible(offerClear) {
       : 'One last thing — this is the bit that protects your next ride. Once '
         + 'you have the bundle safe:';
   }
+
+  renderUpdate();
 }
 
 function showProgress(on) {
@@ -1313,6 +1515,19 @@ function onLinkLost() {
   if (S) S.pulling = false;
   clearInterval(progressTimer);
   busy = false;
+  if (S && S.updating) {
+    // EXPECTED, and it is the measurement the whole update rests on. `uf2`
+    // prints `OK uf2`, waits 250 ms and only THEN tries to reboot
+    // (firmware/src/main.cpp:1306-1317), so the reply says nothing about
+    // whether the reboot happened — the CDC port going away is the only proof
+    // there is, and it was proven on silicon 2026-09-11. So it is RECORDED
+    // here, not reported as a fault: "The cable connection dropped. Nothing
+    // was lost — check the cable at both ends" would be the page shouting
+    // about the thing it just asked for.
+    S.updateLinkDropped = true;
+    setEnabled();
+    return;
+  }
   setEnabled();
   setStatus((isUsb()
     ? 'The cable connection dropped. Nothing was lost — check the cable at '
@@ -1975,17 +2190,29 @@ async function buildBundle() {
 
 // --------------------------------------------------------------------- send
 
-function downloadBlob(name, blob) {
-  const url = URL.createObjectURL(blob);
-  const a = el('a', { href: url, download: name });
+/** Hand a URL to the browser's downloader by clicking an <a download>.
+ *
+ *  The mechanism, in one place, because there are now two callers and they
+ *  must not drift: the ride bundle (an object URL, below) and the firmware
+ *  .uf2 (a plain same-origin path, doUpdate). This IS the path measured
+ *  working on the rider's own Mac twice — 2026-09-10 and 2026-09-11 — and
+ *  nothing newer is used, deliberately: showSaveFilePicker() could confirm the
+ *  write, and it does not exist in the test browser, so it would ship
+ *  untested. That is exactly how a broken share sheet reached this rider. */
+function downloadHref(name, href, revokeAfter) {
+  const a = el('a', { href: href, download: name });
   document.body.append(a);
   a.click();
   a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  if (revokeAfter) setTimeout(() => URL.revokeObjectURL(href), 10000);
   // "Delivered" here means handed to the browser's downloader: a page gets no
   // completion callback for <a download>, so this is the strongest signal the
   // platform offers, and CONTRACT.md §3 defines delivered that way on purpose.
   return true;
+}
+
+function downloadBlob(name, blob) {
+  return downloadHref(name, URL.createObjectURL(blob), true);
 }
 
 /** A link the rider presses himself, for the iOS branch below. A script-driven
@@ -2181,8 +2408,17 @@ async function doClear() {
           ? 'Your ride is in your Downloads as ' + S.deliveredName
             + '. Send it to Josh when you get a chance.'
           : 'Your ride is on this machine. Send it to Josh when you get a chance.',
-         'The puck holds nothing now, so this copy is the only one — the button '
-         + 'below will save it again if you need it.']);
+         // Written ONCE, at the moment of clearing, and then read for as long
+         // as the page stays open — so it must not name a position. It said
+         // "the button below will save it again"; from 2026-09-11d a firmware
+         // update can start underneath this sentence and take every button off
+         // the screen while the rider drags a file (setVisible, `flashing`),
+         // at which point "the button below" points at nothing. Same class of
+         // defect as retryAdvice() naming "Try again" on a screen showing
+         // Connect (measured 2026-09-11). The offer is true at every moment;
+         // its position is not.
+         'The puck holds nothing now, so this copy is the only one — this page '
+         + 'can save it again whenever you need it.']);
     } else {
       // Never call a wipe done on a reading that says otherwise.
       setStatus('The puck still reports '
@@ -2194,6 +2430,285 @@ async function doClear() {
     busy = false; setEnabled();
     renderFacts();
   }
+}
+
+// ----------------------------------------------------- the puck's software
+
+/** Fetch ../firmware/latest.json once, at load, and NEVER block anything on
+ *  it. Every failure — missing, 404, not JSON, the wrong shape — leaves FW
+ *  null, which updateOffer() reads as "say nothing". A broken manifest must
+ *  cost the rider exactly nothing: getting the ride home is this page's job
+ *  and the puck's software is a nicety on the end of it.
+ *
+ *  The shape is CHECKED, not trusted. `file` is pasted into an href, so it is
+ *  held to a bare filename — no slashes, no '..', ending .uf2 — and `src` to
+ *  the hex build hash INFO reports. A manifest that fails either is treated as
+ *  absent rather than half-believed. */
+async function loadFirmwareManifest() {
+  try {
+    const res = await fetch(FW_MANIFEST_URL);
+    if (!res.ok) return;
+    const j = await res.json();
+    const src = typeof j.src === 'string' ? j.src.trim() : '';
+    const file = typeof j.file === 'string' ? j.file.trim() : '';
+    if (!/^[0-9a-fA-F]{4,40}$/.test(src)) return;
+    if (!/^[A-Za-z0-9._-]+\.uf2$/.test(file) || file.indexOf('..') >= 0) return;
+    FW = { src: src, file: file };
+  } catch (_e) {
+    // Offline, blocked, malformed — all the same answer, and the answer is
+    // silence. There is nothing here for the rider to act on.
+  } finally {
+    // Whenever it lands — before his first press or long after — the page
+    // re-renders off it. Nothing waited for this.
+    setEnabled();
+  }
+}
+
+/** The offer, the "up to date" line, or nothing — and, once a flash is under
+ *  way, whatever step it has reached. Presentation only: every gate is
+ *  computed in setEnabled()/updateOffer() and read here. */
+function renderUpdate() {
+  const sec = $('step-update');
+  const note = $('update-note');
+  const btn = $('btn-update');
+  if (S && S.updating) { sec.hidden = false; note.hidden = true; btn.hidden = true; return; }
+
+  const offer = updateOffer();
+  // A disabled button is never on screen on this page, so a 'stale' offer with
+  // the button shut (busy, or the link gone) shows nothing at all rather than
+  // an invitation he cannot accept.
+  const live = offer === 'stale' && !btn.disabled;
+  btn.hidden = !live;
+  if (offer === 'current') {
+    note.hidden = false;
+    note.textContent = 'The puck’s software is up to date. Nothing to do.';
+    sec.hidden = false;
+  } else if (live) {
+    note.hidden = false;
+    note.textContent =
+      'One optional extra: the puck is running older software, and Josh has a '
+      + 'newer version ready. It takes about two minutes and it cannot break '
+      + 'the puck — if anything goes wrong, ' + PUCK_RECOVERY + '.';
+    sec.hidden = false;
+  } else {
+    sec.hidden = true;
+    note.hidden = true;
+    $('update-result').textContent = '';
+  }
+}
+
+/** THE ONE PRESS. Everything after it is a drag and then waiting.
+ *
+ *  Order matters and is not negotiable: the DOWNLOAD GOES FIRST, synchronously,
+ *  inside his click. downloadHref() cannot be reached from a promise chain
+ *  without spending the gesture, and a save Chrome quietly declines is the
+ *  exact failure the ride's Save press exists to prevent (autoChain, doSend).
+ *  The cost of that order is that a puck which then refuses to restart leaves
+ *  one harmless file in his Downloads, and the refusal screen says so. */
+async function doUpdate() {
+  if (busy || !S || !transport || !FW || updateOffer() !== 'stale') return;
+
+  // 1. HIS CLICK, SPENT HERE. No await above this line.
+  downloadHref(FW.file, FW_DIR + FW.file);
+
+  S.updating = true;
+  S.updateStep = 'restarting';
+  S.updateLinkDropped = false;
+  S.updateSrcAfter = null;
+  S.updateWhy = null;
+  busy = true;
+  setEnabled();
+  setStatus('Saving the update file, and restarting the puck…', 'busy');
+  renderUpdateSteps();
+
+  // 2. Restart the puck into its bootloader. `uf2` answers `OK uf2` BEFORE it
+  //    reboots, so the reply is not the confirmation — the link going away is
+  //    (onLinkLost, S.updateLinkDropped). A link that dies mid-capture
+  //    resolves this with an error, which is the same good news.
+  const r = await runCommand('uf2', { timeoutMs: UPDATE_PROBE_MS });
+  busy = false;
+  if (!S.updateLinkDropped) {
+    if (r.err) return endUpdate('norestart', null, String(r.err));
+    // `OK uf2` and the port still here. Either the reboot has not happened
+    // yet (250 ms of flush, main.cpp:1313) or it never will — on a build with
+    // no UF2 bootloader the firmware answers OK and then prints
+    // `ERR uf2_unsupported`, with no capture left to catch it.
+    const dropped = await waitFor(() => S.updateLinkDropped, UPDATE_REBOOT_MS, 100);
+    if (!dropped) return endUpdate('norestart', null, lastErrLine());
+  }
+
+  // 3. The drag. The page cannot see it, cannot help with it, and says so.
+  S.updateStep = 'dragging';
+  setStatus('The puck has restarted. Drag the file onto ' + UF2_VOLUME + ' — '
+          + 'this page is watching, and will say when it is done.', 'busy');
+  renderUpdateSteps();
+  await confirmUpdate();
+}
+
+/** The last ERR the puck said, if it said one after the command ended. The
+ *  `uf2` handler prints OK and then possibly ERR, which no capture can see, so
+ *  device.log is where that sentence survives (CLAUDE.md rule 3 — the reading
+ *  happened, it just arrived late). */
+function lastErrLine() {
+  for (let i = S.deviceLog.length - 1; i >= 0; i--) {
+    if (S.deviceLog[i].startsWith('ERR')) return S.deviceLog[i];
+  }
+  return null;
+}
+
+/** Watch for the puck to come back on its own and ask it what it is running.
+ *
+ *  navigator.serial.getPorts() returns ports already granted with NO picker,
+ *  so no press is needed here — which is the whole reason the flow can be one
+ *  button and one drag. MEASURED on this bench 2026-09-11: getPorts is a
+ *  function on a secure context in headless Chromium 151 and resolves to an
+ *  empty list; it is absent on about:blank. A browser without it is handled
+ *  rather than assumed away.
+ *
+ *  Five minutes, because he has to find a file, find a drive, and drag one
+ *  onto the other. Giving up sooner would report a failure that had not
+ *  happened — and the recovery sentence is on screen the entire time, so a
+ *  rider whose drive never appeared is never waiting on this page to tell him
+ *  what to do. */
+async function confirmUpdate() {
+  const serial = navigator.serial;
+  if (!serial || typeof serial.getPorts !== 'function') {
+    return endUpdate('unchecked', null, 'this browser cannot re-open the puck by itself');
+  }
+  const deadline = Date.now() + UPDATE_CONFIRM_MS;
+  for (;;) {
+    await sleep(UPDATE_POLL_MS);
+    if (!S || !S.updating || S.updateStep !== 'dragging') return;  // moved on
+    const src = await readBackSrc(serial);
+    if (src) return endUpdate(src === FW.src ? 'done' : 'mismatch', src, null);
+    if (Date.now() >= deadline) return endUpdate('unchecked', null, 'the puck never came back');
+  }
+}
+
+/** One probe: open a granted port, ask `info`, read src=. Returns null for
+ *  every kind of nothing — no port, a port that will not open, the
+ *  bootloader's own CDC port (which answers nothing), a reply with no src=.
+ *
+ *  It deliberately does NOT go through onLine()/classify(): those write S, and
+ *  S.infoKV is what buildManifest() ships as the bundle's `src`. A probe that
+ *  updated it would make a re-saved bundle claim the ride came off firmware
+ *  that was flashed afterwards. */
+async function readBackSrc(serial) {
+  let ports = [];
+  try { ports = await serial.getPorts(); } catch (_e) { return null; }
+  for (const port of ports) {
+    const t = new SerialTransport(port);
+    try { await t.open(); } catch (_e) { continue; }
+    let src = null;
+    let settle = null;
+    const answered = new Promise((r) => { settle = () => r(); });
+    const timer = setTimeout(settle, UPDATE_PROBE_MS);
+    t.onLine((line) => {
+      const kv = parseKV(line);
+      if (kv._tag === 'INFO' && kv.src != null) src = String(kv.src).trim();
+      if (line === 'OK info' || line.startsWith('ERR')) settle();
+    });
+    t.onClose(settle);
+    try { await t.sendLine('info'); } catch (_e) { settle(); }
+    await answered;
+    clearTimeout(timer);
+    // A port that will not close must never hang the watch.
+    try { await Promise.race([t.disconnect(), sleep(UPDATE_CLOSE_MS)]); } catch (_e) {}
+    if (src) return src;
+  }
+  return null;
+}
+
+/** The last screen. Four outcomes, and every one that is not 'done' names the
+ *  recovery — one constant, one place (PUCK_RECOVERY). */
+function endUpdate(step, src, why) {
+  S.updateStep = step;
+  S.updateSrcAfter = src;
+  S.updateWhy = why || null;
+  busy = false;
+  setEnabled();
+  renderUpdateSteps();
+}
+
+function renderUpdateSteps() {
+  const file = FW ? FW.file : 'the update file';
+  const step = S.updateStep;
+
+  if (step === 'restarting') {
+    showPanel('update-result', 'Starting the update…', null, []);
+    return;
+  }
+
+  if (step === 'dragging') {
+    showPanel('update-result', 'Now drag one file onto the puck.', null, [
+      // NOT "reload and start again": by the time this screen is up the puck
+      // has ALREADY rebooted into its bootloader, so a reload lands him on a
+      // page that has forgotten the update, in front of a port that opens and
+      // answers nothing. Measured in review. Send him to the recovery instead,
+      // which works from any state.
+      'Look in your Downloads for ' + file + '. If it is not there, '
+        + PUCK_RECOVERY + ', then tell Josh — the puck is fine either way.',
+      'A drive called ' + UF2_VOLUME + ' will appear on your Mac in a few '
+        + 'seconds — in Finder, under Locations.',
+      'Drag ' + file + ' onto ' + UF2_VOLUME + '.',
+      UF2_VOLUME + ' will vanish part-way through the copy and your Mac may '
+        + 'say the copy failed. That is the puck restarting — it means it '
+        + 'worked.',
+      'Nothing else to press. If it goes wrong at any point, ' + PUCK_RECOVERY
+        + ' — then drag the file on again.',
+    ]);
+    return;
+  }
+
+  if (step === 'done') {
+    setStatus('Done — the puck is running the new software. You can unplug it.', 'ok');
+    showPanel('update-result', 'The puck is up to date.', 'ok', [
+      'Checked on the puck itself: it came back running build '
+        + S.updateSrcAfter + '.',
+      'Nothing else to do — your ride was already saved before any of this '
+        + 'started.',
+    ]);
+    return;
+  }
+
+  if (step === 'mismatch') {
+    setStatus('The puck came back, but it is still running the old software.', 'bad');
+    showPanel('update-result', 'The update did not take.', 'bad', [
+      'Nothing is broken and nothing is lost — the puck is working, it is '
+        + 'just still on the old build (' + S.updateSrcAfter + ').',
+      'To try once more: ' + PUCK_RECOVERY + ', wait for ' + UF2_VOLUME
+        + ' to appear, and drag ' + file + ' onto it again.',
+      'This page will not check a second attempt by itself — after you drag '
+        + 'it on again, reload this page and press Connect, and it will tell '
+        + 'you which software the puck is running.',
+      'If it still will not take, tell Josh. Your ride is already saved.',
+    ]);
+    return;
+  }
+
+  if (step === 'norestart') {
+    setStatus('The puck would not restart into update mode, so nothing was '
+            + 'changed on it.', 'bad');
+    showPanel('update-result', 'The puck did not go into update mode.', 'bad', [
+      S.updateWhy ? 'It said: ' + S.updateWhy
+                  : 'It answered, but it never went away — which is what '
+                    + 'restarting looks like from here.',
+      'Nothing on the puck has changed and your ride is already saved. The '
+        + file + ' in your Downloads is harmless — you can delete it.',
+      'Tell Josh. If the puck is behaving oddly, ' + PUCK_RECOVERY + '.',
+    ]);
+    return;
+  }
+
+  // 'unchecked'
+  setStatus('The puck restarted, but this page could not check it afterwards.', 'bad');
+  showPanel('update-result', 'Couldn’t check the puck from here.', 'bad', [
+    S.updateWhy ? 'Why: ' + S.updateWhy : 'The puck never came back.',
+    'Unplug the puck, plug it back in, reload this page and press Connect. If '
+      + 'it then says the software is up to date, the update worked.',
+    'If it never comes back at all, ' + PUCK_RECOVERY + '.',
+    'Your ride was saved before any of this started, either way.',
+  ]);
 }
 
 // -------------------------------------------------------------------- chips
@@ -2239,7 +2754,12 @@ function buildChips(group, host) {
  *  window.__sync = { state(), lastBundle() }. Kept deliberately small. */
 function setupMock() {
   const t = new MockTransport();
-  window.__mock = { feed: (line) => t.receive(line), sent: t.sent };
+  // drop() plays the puck going away — the `uf2` reboot, or a cable pulled.
+  // Added 2026-09-11d: the update flow treats the link dying as its proof that
+  // the reboot happened, so a seam that could not play that drop could not
+  // tell a puck that restarted from one that answered and stayed put.
+  window.__mock = { feed: (line) => t.receive(line), sent: t.sent,
+                    drop: () => t.drop() };
   afterConnect(t, MOCK_KIND, null);
 }
 
@@ -2266,11 +2786,22 @@ window.__sync = {
     f22_note: S.f22Note,
     growth_note: S.growthNote,
     bundle: lastBundle ? lastBundle.name : null,
+    // The puck's own software (2026-09-11d). `update_offer` is the GATE read
+    // straight out of the page — null / 'current' / 'stale' — so a driver can
+    // tell "not offered because the ride is still on the puck" from "not
+    // offered because it is already up to date" without guessing from pixels.
+    update_offer: updateOffer(),
+    update_step: S.updateStep,
+    update_src_after: S.updateSrcAfter,
+    fw_src: FW ? FW.src : null,
+    fw_file: FW ? FW.file : null,
   } : { phase: 'boot', auto: false, connected: false, verified: false, delivered: false,
         cleared: false, trace_format: null, jump_rows: 0, reasons: [],
         trace_bytes_device: null, trace_bytes_after: null, trace_bytes_got: null,
         f22_band_applied: false, f22_note: null, growth_note: null,
-        bundle: null }),
+        bundle: null, update_offer: null, update_step: null,
+        update_src_after: null,
+        fw_src: FW ? FW.src : null, fw_file: FW ? FW.file : null }),
   lastBundle: () => lastBundle,
 };
 
@@ -2305,6 +2836,10 @@ function init() {
   $('btn-pull').addEventListener('click', autoChain);
   $('btn-send').addEventListener('click', doSend);
   $('btn-clear').addEventListener('click', doClear);
+  $('btn-update').addEventListener('click', doUpdate);
+  // Fired, never awaited. The ride flow must not wait on a maintenance file,
+  // and every way this can fail leaves FW null, which means "offer nothing".
+  loadFirmwareManifest();
   buildChips('sea', $('chips-sea'));
   buildChips('wind', $('chips-wind'));
   // A typed note changes the bundle, so a note edited after the save must not
