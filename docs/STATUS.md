@@ -517,10 +517,26 @@ hand — CLAUDE.md rule 5). What changed, all pinned by tests, suite 523 →
   in 10.8 s (130.8 KB/s) — 5.1× less data at 2.1× the CSV throughput, ~10×
   quicker end to end** (the branch estimated ~6× and never measured it).
   `tracecheck` answered in **106 s**, first evidence the 300 s floor holds.
+  **2026-09-12 — the rider can update the puck from the page, REHEARSED ON
+  SILICON.** Page `2026-09-11e`. The Puck was rolled back to `ae67dc8d`
+  (old build, empty trace — Nick's exact state) and the whole flow ran with
+  ONE human click, the port picker: connect → chain pulled 14 KB and
+  verified → Send (a real 16,870 B zip in Downloads) → Empty → the update
+  was offered (both gates held: puck empty, build older) → Update the puck
+  put `jumpheight-54c6826d.uf2` in Downloads with a **matching SHA-256**,
+  sent `uf2`, saw the port drop → drive mounted → the downloaded file was
+  copied on → the page re-opened the granted port by itself and reported
+  *"Checked on the puck itself: it came back running build 54c6826d"* — and
+  the wire, read independently, agreed. No `showDirectoryPicker()`: the rider
+  drags; every failure screen names the double-tap recovery; a UF2 write
+  cannot touch the bootloader. The one-click rehearsal is the procedure.
+  **Caught by a session crash, not by review:** `web/firmware/` was
+  gitignored by a stale Phase 3 rule, so the artifact would never have
+  deployed and the button would have pointed at a 404. Tracked now.
   **Still unmeasured:** the root cause of the `share()` rejection itself
-  (routed around, not diagnosed — the desktop no longer calls it), the F-22
-  *band* arm at 16 MB, and a web page actually driving the flash —
-  `showDirectoryPicker()` is the only untested link in that chain.
+  (routed around, not diagnosed), the F-22 *band* arm at 16 MB, and the
+  five-minute give-up on the post-flash reconnect (only the no-getPorts arm
+  is exercised).
 - **Simplified 2026-09-09 to `2026-09-09c`, after the owner read it and called
   it confusing.** It was written for "phone or computer, Bluetooth or cable",
   and Chrome on a Mac reports BOTH transports — so the rider met two competing
