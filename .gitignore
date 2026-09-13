@@ -63,3 +63,6 @@ tools/mtp_send
 # Nick's exported activities: GPS tracks + personal texts. Never leaves this
 # machine. The derived, de-identified statistics go in the analysis doc.
 data/nick-sessions/
+
+# the menu-bar template images the app ships; tiny and hand-drawn by packaging/icon/make_icon.py
+!tools/puckd/assets/*.png

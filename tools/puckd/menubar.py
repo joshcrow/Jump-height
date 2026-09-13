@@ -34,8 +34,12 @@ DEFAULT_SETUP_URL = "http://127.0.0.1:17888/setup"
 
 Opener = Callable[[str], None]
 
-ICON_IDLE = "JH"
-ICON_ATTENTION = "JH!"
+# The menu-bar image is tools/puckd/assets/menubar.png (a template image:
+# black on transparent, macOS recolours it). The TITLE beside it is empty
+# except when Nick needs to act, when it is a single "!".
+ICON_PATH = Path(__file__).resolve().parent / "assets" / "menubar.png"
+ICON_IDLE = None
+ICON_ATTENTION = "!"
 
 
 def format_puck_line(puck_pct: Optional[int], charging: bool) -> str:
@@ -66,7 +70,7 @@ def format_ride_line(last_ride_dt: Optional[_dt.datetime], last_jumps: Optional[
     return f"Last ride {time_text} · {last_jumps} jumps"
 
 
-def format_icon_title(attention: bool) -> str:
+def format_icon_title(attention: bool) -> "Optional[str]":
     """The menu-bar glyph: distinct for "needs you" vs. everything else."""
     return ICON_ATTENTION if attention else ICON_IDLE
 
@@ -86,7 +90,9 @@ def build_app_class():
         def __init__(self, spool_dir: Path = SPOOL_DIR,
                      setup_url: str = DEFAULT_SETUP_URL,
                      opener: Opener = default_opener):
-            super().__init__("JumpHeight", title=format_icon_title(False))
+            icon = str(ICON_PATH) if ICON_PATH.is_file() else None
+            super().__init__("JumpHeight", title=format_icon_title(False),
+                             icon=icon, template=True)
             self._spool_dir = Path(spool_dir)
             self._setup_url = setup_url
             self._opener = opener

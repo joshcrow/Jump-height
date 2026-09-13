@@ -86,10 +86,15 @@ if not _puckd_top_py:
 if not _setup_files:
     sys.exit(f"packaging/setup.py: no files found under {PUCKD_DIR / 'setup'}")
 
+_asset_files = sorted(str(p) for p in (PUCKD_DIR / "assets").glob("*.png"))
+if not _asset_files:
+    sys.exit(f"packaging/setup.py: no menu-bar images under {PUCKD_DIR / 'assets'} (run icon/make_icon.py)")
+
 DATA_FILES = [
     ("tools", [str(JUMP_FILE)]),
     ("tools/puckd", _puckd_top_py),
     ("tools/puckd/setup", _setup_files),
+    ("tools/puckd/assets", _asset_files),
     ("", [str(VENDOR_RCLONE)]),
 ]
 
@@ -136,6 +141,7 @@ _MEASURED_UNUSED = [
 OPTIONS = {
     "py2app": {
         "arch": "universal2",
+        "iconfile": str(Path(__file__).resolve().parent / "icon" / "JumpHeight.icns"),
         "argv_emulation": False,
         "optimize": 0,
         "includes": [

@@ -24,6 +24,9 @@ echo "== packaging/build.sh: vendoring rclone =="
 echo "== packaging/build.sh: cleaning previous build/dist =="
 rm -rf "$HERE/build" "$HERE/dist"
 
+echo "== packaging/build.sh: drawing the icon =="
+"$PYTHON" "$HERE/icon/make_icon.py"
+
 echo "== packaging/build.sh: running py2app (universal2) =="
 (
     cd "$HERE"
@@ -58,4 +61,14 @@ echo "size:     $(du -sh "$APP_PATH" | awk '{print $1}')"
 echo "executable archs: $(lipo -archs "$EXE_PATH")"
 file "$EXE_PATH"
 
-echo "== packaging/build.sh: done. Not installed — run packaging/install.sh yourself when ready. =="
+echo "== packaging/build.sh: building the dmg =="
+STAGE="$(mktemp -d)"
+cp -R "$APP_PATH" "$STAGE/"
+ln -s /Applications "$STAGE/Applications"
+DMG_PATH="$HERE/dist/JumpHeight Sync.dmg"
+rm -f "$DMG_PATH"
+hdiutil create -volname "JumpHeight Sync" -srcfolder "$STAGE" -ov -format UDZO -quiet "$DMG_PATH"
+rm -rf "$STAGE"
+echo "dmg:      $DMG_PATH ($(du -sh "$DMG_PATH" | awk '{print $1}'))"
+
+echo "== packaging/build.sh: done. Nothing installed: opening the app is the install. =="

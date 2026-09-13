@@ -251,7 +251,7 @@ class TestMenubarLazyImport(unittest.TestCase):
         try:
             reloaded = importlib.import_module("puckd.menubar")
             # Importing succeeded with rumps blocked: proves the import is lazy.
-            self.assertEqual(reloaded.format_icon_title(False), "JH")
+            self.assertEqual(reloaded.format_icon_title(False), None)
             with self.assertRaises(ImportError):
                 reloaded.build_app_class()
         finally:

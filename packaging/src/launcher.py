@@ -72,9 +72,76 @@ def main() -> None:
     if rclone_bin.is_file():
         os.environ.setdefault("PUCKD_RCLONE", str(rclone_bin))
 
+    if _install_and_hand_off(resources):
+        return                                     # launchd's copy takes over
     from puckd import daemon  # noqa: E402  (path must be set up first)
-
     daemon.main()
+
+
+# ------------------------------------------------------- self-install
+#
+# Nick installs a Mac app by dragging it to Applications and opening it.
+# So opening it IS the install: every Finder launch writes
+# ~/Library/LaunchAgents/com.jumpheight.puckd.plist pointing at this very
+# bundle, loads it (launchd starts the real, long-running copy with
+# --launchd on its argv), and this Finder-started copy exits. Opened from
+# inside the .dmg, the bundle is copied to /Applications first so the
+# agent never points at a volume that gets ejected.
+#
+# KeepAlive is SuccessfulExit=false: a crash restarts it, "Quit" in the
+# menu (exit 0) does not, and RunAtLoad brings it back at the next login.
+
+LABEL = "com.jumpheight.puckd"
+LAUNCHD_FLAG = "--launchd"
+
+
+def _bundle_path(resources: Path) -> Path:
+    return resources.parent.parent                 # .../JumpHeight Sync.app
+
+
+def _copy_to_applications(bundle: Path) -> Path:
+    import shutil
+    dest = Path("/Applications") / bundle.name
+    if dest.exists():
+        shutil.rmtree(dest)
+    shutil.copytree(bundle, dest, symlinks=True)
+    return dest
+
+
+def _install_and_hand_off(resources: Path) -> bool:
+    import plistlib
+    import subprocess
+
+    if LAUNCHD_FLAG in sys.argv[1:]:
+        return False
+    bundle = _bundle_path(resources)
+    if str(bundle).startswith("/Volumes/"):
+        try:
+            bundle = _copy_to_applications(bundle)
+        except OSError:
+            pass                                   # run from where it is
+    exe = bundle / "Contents" / "MacOS" / "JumpHeight Sync"
+    if not exe.is_file():
+        return False                               # not a bundle; a dev run
+    agents = Path.home() / "Library" / "LaunchAgents"
+    agents.mkdir(parents=True, exist_ok=True)
+    plist = agents / f"{LABEL}.plist"
+    plist.write_bytes(plistlib.dumps({
+        "Label": LABEL,
+        "ProgramArguments": [str(exe), LAUNCHD_FLAG],
+        "RunAtLoad": True,
+        "KeepAlive": {"SuccessfulExit": False},
+        "ProcessType": "Interactive",
+    }))
+    domain = f"gui/{os.getuid()}"
+
+    def run(*args):
+        return subprocess.run(["launchctl", *args], capture_output=True)
+
+    run("bootout", f"{domain}/{LABEL}")            # replace a running copy
+    if run("bootstrap", domain, str(plist)).returncode != 0:
+        run("load", "-w", str(plist))              # the older spelling
+    return True
 
 
 if __name__ == "__main__":
