@@ -84,6 +84,20 @@ class _FakeFlash:
         return False
 
 
+class TheFolderIsSharedWithJosh(_DaemonTestBase):
+    def test_shared_once_after_the_first_confirmed_upload(self):
+        calls = []
+        proc, port = _spawn_fake("session")
+        try:
+            with patch.dict(os.environ, self.rclone_env()):
+                cfg = self.make_cfg(share_fn=lambda d: (calls.append(d), True)[1])
+                daemon.run_job_cycle(port, cfg)
+                daemon.retry_spool(cfg)            # a later upload path
+        finally:
+            _kill(proc)
+        self.assertEqual(calls, ["JumpHeight"], "the top-level folder, once")
+
+
 class SyncedIsSaidAfterTheClear(_DaemonTestBase):
     def test_notification_order_is_clear_then_synced(self):
         order = []

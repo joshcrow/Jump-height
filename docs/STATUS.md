@@ -712,9 +712,15 @@ py2app points `SSL_CERT_FILE` at a file literally named `no-such-file`, so
 every HTTPS call inside the built app was failing silently, the firmware
 check included — fixed with certifi via `tools/puckd/netctx.py`; and rclone
 warns its shared Google client_id "is being retired and will stop working
-during 2026" — the app needs its own client_id (a Google Cloud OAuth
-desktop client, Josh's project) before that happens. Untracked as a
-finding number on purpose: it is a deadline, not a defect.
+during 2026" — CLOSED the same evening: the app has its own client
+(Google Cloud project jump-height-508521, Desktop client "JumpHeight Sync",
+`tools/puckd/assets/google-client.json`), the consent screen is In
+production with the narrow `drive.file` scope (no verification needed), and
+Google's greyed-out Publish button turned out to require a home page, a
+privacy page (`web/privacy.html`) and an authorized domain that its form
+does not mark as required. With `drive.file` the app only sees folders it
+made, so after the first confirmed upload it shares its top-level Drive
+folder with joshcrow1193@gmail.com itself (`upload.ensure_shared`).
 
 **Not yet measured, in the order they cost:** the real Puck (board was
 unplugged all night — rehearse `python3 -m puckd once <port>` first, then

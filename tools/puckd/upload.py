@@ -86,7 +86,20 @@ def _run(args: list[str], timeout: float) -> subprocess.CompletedProcess:
 
 
 _AUTH_TEMPLATE = Path(__file__).resolve().parent / "assets" / "oauth-done.html"
+_CLIENT_FILE = Path(__file__).resolve().parent / "assets" / "google-client.json"
 _ABOUT_URL = "https://www.googleapis.com/drive/v3/about?fields=user"
+_FILES_URL = "https://www.googleapis.com/drive/v3/files"
+
+
+def google_client() -> dict:
+    """JumpHeight Sync's own OAuth client (assets/google-client.json:
+    client_id, client_secret, scope, share_with). rclone's shared client is
+    retired during 2026; this is the one Google issued to the project
+    jump-height-508521 on 2026-09-13."""
+    try:
+        return json.loads(_CLIENT_FILE.read_text())
+    except (OSError, ValueError):
+        return {}
 
 
 def _token_from_authorize_output(text: str) -> "Optional[str]":
@@ -108,18 +121,26 @@ def _token_from_authorize_output(text: str) -> "Optional[str]":
 def authorize(timeout: float = _AUTHORIZE_TIMEOUT_S) -> bool:
     """Google consent, then the "gdrive" remote. Two rclone calls:
 
-      rclone authorize drive --template <ours>   opens the browser, listens
-          on 127.0.0.1 for Google's redirect, renders OUR page there
-          ("Connected. You can close this tab.") instead of rclone's, and
-          prints the token.
-      rclone config create gdrive drive scope drive token <json>
-          stores it, non-interactively.
+      rclone authorize drive <client_id> <client_secret> --template <ours>
+          opens the browser, listens on 127.0.0.1 for Google's redirect,
+          renders OUR page there ("Connected. You can close this tab.")
+          and prints the token. With our own client the consent screen
+          says "JumpHeight Sync" and the scope is drive.file: the app can
+          only ever see files it created itself.
+      rclone config create gdrive drive client_id .. client_secret ..
+          scope drive.file token <json>   stores it, non-interactively.
 
     True only if both exited 0 and a token was actually printed.
     """
+    client = google_client()
+    cid, secret = client.get("client_id"), client.get("client_secret")
+    scope = client.get("scope") or "drive"
+    auth_args = ["authorize", "drive"]
+    if cid and secret:
+        auth_args += [cid, secret]
+    auth_args += ["--template", str(_AUTH_TEMPLATE)]
     try:
-        proc = _run(["authorize", "drive", "--template", str(_AUTH_TEMPLATE)],
-                    timeout=timeout)
+        proc = _run(auth_args, timeout=timeout)
     except (RcloneNotFound, subprocess.TimeoutExpired, OSError):
         return False
     if proc.returncode != 0:
@@ -127,13 +148,66 @@ def authorize(timeout: float = _AUTHORIZE_TIMEOUT_S) -> bool:
     token = _token_from_authorize_output(proc.stdout or "")
     if token is None:
         return False
+    create_args = ["config", "create", REMOTE_NAME, "drive", "scope", scope]
+    if cid and secret:
+        create_args += ["client_id", cid, "client_secret", secret]
+    create_args += ["token", token, "--non-interactive"]
     try:
-        proc = _run(["config", "create", REMOTE_NAME, "drive",
-                     "scope", "drive", "token", token, "--non-interactive"],
-                    timeout=60.0)
+        proc = _run(create_args, timeout=60.0)
     except (RcloneNotFound, subprocess.TimeoutExpired, OSError):
         return False
     return proc.returncode == 0
+
+
+def _folder_id(remote_dir: str) -> "Optional[str]":
+    """Drive's id for gdrive:<remote_dir> (rclone lsjson reports IDs)."""
+    parent, _, name = remote_dir.strip("/").rpartition("/")
+    spec = f"{REMOTE_NAME}:{parent}" if parent else f"{REMOTE_NAME}:"
+    try:
+        proc = _run(["lsjson", "--dirs-only", spec], timeout=_LSJSON_TIMEOUT_S)
+    except (RcloneNotFound, subprocess.TimeoutExpired, OSError):
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        for e in json.loads(proc.stdout or "[]"):
+            if e.get("Name") == name and e.get("IsDir"):
+                return e.get("ID")
+    except ValueError:
+        pass
+    return None
+
+
+def _default_post_json(url: str, bearer: str, body: dict) -> dict:
+    import urllib.request
+    from puckd import netctx
+    data = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(url, data=data, method="POST", headers={
+        "Authorization": f"Bearer {bearer}", "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=15.0, context=netctx.ssl_context()) as resp:
+        return json.loads(resp.read().decode("utf-8") or "{}")
+
+
+def ensure_shared(remote_dir: str = "JumpHeight", email: "Optional[str]" = None,
+                  post_json=_default_post_json) -> bool:
+    """Give `email` (default: the owner in google-client.json) editor access
+    to the top-level Drive folder the app created, so the rides land where
+    Josh can reach them without anyone pressing Share. Idempotent: Drive
+    treats a repeated grant as a no-op. Never raises; True when Drive
+    accepted the grant."""
+    email = email or google_client().get("share_with")
+    if not email:
+        return False
+    fid = _folder_id(remote_dir)
+    token = _stored_access_token()
+    if not fid or not token:
+        return False
+    try:
+        post_json(f"{_FILES_URL}/{fid}/permissions?sendNotificationEmail=false", token,
+                  {"role": "writer", "type": "user", "emailAddress": email})
+        return True
+    except Exception:  # noqa: BLE001 -- a convenience, not a gate
+        return False
 
 
 def _stored_access_token() -> "Optional[str]":

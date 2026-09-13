@@ -261,6 +261,7 @@ class _DaemonTestBase(unittest.TestCase):
         self.home = self.tmp / "home"
         self.spool = self.tmp / "spool"
         self.recorder = _Recorder()
+        self._share_calls = []
 
     def make_cfg(self, **overrides):
         kwargs = dict(
@@ -270,6 +271,7 @@ class _DaemonTestBase(unittest.TestCase):
             notifier=self.recorder,
             garmin_module=_FakeGarmin(),
             sleep=lambda s: None,
+            share_fn=lambda d: (self._share_calls.append(d), True)[1],
         )
         kwargs.update(overrides)
         return daemon.DaemonConfig(**kwargs)

@@ -112,25 +112,26 @@ _FAKE_RCLONE_SRC = textwrap.dedent(
             shutil.copy2(src, dest_dir / Path(src).name)
             sys.exit(0)
 
-        if cmd == "lsjson" and len(argv) >= 2:
+        if cmd == "lsjson":
             if os.environ.get("FAKE_RCLONE_FAIL_LSJSON") == "1":
                 fail("fake rclone: lsjson failed", 1)
             if os.environ.get("FAKE_RCLONE_BAD_JSON") == "1":
                 print("{not valid json")
                 sys.exit(0)
-            spec = argv[1]
+            flags = [a for a in argv[1:] if a.startswith("--")]
+            spec = [a for a in argv[1:] if not a.startswith("--")][0]
             remote_name, _, remote_path = spec.partition(":")
-            src_dir = Path(STORE) / remote_name / remote_path
+            d = Path(STORE) / remote_name / remote_path
             entries = []
-            if (os.environ.get("FAKE_RCLONE_MISSING_FROM_LISTING") != "1"
-                    and src_dir.is_dir()):
-                for p in sorted(src_dir.iterdir()):
-                    if not p.is_file():
+            if os.environ.get("FAKE_RCLONE_MISSING_FROM_LISTING") != "1" and d.is_dir():
+                for p in sorted(d.iterdir()):
+                    if "--dirs-only" in flags and not p.is_dir():
                         continue
-                    size = p.stat().st_size
-                    if os.environ.get("FAKE_RCLONE_SHORT_SIZE") == "1":
+                    size = p.stat().st_size if p.is_file() else -1
+                    if os.environ.get("FAKE_RCLONE_SHORT_SIZE") == "1" and p.is_file():
                         size = max(0, size - 1)
-                    entries.append({"Name": p.name, "Size": size, "IsDir": False})
+                    entries.append({"Name": p.name, "Size": size, "IsDir": p.is_dir(),
+                                    "ID": "id-" + p.name})
             print(json.dumps(entries))
             sys.exit(0)
 

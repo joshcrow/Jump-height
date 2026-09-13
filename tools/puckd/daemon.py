@@ -251,6 +251,7 @@ class DaemonConfig:
     garmin_module: object = None
     flash_module: object = None
     fetch_uf2_fn: "Callable[[str, str, Path], Optional[Path]]" = _default_fetch_uf2
+    share_fn: "Callable[[str], bool]" = upload.ensure_shared
     inbox_dir: str = INBOX_DIR
     fits_dir: str = FITS_DIR
     garmin_interval_s: float = GARMIN_INTERVAL_S
@@ -332,6 +333,10 @@ def _upload_bundle(cfg: DaemonConfig, bundle_path: "Path | str") -> "tuple[bool,
     result = upload.upload(bundle_path, cfg.inbox_dir)
     if getattr(result, "ok", False):
         cfg.runtime["drive_needs_you_sent"] = False
+        if not cfg.runtime.get("folder_shared"):
+            # The folder exists now (drive.file: the app made it). Share it
+            # with Josh once per run; Drive ignores repeats anyway.
+            cfg.runtime["folder_shared"] = bool(cfg.share_fn(cfg.inbox_dir.split("/")[0]))
         return True, _mark_sent(cfg, bundle_path)
     _log(cfg, f"upload did not confirm: {Path(bundle_path).name}: {getattr(result, 'error', '')}")
     return False, None

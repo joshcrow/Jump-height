@@ -144,18 +144,49 @@ class GoogleFlowThroughRclone(unittest.TestCase):
         self.rig = FakeRclone(Path(self._tmp.name) / "rig")
 
     def test_authorize_calls_both_and_passes_our_template(self):
+        if not upload.google_client().get("client_id"):
+            self.skipTest("google-client.json is not on this machine (it is never committed)")
         with patch.dict(os.environ, self.rig.base_env()):
             self.assertTrue(upload.authorize())
             self.assertTrue(upload.is_authorized())
         calls = self.rig.calls()
+        client = upload.google_client()
+        self.assertTrue(client["client_id"].endswith(".apps.googleusercontent.com"))
+        self.assertEqual(client["scope"], "drive.file", "the narrow scope: only files the app made")
         auth = [c for c in calls if c[:1] == ["authorize"]][0]
-        self.assertEqual(auth[1], "drive")
-        self.assertEqual(auth[2], "--template")
-        self.assertTrue(auth[3].endswith("assets/oauth-done.html"))
-        self.assertTrue(Path(auth[3]).is_file(), "the template must ship with the app")
+        self.assertEqual(auth[1:4], ["drive", client["client_id"], client["client_secret"]],
+                         "our own client, not rclone's shared one (retired in 2026)")
+        self.assertEqual(auth[4], "--template")
+        self.assertTrue(auth[5].endswith("assets/oauth-done.html"))
+        self.assertTrue(Path(auth[5]).is_file(), "the template must ship with the app")
         create = [c for c in calls if c[:2] == ["config", "create"]][0]
-        self.assertIn("token", create)
+        self.assertEqual(create[create.index("scope") + 1], "drive.file")
+        self.assertEqual(create[create.index("client_id") + 1], client["client_id"])
         self.assertIn("ya29.fake", create[create.index("token") + 1])
+
+    def test_ensure_shared_grants_the_owner_editor_access_to_the_folder(self):
+        posted = {}
+
+        def post(url, bearer, body):
+            posted["url"], posted["bearer"], posted["body"] = url, bearer, body
+            return {"id": "perm1"}
+        with patch.dict(os.environ, self.rig.base_env()):
+            upload.authorize()
+            (Path(self.rig.root) / "store" / "gdrive" / "JumpHeight" / "inbox").mkdir(parents=True, exist_ok=True) \
+                if hasattr(self.rig, "root") else None
+            # make the folder exist on the fake remote the way an upload would
+            local = Path(self._tmp.name) / "ride.zip"; local.write_bytes(b"PK")
+            upload.upload(local, "JumpHeight/inbox")
+            self.assertTrue(upload.ensure_shared("JumpHeight", post_json=post))
+        self.assertIn("/files/id-JumpHeight/permissions", posted["url"])
+        self.assertEqual(posted["body"], {"role": "writer", "type": "user",
+                                          "emailAddress": "joshcrow1193@gmail.com"})
+        self.assertEqual(posted["bearer"], "ya29.fake")
+
+    def test_ensure_shared_is_false_when_the_folder_is_not_there_yet(self):
+        with patch.dict(os.environ, self.rig.base_env()):
+            upload.authorize()
+            self.assertFalse(upload.ensure_shared("JumpHeight", post_json=lambda *a: {}))
 
     def test_account_email_reads_the_token_back_and_asks_drive(self):
         seen = {}
