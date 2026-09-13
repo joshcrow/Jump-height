@@ -686,6 +686,32 @@ Open findings above), and gating `dfu` behind a required argument before any
 OTA is ever pushed to the rider (DECISION #43). All three are candidates for
 the *next* flash batch, not committed to one.
 
+## The Mac sync agent — built 2026-09-13, rehearsed on the M3, NOT yet on a real puck
+
+What replaces the rider page: `tools/puckd/` (spec and rulings in
+`docs/sync-agent-plan.md`; delete that file when it ships). Nick's whole job
+becomes "plug the puck in to charge". Four notifications exist, three
+"Needs you" lines exist, and a puck with no ride on it produces nothing.
+
+| Claim | Measured | Where |
+|---|---|---|
+| The job, end to end, on this Mac | fake puck over a real pty, real rclone (alias remote on local disk), real macOS notification: pulled 4 jumps, verified, confirmed by `lsjson`, cleared, `Ride synced · 4 jumps` delivered; second plug-in "empty, nothing to sync"; `./tools/jump ingest` took the bundle unchanged | commit fea2589 |
+| Menu bar | rumps app came up as `JH`; after the cycle: `Puck 72%`, `Last ride Sun 1:27 am · 4 jumps`, the other three lines verbatim | same |
+| Gates G1–G5 | adversarial review with mutation checks; three fixes landed in `serial_job.py` (in-frame `#` chatter counted as data, spool clobber, G3/G5 untested) | commit c88da9c, `tools/tests/test_puckd_gates_p3.py` |
+| Suite | 841 passed, 1 skipped, 1 xfailed | `python3 -m pytest tools/tests -q` |
+| Intel Mac | bundle is universal2 top to bottom (0 arm64-only binaries; rclone lipo'd from the two official builds); a full sync cycle ran through the bundle's own interpreter under Rosetta; the real launcher under Rosetta answers on 127.0.0.1:17888 after ~18 s cold | `packaging/`, 255 MB app (184 MB is rclone) |
+| Cost per cycle | every port open pays `Device.drain_boot`'s 5 s window; five opens per cycle; 28 s on the fake | measured 2026-09-13 |
+
+**Not yet measured, in the order they cost:** the real Puck (board was
+unplugged all night — rehearse `python3 -m puckd once <port>` first, then
+the flash leg with an old image); `clear_puck`'s `tracecheck` after a real
+clear (300 s cap, expected fast on an empty region — time it); Josh's own
+Google consent click (`rclone config create gdrive drive`); Nick's Garmin
+login and the ORIGINAL-FIT endpoint (`garmin.py`, unofficial); the `.dmg`
+and the right-click → Open on an actual Intel Mac; `# name=` arriving over
+the cable (every rehearsal bundle is `jumpheight-xxxx-…`). The LaunchAgent
+has been installed nowhere.
+
 ## Known-unmeasured
 
 Stated plainly so an absence is never mistaken for a pass:

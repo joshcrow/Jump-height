@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  packaging/com.jumpheight.puckd.plist — LaunchAgent template.
+
+  packaging/install.sh copies this into ~/Library/LaunchAgents/ (expanding
+  no placeholders — /Applications/JumpHeight Sync.app is a fixed path) and
+  loads it with `launchctl bootstrap gui/$UID`. RunAtLoad + KeepAlive means
+  the menu-bar app comes back on login and after any crash, matching
+  docs/sync-agent-plan.md's Layout line: "the loop + state machine ... ;
+  LaunchAgent at ~/Library/LaunchAgents/com.jumpheight.puckd.plist".
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.jumpheight.puckd</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Applications/JumpHeight Sync.app/Contents/MacOS/JumpHeight Sync</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/com.jumpheight.puckd.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/com.jumpheight.puckd.err.log</string>
+</dict>
+</plist>
