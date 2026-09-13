@@ -92,14 +92,6 @@ p { margin: 0 0 .8rem; }
 .btn:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
 .btn:disabled { opacity: .38; cursor: default; }
 .btn-danger { background: var(--danger); border-color: var(--danger); }
-/* The secondary press (2026-09-12): a re-save is link-styled, never a second
-   black button beside "Empty the puck" or "Update the puck". Still a full-width
-   44px+ target — wet hands. */
-.btn-link {
-  background: none; border-color: transparent; color: var(--text);
-  text-decoration: underline; text-underline-offset: .2em;
-  min-height: 44px; padding: .6rem 0; text-align: left;
-}
 
 /* One caption line, not a four-row table: puck · battery · jumps saved. */
 .facts { color: var(--muted); font-size: .95rem; margin: 0 0 .9rem; }
@@ -142,16 +134,11 @@ textarea:focus-visible { outline: 3px solid var(--focus); outline-offset: 1px; }
 }
 
 .result { margin: 1.5rem 0 0; }
-.result ul, .result ol { margin: .4rem 0 0; padding-left: 1.2rem; }
+.result ul { margin: .4rem 0 0; padding-left: 1.2rem; }
 .result li { margin: .2rem 0; }
 .result .head { font-weight: 600; }
 .result .head.is-ok { color: var(--ok); }
 .result .head.is-bad { color: var(--danger); }
-/* A plain paragraph in the panel (the update outcomes): normal weight, so a
-   four-clause instruction is not shouted in bold. */
-.result .body { margin: .4rem 0 0; }
-/* The update card's title (index.html #update-title). Titles are nouns. */
-.card-title { font-weight: 600; margin: 0 0 .3rem; }
 /* The iOS save link (sync.js saveLink): a link he has to press and HOLD, so it
    needs a big, unmissable target rather than inline-link sizing. */
 .result .save-link {

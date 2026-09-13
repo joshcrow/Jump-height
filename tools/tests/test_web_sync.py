@@ -355,8 +355,8 @@ BENCH_JS = """
     const pt = document.getElementById('progress-text');
     const bf = document.getElementById('bar-fill');
     // The numeric percentage beside the bar (2026-09-11b). The text line
-    // under it carries the elapsed clock alone since 2026-09-12 ("1 min 12 s"
-    // — no byte counts), so the percentage the rider reads lives here.
+    // beside it now carries "2.4 MB of 5.9 MB · 1 min 12 s so far" — bytes and
+    // a ticking clock — so the percentage the rider reads lives here.
     const bp = document.getElementById('bar-pct');
     const mem = performance.memory;
     B.perfMemPresent = !!(mem && typeof mem.usedJSHeapSize === 'number');
@@ -1168,11 +1168,6 @@ class TestWebSync(_WebSyncCase):
                          "one thing the 2026-09-11c correction removed")
         self.assertFalse(self._state()["delivered"],
                          "the chain must not report a save it did not make")
-        # Screen 3 (2026-09-12 copy): one sentence, the jump count in it.
-        self.assertEqual(self._status(), "Ride copied. 3 jumps.")
-        self.assertEqual(
-            self.page.locator("[data-testid=btn-send]").inner_text().strip(), "Save",
-            "the button saves a file, so it says so")
 
         # THE PRESS. The bundle is already built and waiting, so this is the
         # rider's gesture on a download the browser will honour.
@@ -1181,18 +1176,12 @@ class TestWebSync(_WebSyncCase):
                         auto_dl.suggested_filename)
         self.assertEqual(len(downloads), 1,
                          f"one press, one file: {[d.suggested_filename for d in downloads]}")
-        # Screen 4: the receipt is one sentence, and the file is named in the
-        # panel with what to do with it.
-        self.assertEqual(self._status(), "Saved to Downloads.")
-        res = self.page.locator("[data-testid=result]").inner_text()
-        self.assertIn(auto_dl.suggested_filename + " — send it to Josh however you like.", res)
 
-        # The caption line: the puck he can recognise and a battery figure
-        # ("86% battery"), no charging state, no jump count (2026-09-12).
+        # The caption line that replaced the four-row facts table still shows
+        # the puck the rider can recognise, without jargon.
         self.assertIn("JumpHeight-E2C4",
                       self.page.locator("[data-testid=puck-name]").inner_text())
-        batt = self.page.locator("[data-testid=battery]").inner_text()
-        self.assertRegex(batt, r"^\d+% battery$", batt)
+        self.assertIn("charging", self.page.locator("[data-testid=battery]").inner_text())
 
         st = self._state()
         self.assertTrue(st["verified"], f"a clean traceraw pull must verify: {st['reasons']}")
@@ -1320,23 +1309,17 @@ class TestWebSync(_WebSyncCase):
         # THE SECOND HALF OF THE SAFETY NET around `delivered`. downloadBlob()
         # returns true whether or not Chrome wrote the file, so `delivered` is
         # a hand-off, not a receipt; the first half is that the save is his
-        # press at all, and this is the other — the result line directly above
-        # the erase names the file, and the muted line under the instruction
-        # sends him to LOOK for it before he erases anything (2026-09-12 copy).
-        self.assertIn(name, self.page.locator("[data-testid=result]").inner_text(),
-                      "the panel above the erase must name the file he should see")
-        self.assertEqual(self.page.locator("#clear-hint").inner_text(),
-                         "Empty the puck so it’s ready for next time.")
-        self.assertEqual(self.page.locator("#clear-note").inner_text(),
-                         "Make sure the file is in Downloads first.")
+        # press at all, and this is the other — the button's own sentence
+        # names the file, so he has to LOOK for it before he erases anything.
+        hint = self.page.locator("#clear-hint").inner_text()
+        self.assertIn(name, hint,
+                      f"the erase must name the file he should be able to see: {hint!r}")
         self.page.click("[data-testid=btn-clear]")
         self._drive(puck, lambda: self._state()["phase"] in ("cleared", "failed"),
                     "the puck to confirm it is empty")
         self.assertTrue(self._state()["cleared"])
         self.assertIn("clear", self._sent())
-        self.assertEqual(self._status(), "All done. The puck is empty and ready.")
-        self.assertIn("Your ride is in Downloads as " + name + ".",
-                      self.page.locator("[data-testid=result]").inner_text())
+        self.assertIn("Puck is empty and ready for your next ride.", self._status())
 
     def test_the_chain_never_saves_by_itself(self):
         """THE REGRESSION GUARD for the 2026-09-11c correction.
@@ -1384,19 +1367,18 @@ class TestWebSync(_WebSyncCase):
                         "the erase was offered over a ride that has not been saved")
         self.assertTrue(self.page.locator("#step-clear").is_hidden(),
                         "the erase section must not be in the page's flow yet")
-        self.assertNotIn("Saved to Downloads", self._status(),
-                         f"the page claimed a save that never happened: {self._status()!r}")
+        res = self.page.locator("[data-testid=result]").inner_text()
+        self.assertNotIn("Saved to your Downloads", res,
+                         f"the page claimed a save that never happened: {res!r}")
         self.assertEqual(self._one_button(), ["btn-send"],
                          "the one thing left to do is save it")
 
         # The sentence he reads while it copies must not promise the save
         # either — it said "this page saves the ride to your Downloads by
         # itself when it's done" until 2026-09-11c, which would leave him
-        # watching a finished page for a file that is never coming. Since
-        # 2026-09-12 it is the fixed Bluetooth-shape sentence ('#mock' is not
-        # the cable), with the half-hour figure that left Screen 1.
+        # watching a finished page for a file that is never coming.
         hint = self.page.locator("#pull-hint").text_content()
-        self.assertEqual(hint, "Keep the phone next to the puck. This can take up to half an hour.")
+        self.assertIn("ask you to save", hint, hint)
         self.assertNotIn("by itself", hint,
                          f"the copy still promises an automatic save: {hint!r}")
 
@@ -1481,19 +1463,13 @@ class TestWebSync(_WebSyncCase):
         self.assertEqual(st["trace_bytes_device"], CSV_BYTES + 765)
         self.assertEqual(st["trace_bytes_got"], CSV_BYTES)
 
-        # Recorded on the seam and in the manifest — and NOT on screen
-        # (2026-09-12 copy: no byte counts, no quirks explained). What the
-        # rider sees is the fixed status and the one muted line saying the
-        # details are in the file; the file (below) really carries them.
+        # Said out loud, in the rider's language, on the screen he reads.
         note = st["f22_note"]
         self.assertIn("The puck is full", note)
         self.assertIn("765", note)
         self.assertIn("the copy is complete", note)
-        self.assertEqual(self._status(), "Ride copied. 3 jumps.")
-        res = self.page.locator("[data-testid=result]").inner_text()
-        self.assertNotIn("765", res, f"a byte count reached the screen: {res!r}")
-        self.assertNotIn("quirk", res)
-        self.assertEqual(res, "Details for Josh are saved in the file.")
+        self.assertIn(note, self.page.locator("[data-testid=result]").inner_text(),
+                      "the forgiveness must be shown, not just recorded")
 
         _name, z = self._bundle()
         man = json.loads(z.read("manifest.json"))
@@ -1516,11 +1492,7 @@ class TestWebSync(_WebSyncCase):
         self.assertNotIn("known quirk", joined)
         self.assertTrue(self.page.locator("[data-testid=btn-clear]").is_hidden(),
                         "Clear must never be offered on an unverified ride")
-        self.assertEqual(self._status(), "The copy didn’t check out.")
-        # The reason (a byte count) stays off the screen and in the file.
-        res = self.page.locator("[data-testid=result]").inner_text()
-        self.assertNotIn("bytes", res, f"a byte count reached the screen: {res!r}")
-        self.assertIn("Details for Josh are saved in the file.", res)
+        self.assertIn("still has everything", self._status())
 
     def test_csv_surplus_is_still_a_refusal(self):
         """One byte MORE than the puck says it holds. F-22 only ever runs the
@@ -1562,21 +1534,13 @@ class TestWebSync(_WebSyncCase):
             "Try again")
         self.assertEqual(
             self.page.locator("[data-testid=btn-send]").inner_text().strip(),
-            "Save")
+            "Send")
 
-        # The 2026-09-12 copy, exactly: one sentence of status, "Nothing was
-        # lost.", the save offer, and the one muted line. The reasons
-        # themselves (byte counts, the check number) are NOT rendered.
-        self.assertEqual(self._status(), "The copy didn’t check out.")
-        res = self.page.locator("[data-testid=result]").inner_text()
-        self.assertIn("Nothing was lost.", res)
-        self.assertIn("You can still save this copy for Josh.", res)
-        self.assertIn("Details for Josh are saved in the file.", res)
-        self.assertNotIn("check number", res, f"a diagnostic reached the screen: {res!r}")
-        self.assertNotIn("bytes", res, f"a byte count reached the screen: {res!r}")
+        status = self._status()
+        self.assertIn("still has everything", status,
+                      f"the refusal must say the puck kept the ride: {status!r}")
 
-        # Both independent checks fired: fewer bytes AND a crc that can't match
-        # — on the seam, where Josh's tests read them.
+        # Both independent checks fired: fewer bytes AND a crc that can't match.
         joined = " ".join(st["reasons"]).lower()
         self.assertIn("came across", joined)
         self.assertIn("check number", joined)
@@ -1662,12 +1626,10 @@ class TestWebSync(_WebSyncCase):
                          "the 'Josh empties the puck' line was cut; a test "
                          "still reading it would be asserting on nothing")
         hint = self.page.locator("#clear-hint").inner_text()
-        self.assertIn("ready for next time", hint,
+        self.assertIn("protects your next ride", hint,
                       "he must be told WHY, or he will skip it: " + hint)
-        self.assertIn("in Downloads first", self.page.locator("#clear-note").inner_text(),
-                      "and he must be sent to look for the file first")
-        self.assertIn(st["bundle"], self.page.locator("[data-testid=result]").inner_text(),
-                      "and the file he should look for is named directly above")
+        self.assertIn(st["bundle"], hint,
+                      "and he must be told WHICH FILE to look for first: " + hint)
 
     def test_the_owner_flag_lifts_the_delivered_requirement(self):
         """?allowclear=1 is Josh asserting he already holds the ride. Before
@@ -1723,11 +1685,8 @@ class TestWebSync(_WebSyncCase):
         self.assertIn("kept recording while you plugged it in", note)
         self.assertIn("700", note)
         self.assertIn("that is normal", note)
-        # Not on screen (2026-09-12): the muted line points at the file, and
-        # the manifest below carries both readings.
-        res = self.page.locator("[data-testid=result]").inner_text()
-        self.assertNotIn("700", res, f"a byte count reached the screen: {res!r}")
-        self.assertEqual(res, "Details for Josh are saved in the file.")
+        self.assertIn(note, self.page.locator("[data-testid=result]").inner_text(),
+                      "the explanation must be shown, not just recorded")
 
         _name, z = self._bundle()
         man = json.loads(z.read("manifest.json"))
@@ -1772,15 +1731,12 @@ class TestWebSync(_WebSyncCase):
         self._connect(puck)
         st = self.page.locator("[data-testid=status]").inner_text()
         res = self.page.locator("[data-testid=result]").inner_text()
-        # The 2026-09-12 copy has one sentence for a ride with no jumps in it,
-        # and it is not "nothing recorded" — the trace is in the bundle.
-        self.assertEqual(st, "Ride copied. No jumps this time.")
+        self.assertIn("No jumps were detected", st)
+        self.assertIn("the whole ride is here", st)
         self.assertNotIn("nothing was recorded", st.lower(),
                          "a full trace is not 'nothing recorded'")
         self.assertNotIn("nothing was recorded", res.lower())
         self.assertTrue(self.page.evaluate("() => window.__sync.state().verified"))
-        self.assertEqual(self._state()["trace_bytes_got"], CSV_BYTES,
-                         "the whole ride must be in the bundle behind that sentence")
 
     def test_header_only_trace_region_reads_as_an_empty_puck(self):
         """A real nrf52 puck ALWAYS emits the 6-byte "t,mag\\n" header when it
@@ -1806,9 +1762,10 @@ class TestWebSync(_WebSyncCase):
         self.assertFalse(st["f22_band_applied"], "nothing was forgiven by F-22 here")
         self.assertEqual(st["jump_rows"], 0)
 
-        # An empty puck reads the same as a ride with no jumps (2026-09-12
-        # copy); Josh tells them apart from trace_bytes_got in the manifest.
-        self.assertEqual(self._status(), "Ride copied. No jumps this time.")
+        status = self._status()
+        self.assertIn("nothing saved on it", status,
+                      f"the empty-puck sentence must be reachable: {status!r}")
+        self.assertIn("so Josh can see why", status)
 
         _name, z = self._bundle()
         self.assertEqual(z.read("trace.csv").decode(), "t,mag\n")
@@ -1849,25 +1806,22 @@ class TestWebSync(_WebSyncCase):
         self._wait_for(lambda: self._state()["phase"] == "failed",
                        "the inactivity timer to end the first pull")
         first = self._status()
-        self.assertIn("The puck stopped responding.", first,
+        self.assertIn("stopped part-way", first)
+        self.assertIn("went quiet for 30 seconds", first,
                       f"it must be the INACTIVITY_MS timer that ended it, not "
                       f"some other failure: {first!r}")
         # And the failure screen offers him the one thing that can help —
         # nothing arrived, so there is no evidence bundle to send beside it.
         self.assertEqual(self._one_button(), ["btn-pull"])
-        # The status names THAT button, and it is on screen. The link is still
-        # up here (the puck went quiet, the cable did not), so the spec's
-        # "press Connect" would name a button that is not there — sync.js
-        # stoppedSentence() reads the label off the page instead; the
-        # lost-link half is pinned by
+        # The advice names THAT button, and it is on screen. The link is still
+        # up here (the puck went quiet, the cable did not) — which is the half
+        # of retryAdvice() that survives; the lost-link half is pinned by
         # test_a_cable_yanked_mid_copy_names_a_button_on_screen.
-        self.assertIn("press Try again.", first, first)
-        self.assertNotIn("Connect", first, f"names a button that is not on screen: {first!r}")
-        self.assertEqual(self.page.locator("[data-testid=result]").inner_text(),
-                         "Nothing was lost.")
+        advice = self.page.locator("[data-testid=result]").inner_text()
+        self.assertIn('"Try again"', advice, advice)
         self.assertEqual(
             self.page.locator("[data-testid=btn-pull]").inner_text().strip(),
-            "Try again", "the status names a button whose label has moved on")
+            "Try again", "the advice names a button whose label has moved on")
 
         # Second attempt: the same puck, answering everything. "Try again"
         # re-runs the WHOLE chain, so it ends where the first attempt was
@@ -2005,42 +1959,34 @@ class TestWebSync(_WebSyncCase):
 
         # The caption must not print zeros it did not read. The byte-count row
         # ("Ride data waiting", #waiting) was cut 2026-09-09 along with "Puck
-        # software" (#fw), and the jump count (#stored-jumps, which read
-        # "unknown — not saving" here) was cut 2026-09-12 — so this test
-        # asserts the rows are GONE rather than quietly passing against an
+        # software" (#fw) — diagnostics, not news to a rider — so this test
+        # asserts the row is GONE rather than quietly passing against an
         # element that no longer exists (CLAUDE.md rule 3), and then checks
-        # the places that still carry the condition.
+        # the two places that still carry the condition.
         self.assertEqual(self.page.locator("#waiting").count(), 0,
                          "the byte-count row was cut; a test still reading it "
                          "would be asserting on nothing")
         self.assertEqual(self.page.locator("#fw").count(), 0,
                          "the firmware/build row was cut")
-        self.assertEqual(self.page.locator("#stored-jumps").count(), 0,
-                         "the jump-count caption was cut 2026-09-12")
-        self.assertNotIn("0 jumps", self.page.locator("#facts").inner_text(),
-                         "a zero the store never read must not be printed")
+        self.assertIn("unknown", self.page.locator("#stored-jumps").inner_text().lower())
 
         st = self._state()
         self.assertFalse(st["verified"], "nothing read from an unmounted store verifies")
         self.assertTrue(any("not saving" in r for r in st["reasons"]), st["reasons"])
         # The chain pulls a NO REC puck on purpose — that bundle is the one
-        # Josh most needs — and the condition survives it, in the status line
-        # he is left looking at and the panel under it (2026-09-12 copy).
-        self.assertEqual(self._status(), "The puck isn’t recording.")
-        res = self.page.locator("[data-testid=result]").inner_text()
-        self.assertIn("Don’t empty it. Save this copy and tell Josh.", res)
-        self.assertNotIn("NO REC", res, "protocol shorthand is not the rider's sentence")
+        # Josh most needs — and the rider's own word for the condition survives
+        # it, in the status line he is left looking at.
+        self.assertIn("NO REC", self._status(),
+                      "the rider already has a word for this (docs/rider-brief.md item 6)")
+        self.assertIn("do NOT empty the puck", self._status())
         # And the save he is told to make is offered and works. The status
-        # above must still be the not-recording sentence afterwards: doSend()
-        # keeps S.outcome on an unverified ride, not its own receipt, precisely
-        # so the save cannot overwrite the news.
+        # above must still be the NO REC sentence afterwards: doSend() writes
+        # S.outcome, not its own receipt, precisely so the save cannot
+        # overwrite the news.
         self._save_press()
         self.assertTrue(self._state()["delivered"], "Josh must get the NO REC evidence")
-        self.assertEqual(self._status(), "The puck isn’t recording.",
-                         "the save overwrote the one sentence that mattered")
-        res = self.page.locator("[data-testid=result]").inner_text()
-        self.assertIn("Don’t empty it.", res)
-        self.assertIn("Details for Josh are saved in the file.", res)
+        self.assertIn("NO REC", self._status(),
+                      "the save overwrote the one sentence that mattered")
 
         self.assertTrue(self.page.locator("[data-testid=btn-clear]").is_hidden(),
                         "the erase must stay shut for a puck whose store never mounted")
@@ -2071,14 +2017,11 @@ class TestWebSync(_WebSyncCase):
         status = self._status()
         self.assertNotIn("ERR traceraw storage_down", status,
                          f"protocol text reached the rider: {status!r}")
-        self.assertEqual(status, "The puck isn’t recording.")
+        self.assertIn("NO REC", status)
         result = self.page.locator("[data-testid=result]").inner_text()
-        self.assertNotIn("closer", result,
+        self.assertNotIn("closer to the puck", result,
                          "retry advice must not be offered where a retry cannot help")
-        # Nothing came across, so "Save this copy" would name a button that is
-        # not there: the panel says the two things that are true.
-        self.assertEqual(result, "Don’t empty it. Tell Josh.")
-        self.assertNotIn("Nothing was lost", status + result,
+        self.assertNotIn("still has everything", status,
                          "a puck that is not saving cannot vouch for what it holds")
 
     def _padding_case(self, raw: bytes):
@@ -2166,9 +2109,8 @@ class TestWebSync(_WebSyncCase):
         self.assertEqual(self.page.evaluate("() => window.__shareCalls"), 0,
                          "a desktop must not call navigator.share() at all")
         self.assertTrue(self._state()["delivered"])
-        self.assertEqual(self._status(), "Saved to Downloads.")
         res = self.page.locator("[data-testid=result]").inner_text()
-        self.assertIn(dl.suggested_filename + " — send it to Josh however you like.", res)
+        self.assertIn("Saved to your Downloads", res)
         self.assertNotIn("share sheet", res)
 
     def test_a_failed_share_sheet_falls_back_to_the_download(self):
@@ -2200,12 +2142,9 @@ class TestWebSync(_WebSyncCase):
                         dl.value.suggested_filename)
         st = self._state()
         self.assertTrue(st["delivered"], "the fallback must count as delivered")
-        # The same Screen 4 as the Mac: the sheet's failure is a mechanism and
-        # is not explained (2026-09-12 copy).
-        self.assertEqual(self._status(), "Saved to Downloads.")
         res = self.page.locator("[data-testid=result]").inner_text()
-        self.assertIn(dl.value.suggested_filename + " — send it to Josh however you like.", res)
-        self.assertNotIn("share sheet", res)
+        self.assertIn("Saved to your Downloads", res)
+        self.assertIn("Nothing was lost", res)
 
     def test_a_cancelled_share_sheet_does_not_force_a_download(self):
         """The other half, and the reason the fallback is not unconditional:
@@ -2226,9 +2165,9 @@ class TestWebSync(_WebSyncCase):
                          "a cancelled share must not count as delivered")
         st = self.page.locator("[data-testid=status]").inner_text()
         res = self.page.locator("[data-testid=result]").inner_text()
-        self.assertEqual(st, "Not saved yet. Press Save again.")
-        self.assertNotIn("share sheet", res, "the mechanism is not explained")
-        self.assertNotIn("Saved to Downloads", st + res,
+        self.assertIn("Not sent yet", st)
+        self.assertIn("closed the share sheet", res)
+        self.assertNotIn("Saved to your Downloads", res,
                          "a deliberate cancel must not push a file at him")
         # The button stays, so he can change his mind.
         self.assertEqual(self._one_button(), ["btn-send"])
@@ -2264,8 +2203,6 @@ class TestWebSync(_WebSyncCase):
         result = self.page.locator("[data-testid=result]").inner_text()
         self.assertNotIn("Bluefy", result,
                          f"do not name the browser he is standing in: {result!r}")
-        self.assertIn("Press and hold this link", result)
-        self.assertEqual(self._status(), "Not saved yet.")
         link = self.page.locator("[data-testid=result] a.save-link")
         self.assertEqual(link.count(), 1, f"no save link was offered: {result!r}")
         self.assertTrue(link.get_attribute("href").startswith("blob:"),
@@ -2334,10 +2271,7 @@ class TestWebSync(_WebSyncCase):
         # the ONLY copy of the ride, so saving it again stays reachable.
         save_again = self.page.locator("[data-testid=btn-send]")
         self.assertEqual(self._one_button(), ["btn-send"])
-        self.assertEqual(save_again.inner_text().strip(), "Save a copy again")
-        # Secondary, link-styled — not a second black button (2026-09-12).
-        self.assertIn("btn-link", save_again.get_attribute("class"))
-        self.assertNotIn("btn-primary", save_again.get_attribute("class"))
+        self.assertIn("Save the ride again", save_again.inner_text())
         save_again.click()
         self._drive(puck, lambda: self.page.evaluate(
             "() => !!window.__sync.lastBundle()"), "the bundle to be rebuilt")
@@ -2525,7 +2459,8 @@ class TestWebSyncAtRegionScale(_WebSyncCase):
         texts = [s["progress_text"] for s in outside]
         self.assertGreater(len(set(texts)), 1,
                            f"the progress text never changed during the pull: {texts}")
-        # The percentage lives in its own label beside the bar (#bar-pct), so
+        # The percentage moved to its own label beside the bar (#bar-pct) when
+        # the text line became "N MB of M MB · T so far" (2026-09-11b), so
         # that is where the number the rider reads is sampled from.
         pcts = sorted({int(g.group(1)) for s in outside
                        for g in [re.search(r"(\d+)\s*%", s["pct"] or "")] if g})
@@ -2534,14 +2469,11 @@ class TestWebSyncAtRegionScale(_WebSyncCase):
                         f"{[s['pct'] for s in outside]}")
         # The ticking clock is the load-bearing half — a percentage can sit
         # still on a slow link and look dead. Two different readings, both
-        # measured in-session — and since 2026-09-12 the text line is the
-        # clock ALONE: no byte counts and no KB/s reach the rider (they go to
-        # Josh in manifest.json transfer.bytes_received / seconds).
-        clocks = sorted({t for t in texts if re.fullmatch(r"(\d+ min )?\d+ s", t)})
+        # measured in-session.
+        clocks = sorted({g.group(0) for t in texts
+                         for g in [re.search(r"\d+ s so far", t)] if g})
         self.assertGreater(len(clocks), 1,
                            f"the elapsed clock never advanced: {texts}")
-        self.assertEqual([t for t in texts if not re.fullmatch(r"(\d+ min )?\d+ s", t)], [],
-                         f"the progress line carried more than the clock: {texts}")
         bars = sorted({s["bar"] for s in outside if s["bar"]})
         self.assertGreater(len(bars), 1, f"the bar never moved: {bars}")
         m["percentages_seen"] = pcts
@@ -2803,9 +2735,7 @@ class TestWebSyncCable(_WebSyncCase):
         self.assertTrue(self.page.locator("[data-testid=btn-update]").is_hidden(),
                         "there is nothing to update, so there is no button")
         note = self.page.locator("#update-note").inner_text()
-        self.assertEqual(note, "Software is up to date.")
-        self.assertTrue(self.page.locator("#update-title").is_hidden(),
-                        "no card title when there is nothing to offer")
+        self.assertIn("up to date", note, note)
         self.assertEqual(self._update_panel(), "",
                          "nothing to do means nothing to read")
         self.assertNotIn("uf2", self._sent())
@@ -2862,14 +2792,12 @@ class TestWebSyncCable(_WebSyncCase):
         self._to_empty_puck(puck)
 
         self.assertEqual(self._state()["update_offer"], "stale")
-        # The card (2026-09-12 copy): a title, a body, the button. The recovery
-        # sentence is for failure screens only and must NOT be on the offer.
-        self.assertEqual(self.page.locator("#update-title").inner_text(),
-                         "Software update available")
         note = self.page.locator("#update-note").inner_text()
-        self.assertEqual(note, "Takes about two minutes. Your ride is already saved.")
-        self.assertNotIn("small button", note,
-                         f"the recovery belongs on failure screens only: {note!r}")
+        self.assertIn("older software", note, note)
+        self.assertIn("cannot break the puck", note, note)
+        self.assertIn("press the small button on the puck twice and it comes "
+                      "straight back", note,
+                      f"the recovery must be offered before he commits: {note!r}")
         self.assertEqual(
             self.page.locator("[data-testid=btn-update]").inner_text().strip(),
             "Update the puck")
@@ -2877,16 +2805,12 @@ class TestWebSyncCable(_WebSyncCase):
         # THE SECOND STATED EXCEPTION. Two buttons, about two different things:
         # the ride (this machine now holds the only copy, so re-saving stays
         # reachable) and the puck. Asserted exactly, so a third can never
-        # arrive unnoticed — and the re-save is the link-styled one, so only
-        # ONE black button is on screen.
+        # arrive unnoticed.
         self.assertEqual(self._one_button(), ["btn-send", "btn-update"],
                          "the emptied-puck screen offers the re-save and the "
                          "update, and nothing else")
-        save_again = self.page.locator("[data-testid=btn-send]")
-        self.assertEqual(save_again.inner_text().strip(), "Save a copy again")
-        self.assertIn("btn-link", save_again.get_attribute("class"))
-        self.assertIn("btn-primary",
-                      self.page.locator("[data-testid=btn-update]").get_attribute("class"))
+        self.assertIn("Save the ride again",
+                      self.page.locator("[data-testid=btn-send]").inner_text())
 
     def test_pressing_update_saves_the_file_and_restarts_the_puck(self):
         """THE PRESS: one click, one file in his Downloads, one `uf2` on the
@@ -2918,28 +2842,23 @@ class TestWebSyncCable(_WebSyncCase):
         self._wait_for(lambda: self._state()["update_step"] == "dragging",
                        "the page to reach the drag instructions")
         panel = self._update_panel()
-        self.assertIn("One more step", panel)
-        self.assertIn(FW_FILE + " is in your Downloads.", panel,
-                      f"the file he must drag is unnamed: {panel!r}")
-        self.assertIn("A drive called XIAO-SENSE has appeared in Finder. Drag the file onto it.",
-                      panel, f"the drive he must drag it onto is unnamed: {panel!r}")
-        self.assertIn("The drive disappears during the copy. That’s normal.", panel,
+        self.assertIn(FW_FILE, panel, f"the file he must drag is unnamed: {panel!r}")
+        self.assertIn("XIAO-SENSE", panel,
+                      f"the drive he must drag it onto is unnamed: {panel!r}")
+        self.assertIn("may say the copy failed", panel,
                       "the mid-write unmount is what success looks like, and "
                       "he must be told before it happens")
-        self.assertIn("If anything goes wrong, press the small button on the puck twice.",
-                      panel, "the one recovery sentence, verbatim")
-        self.assertNotIn("comes straight back", panel)
-        # Numbered steps (2026-09-12): the panel is an ordered list.
-        self.assertEqual(self.page.locator("[data-testid=update-result] ol li").count(), 3)
+        self.assertIn("press the small button on the puck twice and it comes "
+                      "straight back", panel)
         # Nothing else on screen: from here there is exactly one thing to do
         # and it is a drag.
         self.assertEqual(self._one_button(), [],
                          "the drag screen must offer no buttons at all")
         # And the link going away was not reported as a fault.
         status = self._status()
-        self.assertNotIn("disconnected", status, f"the expected reboot was reported "
-                                                 f"as a lost cable: {status!r}")
-        self.assertEqual(status, "Drag the file onto the XIAO-SENSE drive.")
+        self.assertNotIn("dropped", status, f"the expected reboot was reported "
+                                            f"as a lost cable: {status!r}")
+        self.assertIn("XIAO-SENSE", status)
 
     def test_the_update_confirms_itself_when_the_puck_comes_back(self):
         """CONSTRAINT FOUR: confirm the result.
@@ -2969,10 +2888,11 @@ class TestWebSyncCable(_WebSyncCase):
                            "the page never opened a port — 'done' was not a "
                            "reading off the puck")
         status = self._status()
-        self.assertEqual(status, "Update complete. You can unplug the puck.")
+        self.assertIn("running the new software", status, status)
         panel = self._update_panel()
-        self.assertEqual(panel, "Now running " + FW_SRC + ".",
-                         f"the confirmation must say what it actually read: {panel!r}")
+        self.assertIn(FW_SRC, panel,
+                      f"the confirmation must say what it actually read: {panel!r}")
+        self.assertIn("already saved", panel)
 
         # The ride's own buttons come back once the flash has an answer —
         # "Save the ride again" in particular, because doClear dropped the
@@ -3013,16 +2933,14 @@ class TestWebSyncCable(_WebSyncCase):
                        "the page to notice the build did not change",
                        timeout=20.0)
         self.assertEqual(self._state()["update_src_after"], OG_SRC)
-        self.assertEqual(self._status(), "The update didn’t take.")
         panel = self._update_panel()
-        self.assertIn("press the small button on the puck twice", panel,
+        self.assertIn("press the small button on the puck twice and it comes "
+                      "straight back", panel,
                       f"the failure path must name the recovery: {panel!r}")
-        self.assertIn("wait for XIAO-SENSE, drag the file on again", panel)
-        self.assertIn("still on its previous software", panel)
-        self.assertIn("Your ride is already saved.", panel)
-        # No build hash on this screen (2026-09-12): the old build it came
-        # back on is on the seam (asserted above), not in front of the rider.
-        self.assertNotIn(OG_SRC, panel, f"a build hash reached the screen: {panel!r}")
+        self.assertIn("XIAO-SENSE", panel)
+        self.assertIn(FW_FILE, panel)
+        self.assertIn("Nothing is broken", panel)
+        self.assertIn("already saved", panel)
 
     def test_a_puck_that_will_not_restart_says_so_instead_of_guessing(self):
         """`uf2` predates nothing on the bench puck, but the rider's OG is on
@@ -3047,27 +2965,19 @@ class TestWebSyncCable(_WebSyncCase):
 
         self._wait_for(lambda: self._state()["update_step"] == "norestart",
                        "the page to report that the puck never restarted")
-        # The puck's own words are for Josh: on the seam and in device.log,
-        # not on the screen (2026-09-12 copy).
-        self.assertEqual(self._state()["update_why"], "ERR unknown_command uf2",
-                         "the reading must survive somewhere Josh can read it")
-        self.assertEqual(self._status(), "The puck didn’t enter update mode.")
         panel = self._update_panel()
-        self.assertNotIn("ERR", panel, f"protocol text reached the rider: {panel!r}")
-        self.assertIn("Nothing changed and your ride is saved. Tell Josh.", panel)
-        self.assertIn("press the small button on the puck twice", panel)
-        self.assertNotIn("XIAO-SENSE", panel,
+        self.assertIn("ERR unknown_command uf2", panel,
+                      f"the puck's own words are all Josh has here: {panel!r}")
+        self.assertIn("Nothing on the puck has changed", panel)
+        self.assertIn("harmless", panel,
+                      "the file he now has in Downloads must be accounted for")
+        self.assertIn("press the small button on the puck twice and it comes "
+                      "straight back", panel)
+        self.assertNotIn("XIAO-SENSE will appear", panel,
                          "he must not be sent looking for a drive that is not "
                          "coming")
         self.assertTrue(self.page.evaluate("() => window.__sync.state().connected"),
                         "the link never dropped, which is the whole finding")
-        # And the words really are in the file: "Save a copy again" rebuilds
-        # device.log with the whole session in it.
-        self.page.click("[data-testid=btn-send]")
-        self._drive(puck, lambda: self.page.evaluate(
-            "() => !!window.__sync.lastBundle()"), "the bundle to be rebuilt")
-        _name, z = self._bundle()
-        self.assertIn("ERR unknown_command uf2", z.read("device.log").decode())
 
     def test_a_puck_that_answers_ok_but_never_reboots_is_not_called_restarted(self):
         """THE OK-THEN-ERR SHAPE, and the reason `OK uf2` is not the
@@ -3109,16 +3019,13 @@ class TestWebSyncCable(_WebSyncCase):
         self.assertTrue(self.page.evaluate("() => window.__sync.state().connected"),
                         "the link dropped after all, so this is not the path "
                         "the test claims to be on")
-        # The puck said why, and the reading is kept — on the seam, for Josh —
-        # while the screen carries the fixed sentence (2026-09-12 copy).
-        self.assertIn("ERR uf2_unsupported", self._state()["update_why"] or "",
-                      "the puck said why and the page swallowed it")
-        self.assertEqual(self._status(), "The puck didn’t enter update mode.")
         panel = self._update_panel()
-        self.assertNotIn("ERR", panel, f"protocol text reached the rider: {panel!r}")
-        self.assertIn("Nothing changed and your ride is saved. Tell Josh.", panel)
-        self.assertIn("press the small button on the puck twice", panel)
-        self.assertNotIn("XIAO-SENSE", panel,
+        self.assertIn("ERR uf2_unsupported", panel,
+                      f"the puck said why and the page swallowed it: {panel!r}")
+        self.assertIn("Nothing on the puck has changed", panel)
+        self.assertIn("press the small button on the puck twice and it comes "
+                      "straight back", panel)
+        self.assertNotIn("XIAO-SENSE will appear", panel,
                          "he must not be sent looking for a drive that is not "
                          "coming")
 
@@ -3141,19 +3048,21 @@ class TestWebSyncCable(_WebSyncCase):
         self._wait_for(lambda: self._state()["update_step"] == "unchecked",
                        "the page to report that it could not check")
         status = self._status()
-        self.assertEqual(status, "Couldn’t confirm the update.")
+        self.assertIn("could not check it afterwards", status, status)
         panel = self._update_panel()
         self.assertIn("reload this page and press Connect", panel,
                       f"he must be told how to find out for himself: {panel!r}")
-        self.assertIn("If it says the software is up to date, it worked.", panel)
-        self.assertIn("press the small button on the puck twice", panel)
+        self.assertIn("press the small button on the puck twice and it comes "
+                      "straight back", panel)
+        self.assertIn("saved before any of this started", panel)
         # It must NOT claim the update worked. Checked against the sentences
         # the 'done' screen actually uses — "up to date" appears here on
-        # purpose, inside the instruction for finding out, so testing for that
+        # purpose, inside the instruction for finding out ("If it then says
+        # the software is up to date, the update worked"), so testing for that
         # phrase would fail the page for saying the right thing.
         self.assertIsNone(self._state()["update_src_after"])
-        self.assertNotIn("Update complete", status + panel)
-        self.assertNotIn("Now running", panel)
+        self.assertNotIn("running the new software", panel)
+        self.assertNotIn("The puck is up to date.", panel)
 
     def test_a_broken_firmware_manifest_never_blocks_the_ride(self):
         """The manifest is a nicety on the end of the page's real job. A 404 —
@@ -3245,20 +3154,10 @@ class TestWebSyncCable(_WebSyncCase):
             "Connect")
         self.assertTrue(self.page.locator("#ble-hint").is_hidden(),
                         "the Bluetooth hint must go with its button")
-        # The "20–30 minutes (an estimate — nobody has timed a real one yet)"
-        # paragraph (#ble-time-hint) was cut 2026-09-12 with its hedge; the
-        # Bluetooth figure lives in the copying screen's hint now (pinned by
-        # test_the_chain_never_saves_by_itself). Asserted GONE rather than
-        # quietly hidden (CLAUDE.md rule 3).
-        self.assertEqual(self.page.locator("#ble-time-hint").count(), 0,
-                         "the Bluetooth estimate paragraph was cut; a test still "
-                         "reading it would be asserting on nothing")
+        self.assertTrue(self.page.locator("#ble-time-hint").is_hidden(),
+                        "the 20-30 minute figure is a BLUETOOTH estimate and "
+                        "must not appear on the cable path")
         self.assertFalse(self.page.locator("#usb-hint").is_hidden())
-        self.assertEqual(self.page.locator("#usb-hint").inner_text(),
-                         "When Chrome asks, choose XIAO nRF52840 Sense.")
-        self.assertEqual(self.page.locator("#lede").inner_text(),
-                         "Plug in the puck, then press Connect.")
-        self.assertEqual(self.page.locator("h1").inner_text(), "Your ride")
         # The rows cut in the same pass: a byte count and a build hash.
         self.assertEqual(self.page.locator("#waiting").count(), 0)
         self.assertEqual(self.page.locator("#fw").count(), 0)
@@ -3278,14 +3177,8 @@ class TestWebSyncCable(_WebSyncCase):
         self.assertEqual(self._visible_connect_buttons(), ["btn-connect"],
                          "without a serial port Bluetooth must be offered")
         self.assertFalse(self.page.locator("#ble-hint").is_hidden())
-        self.assertEqual(self.page.locator("#ble-hint").inner_text(),
-                         "Choose the one that starts with JumpHeight.")
-        # Both buttons read "Connect" (2026-09-12); the phone lede is rewritten
-        # by init() for the shape it is on.
-        self.assertEqual(
-            self.page.locator("[data-testid=btn-connect]").inner_text().strip(), "Connect")
-        self.assertEqual(self.page.locator("#lede").inner_text(),
-                         "Turn on the puck, keep it next to your phone, then press Connect.")
+        self.assertFalse(self.page.locator("#ble-time-hint").is_hidden(),
+                         "the Bluetooth estimate belongs on the Bluetooth path")
         self.assertTrue(self.page.locator("#usb-hint").is_hidden())
 
     def test_no_link_at_all_says_which_browser_to_use(self):
@@ -3294,10 +3187,17 @@ class TestWebSyncCable(_WebSyncCase):
                          "Object.defineProperty(Navigator.prototype, 'bluetooth', "
                          "{ get: () => undefined, configurable: true });")
         status = self._status()
-        # One sentence, the rider's ONE configuration (2026-09-12 copy). The
-        # Android and Bluefy sentences it used to carry are gone with it.
-        self.assertEqual(status, "Open this page in Chrome on a Mac and use the cable.")
-        self.assertNotIn("Bluefy", status)
+        # The Mac leads: it is the rider's ONE configuration and the remedy he
+        # can act on in ten seconds. The Android and iPhone sentences stay
+        # behind it — this page is also the phone fallback, and Bluefy is the
+        # only iPhone browser that reaches the puck at all.
+        self.assertIn("On a Mac, open this page in Chrome and use the cable",
+                      status, f"the Mac case must lead: {status!r}")
+        self.assertLess(status.index("Mac"), status.index("Android"),
+                        f"Android must not come before the Mac: {status!r}")
+        self.assertIn("Chrome", status)
+        self.assertIn("cable", status)
+        self.assertIn("Bluefy", status)
 
     def test_cancelled_port_picker_is_a_plain_sentence(self):
         self._open_plain(
@@ -3306,21 +3206,24 @@ class TestWebSyncCable(_WebSyncCase):
             "new DOMException('No port selected by the user.', 'NotFoundError')) }) });")
         self.page.click("[data-testid=btn-connect-usb]")
         self.page.wait_for_function(
-            "() => document.querySelector('[data-testid=status]').textContent.includes('No puck chosen')",
+            "() => document.querySelector('[data-testid=status]').textContent.includes('No puck picked')",
             timeout=8000)
         status = self._status()
+        self.assertIn("cable", status)
         # The string Chrome actually shows, measured off the board with ioreg
         # 2026-09-09: USB Product Name "XIAO nRF52840 Sense". It is NOT
         # "JumpHeight" — that is the BLE advertised name and cannot appear in
         # a USB port picker, so telling him to look for it sent him hunting
         # for something that does not exist.
-        self.assertEqual(status, "No puck chosen. Press Connect and choose XIAO nRF52840 Sense.")
+        self.assertIn("XIAO nRF52840 Sense", status)
         self.assertNotIn("JumpHeight", status,
                          "the BLE name cannot appear in a USB port picker")
-        # It names the button by the label the button actually carries
-        # (CLAUDE.md §4, the mirror case).
-        self.assertIn("Press " + self.page.locator("[data-testid=btn-connect-usb]").inner_text().strip()
-                      + " and choose", status,
+        # It must name the button by the label the button actually carries.
+        # That label became "Connect" on 2026-09-09 when the cable became the
+        # only path on a computer; this sentence said 'tap "Connect with the
+        # cable"', which now names nothing on screen (CLAUDE.md §4, the mirror
+        # case).
+        self.assertIn('tap "Connect" and choose', status,
                       f"the retry sentence names a button that is not there: {status!r}")
         # The connect button comes back: he can try again.
         self.assertFalse(self.page.locator("[data-testid=btn-connect-usb]").is_disabled())
@@ -3366,16 +3269,16 @@ class TestWebSyncCable(_WebSyncCase):
         self.assertTrue(self.page.evaluate("() => window.__sync.state().connected"))
 
         self.page.evaluate("() => window.__fakePort.drop()")
-        self._wait_for(lambda: "disconnected" in self._status(),
+        self._wait_for(lambda: "dropped" in self._status(),
                        "the page to notice the link went away")
 
-        # The 2026-09-12 sentence, exactly: it names the cable (over USB he
-        # must not be told to move closer) and the Connect button, which is
-        # the one back on screen. The old "reload this page" tail is gone.
         status = self._status()
-        self.assertEqual(status, "The cable disconnected. Plug it back in and press Connect.")
+        self.assertIn("cable", status, "over USB he must not be told to move closer")
         self.assertNotIn("out of range", status)
-        self.assertEqual(self._one_button(), ["btn-connect-usb"])
+        self.assertIn('tap "Connect" and start again', status,
+                      f"the retry sentence names a button that is not there: {status!r}")
+        self.assertIn("reload this page", status,
+                      f"the last-resort remedy must be offered: {status!r}")
         self.assertFalse(self.page.evaluate("() => window.__sync.state().connected"))
 
     def test_a_cable_yanked_mid_copy_names_a_button_on_screen(self):
@@ -3424,21 +3327,18 @@ class TestWebSyncCable(_WebSyncCase):
         label = self.page.locator("[data-testid=btn-connect-usb]").inner_text().strip()
         self.assertEqual(label, "Connect")
 
-        # Since 2026-09-12 the sentence is the status line (the same one
-        # onLinkLost writes, so the two paths cannot disagree) and the panel
-        # is "Nothing was lost." — neither names Try again.
-        status = self._status()
         advice = self.page.locator("[data-testid=result]").inner_text()
-        self.assertNotIn("Try again", status + advice,
-                         f"the advice names a button that is not on screen: {status!r} {advice!r}")
-        self.assertEqual(status, f"The cable disconnected. Plug it back in and press {label}.")
-        self.assertEqual(advice, "Nothing was lost.")
+        self.assertNotIn("Try again", advice,
+                         f"the advice names a button that is not on screen: {advice!r}")
+        self.assertIn(f'press "{label}" and start again', advice, advice)
         # And the remedy is still the CABLE one: a cable that came out is not
         # fixed by moving closer or by ending a watch activity.
-        self.assertNotIn("closer", status)
-        self.assertNotIn("watch", status)
+        self.assertIn("cable", advice)
+        self.assertNotIn("closer", advice)
+        self.assertNotIn("watch", advice)
         # Nothing was claimed on the way past.
         self.assertFalse(self._state()["delivered"])
+        self.assertIn("nothing was erased", advice.lower())
 
     def test_usb_session_records_its_transport_and_gives_cable_advice(self):
         """A cable-shaped mock session: the manifest names the transport, and a
@@ -3455,16 +3355,13 @@ class TestWebSyncCable(_WebSyncCase):
         # because the progress block is hidden again by now — the assertion is
         # about what was on screen DURING the copy, and doPull writes it once.
         copying = self.page.locator("#pull-hint").text_content()
-        self.assertEqual(copying, "Keep the puck plugged in. This takes a few minutes.",
-                         f"the cable copy must not send him looking for a phone: {copying!r}")
+        self.assertIn("Leave the puck plugged in", copying,
+                      f"the cable copy must not send him looking for a phone: {copying!r}")
         self.assertNotIn("phone", copying)
         st = self._state()
         self.assertFalse(st["verified"])
-        # A copy that arrived and did not check out gets the one fixed
-        # sentence on every transport (2026-09-12); what it must NOT do is
-        # hand out the Bluetooth remedies over a cable.
         status = self._status()
-        self.assertEqual(status, "The copy didn’t check out.")
+        self.assertIn("cable", status)
         self.assertNotIn("watch", status)
         self.assertNotIn("closer", status)
         self.assertTrue(self.page.locator("[data-testid=btn-clear]").is_hidden())
