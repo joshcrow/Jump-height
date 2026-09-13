@@ -81,7 +81,7 @@ _puckd_top_py = sorted(str(p) for p in PUCKD_DIR.glob("*.py"))
 if not _puckd_top_py:
     sys.exit(f"packaging/setup.py: no .py files found directly under {PUCKD_DIR}")
 
-_asset_files = sorted(str(p) for p in (PUCKD_DIR / "assets").iterdir() if p.suffix in (".png", ".html"))
+_asset_files = sorted(str(p) for p in (PUCKD_DIR / "assets").iterdir() if p.suffix in (".png", ".html", ".json"))
 if not _asset_files:
     sys.exit(f"packaging/setup.py: no menu-bar images under {PUCKD_DIR / 'assets'} (run icon/make_icon.py)")
 
