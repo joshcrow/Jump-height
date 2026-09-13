@@ -154,11 +154,15 @@ class GoogleFlowThroughRclone(unittest.TestCase):
         self.assertTrue(client["client_id"].endswith(".apps.googleusercontent.com"))
         self.assertEqual(client["scope"], "drive.file", "the narrow scope: only files the app made")
         auth = [c for c in calls if c[:1] == ["authorize"]][0]
-        self.assertEqual(auth[1:4], ["drive", client["client_id"], client["client_secret"]],
-                         "our own client, not rclone's shared one (retired in 2026)")
-        self.assertEqual(auth[4], "--template")
-        self.assertTrue(auth[5].endswith("assets/oauth-done.html"))
-        self.assertTrue(Path(auth[5]).is_file(), "the template must ship with the app")
+        self.assertEqual(auth[1], "drive")
+        import base64
+        blob = json.loads(base64.b64decode(auth[2]))
+        self.assertEqual(blob, {"client_id": client["client_id"], "client_secret": client["client_secret"],
+                                "scope": "drive.file"},
+                         "our own client AND the narrow scope, in the one form rclone honours")
+        self.assertEqual(auth[3], "--template")
+        self.assertTrue(auth[4].endswith("assets/oauth-done.html"))
+        self.assertTrue(Path(auth[4]).is_file(), "the template must ship with the app")
         create = [c for c in calls if c[:2] == ["config", "create"]][0]
         self.assertEqual(create[create.index("scope") + 1], "drive.file")
         self.assertEqual(create[create.index("client_id") + 1], client["client_id"])

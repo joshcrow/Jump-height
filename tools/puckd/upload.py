@@ -30,6 +30,7 @@ wrong, never a bare False.
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 import os
@@ -121,7 +122,7 @@ def _token_from_authorize_output(text: str) -> "Optional[str]":
 def authorize(timeout: float = _AUTHORIZE_TIMEOUT_S) -> bool:
     """Google consent, then the "gdrive" remote. Two rclone calls:
 
-      rclone authorize drive <client_id> <client_secret> --template <ours>
+      rclone authorize drive <base64 {client_id, client_secret, scope}> --template <ours>
           opens the browser, listens on 127.0.0.1 for Google's redirect,
           renders OUR page there ("Connected. You can close this tab.")
           and prints the token. With our own client the consent screen
@@ -137,7 +138,13 @@ def authorize(timeout: float = _AUTHORIZE_TIMEOUT_S) -> bool:
     scope = client.get("scope") or "drive"
     auth_args = ["authorize", "drive"]
     if cid and secret:
-        auth_args += [cid, secret]
+        # The blob form is the only one that carries the SCOPE into the
+        # consent request; the bare "client_id client_secret" form asks for
+        # full Drive, which is a restricted scope and puts Nick on Google's
+        # "hasn't verified this app" screen (measured 2026-09-13).
+        blob = base64.b64encode(json.dumps(
+            {"client_id": cid, "client_secret": secret, "scope": scope}).encode()).decode()
+        auth_args.append(blob)
     auth_args += ["--template", str(_AUTH_TEMPLATE)]
     try:
         proc = _run(auth_args, timeout=timeout)
