@@ -37,7 +37,8 @@ There is no window after setup. Nothing to remember. No steps.
 - Nothing destructive is ever automatic UNLESS the safer copy already exists elsewhere and
   has been confirmed: the puck is emptied only after the file is confirmed on Drive.
 
-## Setup — four screens, one button each, run once. Local web page opened by the app.
+## Setup — three screens, one button each, run once. A native window; opens by itself the first time.
+(Was a local web page; replaced 2026-09-13 after the owner's first install: it could not open itself, cost a click, and ended on rclone's page.)
 1  JumpHeight                          Plug the puck in to charge. Rides upload themselves.   [Continue]
 2  Rides go to Google Drive            [Connect]  → browser consent → back automatically → "Connected as nick@…"  [Continue]
 3  Your watch                          [email] [password] [Sign in]   ·  Skip     (+ a code field only if Garmin asks)  → "Signed in"  [Continue]

@@ -89,13 +89,15 @@ def build_app_class():
     class PuckdApp(rumps.App):
         def __init__(self, spool_dir: Path = SPOOL_DIR,
                      setup_url: str = DEFAULT_SETUP_URL,
-                     opener: Opener = default_opener):
+                     opener: Opener = default_opener,
+                     on_setup: "Optional[Callable[[], None]]" = None):
             icon = str(ICON_PATH) if ICON_PATH.is_file() else None
             super().__init__("JumpHeight", title=format_icon_title(False),
                              icon=icon, template=True)
             self._spool_dir = Path(spool_dir)
             self._setup_url = setup_url
             self._opener = opener
+            self._on_setup = on_setup          # the native window, when wired
 
             self._status_puck = rumps.MenuItem(format_puck_line(None, False))
             self._status_ride = rumps.MenuItem(format_ride_line(None, None))
@@ -118,7 +120,10 @@ def build_app_class():
             self._opener(str(self._spool_dir))
 
         def _open_setup(self, _sender) -> None:
-            self._opener(self._setup_url)
+            if self._on_setup is not None:
+                self._on_setup()
+            else:
+                self._opener(self._setup_url)
 
     return PuckdApp
 

@@ -40,7 +40,7 @@ so don't open it on a Mac that shouldn't be running the agent.
 
 1. Open **JumpHeight Sync.dmg** and drag the app onto the Applications folder next to it.
 2. Open Applications, **right-click JumpHeight Sync → Open → Open**. Once. (The app is not signed with an Apple Developer ID, so a plain double-click refuses the first time.)
-3. A small wing appears in the menu bar. Click it → **Set up…** → four screens.
+3. A small wing appears in the menu bar and the setup window opens on its own: connect Google Drive, sign in to the watch (or skip), done.
 
 That's it. Opening the app is the install: it registers itself to start at
 login and hands off to that copy, so there is nothing else to run. macOS
@@ -49,4 +49,4 @@ charge.
 
 Double-clicking the app again later just makes sure it is running. Quit from
 the menu stops it until the next login. `packaging/uninstall.sh` removes the
-login item entirely (Josh's tool, not Nick's).
+login item entirely; `packaging/reset.sh` also wipes the app's data and the Google connection, to test the first run again (both Josh's tools, not Nick's).

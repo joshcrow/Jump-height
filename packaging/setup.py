@@ -77,23 +77,17 @@ if not VENDOR_RCLONE.is_file():
 APP = [str(HERE / "src" / "launcher.py")]
 
 _puckd_top_py = sorted(str(p) for p in PUCKD_DIR.glob("*.py"))
-_setup_files = sorted(
-    str(p) for p in (PUCKD_DIR / "setup").iterdir() if p.is_file()
-)
 
 if not _puckd_top_py:
     sys.exit(f"packaging/setup.py: no .py files found directly under {PUCKD_DIR}")
-if not _setup_files:
-    sys.exit(f"packaging/setup.py: no files found under {PUCKD_DIR / 'setup'}")
 
-_asset_files = sorted(str(p) for p in (PUCKD_DIR / "assets").glob("*.png"))
+_asset_files = sorted(str(p) for p in (PUCKD_DIR / "assets").iterdir() if p.suffix in (".png", ".html"))
 if not _asset_files:
     sys.exit(f"packaging/setup.py: no menu-bar images under {PUCKD_DIR / 'assets'} (run icon/make_icon.py)")
 
 DATA_FILES = [
     ("tools", [str(JUMP_FILE)]),
     ("tools/puckd", _puckd_top_py),
-    ("tools/puckd/setup", _setup_files),
     ("tools/puckd/assets", _asset_files),
     ("", [str(VENDOR_RCLONE)]),
 ]
@@ -149,6 +143,7 @@ OPTIONS = {
             "serial.tools.list_ports",
             "rumps",
             "garth",
+            "certifi",
         ],
         "excludes": _MEASURED_UNUSED,
         "plist": {

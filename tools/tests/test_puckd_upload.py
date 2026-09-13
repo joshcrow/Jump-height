@@ -68,9 +68,23 @@ _FAKE_RCLONE_SRC = textwrap.dedent(
             fail("fake rclone: no subcommand", 2)
         cmd = argv[0]
 
-        if cmd == "config" and len(argv) >= 3 and argv[1] == "create":
+        if cmd == "authorize":
             if os.environ.get("FAKE_RCLONE_FAIL_AUTHORIZE") == "1":
                 fail("fake rclone: consent denied", 1)
+            print("Paste the following into your remote machine --->")
+            print('{"access_token":"ya29.fake","token_type":"Bearer","refresh_token":"1//fake","expiry":"2099-01-01T00:00:00Z"}')
+            print("<---End paste")
+            sys.exit(0)
+
+        if cmd == "config" and len(argv) >= 2 and argv[1] == "dump":
+            rf = remotes_file()
+            names = rf.read_text().split() if rf.exists() else []
+            print(json.dumps({n: {"type": "drive", "token": '{"access_token":"ya29.fake"}'} for n in names}))
+            sys.exit(0)
+
+        if cmd == "config" and len(argv) >= 3 and argv[1] == "create":
+            if "token" not in argv:
+                fail("fake rclone: config create without a token", 1)
             name = argv[2]
             rf = remotes_file()
             rf.parent.mkdir(parents=True, exist_ok=True)

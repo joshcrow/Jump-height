@@ -212,7 +212,8 @@ def _default_fetch_uf2(site_url: str, file_name: str, dest_dir: "Path | str") ->
     and not coming back does that -- G4)."""
     url = site_url.rstrip("/") + "/firmware/" + file_name
     try:
-        with urllib.request.urlopen(url, timeout=60.0) as resp:
+        from puckd import netctx
+        with urllib.request.urlopen(url, timeout=60.0, context=netctx.ssl_context()) as resp:
             status = getattr(resp, "status", None) or resp.getcode()
             if status != 200:
                 return None
@@ -746,56 +747,51 @@ def run_once_report(port_path: "Optional[str]", cfg: DaemonConfig) -> str:
     return "\n".join(lines)
 
 
-def _start_setup_server(cfg: "Optional[DaemonConfig]" = None):
-    """Start tools/puckd/setup/server.py's HTTP server with its OWN
-    production wiring (server.py's _wire_production(), a function that file
-    itself documents as being for exactly this: "for a standalone run" --
-    reused rather than re-adapted a second time here, since the
-    google_authorize/garmin_login/notify_permission wiring choices it
-    already made and explained are that file's, not this one's, to
-    duplicate). Returns (httpd, port); never raises -- an import failure
-    (rumps-less CI, a stripped install) means no setup page, not a crashed
-    daemon."""
+def _onboarding(app=None):
+    """The native first-run window (tools/puckd/onboarding.py), wired to the
+    real modules. Returns an object with .show(); None if AppKit is not
+    importable (a stripped install), in which case there is no setup UI
+    rather than a crashed daemon."""
     try:
-        from puckd.setup import server as setup_server
-    except ImportError:
-        return None, None
-    return setup_server.serve(**setup_server._wire_production())
+        from puckd import onboarding
+        model = onboarding.production_model()
+        return onboarding.make_window(model)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def run_setup() -> None:
-    """`python -m puckd setup`: serve the four screens and open them in the
-    default browser -- "Local web page opened by the app"
-    (docs/sync-agent-plan.md's Setup section) -- blocking until Ctrl-C,
-    the same shape server.py's own standalone `main()` already uses."""
-    import webbrowser
+    """`python -m puckd setup`: the onboarding window alone, no daemon."""
+    from AppKit import NSApplication  # type: ignore
 
-    httpd, port = _start_setup_server()
-    if httpd is None:
-        print("could not start the setup server (see tools/puckd/setup/server.py)")
+    nsapp = NSApplication.sharedApplication()
+    win = _onboarding()
+    if win is None:
+        print("could not build the setup window (see tools/puckd/onboarding.py)")
         return
-    url = f"http://127.0.0.1:{port}/setup"
-    webbrowser.open(url)
-    print(f"JumpHeight setup: {url}")
-    try:
-        threading.Event().wait()
-    except KeyboardInterrupt:
-        httpd.shutdown()
-        httpd.server_close()
+    win.model.on_finished = lambda: nsapp.terminate_(None)
+    win.show()
+    nsapp.run()
 
 
 def main() -> None:
-    """`python -m puckd`: the real, long-running agent. The setup server
-    starts alongside the loop so the menu bar's "Set up..." item -- which
-    just runs `open <url>` (menubar.py's default_opener) -- always has
-    something listening on the far end; the menu bar itself owns the main
-    thread (rumps.App.run()'s own requirement), so the poll loop runs on a
-    daemon thread behind it."""
+    """`python -m puckd`: the real, long-running agent. The menu bar owns
+    the main thread (rumps.App.run()'s requirement); the poll loop runs on
+    a daemon thread behind it. The first launch (no Drive remote yet) opens
+    the setup window by itself; "Set up…" in the menu opens it again."""
     cfg = build_config()
-    _start_setup_server(cfg)
-    app = menubar.make_app(spool_dir=cfg.spool_dir, opener=menubar.default_opener)
+    win = _onboarding()
+    app = menubar.make_app(spool_dir=cfg.spool_dir, opener=menubar.default_opener,
+                           on_setup=(win.show if win is not None else None))
     t = threading.Thread(target=run_forever, args=(cfg,), kwargs={"app": app}, daemon=True)
     t.start()
+    if win is not None and not upload.is_authorized():
+        import rumps
+
+        def first_run(_timer):
+            _timer.stop()
+            win.show()
+        rumps.Timer(first_run, 1.0).start()      # once the run loop is up
     app.run()
 
 

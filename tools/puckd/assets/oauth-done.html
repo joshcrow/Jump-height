@@ -1,0 +1,18 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>JumpHeight</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body { margin: 0; font-family: -apple-system, "Helvetica Neue", Arial, sans-serif; background: #f5f5f7; color: #111; }
+  main { max-width: 34rem; margin: 18vh auto 0; padding: 0 1.5rem; }
+  h1 { font-size: 2rem; letter-spacing: -.02em; margin: 0 0 .5rem; }
+  p { font-size: 1.15rem; color: #555; margin: 0; }
+</style></head>
+<body><main>
+{{ if .OK }}
+  <h1>Connected.</h1>
+  <p>You can close this tab and go back to JumpHeight.</p>
+{{ else }}
+  <h1>That didn&rsquo;t connect.</h1>
+  <p>Go back to JumpHeight and press Connect again.</p>
+{{ end }}
+</main></body></html>

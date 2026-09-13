@@ -702,6 +702,20 @@ becomes "plug the puck in to charge". Four notifications exist, three
 | Intel Mac | bundle is universal2 top to bottom (0 arm64-only binaries; rclone lipo'd from the two official builds); a full sync cycle ran through the bundle's own interpreter under Rosetta; the real launcher under Rosetta answers on 127.0.0.1:17888 after ~18 s cold | `packaging/`, 255 MB app (184 MB is rclone) |
 | Cost per cycle | every port open pays `Device.drain_boot`'s 5 s window; five opens per cycle; 28 s on the fake | measured 2026-09-13 |
 
+**Changed 2026-09-13 evening, after the owner installed it:** setup is a
+native window (`tools/puckd/onboarding.py`, AppKit) that opens by itself on
+the first launch and starts on "Connect Google Drive"; the browser wizard
+is deleted. Google consent is `rclone authorize drive --template <ours>`
+then `config create ... token`, so the browser ends on our page and the
+account is read back from Drive's `about`. Two findings from that work:
+py2app points `SSL_CERT_FILE` at a file literally named `no-such-file`, so
+every HTTPS call inside the built app was failing silently, the firmware
+check included — fixed with certifi via `tools/puckd/netctx.py`; and rclone
+warns its shared Google client_id "is being retired and will stop working
+during 2026" — the app needs its own client_id (a Google Cloud OAuth
+desktop client, Josh's project) before that happens. Untracked as a
+finding number on purpose: it is a deadline, not a defect.
+
 **Not yet measured, in the order they cost:** the real Puck (board was
 unplugged all night — rehearse `python3 -m puckd once <port>` first, then
 the flash leg with an old image); `clear_puck`'s `tracecheck` after a real

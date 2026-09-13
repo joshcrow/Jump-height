@@ -31,6 +31,7 @@ wrong, never a bare False.
 from __future__ import annotations
 
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -84,25 +85,99 @@ def _run(args: list[str], timeout: float) -> subprocess.CompletedProcess:
     )
 
 
-def authorize(timeout: float = _AUTHORIZE_TIMEOUT_S) -> bool:
-    """Set up the "gdrive" remote (docs/sync-agent-plan.md:36's [Connect]).
+_AUTH_TEMPLATE = Path(__file__).resolve().parent / "assets" / "oauth-done.html"
+_ABOUT_URL = "https://www.googleapis.com/drive/v3/about?fields=user"
 
-    Runs `rclone config create gdrive drive scope drive` with no client_id
-    or token supplied — rclone's normal (non-headless) behavior for that is
-    to open the browser to Google's consent screen and listen on
-    127.0.0.1 for the redirect itself, "so the browser consent returns to
-    localhost automatically" (docs/sync-agent-plan.md:49) with no port
-    forwarding or copy-pasted code. Returns True only if rclone exits 0 —
-    consent completed and the remote is now in rclone's config.
+
+def _token_from_authorize_output(text: str) -> "Optional[str]":
+    """`rclone authorize` prints the token between two marker lines:
+        Paste the following into your remote machine --->
+        {"access_token": ...}
+        <---End paste
+    """
+    m = re.search(r"--->\s*(\{.*?\})\s*<---", text, re.S)
+    if m:
+        return m.group(1).strip()
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("{") and "access_token" in line:
+            return line
+    return None
+
+
+def authorize(timeout: float = _AUTHORIZE_TIMEOUT_S) -> bool:
+    """Google consent, then the "gdrive" remote. Two rclone calls:
+
+      rclone authorize drive --template <ours>   opens the browser, listens
+          on 127.0.0.1 for Google's redirect, renders OUR page there
+          ("Connected. You can close this tab.") instead of rclone's, and
+          prints the token.
+      rclone config create gdrive drive scope drive token <json>
+          stores it, non-interactively.
+
+    True only if both exited 0 and a token was actually printed.
     """
     try:
-        proc = _run(
-            ["config", "create", REMOTE_NAME, "drive", "scope", "drive"],
-            timeout=timeout,
-        )
+        proc = _run(["authorize", "drive", "--template", str(_AUTH_TEMPLATE)],
+                    timeout=timeout)
+    except (RcloneNotFound, subprocess.TimeoutExpired, OSError):
+        return False
+    if proc.returncode != 0:
+        return False
+    token = _token_from_authorize_output(proc.stdout or "")
+    if token is None:
+        return False
+    try:
+        proc = _run(["config", "create", REMOTE_NAME, "drive",
+                     "scope", "drive", "token", token, "--non-interactive"],
+                    timeout=60.0)
     except (RcloneNotFound, subprocess.TimeoutExpired, OSError):
         return False
     return proc.returncode == 0
+
+
+def _stored_access_token() -> "Optional[str]":
+    try:
+        # Any real call makes rclone refresh an expired token and write the
+        # new one to its config; `about` is the cheapest.
+        _run(["about", f"{REMOTE_NAME}:", "--json"], timeout=_LISTREMOTES_TIMEOUT_S)
+        proc = _run(["config", "dump"], timeout=_LISTREMOTES_TIMEOUT_S)
+    except (RcloneNotFound, subprocess.TimeoutExpired, OSError):
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        remote = json.loads(proc.stdout or "{}").get(REMOTE_NAME) or {}
+        token = remote.get("token")
+        if isinstance(token, str):
+            token = json.loads(token)
+        return (token or {}).get("access_token")
+    except (ValueError, AttributeError):
+        return None
+
+
+def _default_fetch_json(url: str, bearer: str) -> dict:
+    import urllib.request
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {bearer}"})
+    from puckd import netctx
+    with urllib.request.urlopen(req, timeout=10.0, context=netctx.ssl_context()) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def account_email(fetch_json=_default_fetch_json) -> "Optional[str]":
+    """The signed-in Google account, read back from Drive's `about` with
+    the token rclone stored. The Drive scope covers it. None when it
+    cannot be read; never raises. The screen then says "Connected to
+    Google Drive" instead of naming the account."""
+    token = _stored_access_token()
+    if not token:
+        return None
+    try:
+        user = (fetch_json(_ABOUT_URL, token) or {}).get("user") or {}
+        email = user.get("emailAddress")
+        return email if isinstance(email, str) and "@" in email else None
+    except Exception:  # noqa: BLE001 -- a label, not a gate
+        return None
 
 
 def is_authorized() -> bool:

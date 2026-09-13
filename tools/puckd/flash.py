@@ -145,7 +145,8 @@ def latest_manifest(site_url: str) -> "dict | None":
     """
     url = site_url.rstrip("/") + _MANIFEST_PATH
     try:
-        with urllib.request.urlopen(url, timeout=_MANIFEST_TIMEOUT_S) as resp:
+        from puckd import netctx
+        with urllib.request.urlopen(url, timeout=_MANIFEST_TIMEOUT_S, context=netctx.ssl_context()) as resp:
             status = getattr(resp, "status", None) or resp.getcode()
             if status != 200:
                 return None
