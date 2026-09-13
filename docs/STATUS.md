@@ -537,12 +537,20 @@ hand — CLAUDE.md rule 5). What changed, all pinned by tests, suite 523 →
   (routed around, not diagnosed), the F-22 *band* arm at 16 MB, and the
   five-minute give-up on the post-flash reconnect (only the no-getPorts arm
   is exercised).
-  **NEXT (2026-09-12, not started):** the owner read the live page top to
-  bottom and called the copy "kinda bad" — it leaks bench diagnostics (byte
-  counts, "check number matches", build hashes, "NO REC") and hedges onto
-  the rider's screen. The rewrite is fully specified in
-  `docs/rider-copy-spec.md`; implementation is copy-only, and was blocked by
-  a rate limit before any edit landed.
+  **2026-09-12 — copy rewritten, page `2026-09-12a`.** The owner read the
+  live page and called the copy "kinda bad": it leaked bench diagnostics
+  (byte counts, "check number matches", build hashes, "NO REC") and hedges
+  onto the rider's screen, named Josh in nearly every sentence, and labelled
+  a save button "Send". Now: one task per screen, one sentence of status,
+  buttons are verbs, no numbers he cannot act on, one identical recovery
+  sentence, diagnostics still written to the bundle for Josh but shown as a
+  single muted line. Principles recorded in `web/sync/CONTRACT.md`. Verified:
+  protected functions byte-identical (`verifyPull` comments only, gates
+  unchanged), 618 passed, the updated tests fail 32/49 against the old page,
+  every ride screen read back from a real browser. Two defects found and
+  fixed on the way: a null read at load that broke every test, and "Empty
+  the puck" left visible after a lost cable (the gate now requires a live
+  transport).
 - **Simplified 2026-09-09 to `2026-09-09c`, after the owner read it and called
   it confusing.** It was written for "phone or computer, Bluetooth or cable",
   and Chrome on a Mac reports BOTH transports — so the rider met two competing
