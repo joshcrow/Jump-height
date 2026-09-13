@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JumpHeight Setup</title>
+<!--
+  The four setup screens (docs/sync-agent-plan.md, "Setup"). Run once, opened
+  by the app as a local page (tools/puckd/setup/server.py). Every sentence
+  below is quoted from that spec, verbatim, with nothing added — the two
+  fields with no spec wording of their own (the code field's label, and the
+  "Connected as …" / "Signed in" / error text that is not fixed copy at all
+  but a live value read back from the server) are named in server.js's own
+  comments.
+
+  Visual language matches web/sync/sync.css (read for this purpose, not
+  imported — this page is its own package under tools/puckd/setup/): the
+  same tokens, the same one high-contrast light theme, the same "exactly one
+  button on screen" rule. Screen 3 is this page's one stated exception, the
+  same shape CONTRACT.md already names for the rider's page: a black
+  primary button plus one link-styled secondary (Skip) beside it — never two
+  black buttons.
+-->
+<link rel="stylesheet" href="setup.css">
+</head>
+<div class="wrap">
+
+  <section id="screen-1" class="screen" data-testid="screen-1">
+    <h1>JumpHeight</h1>
+    <p class="lede">Plug the puck in to charge. Rides upload themselves.</p>
+    <button class="btn" id="btn-continue-1" data-testid="btn-continue-1">Continue</button>
+  </section>
+
+  <section id="screen-2" class="screen" data-testid="screen-2" hidden>
+    <h1>Rides go to Google Drive</h1>
+    <p class="status muted" id="google-status" data-testid="google-status" hidden></p>
+    <button class="btn" id="btn-google" data-testid="btn-google">Connect</button>
+  </section>
+
+  <section id="screen-3" class="screen" data-testid="screen-3" hidden>
+    <h1>Your watch</h1>
+    <form id="garmin-form">
+      <input type="email" id="garmin-email" data-testid="garmin-email"
+             placeholder="Email" aria-label="Email" autocomplete="username">
+      <input type="password" id="garmin-password" data-testid="garmin-password"
+             placeholder="Password" aria-label="Password" autocomplete="current-password">
+      <input type="text" id="garmin-code" data-testid="garmin-code"
+             placeholder="Code" aria-label="Code" inputmode="numeric"
+             autocomplete="one-time-code" hidden>
+      <p class="status muted" id="garmin-status" data-testid="garmin-status" hidden></p>
+      <button type="submit" class="btn" id="btn-garmin" data-testid="btn-garmin">Sign in</button>
+      <button type="button" class="btn-link" id="btn-skip" data-testid="btn-skip">Skip</button>
+    </form>
+  </section>
+
+  <section id="screen-4" class="screen" data-testid="screen-4" hidden>
+    <h1>Done. Plug the puck in whenever.</h1>
+    <button class="btn" id="btn-close" data-testid="btn-close">Close</button>
+  </section>
+
+</div>
+<script src="setup.js"></script>
+</html>

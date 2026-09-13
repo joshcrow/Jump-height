@@ -1,0 +1,713 @@
+"""tools/puckd/daemon.py -- the loop (docs/sync-agent-plan.md's whole "What
+the agent does when the puck appears" section, :41-58, and the gates,
+:60-66).
+
+This is P2: it reimplements none of the six P1 modules' protocols -- it
+composes them. Every decision that changes what Nick sees traces to a line
+in the spec:
+
+    find_puck_port()   the 2 s poll target: Seeed VID 0x2886 first (survives
+                        a replug even when macOS renumbers /dev/cu.usbmodemN),
+                        then a bare /dev/cu.usbmodem* glob when pyserial
+                        itself is not importable (tools/jump:240-251's own
+                        fallback, restated).
+    run_job_cycle()     one plug-in: steps 1-9 (docs/sync-agent-plan.md:42-55),
+                        holding G1 (upload.py) and G2 (flash.py) exactly --
+                        clear only when uploaded AND verified; flash only
+                        when clear just confirmed the puck empty AND
+                        needs_update() AND flash()'s own sha256 gate passes.
+    poll_attached()     step 10's 60 s battery poll and the one "Puck
+                        charged" per attachment (chg 1->0 at batt_pct>=95).
+    run_forever()       the 2 s loop gluing the two above to a menu bar and
+                        a Garmin leg that "never blocks the puck job"
+                        (docs/sync-agent-plan.md:58) -- every exception in
+                        the Garmin leg is swallowed, never the puck's.
+
+Every external effect -- which port is a puck, the wall clock, sleep, the
+notifier, the two P1 modules with swappable behaviour (garmin, flash) -- is
+an injectable field on DaemonConfig, the same seam pattern flash.py's own
+keyword arguments use, so tools/tests/test_puckd_daemon.py can drive the
+whole state machine against a real tools/fake_device.py subprocess, a real
+rclone pointed at a fake script on PATH (PUCKD_RCLONE, same technique as
+tools/tests/test_puckd_upload.py), and a fake garmin/flash module -- with no
+real puck, Google account, or 60 s wait anywhere in the suite.
+
+Two strings here are not spec-literal and are cited as such: G1 (a Drive
+upload failing) and G2's post-flash failure both need a needs_you `line`/
+`action` docs/sync-agent-plan.md never spells out for those two cases (only
+the Garmin-expiry title, line 39, and the generic pattern's own example,
+line 13, are given verbatim) -- see NEEDS_YOU_UPLOAD_* and PUCK_RESET_*
+below for exactly which words are quoted and which are this module's own,
+kept as short and as literal-recovery-action as the spec's own voice.
+"""
+
+from __future__ import annotations
+
+import glob
+import json
+import os
+import sys
+import threading
+import time
+import urllib.error
+import urllib.request
+import zipfile
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Callable, Optional
+
+REPO = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(REPO / "tools"))            # `from puckd import ...`
+sys.path.insert(0, str(REPO / "tools" / "puckd"))  # bare `import garmin` --
+# garmin.py's own module docstring: "import via sys.path.insert(str(REPO /
+# 'tools' / 'puckd')); import garmin -- no package __init__.py, matches
+# sibling P1 modules already in tools/puckd/".
+
+from puckd import serial_job, upload, notify, menubar, flash  # noqa: E402
+import garmin  # noqa: E402
+
+
+# --------------------------------------------------------------- constants
+
+SEEED_VID = 0x2886  # Seeed Studio's USB vendor id -- the XIAO Sense's own.
+POLL_INTERVAL_S = 2.0                    # docs/sync-agent-plan.md's own "loop"
+STATS_POLL_INTERVAL_S = 60.0             # spec item 10
+GARMIN_INTERVAL_S = 6 * 3600.0           # spec line 57: "every job and every 6 h"
+CHARGED_BATT_PCT_MIN = 95                # spec item 10
+
+# spec lines 49/58's own paths, verbatim (upload.upload() prefixes "gdrive:").
+INBOX_DIR = "JumpHeight/inbox"
+FITS_DIR = "JumpHeight/fits"
+
+STATE_FILENAME = "state.json"            # last ride, under PUCKD_HOME
+GARMIN_SEEN_FILENAME = "garmin_last_seen.json"
+FIRMWARE_CACHE_DIRNAME = "firmware"
+FITS_CACHE_DIRNAME = "fits"
+
+# No repo document records the deployed site's domain (grepped docs/*.md,
+# DECISIONS.md, web/sync/ -- the page itself uses a *relative*
+# '../firmware/latest.json', which only works from inside the site; a
+# standalone Mac process needs an absolute one). Left env-configurable
+# rather than guessed: flash.latest_manifest("") returns None (its own
+# never-raises contract), so an unset site_url just means "no update this
+# cycle", never a crash or a wrong host contacted.
+SITE_URL_ENV = "PUCKD_SITE_URL"
+
+# docs/sync-agent-plan.md:13's own example -- reused verbatim (CLAUDE.md/the
+# build brief: "every user-facing string in it is final -- do not invent
+# copy") for every needs_you whose cause is the PUCK itself not answering
+# the way a completed step requires: a pull that didn't finish structurally
+# (serial_job.PullFailed), a clear that didn't confirm empty, or a flash
+# that touched the device and didn't come back running the new build (G4:
+# "no src after flash -> Needs you").
+PUCK_RESET_LINE = "reset the puck"
+PUCK_RESET_ACTION = "Press the small button on the puck twice."
+
+# No literal string for an upload failure exists in the spec -- G1 is a
+# Drive/network problem, not a puck one, so PUCK_RESET_ACTION would send
+# Nick to press a button that fixes nothing. The one thing that actually
+# retries it is a fresh plug-in (docs/sync-agent-plan.md:41 runs the whole
+# job again), so that is the action named.
+NEEDS_YOU_UPLOAD_LINE = "reconnect the puck"
+NEEDS_YOU_UPLOAD_ACTION = "Unplug the puck and plug it back in."
+
+# docs/sync-agent-plan.md:39's own literal title ("Token expiry ->
+# 'Needs you: sign in to Garmin again'"). The action is this module's own
+# words, naming the real menu item ("Set up...", docs/sync-agent-plan.md's
+# menu-bar section) rather than inventing a new one.
+NEEDS_YOU_GARMIN_LINE = "sign in to Garmin again"
+NEEDS_YOU_GARMIN_ACTION = "Sign in again from Set up in the menu bar."
+
+
+# ------------------------------------------------------------ port finding
+
+def _pyserial_candidates() -> "list[tuple[str, Optional[int]]]":
+    from serial.tools import list_ports  # type: ignore
+
+    return [(p.device, p.vid) for p in list_ports.comports()]
+
+
+def find_puck_port(
+    list_ports_fn: "Callable[[], list[tuple[str, Optional[int]]]] | None" = None,
+) -> "Optional[str]":
+    """The 2 s poll target. The Seeed VID (0x2886) is tried first -- pyserial
+    reports it regardless of which /dev/cu.usbmodemN macOS happens to assign
+    on this particular replug, so it is the one identification that
+    survives a port-number change; falling back to a bare
+    /dev/cu.usbmodem* glob only when pyserial itself is not importable
+    mirrors tools/jump's own scan_ports() fallback (tools/jump:240-251) for
+    the same reason. Multiple candidates (two pucks on one bench) are
+    resolved by sorted()[0] -- deterministic, not a guess at "the right
+    one" -- exactly the ambiguity CLAUDE.md's board registry exists to
+    avoid living inside one process's silent pick; a real multi-puck bench
+    is `--name`-pinned tooling's job (CLAUDE.md ss1), not this poll's.
+    """
+    try:
+        candidates = (list_ports_fn or _pyserial_candidates)()
+    except ImportError:
+        candidates = [(d, None) for d in glob.glob("/dev/cu.usbmodem*")]
+
+    seeed = sorted(d for d, vid in candidates if vid == SEEED_VID)
+    if seeed:
+        return seeed[0]
+    modem = sorted(
+        d for d, vid in candidates if isinstance(d, str) and d.startswith("/dev/cu.usbmodem")
+    )
+    return modem[0] if modem else None
+
+
+# --------------------------------------------------------------- state I/O
+
+def _state_path(home_dir: "Path | str") -> Path:
+    return Path(home_dir) / STATE_FILENAME
+
+
+def load_state(home_dir: "Path | str") -> dict:
+    """The daemon's own persisted memory (docs/sync-agent-plan.md's build
+    note: "Persist state (last ride, last_seen) under PUCKD_HOME"). Missing
+    or corrupt reads as "nothing yet" -- a fresh install's first tick, not
+    an error -- same posture as garmin.last_seen()'s own file read."""
+    try:
+        data = json.loads(_state_path(home_dir).read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_state(home_dir: "Path | str", state: dict) -> None:
+    """Atomic write (.tmp + replace), the same pattern garmin.mark_seen()
+    uses -- a crash mid-write must leave the PREVIOUS state intact, not a
+    half-written one."""
+    path = _state_path(home_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(state))
+    tmp.replace(path)
+
+
+def _read_bundle_manifest(bundle_path: "Path | str") -> dict:
+    with zipfile.ZipFile(bundle_path) as zf:
+        return json.loads(zf.read("manifest.json"))
+
+
+def _record_ride(cfg: "DaemonConfig", jumps: int, bundle_path: "Path | str") -> None:
+    """"Last ride Tue 4:52 pm . 12 jumps" needs a wall-clock moment for the
+    ride -- reads it back out of the bundle's OWN manifest.json
+    (synced_at_local, CONTRACT.md SS2.2/SS2.3) rather than capturing a
+    second, possibly-different `datetime.now()` here: one clock reading per
+    ride, reused, not two that could disagree."""
+    try:
+        synced_at_local = _read_bundle_manifest(bundle_path).get("synced_at_local")
+    except (OSError, KeyError, ValueError, zipfile.BadZipFile):
+        synced_at_local = None
+    state = load_state(cfg.home_dir)
+    if synced_at_local:
+        state["last_ride_iso"] = synced_at_local
+    state["last_ride_jumps"] = jumps
+    save_state(cfg.home_dir, state)
+
+
+# ------------------------------------------------------------------ config
+
+def _default_fetch_uf2(site_url: str, file_name: str, dest_dir: "Path | str") -> "Optional[Path]":
+    """Download <site_url>/firmware/<file_name> -- the sibling path to
+    flash.py's own _MANIFEST_PATH ("/firmware/latest.json", flash.py:71) --
+    to dest_dir, returning the local path. NEVER RAISES: any failure to
+    reach or read it returns None, which _maybe_flash() below reads as "try
+    again next job", the same silence latest_manifest() uses for a broken
+    manifest -- a firmware update is maintenance, not urgent, and must
+    never turn a network blip into a needs_you (only touching the DEVICE
+    and not coming back does that -- G4)."""
+    url = site_url.rstrip("/") + "/firmware/" + file_name
+    try:
+        with urllib.request.urlopen(url, timeout=60.0) as resp:
+            status = getattr(resp, "status", None) or resp.getcode()
+            if status != 200:
+                return None
+            data = resp.read()
+    except (urllib.error.URLError, OSError, ValueError, TimeoutError):
+        return None
+    dest = Path(dest_dir)
+    dest.mkdir(parents=True, exist_ok=True)
+    path = dest / file_name
+    tmp = path.with_suffix(path.suffix + ".part")
+    tmp.write_bytes(data)
+    tmp.replace(path)
+    return path
+
+
+@dataclass
+class DaemonConfig:
+    """Every external effect the daemon touches, gathered so the whole state
+    machine can be driven by a test with a fake for each one -- the same
+    seam pattern flash.py's own injectable keywords use (flash.py:225-241).
+
+    Production (build_config()) leaves every injectable at its real
+    default; tests override device_factory (a real tools/jump.Device
+    talking to a spawned tools/fake_device.py), garmin_module (a small
+    fake), flash_module (a small fake or the real one against a local HTTP
+    manifest server, test_puckd_flash.py's own technique), notifier (a
+    recording runner), and the two clocks.
+    """
+
+    home_dir: Path
+    spool_dir: Path
+    site_url: str = ""
+    device_factory: "Callable[[str], object] | None" = None
+    notifier: "Callable[[str, Optional[str]], None]" = notify.osascript_runner
+    garmin_module: object = None
+    flash_module: object = None
+    fetch_uf2_fn: "Callable[[str, str, Path], Optional[Path]]" = _default_fetch_uf2
+    inbox_dir: str = INBOX_DIR
+    fits_dir: str = FITS_DIR
+    garmin_interval_s: float = GARMIN_INTERVAL_S
+    now: "Callable[[], float]" = time.time
+    sleep: "Callable[[float], None]" = time.sleep
+    # Small cross-call bookkeeping (the Garmin needs_you dedup flag, the
+    # menu-bar "attention" flag) that doesn't belong on any one call's
+    # return value -- a plain dict, not more dataclass fields, because
+    # nothing outside this module reads it.
+    runtime: dict = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.garmin_module is None:
+            self.garmin_module = garmin
+        if self.flash_module is None:
+            self.flash_module = flash
+
+
+def build_config(*, home_dir: "Path | str | None" = None,
+                 site_url: "Optional[str]" = None) -> DaemonConfig:
+    """Production wiring: home_dir defaults to garmin.puckd_home() (the one
+    definition of PUCKD_HOME, reused rather than re-derived), spool_dir to
+    its "spool" child (menubar.py's own SPOOL_DIR default, computed here
+    instead of imported so PUCKD_HOME overrides both consistently), and
+    site_url from PUCKD_SITE_URL (see SITE_URL_ENV's own note above)."""
+    home = Path(home_dir) if home_dir is not None else garmin.puckd_home()
+    return DaemonConfig(
+        home_dir=home,
+        spool_dir=home / "spool",
+        site_url=site_url if site_url is not None else os.environ.get(SITE_URL_ENV, ""),
+    )
+
+
+# ------------------------------------------------------------- needs_you
+
+def _fire_needs_you(cfg: DaemonConfig, line: str, action: str) -> None:
+    notify.notify("needs_you", runner=cfg.notifier, line=line, action=action)
+    cfg.runtime["needs_you_active"] = True
+
+
+# --------------------------------------------------------------- the job
+
+@dataclass(frozen=True)
+class JobCycleReport:
+    """What one plug-in's worth of run_job_cycle() did -- for `once`'s
+    plain-text report and for tests to assert against without re-deriving
+    it from notifier calls alone."""
+
+    port: str
+    pulled: bool
+    verified: "Optional[bool]"
+    jumps: "Optional[int]"
+    reasons: "list[str]"
+    uploaded: bool
+    cleared: bool
+    flashed: bool
+    needs_you: "Optional[tuple[str, str]]"
+    bundle_path: "Optional[Path]"
+    src: "Optional[str]"
+
+
+def _maybe_flash(
+    port_path: str, puck_src: "Optional[str]", cfg: DaemonConfig
+) -> "tuple[bool, Optional[tuple[str, str]]]":
+    """G2 (docs/sync-agent-plan.md:62), the half of it not already enforced
+    by flash.flash() itself: called ONLY once run_job_cycle()'s own
+    clear_puck() has just confirmed stored_jumps=0 AND trace_bytes=0 (the
+    "puck empty" clause), so this function's own job is only needs_update()
+    and the manifest fetch. flash()'s own sha256 check (the "matches
+    latest.json" clause) is still the one gate that runs first inside it,
+    unconditionally, before anything touches the device.
+
+    Returns (flashed, needs_you) -- needs_you is surfaced to the caller
+    (rather than only fired through the notifier) so run_job_cycle()'s own
+    report reflects it too: a flash is the one step that can still turn a
+    fully-synced, fully-cleared cycle into one Nick needs to act on.
+
+    A manifest miss, a needs_update()=False verdict, or an unreachable .uf2
+    file are all silent -- "try again next job", same posture as
+    latest_manifest()'s own contract. Only a flash() call that ACTUALLY
+    TOUCHED THE DEVICE (stage_reached past STAGE_SHA256) and still failed
+    fires needs_you -- G4: "no src after flash -> Needs you"; a sha256
+    mismatch caught before anything was sent never touched the puck, so it
+    is not one.
+    """
+    if not cfg.site_url:
+        return False, None
+    manifest = cfg.flash_module.latest_manifest(cfg.site_url)
+    if not cfg.flash_module.needs_update(puck_src, manifest):
+        return False, None
+    uf2_path = cfg.fetch_uf2_fn(
+        cfg.site_url, manifest["file"], Path(cfg.home_dir) / FIRMWARE_CACHE_DIRNAME
+    )
+    if uf2_path is None:
+        return False, None
+    result = cfg.flash_module.flash(
+        port_path, uf2_path, manifest, device_factory=cfg.device_factory
+    )
+    if result.ok:
+        notify.notify("updated", runner=cfg.notifier)
+        return True, None
+    if result.stage_reached != flash.STAGE_SHA256:
+        needs_you = (PUCK_RESET_LINE, PUCK_RESET_ACTION)
+        _fire_needs_you(cfg, *needs_you)
+        return False, needs_you
+    return False, None
+
+
+def run_job_cycle(port_path: str, cfg: DaemonConfig) -> JobCycleReport:
+    """One plug-in, steps 1-9 (docs/sync-agent-plan.md:42-55).
+
+    serial_job.run_job() itself covers steps 1-5 (open, pull, verify, write
+    the bundle) and never clears or uploads -- G1's other half, and step 7,
+    are this function's job:
+
+        PullFailed (the pull did not complete structurally) -> needs_you,
+            nothing uploaded, nothing cleared, the puck untouched (G3).
+        uploaded == False (G1's remote-size check) -> needs_you, NO clear.
+        uploaded AND verified -> "synced", THEN clear_puck() (step 7); a
+            clear that doesn't confirm -> needs_you (G4: "no stats -> no
+            clear" reads as "a stats that then says otherwise refuses the
+            clear", which clear_puck() itself already enforces -- this is
+            the needs_you for that refusal reaching the surface).
+        uploaded AND NOT verified -> nothing cleared, nothing said to Nick:
+            the ride is already safe on Drive and there is nothing for HIM
+            to do about a content-level question; CONTRACT.md's own words
+            for exactly this bundle -- "an unverified bundle is exactly the
+            one Josh most wants to look at" -- are why it is Josh's spool
+            to find, not Nick's notification to receive.
+
+    Step 8 (flash) only runs once clear_puck() has itself just confirmed
+    the puck empty -- see _maybe_flash().
+
+    Everything from the upload on is wrapped in a broad except: an
+    unexpected exception out of upload.py/flash.py (not one of their own
+    documented never-raises paths -- e.g. a misconfigured PUCKD_RCLONE
+    naming a binary that no longer exists, verified 2026-09-12 to raise
+    FileNotFoundError straight through upload.upload()'s own two
+    try/excepts, which catch RcloneNotFound and TimeoutExpired but not
+    that) must never take the WHOLE daemon loop down with it -- G3's "a job
+    interrupted anywhere leaves the puck recoverable" applies to the
+    daemon's own process staying up, not only to the puck's data. The
+    bundle is already safely on disk by this point (run_job() already
+    returned), so nothing is lost; the daemon still owes Nick the same
+    needs_you an ordinary upload failure would.
+    """
+    try:
+        result = serial_job.run_job(port_path, cfg.spool_dir, device_factory=cfg.device_factory)
+    except serial_job.PullFailed as exc:
+        _fire_needs_you(cfg, PUCK_RESET_LINE, PUCK_RESET_ACTION)
+        return JobCycleReport(
+            port=port_path, pulled=False, verified=None, jumps=None,
+            reasons=list(exc.reasons), uploaded=False, cleared=False, flashed=False,
+            needs_you=(PUCK_RESET_LINE, PUCK_RESET_ACTION), bundle_path=None, src=None,
+        )
+
+    uploaded = False
+    cleared = False
+    flashed = False
+    needs_you: "Optional[tuple[str, str]]" = None
+
+    try:
+        upload_result = upload.upload(result.bundle_path, cfg.inbox_dir)
+        uploaded = bool(getattr(upload_result, "ok", False))
+
+        if not uploaded:
+            needs_you = (NEEDS_YOU_UPLOAD_LINE, NEEDS_YOU_UPLOAD_ACTION)
+            _fire_needs_you(cfg, *needs_you)
+        elif result.verified:
+            # Fired here, not after clear/flash (docs/sync-agent-plan.md's
+            # own numbered list puts "notify Ride synced" at step 9, after
+            # clear (7) and flash (8)) -- deliberately: THIS is the exact
+            # moment the fact it reports becomes true (the ride is safe,
+            # uploaded and verified), and a clear or flash problem afterward
+            # is a separate, secondary concern that must not delay or
+            # suppress telling Nick his ride itself is safe.
+            notify.notify("synced", runner=cfg.notifier, jumps=result.jumps)
+            cfg.runtime["needs_you_active"] = False
+            clear_result = serial_job.clear_puck(port_path, device_factory=cfg.device_factory)
+            cleared = clear_result.ok
+            if not cleared:
+                needs_you = (PUCK_RESET_LINE, PUCK_RESET_ACTION)
+                _fire_needs_you(cfg, *needs_you)
+            else:
+                flashed, flash_needs_you = _maybe_flash(port_path, result.src, cfg)
+                needs_you = needs_you or flash_needs_you
+        # else: uploaded but not verified -- see the docstring above.
+    except Exception:
+        # Whatever already succeeded (uploaded/cleared/flashed, each still
+        # holding its own real value from above) stays reported as true --
+        # only the step that actually raised, and everything after it,
+        # never ran.
+        needs_you = (NEEDS_YOU_UPLOAD_LINE, NEEDS_YOU_UPLOAD_ACTION)
+        _fire_needs_you(cfg, *needs_you)
+
+    return JobCycleReport(
+        port=port_path, pulled=True, verified=result.verified, jumps=result.jumps,
+        reasons=list(result.reasons), uploaded=uploaded, cleared=cleared, flashed=flashed,
+        needs_you=needs_you, bundle_path=result.bundle_path, src=result.src,
+    )
+
+
+# --------------------------------------------------------------- Garmin leg
+
+def _run_garmin(cfg: DaemonConfig) -> None:
+    """docs/sync-agent-plan.md:57-58: "on every job and every 6 h ... Never
+    blocks the puck job." Every exception below is swallowed -- an
+    unofficial API (garmin.py's own module docstring: "it has broken and
+    been fixed before") must never be able to take the puck loop down with
+    it, and the caller (run_forever()) never awaits this beyond calling it.
+
+    Token expiry fires docs/sync-agent-plan.md:39's needs_you exactly once
+    per expiry -- cfg.runtime['garmin_needs_you_sent'] is cleared the
+    moment is_signed_in() is true again, so a re-run of setup screen 3
+    silences it without this function needing to know that happened.
+    """
+    try:
+        g = cfg.garmin_module
+        if not g.is_signed_in():
+            if not cfg.runtime.get("garmin_needs_you_sent"):
+                _fire_needs_you(cfg, NEEDS_YOU_GARMIN_LINE, NEEDS_YOU_GARMIN_ACTION)
+                cfg.runtime["garmin_needs_you_sent"] = True
+            return
+        cfg.runtime["garmin_needs_you_sent"] = False
+
+        home = Path(cfg.home_dir)
+        store = home / GARMIN_SEEN_FILENAME
+        since_iso = g.last_seen(store)
+        out_dir = home / FITS_CACHE_DIRNAME
+        downloaded = g.fetch_new(since_iso, out_dir)
+        for fit_path in downloaded:
+            upload.upload(fit_path, cfg.fits_dir)
+        if downloaded:
+            g.mark_seen(store, datetime.now().astimezone().isoformat(timespec="seconds"))
+    except Exception:
+        pass
+
+
+# -------------------------------------------------------- attached polling
+
+@dataclass
+class AttachmentSession:
+    """Per-plug-in tracking for step 10 -- reset by run_forever() every time
+    the port disappears and a new one appears, so "fires exactly once" is
+    "once per attachment", never once ever."""
+
+    port: str
+    prev_chg: "Optional[int]" = None
+    charged_notified: bool = False
+    last_stats_poll: float = 0.0
+    last_puck_pct: "Optional[int]" = None
+    last_puck_charging: bool = False
+
+
+def poll_attached(port_path: str, cfg: DaemonConfig, session: AttachmentSession) -> dict:
+    """One `stats` read while the puck sits attached (step 10). Fires
+    "Puck charged" the one time chg goes 1->0 with batt_pct>=95 -- both
+    conditions read off the SAME `stats` reply, never a stale one, and
+    `session.charged_notified` makes it exactly-once per attachment even if
+    the poll keeps running for hours afterward."""
+    stats = serial_job.read_stats(port_path, device_factory=cfg.device_factory)
+    chg = stats.get("chg")
+    pct = stats.get("batt_pct")
+    if (
+        session.prev_chg == 1 and chg == 0
+        and pct is not None and pct >= CHARGED_BATT_PCT_MIN
+        and not session.charged_notified
+    ):
+        notify.notify("charged", runner=cfg.notifier)
+        session.charged_notified = True
+    if chg is not None:
+        session.prev_chg = chg
+    session.last_puck_pct = pct
+    session.last_puck_charging = bool(chg)
+    return stats
+
+
+# ------------------------------------------------------------- menu bar
+
+def _update_menubar(app, cfg: DaemonConfig, session: "Optional[AttachmentSession]") -> None:
+    """Rewrite the two status lines menubar.py's PuckdApp.set_state() owns.
+    `app` is None in every test that doesn't care about the menu bar
+    (menubar.py's own design keeps rumps out of the import path unless
+    build_app_class()/make_app() is actually called) -- a no-op then."""
+    if app is None:
+        return
+    state = load_state(cfg.home_dir)
+    last_ride_dt = None
+    iso = state.get("last_ride_iso")
+    if iso:
+        try:
+            last_ride_dt = datetime.fromisoformat(iso)
+        except ValueError:
+            last_ride_dt = None
+    last_jumps = state.get("last_ride_jumps")
+    pct = session.last_puck_pct if session else None
+    charging = session.last_puck_charging if session else False
+    attention = bool(cfg.runtime.get("needs_you_active"))
+    app.set_state(pct, charging, last_ride_dt, last_jumps, attention)
+
+
+# ----------------------------------------------------------------- the loop
+
+def run_forever(
+    cfg: DaemonConfig,
+    *,
+    find_port: "Callable[[], Optional[str]]" = find_puck_port,
+    on_cycle: "Optional[Callable[[JobCycleReport], None]]" = None,
+    app=None,
+    max_iterations: "Optional[int]" = None,
+) -> None:
+    """The 2 s poll loop. A NEW port (one that wasn't the currently-attached
+    one) runs run_job_cycle() once; the SAME port on later ticks only gets
+    step 10's 60 s battery poll; the port going away resets attachment
+    tracking so the next arrival is a fresh "plug-in" (a second plug-in
+    after a failed upload is indistinguishable from a first one here -- it
+    just runs the whole job again, which is what actually retries a failed
+    upload: the puck was never cleared, so the fresh pull carries the same
+    data forward until an upload finally confirms and clear_puck() runs).
+
+    `max_iterations` bounds the loop for tests (and nothing else) --
+    production (`daemon.main()`) never passes it, so the loop is
+    unconditional there, exactly like every other "the daemon" in this
+    repo's docs.
+    """
+    current_port: "Optional[str]" = None
+    session: "Optional[AttachmentSession]" = None
+    last_garmin = cfg.now()
+
+    i = 0
+    while max_iterations is None or i < max_iterations:
+        i += 1
+        port = find_port()
+        now = cfg.now()
+
+        if port and port != current_port:
+            current_port = port
+            session = AttachmentSession(port=port, last_stats_poll=now)
+            report = run_job_cycle(port, cfg)
+            if report.pulled and report.uploaded and report.verified:
+                _record_ride(cfg, report.jumps or 0, report.bundle_path)
+            if on_cycle is not None:
+                on_cycle(report)
+            poll_attached(port, cfg, session)
+            _update_menubar(app, cfg, session)
+            last_garmin = now
+            _run_garmin(cfg)
+        elif port and port == current_port and session is not None:
+            if now - session.last_stats_poll >= STATS_POLL_INTERVAL_S:
+                session.last_stats_poll = now
+                poll_attached(port, cfg, session)
+                _update_menubar(app, cfg, session)
+        elif not port and current_port is not None:
+            current_port = None
+            session = None
+            _update_menubar(app, cfg, None)
+
+        if now - last_garmin >= cfg.garmin_interval_s:
+            last_garmin = now
+            _run_garmin(cfg)
+
+        cfg.sleep(POLL_INTERVAL_S)
+
+
+# ------------------------------------------------------------- `once`/setup
+
+def run_once_report(port_path: "Optional[str]", cfg: DaemonConfig) -> str:
+    """`python -m puckd once`'s plain-text report -- runs exactly one job
+    cycle (no loop, no 60 s poll) and the Garmin leg, then returns a report
+    a person reads on the bench, never a structure a script parses."""
+    if port_path is None:
+        port_path = find_puck_port()
+        if port_path is None:
+            return "no puck found -- plug it in (data cable), or pass a port"
+
+    report = run_job_cycle(port_path, cfg)
+    _run_garmin(cfg)
+
+    lines = [f"port: {report.port}"]
+    if not report.pulled:
+        lines.append("pull: FAILED")
+        lines.extend(f"  - {r}" for r in report.reasons)
+        return "\n".join(lines)
+
+    lines.append(f"jumps: {report.jumps}")
+    lines.append(f"verified: {report.verified}")
+    for r in report.reasons:
+        lines.append(f"  ! {r}")
+    lines.append(f"bundle: {report.bundle_path}")
+    lines.append(f"uploaded: {report.uploaded}")
+    lines.append(f"cleared: {report.cleared}")
+    lines.append(f"flashed: {report.flashed}")
+    if report.needs_you:
+        lines.append(f"needs_you: {report.needs_you[0]} -- {report.needs_you[1]}")
+    return "\n".join(lines)
+
+
+def _start_setup_server(cfg: "Optional[DaemonConfig]" = None):
+    """Start tools/puckd/setup/server.py's HTTP server with its OWN
+    production wiring (server.py's _wire_production(), a function that file
+    itself documents as being for exactly this: "for a standalone run" --
+    reused rather than re-adapted a second time here, since the
+    google_authorize/garmin_login/notify_permission wiring choices it
+    already made and explained are that file's, not this one's, to
+    duplicate). Returns (httpd, port); never raises -- an import failure
+    (rumps-less CI, a stripped install) means no setup page, not a crashed
+    daemon."""
+    try:
+        from puckd.setup import server as setup_server
+    except ImportError:
+        return None, None
+    return setup_server.serve(**setup_server._wire_production())
+
+
+def run_setup() -> None:
+    """`python -m puckd setup`: serve the four screens and open them in the
+    default browser -- "Local web page opened by the app"
+    (docs/sync-agent-plan.md's Setup section) -- blocking until Ctrl-C,
+    the same shape server.py's own standalone `main()` already uses."""
+    import webbrowser
+
+    httpd, port = _start_setup_server()
+    if httpd is None:
+        print("could not start the setup server (see tools/puckd/setup/server.py)")
+        return
+    url = f"http://127.0.0.1:{port}/setup"
+    webbrowser.open(url)
+    print(f"JumpHeight setup: {url}")
+    try:
+        threading.Event().wait()
+    except KeyboardInterrupt:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def main() -> None:
+    """`python -m puckd`: the real, long-running agent. The setup server
+    starts alongside the loop so the menu bar's "Set up..." item -- which
+    just runs `open <url>` (menubar.py's default_opener) -- always has
+    something listening on the far end; the menu bar itself owns the main
+    thread (rumps.App.run()'s own requirement), so the poll loop runs on a
+    daemon thread behind it."""
+    cfg = build_config()
+    _start_setup_server(cfg)
+    app = menubar.make_app(spool_dir=cfg.spool_dir, opener=menubar.default_opener)
+    t = threading.Thread(target=run_forever, args=(cfg,), kwargs={"app": app}, daemon=True)
+    t.start()
+    app.run()
+
+
+if __name__ == "__main__":  # pragma: no cover -- exercised via `python -m puckd`
+    main()
