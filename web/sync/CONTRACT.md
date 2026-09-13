@@ -819,13 +819,41 @@ reverted.
 
 ### §3.4 Rider-facing language
 
-Protocol strings are translated, not pasted (`failWord()`,
-`web/sync/sync.js:960-993`): a page whose whole promise is that there is no
-jargon must not print `ERR traceraw storage_down`. And the standing
-reassurance — "the puck still has everything" — is **only** offered where the
-puck is in a state to vouch for it (`retryCouldHelp()`,
-`web/sync/sync.js:949-958`, used at `:991`): a store that never mounted cannot
-be fixed by moving the phone.
+Protocol strings are translated, not pasted: a page whose whole promise is
+that there is no jargon must not print `ERR traceraw storage_down`. And the
+standing reassurance — "Nothing was lost." — is **only** offered where the
+puck is in a state to vouch for it (`retryCouldHelp()`, `web/sync/sync.js`;
+`endPullFailed()`/`endPullOk()` branch on `S.storageDown`): a store that never
+mounted cannot be fixed by moving the phone. (`failWord()` and its "It said:
+…" paste of unmapped `ERR` lines were removed 2026-09-12 — see the section
+below; the puck's words go to `device.log` and the seam instead.)
+
+### Copy, 2026-09-12 (`PAGE_VERSION` `2026-09-12a`)
+
+Every sentence on the page comes from the owner's spec of 2026-09-12 and is
+implemented verbatim; do not improve on it. The principles, so a later edit
+does not regress the voice: **one task per screen, one sentence of status,
+buttons are verbs, titles are nouns; say what is happening and what to do
+next, and never explain the mechanism.** No numbers the rider cannot act on
+reach the screen — no bytes, no KB/s, no seconds-taken, no build hashes, no
+"check number" — and no hedges; the diagnostics stay **exactly as before** in
+`manifest.json` (§2.2, `buildManifest()` untouched) and `device.log`, and
+the screen carries at most one muted line, "Details for Josh are saved in
+the file." One recovery sentence, identical everywhere it appears and only
+on failure screens: "If anything goes wrong, press the small button on the
+puck twice." The save button is **Save** (it saves a file; sending is what he
+does afterwards), and a re-save is link-styled, never a second black button.
+
+Nothing in §2 or §3's gates moved: `verifyPull()`, the F-22 band,
+`trace_bytes_after`, the header-only arm, the verified+delivered clear gate,
+`ALLOW_CLEAR`, `updateOffer()`, the reboot detection and the `getPorts`
+reconnect are byte-identical to `84cdde0`. Two elements left the markup with
+their sentences: `#ble-time-hint` (the 20–30 minute hedge; the Bluetooth
+figure is now the copying screen's hint) and `#stored-jumps` (the jump count
+is in the status line, "Copying your ride · 3 jumps"; the fs=down condition
+is the status "The puck isn’t recording."). The §3.3 hooks are all intact,
+and `state()` gained `update_why` (the puck's own `ERR` when it refused to
+restart) because that reading left the screen.
 
 ---
 

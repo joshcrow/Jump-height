@@ -537,6 +537,12 @@ hand — CLAUDE.md rule 5). What changed, all pinned by tests, suite 523 →
   (routed around, not diagnosed), the F-22 *band* arm at 16 MB, and the
   five-minute give-up on the post-flash reconnect (only the no-getPorts arm
   is exercised).
+  **NEXT (2026-09-12, not started):** the owner read the live page top to
+  bottom and called the copy "kinda bad" — it leaks bench diagnostics (byte
+  counts, "check number matches", build hashes, "NO REC") and hedges onto
+  the rider's screen. The rewrite is fully specified in
+  `docs/rider-copy-spec.md`; implementation is copy-only, and was blocked by
+  a rate limit before any edit landed.
 - **Simplified 2026-09-09 to `2026-09-09c`, after the owner read it and called
   it confusing.** It was written for "phone or computer, Bluetooth or cable",
   and Chrome on a Mac reports BOTH transports — so the rider met two competing

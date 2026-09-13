@@ -39,7 +39,7 @@
 // Baked into the page and copied into every manifest.json, so Josh can tell
 // which build of this page produced a bundle without asking the rider
 // anything (CONTRACT.md §2 `page_version`). Bump it when the page changes.
-const PAGE_VERSION = '2026-09-11e';
+const PAGE_VERSION = '2026-09-12a';
 
 // ------------------------------------------------------------------ protocol
 
@@ -170,12 +170,14 @@ const UPDATE_CLOSE_MS = 1500;
 // rather than send him hunting for a drive that is never going to mount.
 const UPDATE_REBOOT_MS = 6000;
 
-// The one sentence every failure path here has to carry, verbatim and from one
-// place (CLAUDE.md §4 — a sentence copied is a sentence that drifts). It is
-// also on the waiting screen, before anything has gone wrong: the rider who
-// most needs it is the one staring at a puck that never produced a drive.
-const PUCK_RECOVERY = 'press the small button on the puck twice and it comes '
-                    + 'straight back';
+// The recovery, from one place (CLAUDE.md §4 — a sentence copied is a sentence
+// that drifts). Since the 2026-09-12 copy it is ONE sentence, identical
+// wherever it appears, and it appears only on failure screens and on the drag
+// screen — the rider who most needs it is the one whose puck never produced a
+// drive. The bare phrase is separate because two update panels embed it
+// mid-sentence.
+const PRESS_TWICE = 'press the small button on the puck twice';
+const PUCK_RECOVERY = 'If anything goes wrong, ' + PRESS_TWICE + '.';
 
 // The drive the bootloader mounts. Named, never described: "a USB drive" sent
 // nobody anywhere.
@@ -271,13 +273,6 @@ function el(tag, props, ...kids) {
   }
   for (const c of kids) if (c != null) n.append(c.nodeType ? c : document.createTextNode(String(c)));
   return n;
-}
-
-function human(bytes) {
-  if (bytes == null || !Number.isFinite(bytes)) return '–';
-  if (bytes < 1024) return bytes + ' bytes';
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(bytes < 10240 ? 1 : 0) + ' KB';
-  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
 }
 
 function pad2(n) { return String(n).padStart(2, '0'); }
@@ -557,9 +552,13 @@ function freshSession(kind) {
     // confirmation standing where downloadBlob() cannot give us a real one
     // (it returns true whether or not Chrome wrote the file).
     deliveredName: null,
-    // The one sentence that says how the copy came out — set by endPullOk and
-    // re-shown by doSend, so the save does not overwrite the news with its own
-    // receipt. Screen C says both: what happened, then where the file is.
+    // How many times a bundle has actually gone out this session. The "two
+    // files, send the newer one" line is shown only from the second save on
+    // (setVisible) — before that there is only one file to talk about.
+    saveCount: 0,
+    // The one sentence that says how the copy came out — set by endPullOk and,
+    // on an UNVERIFIED ride, kept as the status by doSend, so the save does
+    // not overwrite the news with its own receipt.
     outcome: null,
     outcomeKind: null,
     // ---- the puck's own software (2026-09-11d).
@@ -890,60 +889,53 @@ function renderFacts() {
   const kvS = S.statsLatestKV || {};
   $('puck-name').textContent = S.puckName || (transport && transport.device && transport.device.name) || 'connected';
 
-  // Battery: the charging state leads, because while charging the voltage
-  // floats high and the percentage reads optimistic — the archived app's own
-  // caveat, and only the OG has a cell at all (CLAUDE.md §1).
+  // "86% battery". The charging state is not said (2026-09-12): over the cable
+  // the OG — the only board with a cell, CLAUDE.md §1 — is charging every
+  // time it is synced, so the word carried no news. The percentage reads
+  // optimistic while charging (the archived app's caveat); it is a caption,
+  // not a measurement anyone acts on.
   const pct = numOrNull(kvS.batt_pct != null ? kvS.batt_pct : kvI.batt_pct);
   const chg = numOrNull(kvS.chg != null ? kvS.chg : kvI.chg);
-  let batt = 'not reported';
-  if (pct !== null) batt = chg === 1 ? `charging (${pct}%)` : `${pct}%`;
+  let batt = 'battery not reported';
+  if (pct !== null) batt = `${pct}% battery`;
   else if (chg === 1) batt = 'charging';
   $('battery').textContent = batt;
-
-  // With fs=down the store never mounted, so stored_jumps=0 / trace_bytes=0
-  // are readings that did not happen. Printing them as "0" is precisely the
-  // 2026-08-11 mistake firmware/src/main.cpp's `stats` comment records — "A
-  // reading that could not be taken must never be dressed up as a reading of
-  // zero" — and on this page it would also read as a puck with nothing worth
-  // keeping, one screen before an erase button.
-  //
-  // The "Ride data waiting" (trace_bytes) and "Puck software" (fw/src) rows
-  // were cut 2026-09-09: a byte count and a build hash are diagnostics, not
-  // news to a rider, and both still travel to Josh inside manifest.json
-  // (trace_bytes_device, fw, src) and device.log. What must NOT be lost with
-  // them is the fs=down condition, and it is not: this row says "unknown — not
-  // saving" and afterConnect's status line says NO REC in his own words. Two
-  // places, neither of them a number he has to interpret.
-  const down = !!S.storageDown;
-  const stored = numOrNull(kvS.stored_jumps);
-  // One caption line since 2026-09-11b — "JumpHeight-E2C4 · charging (86%) ·
-  // 3 jumps saved" — so the row label has to move into the value.
-  $('stored-jumps').textContent = down ? 'unknown — not saving'
-                                       : (stored === null ? 'jumps unknown'
-                                          : stored + (stored === 1 ? ' jump saved' : ' jumps saved'));
+  // The jump count left this caption on 2026-09-12: it is in the status line
+  // instead ("Copying your ride · 3 jumps", doPull). The fs=down condition
+  // that used to sit here as "unknown — not saving" is now the status line
+  // "The puck isn’t recording." (endPullOk / endPullFailed) — still never a
+  // zero dressed up as a reading (firmware/src/main.cpp, `stats`).
 }
 
-function showResult(headText, kind, lines) {
-  showPanel('result', headText, kind, lines);
+function showResult(headText, kind, lines, opts) {
+  showPanel('result', headText, kind, lines, opts);
 }
 
 /** The result panel's builder, with the host named — #result for the ride,
  *  #update-result for the puck's software. Same rule either way: text nodes
  *  only, so nothing that arrives from a device or a manifest can become
- *  markup. */
-function showPanel(hostId, headText, kind, lines) {
+ *  markup.
+ *
+ *  opts: { body: a plain paragraph under the head; ordered: number the lines;
+ *  muted: one muted line at the bottom }. The muted line is where the
+ *  2026-09-12 copy puts everything that is for Josh rather than the rider —
+ *  at most one, and it says only that the details are in the file. */
+function showPanel(hostId, headText, kind, lines, opts) {
+  const o = opts || {};
   const host = $(hostId);
   host.textContent = '';
   const panel = el('div');
-  panel.append(el('p', { class: 'head' + (kind ? ' is-' + kind : ''), text: headText }));
+  if (headText) panel.append(el('p', { class: 'head' + (kind ? ' is-' + kind : ''), text: headText }));
+  if (o.body) panel.append(el('p', { class: 'body', text: o.body }));
   if (lines && lines.length) {
-    const ul = el('ul');
+    const list = el(o.ordered ? 'ol' : 'ul');
     // el() turns a string into a text node and appends a node as it is, so a
     // built element (the save link on the iOS path) can ride in this list
     // without any of it going near innerHTML.
-    for (const l of lines) ul.append(el('li', null, l));
-    panel.append(ul);
+    for (const l of lines) list.append(el('li', null, l));
+    panel.append(list);
   }
+  if (o.muted) panel.append(el('p', { class: 'hint', text: o.muted }));
   host.append(panel);
 }
 
@@ -958,26 +950,58 @@ function isUsb() { return !!S && S.transportKind === 'usb'; }
  *  connect" sentence, so the advice cannot drift between them. */
 const RELOAD_HINT = 'If it still won’t connect, reload this page.';
 
-/** What the connect-time `stats` found, in one sentence.
- *
- *  On a NO REC puck this is the whole of what he needs to know, in his own
- *  word for it (docs/rider-brief.md item 6: "it means the puck is powered and
- *  talking to your watch but not saving anything"), and it must NOT be
- *  "0 jumps, 0 bytes" — the store never mounted, so nothing was read
- *  (firmware/src/main.cpp, `stats`). */
-function foundSentence() {
-  if (S.storageDown) {
-    return 'The puck is NOT saving anything. That is the "NO REC" problem: '
-         + 'powered, talking, recording nothing.\n'
-         + 'Nothing you can do on the beach fixes it. Copying and saving what '
-         + 'is there so Josh can see it — and do NOT empty the puck.';
-  }
-  const stored = numOrNull(S.statsBeforeKV.stored_jumps);
-  const tb = numOrNull(S.statsBeforeKV.trace_bytes);
+// The fixed sentences of the 2026-09-12 copy (scratch spec "Rider page copy",
+// implemented verbatim). One sentence of status; the mechanism is never
+// explained; the numbers stay in manifest.json and device.log.
+const NOT_CHECKED_OUT = 'The copy didn’t check out.';
+const NOT_RECORDING = 'The puck isn’t recording.';
+const NOTHING_LOST = 'Nothing was lost.';
+// The one muted line a failure screen may carry. The reasons verifyPull()
+// names — byte counts, the check number, "Only N of M jumps" — are NOT
+// rendered any more: they are for Josh, and they reach him unchanged through
+// manifest.json's fields and device.log (buildManifest is untouched by the
+// copy change). The state seam still exposes them for the tests.
+const DETAILS_LINE = 'Details for Josh are saved in the file.';
+
+/** Whether a VERIFIED copy still carries something Josh should read off the
+ *  bundle — a forgiveness inside F-22's band, growth between the two stats
+ *  reads, or a FILE frame this page does not carry. All three are in the file
+ *  (f22_band_applied / trace_bytes_* in manifest.json; the frame lines in
+ *  device.log), so the muted line is true whenever this is. */
+function detailsForJosh() {
+  return !!(S.f22Note || S.growthNote || unknownBodies.size);
+}
+
+/** The status line while the copy runs. Jumps are known off the connect-time
+ *  `stats`, so the count is there from the first tick; on a store that never
+ *  mounted the zero is not a reading (firmware/src/main.cpp, `stats`) and is
+ *  not shown. */
+function copyingStatus() {
+  const stored = S.storageDown ? null : numOrNull(S.statsBeforeKV.stored_jumps);
   return stored === null
-    ? 'The puck is ready.'
-    : `Found ${stored} ${stored === 1 ? 'jump' : 'jumps'} and `
-      + `${human(tb || 0)} of ride data.`;
+    ? 'Copying your ride…'
+    : `Copying your ride · ${stored} ${stored === 1 ? 'jump' : 'jumps'}`;
+}
+
+/** The link is gone. Names the Connect button, which setVisible() puts back
+ *  on screen the moment `transport` is null. */
+function linkLostSentence() {
+  return (isUsb()
+    ? 'The cable disconnected. Plug it back in and press '
+    : 'The puck went out of range. Move closer and press ') + connectLabel() + '.';
+}
+
+/** The puck stopped answering with the link still up. The spec's sentence
+ *  says "press Connect", but on a timeout the transport is still open and the
+ *  button on screen is "Try again" (setVisible) — so the button is read off
+ *  the page rather than copied into the sentence, the same rule as
+ *  connectLabel(): measured 2026-09-11, this page once named "Try again" on a
+ *  screen showing only Connect. */
+function stoppedSentence() {
+  const btn = transport ? ($('btn-pull').textContent || 'Try again').trim() : connectLabel();
+  return (isUsb()
+    ? 'The puck stopped responding. Check the cable and press '
+    : 'The puck stopped responding. Keep it next to the phone and press ') + btn + '.';
 }
 
 /** The label on whichever Connect button setVisible() puts back on screen when
@@ -994,36 +1018,6 @@ function foundSentence() {
 function connectLabel() {
   const b = connectKind === 'ble' ? $('btn-connect') : $('btn-connect-usb');
   return (b && b.textContent || 'Connect').trim();
-}
-
-/** The one thing to do after a failure — and it must name a button that is
- *  ACTUALLY ON SCREEN at the moment the sentence is written.
- *
- *  TWO AXES, not one:
- *   * the TRANSPORT decides the remedy (a cable cannot be fixed by moving
- *     closer, and a watch cannot slow a cable);
- *   * the LINK decides the button. setVisible() takes #btn-pull off screen
- *     whenever the transport is gone — setEnabled() shuts it on `!transport`
- *     and setVisible() only ever hides a shut button — and puts the Connect
- *     button back in its place.
- *
- *  Measured 2026-09-11: with the cable yanked mid-pull, the result panel read
- *  'press "Try again"' while the only button on screen was #btn-connect-usb.
- *  onLinkLost()'s own status line already said the right thing; this sentence,
- *  written underneath it by endPullFailed(), did not. */
-function retryAdvice() {
-  const cable = 'Check the cable is pushed in properly at both ends (some '
-              + 'cables only charge — use one that carries data), then ';
-  if (!transport) {
-    const reconnect = 'press "' + connectLabel() + '" and start again.';
-    return isUsb()
-      ? cable + reconnect
-      : 'Move closer to the puck, take your watch out of its activity, then '
-        + reconnect;
-  }
-  return isUsb()
-    ? cable + 'press "Try again".'
-    : 'Press "Try again" — closer to the puck, and with your watch out of an activity.';
 }
 
 function setEnabled() {
@@ -1163,7 +1157,6 @@ function setVisible(offerClear) {
   $('usb-hint').hidden = !usb;
   $('btn-connect').hidden = !ble;
   $('ble-hint').hidden = !ble;
-  $('ble-time-hint').hidden = !ble;
 
   // ---- The note and the chips. They appear the moment the copy starts —
   // during the minutes he is doing nothing — and stay editable afterwards, so
@@ -1221,35 +1214,36 @@ function setVisible(offerClear) {
   //   * a note typed AFTER the save already fired;
   //   * a re-save once the puck has been emptied and this machine holds the
   //     only copy of the ride.
+  //
+  // The button is "Save" (it saves a file; sending is what he does afterwards,
+  // 2026-09-12). A re-save is SECONDARY — link-styled, never a second black
+  // button beside "Empty the puck" or "Update the puck" — so the one-button
+  // rule holds visually where two presses are legitimately on offer.
   let sendLabel = null;
   if (!$('btn-send').disabled) {
-    if (!S.delivered && !S.cleared) sendLabel = 'Send';
+    if (!S.delivered && !S.cleared) sendLabel = 'Save';
     else if (noteDirtySinceSave) sendLabel = 'Save it again with your note';
-    else if (S.cleared) sendLabel = 'Save the ride again';
+    else if (S.cleared) sendLabel = 'Save a copy again';
   }
   $('btn-send').hidden = !sendLabel;
-  if (sendLabel) $('btn-send').textContent = sendLabel;
-  $('send-hint').hidden = !(sendLabel && S.delivered);
+  if (sendLabel) {
+    $('btn-send').textContent = sendLabel;
+    const secondary = !!(S.delivered || S.cleared);
+    $('btn-send').classList.toggle('btn-primary', !secondary);
+    $('btn-send').classList.toggle('btn-link', secondary);
+  }
+  // "Two files, send the newer one" — only once there ARE two files.
+  $('send-hint').hidden = !(S.saveCount >= 2);
 
   // ---- The destructive press. The gate is offerClear, computed above and
   // unchanged; this only decides whether the section around it is in the
-  // page's flow at all, and writes the sentence that names the saved file.
+  // page's flow at all. The sentences are fixed (2026-09-12 copy): the saved
+  // file is named in the result line directly above this section (doSend),
+  // and the muted line under the instruction sends him to look for it before
+  // he erases anything — downloadBlob() returns true whether or not Chrome
+  // wrote the file, so a human LOOK still stands at the expensive point.
   const showClear = (ALLOW_CLEAR || OFFER_CLEAR_TO_RIDER) && !!offerClear;
   $('step-clear').hidden = !showClear;
-  if (showClear) {
-    // Naming the file in the button's own sentence is the second half of the
-    // safety net around `delivered`: downloadBlob() returns true whether or
-    // not Chrome actually wrote anything (CONTRACT.md §3 defines `delivered`
-    // that way on purpose). The first half is that the save is his press at
-    // all; this is the other one — making him LOOK for the filename before he
-    // erases anything puts a person at the only point where being wrong is
-    // expensive.
-    $('clear-hint').textContent = S.deliveredName
-      ? 'One last thing — this is the bit that protects your next ride. Once '
-        + 'you can see ' + S.deliveredName + ' in your Downloads:'
-      : 'One last thing — this is the bit that protects your next ride. Once '
-        + 'you have the bundle safe:';
-  }
 
   renderUpdate();
 }
@@ -1274,18 +1268,19 @@ function updateProgress() {
   const kbps = elapsed > 0 ? (S.pullBytes / 1024) / elapsed : 0;
   const exp = S.trace.expectedText;
   const clock = elapsedWords(elapsed);
+  // The bar and the clock, nothing else (2026-09-12): no byte counts and no
+  // KB/s on screen. transfer.bytes_received and transfer.seconds still go to
+  // Josh in manifest.json.
   if (exp !== null && exp > 0) {
     const pct = Math.max(0, Math.min(99, Math.floor((S.trace.textBytes / exp) * 100)));
     $('bar-fill').style.width = pct + '%';
     $('bar-pct').textContent = pct + '%';
-    $('progress-text').textContent =
-      `${human(S.trace.textBytes)} of ${human(exp)}  ·  ${clock} so far`;
   } else {
     // The CSV fallback on a puck that never said how much to expect. No
     // denominator, so no percentage is invented — same clock, no fake bar.
     $('bar-pct').textContent = '';
-    $('progress-text').textContent = `${human(S.pullBytes)} so far  ·  ${clock}`;
   }
+  $('progress-text').textContent = clock;
 
   // The known cause is a second BLE central — his watch, mid-activity — which
   // drops the link to a 23-byte MTU (docs/watch.md, "Two-central policy").
@@ -1330,14 +1325,11 @@ async function doConnectUsb() {
     port = await navigator.serial.requestPort();
   } catch (_e) {
     busy = false; setEnabled();
-    // Names the button by the label it actually carries. It read "Connect with
-    // the cable" until 2026-09-09; the cable is now the only path on a
-    // computer, so the button is just "Connect" and a sentence pointing at the
-    // old name would point at nothing on screen (CLAUDE.md §4, the mirror
-    // case: retire an identifier, fix what pointed at it).
-    setStatus('No puck picked. Check the cable is plugged into the puck and the '
-            + 'computer, then tap "Connect" and choose the entry '
-            + 'called XIAO nRF52840 Sense.');
+    // Names the button by the label it actually carries (CLAUDE.md §4, the
+    // mirror case: retire an identifier, fix what pointed at it). The picker
+    // string is the USB product name measured off the board 2026-09-09.
+    setStatus('No puck chosen. Press ' + connectLabel()
+            + ' and choose XIAO nRF52840 Sense.');
     return;
   }
   const t = new SerialTransport(port);
@@ -1373,7 +1365,8 @@ async function doConnect() {
     });
   } catch (_e) {
     busy = false; setEnabled();
-    setStatus('No puck picked. Tap Connect and choose the one whose name starts with JumpHeight.');
+    setStatus('No puck chosen. Press ' + connectLabel()
+            + ' and choose the one that starts with JumpHeight.');
     return;
   }
   const t = new BleTransport(device);
@@ -1406,12 +1399,17 @@ async function afterConnect(t, kind, advertisedName) {
   // stop a USB transfer, and "tap the screen every so often" is phone advice.
   $('wake-hint').hidden = !!wakeLock || kind === 'usb';
   busy = true; setEnabled();
-  setStatus('Reading the puck…', 'busy');
+  // Screen 2 from the first moment the link is up: the chain that follows
+  // (autoChain) is the copy, and the two reads before it are part of it.
+  setStatus('Copying your ride…', 'busy');
 
   const info = await runCommand('info');
   if (info.err) {
     busy = false; S.phase = 'connected'; setEnabled();
-    setStatus(failWord(info.err, 'The puck connected but didn’t answer.'), 'bad');
+    // No button is on screen here (phase 'connected' offers no retry and the
+    // link is still up), so the remedy must not name one.
+    setStatus('The puck didn’t answer. Unplug it, plug it back in, and reload '
+            + 'this page.', 'bad');
     return;
   }
   S.infoLines = info.lines;
@@ -1430,9 +1428,8 @@ async function afterConnect(t, kind, advertisedName) {
   // it, where err is null and S.statsBefore is still null. setEnabled() keeps
   // step 2 shut on the same condition.
   if (stats.err || S.statsBefore === null) {
-    const lead = 'The puck didn’t answer its first question — unplug it, plug '
-               + 'it back in, and reload this page.';
-    setStatus(stats.err ? failWord(stats.err, lead) : lead, 'bad');
+    setStatus('The puck didn’t answer its first question — unplug it, plug '
+            + 'it back in, and reload this page.', 'bad');
     return;
   }
   renderFacts();
@@ -1497,9 +1494,10 @@ async function autoChain() {
     try {
       if (!lastBundle) lastBundle = await buildBundle();
     } catch (e) {
-      setStatus('The ride came off the puck, but packing it up failed: '
-              + ((e && e.message) || e) + '\nPress Send to try that part again — '
-              + 'nothing was lost, and the puck still has everything.', 'bad');
+      // The Save button is on screen at this point (phase 'pulled'), and
+      // doSend() rebuilds. The exception text is kept on the console only.
+      console.error('buildBundle failed', e);
+      setStatus('Couldn’t pack the ride up. Press Save to try again.', 'bad');
     }
     setEnabled();
   } finally {
@@ -1529,11 +1527,7 @@ function onLinkLost() {
     return;
   }
   setEnabled();
-  setStatus((isUsb()
-    ? 'The cable connection dropped. Nothing was lost — check the cable at '
-      + 'both ends, tap "Connect" and start again.'
-    : 'The puck dropped out of range. Nothing was lost — move closer, '
-      + 'tap Connect and start again.') + '\n' + RELOAD_HINT, 'bad');
+  setStatus(linkLostSentence(), 'bad');
 }
 
 // CONTRACT.md §1's fixed ERR string for "the store never mounted"
@@ -1553,41 +1547,6 @@ const TRACE_HEADER_BYTES = 6;
 function retryCouldHelp(err) {
   return !STORAGE_DOWN_RE.test(String(err)) && !(S && S.storageDown)
       && !/\btraceraw_unsupported\b/.test(String(err));
-}
-
-/** Turn a capture error into a sentence a rider can act on.
- *
- *  The ERR strings are fixed by CONTRACT.md §1, so the ones that mean something
- *  to him are translated rather than pasted: "ERR traceraw storage_down" is
- *  protocol jargon on a page whose whole promise is that there is none
- *  (web/sync/index.html's own header comment), and the reassurance that
- *  follows every other failure — "the puck still has everything" — is exactly
- *  the claim a puck that is not saving cannot support. Unmapped ERRs keep
- *  their text: he cannot act on it, but it is the only thing he and Josh have
- *  to talk about, and device.log carries it either way. */
-function failWord(err, lead) {
-  const s = String(err);
-  const out = [lead];
-  if (err === 'timeout') {
-    out.push(isUsb()
-      ? 'It went quiet for 30 seconds. Check the cable at both ends and try again.'
-      : 'It went quiet for 30 seconds. Move the phone right next to it '
-        + 'and try again.');
-  } else if (STORAGE_DOWN_RE.test(s)) {
-    out.push('The puck is not saving anything — that is the "NO REC" problem: '
-           + 'powered, talking, recording nothing.');
-    out.push('Nothing you can do on the beach fixes it. Tell Josh, and do NOT '
-           + 'empty the puck.');
-  } else if (/\btraceraw_unsupported\b/.test(s)) {
-    out.push('This puck’s software can’t hand the ride over this way. Nothing '
-           + 'is lost — tell Josh.');
-  } else {
-    out.push('It said: ' + s);
-  }
-  // Only claim the puck kept the ride when the puck is in a state to vouch
-  // for it.
-  if (retryCouldHelp(err)) out.push('The puck still has everything.');
-  return out.join('\n');
 }
 
 // --------------------------------------------------------------------- pull
@@ -1628,54 +1587,47 @@ async function doPull() {
   S.reasons = [];
   S.delivered = false;
   $('bar-fill').style.width = '0%';
-  $('progress-text').textContent = 'Starting…';
+  $('progress-text').textContent = '0 s';
   showProgress(true);
   setEnabled();
-  // The first real news of the session, and it replaces the four-row facts
-  // table: what is on the puck, and that the page is now getting it. On a NO
-  // REC puck this leads with that instead, verbatim — the chain still copies
-  // and still saves, because that bundle is the one Josh most needs.
-  setStatus(foundSentence() + '\n' + 'Copying it now — this can take a few minutes.',
-            S.storageDown ? 'bad' : 'busy');
+  // Screen 2 (2026-09-12): one line, the jump count in it. On a NO REC puck
+  // the count is not a reading and the news waits for the end of the copy —
+  // the chain still copies and still saves, because that bundle is the one
+  // Josh most needs.
+  setStatus(copyingStatus(), 'busy');
   // The instruction has to name the thing he is actually holding. Over the
   // cable there is no phone in the loop at all — the puck is plugged into a
   // Mac — and "keep the phone next to the puck" sent him looking for a link
-  // that does not exist. Same rule as retryAdvice() and the slow hint.
-  // It must also promise only what the page will actually do. It said "this
-  // page saves the ride to your Downloads by itself when it's done" while the
-  // chain auto-saved; the chain now stops at a built bundle and waits for his
-  // Save press (autoChain), so that sentence would leave him watching a
-  // finished page for a file that is never coming — the same "a save that did
-  // not happen looks like one that did" failure the press exists to prevent.
-  $('pull-hint').textContent = (isUsb()
-    ? 'Leave the puck plugged in. '
-    : 'Keep the phone next to the puck. ')
-    + 'You don’t have to do anything while this runs — when it’s finished the '
-    + 'page will ask you to save the ride.';
+  // that does not exist. The Bluetooth figure is the 20–30 minute estimate
+  // that used to sit on Screen 1; nobody has timed a real one, and the
+  // sentence no longer says so (no hedges, 2026-09-12).
+  $('pull-hint').textContent = isUsb()
+    ? 'Keep the puck plugged in. This takes a few minutes.'
+    : 'Keep the phone next to the puck. This can take up to half an hour.';
   progressTimer = setInterval(updateProgress, 500);
-  updateProgress();   // start the clock at 0 s rather than at "Starting…"
+  updateProgress();   // start the clock at 0 s
 
   try {
     let r = await runCommand('jumps');
-    if (r.err) return endPullFailed('the jump list', r.err);
+    if (r.err) return endPullFailed(r.err);
 
     r = await runCommand('traceraw');
     if (r.err && /^ERR unknown_command\b/.test(r.err)) {
       // CONTRACT.md §1: fall back to CSV on ERR unknown_command ONLY. Every other
       // ERR (storage_down, traceraw_unsupported) is the puck reporting a real
       // condition and is shown as-is rather than papered over with a retry.
+      // Nothing is said on screen about it (2026-09-12): the timer covers the
+      // slower path, and "older software" is a mechanism.
       S.trace.format = 'csv';
       S.trace.expectedText = numOrNull(S.statsBeforeKV.trace_bytes);
-      setStatus('This puck has the older software, so the ride comes across '
-              + 'the slow way. Nothing is lost — just give it longer.', 'busy');
       r = await runCommand('trace');
-      if (r.err) return endPullFailed('the ride data', r.err);
+      if (r.err) return endPullFailed(r.err);
     } else if (r.err) {
-      return endPullFailed('the ride data', r.err);
+      return endPullFailed(r.err);
     }
 
     r = await runCommand('stats');
-    if (r.err) return endPullFailed('the final check', r.err);
+    if (r.err) return endPullFailed(r.err);
     S.statsAfter = S.statsLatest;
     S.statsAfterKV = S.statsLatestKV;
 
@@ -1703,26 +1655,42 @@ function stopPullClock() {
   S.pullSeconds = Math.round(((Date.now() - S.pullStartMs) / 1000) * 10) / 10;
 }
 
-function endPullFailed(what, err) {
+/** A pull that stopped part-way: no bundle, so no Save. Which command failed
+ *  is not said (it is in device.log's last lines when a bundle is later built,
+ *  and on the console); which SENTENCE he gets depends on the link and the
+ *  error, and it must name a button that is on screen:
+ *
+ *   * link gone — the Connect button is back (setVisible on `!transport`);
+ *     onLinkLost() has already written this sentence and this writes the same
+ *     one, so the two paths cannot disagree whichever runs last;
+ *   * timeout with the link up — "Try again" is on screen;
+ *   * the store never mounted — no button can help, and the puck cannot
+ *     vouch for what it holds, so "Nothing was lost" is not claimed;
+ *   * anything else — the fixed failure sentence. */
+function endPullFailed(err) {
   stopPullClock();
   showProgress(false);
   S.phase = 'failed';
-  // Whether "Try again" is a button at all. Same predicate as the sentence
-  // below it, read once and kept: a store that never mounted cannot be fixed
-  // by pressing anything, and a button that cannot work is an instruction to
-  // keep trying until he gives up.
+  // Whether "Try again" is a button at all: a store that never mounted cannot
+  // be fixed by pressing anything, and a button that cannot work is an
+  // instruction to keep trying until he gives up.
   S.retryable = retryCouldHelp(err);
-  setStatus('Couldn’t get ' + what + ' off the puck.\n'
-          + failWord(err, 'The copy stopped part-way.'), 'bad');
-  // The generic remedy is offered only where it can work. On a store that
-  // never mounted, "move closer, end the activity" is an instruction to keep
-  // retrying something that cannot succeed.
-  showResult('Nothing was sent, and nothing was erased.', 'bad',
-             retryCouldHelp(err)
-               ? ['The puck still has everything. ' + retryAdvice()]
-               : ['There is nothing here to send yet, and nothing was erased. '
-                  + 'Tell Josh the puck is showing NO REC, and leave it alone '
-                  + 'until he says otherwise.']);
+  const s = String(err);
+  if (!transport) {
+    setStatus(linkLostSentence(), 'bad');
+    showResult(NOTHING_LOST, 'bad');
+  } else if (err === 'timeout') {
+    setStatus(stoppedSentence(), 'bad');
+    showResult(NOTHING_LOST, 'bad');
+  } else if (STORAGE_DOWN_RE.test(s) || S.storageDown) {
+    // Nothing came across, so there is no copy to save — the NO REC panel's
+    // "Save this copy" would name a button that is not there.
+    setStatus(NOT_RECORDING, 'bad');
+    showResult('Don’t empty it. Tell Josh.', 'bad');
+  } else {
+    setStatus(NOT_CHECKED_OUT, 'bad');
+    showResult(S.retryable ? NOTHING_LOST : NOTHING_LOST + ' Tell Josh.', 'bad');
+  }
 }
 
 function endPullOk() {
@@ -1740,61 +1708,46 @@ function endPullOk() {
   S.retryable = true;
 
   if (S.verified) {
-    // An empty puck is a perfectly good outcome (he cleared it last time and
-    // this ride recorded nothing), and saying "got it all" about nothing reads
-    // like a success that isn't one.
-    // Three outcomes, not two. "No jumps" and "nothing recorded" are
-    // DIFFERENT states and conflating them cost real data on 2026-09-09,
-    // when a puck holding 455 KB of ride and zero detected jumps said
-    // "Nothing was recorded on the puck." That is exactly the shape of the
-    // 2026-09-06 water session — 47 minutes on the water, a full trace, and
-    // not one real jump in it (docs/STATUS.md) — the most valuable capture
-    // this project has. A rider told nothing was recorded has every reason
-    // not to bother sending it.
-    const gotTrace = traceBytesGot();
-    const nothingAtAll = S.jumpRows === 0 && gotTrace <= TRACE_HEADER_BYTES;
-    // Kept on S, because the save that follows must not overwrite the news
-    // with its own receipt. Screen C says both, in this order: what happened,
-    // then where the file is (doSend).
-    S.outcome = nothingAtAll
-      ? 'The puck has nothing saved on it — no jumps and no ride data. It is '
-        + 'being saved anyway so Josh can see why.'
-      : S.jumpRows === 0
-        ? `No jumps were detected, but the whole ride is here — ${human(gotTrace)} `
-          + 'of it, checked and complete. A ride with no jumps in it is still '
-          + 'worth having.'
-        : `Got it all — ${S.jumpRows} ${S.jumpRows === 1 ? 'jump' : 'jumps'} and `
-          + 'the whole ride, checked and complete.';
+    // Two sentences, not three (2026-09-12). "No jumps" and "nothing
+    // recorded" WERE different states on screen, and conflating them cost
+    // real data on 2026-09-09 (a 455 KB ride with zero detected jumps read
+    // "Nothing was recorded on the puck", the exact shape of the 2026-09-06
+    // water session); the fixed copy says "No jumps this time" for both, and
+    // never says nothing was recorded. Josh reads trace_raw_bytes /
+    // trace_bytes_got in manifest.json to tell them apart.
+    // Kept on S so the save's receipt cannot overwrite it (doSend).
+    S.outcome = S.jumpRows === 0
+      ? 'Ride copied. No jumps this time.'
+      : `Ride copied. ${S.jumpRows} ${S.jumpRows === 1 ? 'jump' : 'jumps'}.`;
     S.outcomeKind = 'ok';
     setStatus(S.outcome, 'ok');
-    showResult(
-      nothingAtAll ? 'Nothing was recorded on the puck.'
-                   : S.jumpRows === 0 ? 'The whole ride is here — no jumps detected in it.'
-                                      : 'Everything on the puck is now on this machine.',
-      'ok', okDetail());
+    // No panel on Screen 3 — except the one muted line, when the file holds
+    // something Josh should read (F-22's band, growth between the two stats
+    // reads, an unknown FILE frame). Those sentences with their byte counts
+    // are NOT rendered any more; S.f22Note / S.growthNote survive for the
+    // seam and manifest.json carries the numbers.
+    showResult(null, null, [], { muted: detailsForJosh() ? DETAILS_LINE : null });
   } else {
     // The cruellest failure this product can have is "recorded perfectly,
-    // downloaded incompletely, then erased". Say plainly that the puck is
-    // untouched, and never offer the erase — `verified` is false, so
-    // offerClear cannot open.
+    // downloaded incompletely, then erased". Say plainly that nothing was
+    // lost, and never offer the erase — `verified` is false, so offerClear
+    // cannot open.
     //
-    // The bundle is still built and still saved: an unverified bundle is
+    // The bundle is still built and still OFFERED: an unverified bundle is
     // exactly the one Josh most wants to look at, and it is the only thing
     // that can tell him WHY. That is the same rule setEnabled() has always
-    // applied to Send ("offered on any COMPLETED pull, verified or not") —
-    // the chain simply presses what was already enabled.
-    S.outcome = S.storageDown
-      ? 'The puck is not saving anything — the "NO REC" problem — so nothing '
-        + 'that came across can be trusted.\nIt has been saved anyway: send it '
-        + 'to Josh, it tells him why, and do NOT empty the puck.'
-      : 'That didn’t come across cleanly.\n'
-        + 'The puck still has everything — nothing was lost. ' + retryAdvice();
+    // applied to Save ("offered on any COMPLETED pull, verified or not").
+    // The reasons themselves (verifyPull) are no longer on screen — the one
+    // muted line says they are in the file, and they are: manifest.json's
+    // verified/trace_bytes_*/jump_rows/stored_jumps_device, and device.log.
+    S.outcome = S.storageDown ? NOT_RECORDING : NOT_CHECKED_OUT;
     S.outcomeKind = 'bad';
     S.retryable = !S.storageDown;
     setStatus(S.outcome, 'bad');
-    showResult(S.storageDown ? 'The puck recorded nothing — do not empty it.'
-                             : 'Not complete — the puck still has everything.',
-               'bad', S.reasons);
+    showResult(S.storageDown ? 'Don’t empty it. Save this copy and tell Josh.' : NOTHING_LOST,
+               'bad',
+               S.storageDown ? [] : ['You can still save this copy for Josh.'],
+               { muted: DETAILS_LINE });
   }
   setEnabled();
 }
@@ -1806,20 +1759,6 @@ function traceBytesGot() {
   if (S.trace.format === 'jhtrace-v2-b64') return S.trace.len || 0;
   if (S.trace.format === 'csv') return csvBody().bytes;
   return 0;
-}
-
-function okDetail() {
-  const d = [`${S.jumpRows} jumps`];
-  if (S.trace.format === 'jhtrace-v2-b64') d.push(`${human(S.trace.len)} of ride data, check number matches`);
-  else if (S.trace.format === 'csv') d.push(`${human(csvBody().bytes)} of ride data`);
-  // Said out loud, not swallowed: the check did NOT come out even, and the
-  // rider (and Josh, reading the same sentence in the bundle) is told why it
-  // still counts as complete.
-  if (S.f22Note) d.push(S.f22Note);
-  if (S.growthNote) d.push(S.growthNote);
-  if (S.pullSeconds) d.push(`took ${S.pullSeconds} s`);
-  for (const n of unknownBodies) d.push(`(the puck also sent "${n}", which this page does not carry)`);
-  return d;
 }
 
 /** CONTRACT.md §2 `verified`: every applicable check, and every one that could
@@ -1877,9 +1816,9 @@ function verifyPull() {
     if (S.trace.expectedRaw === null) {
       out.push('The puck never said how much ride data to expect, so it could not be checked.');
     } else if (S.trace.len !== S.trace.expectedRaw) {
-      // Exact counts, not human(): it rounds above 10 KB, so a genuine
-      // shortfall could print "Only 50 KB of the puck's 50 KB" — a sentence
-      // that reads like a contradiction on the one screen he has to act on.
+      // Exact counts, never rounded: a rounded figure could read "Only 50 KB
+      // of the puck's 50 KB" — a contradiction. (These reasons reach Josh via
+      // the seam and the bundle; since 2026-09-12 they are not on screen.)
       out.push(`Only ${S.trace.len.toLocaleString()} of the puck's `
                + `${S.trace.expectedRaw.toLocaleString()} bytes of ride data came across.`);
     }
@@ -1974,8 +1913,8 @@ function verifyPull() {
 
 function joinBody(lines) { return lines.length ? lines.join('\n') + '\n' : ''; }
 
-// The CSV body is joined and TextEncoder'd FOUR separate times at the end of a
-// pull — traceBytesGot(), okDetail(), verifyPull()'s `got`, and buildBundle().
+// The CSV body is joined and TextEncoder'd several times at the end of a
+// pull — traceBytesGot(), verifyPull()'s `got`, and buildBundle().
 // At fixture scale that is invisible; measured at a real full region
 // (15,917,153 B, 1,029,542 lines) it is a 116-144 ms synchronous freeze on an
 // Apple M3, and it lands right after the bar reads 100 %. Nick is on an older
@@ -2229,7 +2168,7 @@ function saveLink(name, blob) {
 async function doSend() {
   if (busy || !S || !(S.phase === 'pulled' || S.phase === 'sent' || S.phase === 'cleared')) return;
   busy = true; setEnabled();
-  setStatus('Packing the ride up…', 'busy');
+  setStatus('Saving…', 'busy');
   try {
     // Keep the built bundle so a cancelled share can be retried without
     // pulling the whole ride off the puck again (CONTRACT.md §3 step 3).
@@ -2237,6 +2176,7 @@ async function doSend() {
     const { name, blob } = lastBundle;
     let delivered = false;
     let how = null;   // 'share' | 'download' | 'upload' — decides the status wording
+    let iosLink = false;
     const notes = [];
 
     // Built lazily: a browser old enough to lack File would otherwise throw
@@ -2248,10 +2188,10 @@ async function doSend() {
       try {
         await navigator.share({ files: [file], title: name });
         delivered = true; how = 'share';
-        notes.push('Sent from the share sheet.');
       } catch (e) {
         if (e && e.name === 'AbortError') {
-          notes.push('You closed the share sheet — tap Send again when you’re ready.');
+          // His own cancel. The status line says "Not saved yet. Press Save
+          // again." and nothing explains the sheet (the mechanism).
         } else {
           // FALL BACK TO THE DOWNLOAD. Measured on the rider's own Mac,
           // 2026-09-10, first real use: navigator.share() rejected with
@@ -2268,11 +2208,10 @@ async function doSend() {
           // reports NotAllowedError for several reasons, including a lost
           // transient activation after the zip. The fallback is correct
           // whichever it was, so it ships now and the cause is chased after.
-          notes.push('The share sheet didn’t work: ' + ((e && e.message) || e));
+          // The error text goes to the console, not the screen.
+          console.warn('navigator.share failed, falling back to download', e);
           delivered = downloadBlob(name, blob);
           how = 'download';
-          notes.push(`Saved to your Downloads as ${name} instead — send that `
-                   + 'file to Josh from there. Nothing was lost.');
         }
       }
     } else if (IS_IOS) {
@@ -2282,15 +2221,10 @@ async function doSend() {
       // reach the puck at all (CONTRACT.md §3, web/index.html), so an iPhone
       // rider who has connected, pulled and got this far is already standing
       // in it — that sentence is the one instruction he has provably followed.
-      // Give him something to try, and something to ask for if it does
-      // nothing.
-      notes.push('The share sheet didn’t open, so the ride hasn’t gone '
-               + 'anywhere yet. It is still on this phone, and the puck still '
-               + 'has its copy.');
-      notes.push('Press and hold this link, then pick “Download Linked File”:');
+      iosLink = true;
+      notes.push('Press and hold this link, then choose Download Linked File.');
       notes.push(saveLink(name, blob));
-      notes.push('If nothing happens, ask Josh for the version of this link '
-               + 'that sends the ride by itself, open that, and tap Send again.');
+      notes.push('If nothing happens, tell Josh.');
     } else {
       // downloadBlob() behind HIS press — the path that has actually worked
       // on the rider's own Mac twice (2026-09-10 and -09-11).
@@ -2306,11 +2240,6 @@ async function doSend() {
       // is to keep the press.
       delivered = downloadBlob(name, blob);
       how = 'download';
-      notes.push(S.verified
-        ? 'Send that file to Josh whenever you like — Messages, Mail, AirDrop, '
-          + 'whatever you’d normally use.'
-        : 'Send Josh that file too — it is the only thing that can tell him '
-          + 'what went wrong.');
     }
 
     if (DROP_URL) {
@@ -2320,45 +2249,47 @@ async function doSend() {
           headers: { 'Content-Type': 'application/zip', 'X-Filename': name },
           body: blob,
         });
-        if (res.ok) { delivered = true; how = 'upload'; notes.push('Uploaded straight to Josh.'); }
-        else notes.push(`The upload came back ${res.status} — the file is still on your phone.`);
+        if (res.ok) { delivered = true; how = 'upload'; }
+        else notes.push('The upload didn’t go through.');
       } catch (e) {
-        notes.push('The upload didn’t go through: ' + ((e && e.message) || e));
+        notes.push('The upload didn’t go through.');
       }
     }
 
     S.delivered = S.delivered || delivered;
+    if (delivered) S.saveCount += 1;
     if (S.delivered) {
       S.phase = 'sent';
       S.deliveredName = name;
       // Whatever was in the note box went into THIS zip, so the second button
       // stands down until he edits it again.
       noteDirtySinceSave = false;
-      // SCREEN C says two things, in this order: what happened to the ride
-      // (endPullOk's sentence, kept on S so the save does not overwrite the
-      // news with its own receipt), then where the file is. The old sentence
-      // here — "You're finished — leave the puck to Josh." — contradicted the
-      // Empty button sitting directly underneath it, and is gone.
-      setStatus(S.outcome || (how === 'download' ? 'Saved to your Downloads.' : 'Sent.'),
+      // Screen 4: "Saved to Downloads." on a verified ride. On an UNVERIFIED
+      // one the status keeps endPullOk's sentence — the news, not the receipt
+      // — because the save must not overwrite the one line that says what is
+      // wrong (measured 2026-09-11: the NO REC sentence was being replaced by
+      // the receipt). The file is named in the panel either way.
+      setStatus(S.verified
+                  ? (how === 'download' ? 'Saved to Downloads.' : 'Sent.')
+                  : S.outcome,
                 S.verified ? 'ok' : 'bad');
     } else {
-      setStatus('Not sent yet. Press Send again and pick where it should go.');
+      setStatus(iosLink ? 'Not saved yet.' : 'Not saved yet. Press Save again.');
     }
-    // A download is not a send: the file is on this machine, not with Josh.
-    // Naming it here is also what the Empty button's sentence points at.
+    // A download is not a send: the file is on this machine, not with Josh —
+    // hence "send it to Josh however you like". This line is also what the
+    // muted sentence under "Empty the puck" points him at.
     const head = S.delivered
-      ? (how === 'download'
-          ? (S.verified
-              ? `Saved to your Downloads: ${name} (${human(blob.size)})`
-              : `Saved to your Downloads anyway, so Josh can see what happened: `
-                + `${name} (${human(blob.size)})`)
-          : `Sent: ${name} (${human(blob.size)})`)
-      : `Bundle ready: ${name} (${human(blob.size)})`;
-    showResult(head, S.delivered ? (S.verified ? 'ok' : 'bad') : null,
-               notes.concat(S.verified ? okDetail() : S.reasons));
+      ? (how === 'download' ? `${name} — send it to Josh however you like.`
+         : how === 'upload' ? `${name} — uploaded to Josh.`
+                            : `${name} — sent.`)
+      : null;
+    if (S.delivered && S.storageDown) notes.push('Don’t empty it.');
+    showResult(head, S.delivered ? (S.verified ? 'ok' : 'bad') : null, notes,
+               { muted: (S.delivered && (!S.verified || detailsForJosh())) ? DETAILS_LINE : null });
   } catch (e) {
-    setStatus('Couldn’t pack the ride up: ' + ((e && e.message) || e)
-            + '\nNothing was erased — the puck still has everything.', 'bad');
+    console.error('doSend failed', e);
+    setStatus('Couldn’t save. Press Save again.', 'bad');
   } finally {
     busy = false; setEnabled();
   }
@@ -2377,12 +2308,12 @@ async function doClear() {
   try {
     const r = await runCommand('clear');
     if (r.err) {
-      setStatus(failWord(r.err, 'The puck didn’t confirm it was emptied.'), 'bad');
+      setStatus('The puck didn’t confirm it was emptied. Tell Josh.', 'bad');
       return;
     }
     const st = await runCommand('stats');
     if (st.err) {
-      setStatus(failWord(st.err, 'The puck was told to empty, but didn’t report back.'), 'bad');
+      setStatus('The puck was told to empty, but didn’t report back. Tell Josh.', 'bad');
       return;
     }
     const kv = S.statsLatestKV || {};
@@ -2398,33 +2329,22 @@ async function doClear() {
       // is now empty. Same bundle name — the later file supersedes the
       // earlier one, which is the honest ordering.
       lastBundle = null;
-      setStatus('Puck is empty and ready for your next ride.', 'ok');
+      setStatus('All done. The puck is empty and ready.', 'ok');
       // The last screen, and the last thing that needs saying: where the file
-      // is. #pull-hint used to carry this sentence, but it lives inside the
-      // progress block now and that block is long hidden by here — a line
-      // nobody can read is a line that was not written (CLAUDE.md rule 3).
-      showResult('That’s everything — thanks.', 'ok',
-        [S.deliveredName
-          ? 'Your ride is in your Downloads as ' + S.deliveredName
-            + '. Send it to Josh when you get a chance.'
-          : 'Your ride is on this machine. Send it to Josh when you get a chance.',
-         // Written ONCE, at the moment of clearing, and then read for as long
-         // as the page stays open — so it must not name a position. It said
-         // "the button below will save it again"; from 2026-09-11d a firmware
-         // update can start underneath this sentence and take every button off
-         // the screen while the rider drags a file (setVisible, `flashing`),
-         // at which point "the button below" points at nothing. Same class of
-         // defect as retryAdvice() naming "Try again" on a screen showing
-         // Connect (measured 2026-09-11). The offer is true at every moment;
-         // its position is not.
-         'The puck holds nothing now, so this copy is the only one — this page '
-         + 'can save it again whenever you need it.']);
+      // is. Written ONCE, at the moment of clearing, and read for as long as
+      // the page stays open — so it names no button position (a firmware
+      // update can take every button off the screen underneath it,
+      // setVisible `flashing`). The link-styled "Save a copy again" beside it
+      // is the offer; ALLOW_CLEAR without a delivery is the one case where no
+      // file exists yet, and then the line says so.
+      showResult(S.deliveredName
+        ? 'Your ride is in Downloads as ' + S.deliveredName + '.'
+        : 'Your ride is on this page only — save a copy before you close it.',
+        'ok');
     } else {
-      // Never call a wipe done on a reading that says otherwise.
-      setStatus('The puck still reports '
-              + `${jumps === null ? 'an unknown number of' : jumps} jumps and `
-              + `${bytes === null ? 'an unknown amount of' : human(bytes)} ride data. `
-              + 'Nothing is lost — show this to Josh.', 'bad');
+      // Never call a wipe done on a reading that says otherwise. The counts
+      // it reported are in device.log (the STATS line), not on screen.
+      setStatus('The puck didn’t empty. Nothing was lost — tell Josh.', 'bad');
     }
   } finally {
     busy = false; setEnabled();
@@ -2478,20 +2398,24 @@ function renderUpdate() {
   // the button shut (busy, or the link gone) shows nothing at all rather than
   // an invitation he cannot accept.
   const live = offer === 'stale' && !btn.disabled;
+  const title = $('update-title');
   btn.hidden = !live;
   if (offer === 'current') {
+    title.hidden = true;
     note.hidden = false;
-    note.textContent = 'The puck’s software is up to date. Nothing to do.';
+    note.textContent = 'Software is up to date.';
     sec.hidden = false;
   } else if (live) {
+    // The card: a title, a body, the button. The recovery sentence is NOT
+    // here (failure screens only, 2026-09-12); it appears on the drag screen
+    // before anything can have gone wrong.
+    title.hidden = false;
     note.hidden = false;
-    note.textContent =
-      'One optional extra: the puck is running older software, and Josh has a '
-      + 'newer version ready. It takes about two minutes and it cannot break '
-      + 'the puck — if anything goes wrong, ' + PUCK_RECOVERY + '.';
+    note.textContent = 'Takes about two minutes. Your ride is already saved.';
     sec.hidden = false;
   } else {
     sec.hidden = true;
+    title.hidden = true;
     note.hidden = true;
     $('update-result').textContent = '';
   }
@@ -2518,7 +2442,7 @@ async function doUpdate() {
   S.updateWhy = null;
   busy = true;
   setEnabled();
-  setStatus('Saving the update file, and restarting the puck…', 'busy');
+  setStatus('Restarting the puck…', 'busy');
   renderUpdateSteps();
 
   // 2. Restart the puck into its bootloader. `uf2` answers `OK uf2` BEFORE it
@@ -2539,8 +2463,7 @@ async function doUpdate() {
 
   // 3. The drag. The page cannot see it, cannot help with it, and says so.
   S.updateStep = 'dragging';
-  setStatus('The puck has restarted. Drag the file onto ' + UF2_VOLUME + ' — '
-          + 'this page is watching, and will say when it is done.', 'busy');
+  setStatus('Drag the file onto the ' + UF2_VOLUME + ' drive.', 'busy');
   renderUpdateSteps();
   await confirmUpdate();
 }
@@ -2620,7 +2543,7 @@ async function readBackSrc(serial) {
 }
 
 /** The last screen. Four outcomes, and every one that is not 'done' names the
- *  recovery — one constant, one place (PUCK_RECOVERY). */
+ *  recovery — one phrase, one place (PRESS_TWICE). */
 function endUpdate(step, src, why) {
   S.updateStep = step;
   S.updateSrcAfter = src;
@@ -2635,80 +2558,67 @@ function renderUpdateSteps() {
   const step = S.updateStep;
 
   if (step === 'restarting') {
-    showPanel('update-result', 'Starting the update…', null, []);
+    // The status line carries this step alone.
+    $('update-result').textContent = '';
     return;
   }
 
   if (step === 'dragging') {
-    showPanel('update-result', 'Now drag one file onto the puck.', null, [
-      // NOT "reload and start again": by the time this screen is up the puck
-      // has ALREADY rebooted into its bootloader, so a reload lands him on a
-      // page that has forgotten the update, in front of a port that opens and
-      // answers nothing. Measured in review. Send him to the recovery instead,
-      // which works from any state.
-      'Look in your Downloads for ' + file + '. If it is not there, '
-        + PUCK_RECOVERY + ', then tell Josh — the puck is fine either way.',
-      'A drive called ' + UF2_VOLUME + ' will appear on your Mac in a few '
-        + 'seconds — in Finder, under Locations.',
-      'Drag ' + file + ' onto ' + UF2_VOLUME + '.',
-      UF2_VOLUME + ' will vanish part-way through the copy and your Mac may '
-        + 'say the copy failed. That is the puck restarting — it means it '
-        + 'worked.',
-      'Nothing else to press. If it goes wrong at any point, ' + PUCK_RECOVERY
-        + ' — then drag the file on again.',
-    ]);
+    // NOT "reload and start again": by the time this screen is up the puck
+    // has ALREADY rebooted into its bootloader, so a reload lands him on a
+    // page that has forgotten the update, in front of a port that opens and
+    // answers nothing. Measured in review. The recovery works from any state.
+    showPanel('update-result', 'One more step', null, [
+      file + ' is in your Downloads.',
+      'A drive called ' + UF2_VOLUME + ' has appeared in Finder. Drag the file onto it.',
+      'The drive disappears during the copy. That’s normal. This page will '
+        + 'confirm when it’s done.',
+    ], { ordered: true, muted: PUCK_RECOVERY });
     return;
   }
 
   if (step === 'done') {
-    setStatus('Done — the puck is running the new software. You can unplug it.', 'ok');
-    showPanel('update-result', 'The puck is up to date.', 'ok', [
-      'Checked on the puck itself: it came back running build '
-        + S.updateSrcAfter + '.',
-      'Nothing else to do — your ride was already saved before any of this '
-        + 'started.',
-    ]);
+    setStatus('Update complete. You can unplug the puck.', 'ok');
+    // The build hash is the one number the spec keeps on screen, muted: it is
+    // what was READ BACK off the puck (confirmUpdate), and it is how Josh
+    // knows the flash took.
+    showPanel('update-result', null, null, [],
+              { muted: 'Now running ' + S.updateSrcAfter + '.' });
     return;
   }
 
   if (step === 'mismatch') {
-    setStatus('The puck came back, but it is still running the old software.', 'bad');
-    showPanel('update-result', 'The update did not take.', 'bad', [
-      'Nothing is broken and nothing is lost — the puck is working, it is '
-        + 'just still on the old build (' + S.updateSrcAfter + ').',
-      'To try once more: ' + PUCK_RECOVERY + ', wait for ' + UF2_VOLUME
-        + ' to appear, and drag ' + file + ' onto it again.',
-      'This page will not check a second attempt by itself — after you drag '
-        + 'it on again, reload this page and press Connect, and it will tell '
-        + 'you which software the puck is running.',
-      'If it still will not take, tell Josh. Your ride is already saved.',
-    ]);
+    // The old build it came back on is in S.updateSrcAfter (seam) and not on
+    // screen; "still on its previous software" is the sentence.
+    setStatus('The update didn’t take.', 'bad');
+    showPanel('update-result', null, 'bad', [], {
+      body: 'The puck is fine and still on its previous software. To try '
+          + 'again: ' + PRESS_TWICE + ', wait for ' + UF2_VOLUME + ', drag the '
+          + 'file on again, then reload this page and press Connect. Your '
+          + 'ride is already saved.',
+    });
     return;
   }
 
   if (step === 'norestart') {
-    setStatus('The puck would not restart into update mode, so nothing was '
-            + 'changed on it.', 'bad');
-    showPanel('update-result', 'The puck did not go into update mode.', 'bad', [
-      S.updateWhy ? 'It said: ' + S.updateWhy
-                  : 'It answered, but it never went away — which is what '
-                    + 'restarting looks like from here.',
-      'Nothing on the puck has changed and your ride is already saved. The '
-        + file + ' in your Downloads is harmless — you can delete it.',
-      'Tell Josh. If the puck is behaving oddly, ' + PUCK_RECOVERY + '.',
-    ]);
+    // The puck's own ERR line (S.updateWhy) is not on screen: it is in
+    // device.log, which the next "Save a copy again" rebuilds with, and on
+    // the seam (update_why) for the tests.
+    setStatus('The puck didn’t enter update mode.', 'bad');
+    showPanel('update-result', null, 'bad', [], {
+      body: 'Nothing changed and your ride is saved. Tell Josh. If the puck '
+          + 'seems stuck, ' + PRESS_TWICE + '.',
+    });
     return;
   }
 
   // 'unchecked'
-  setStatus('The puck restarted, but this page could not check it afterwards.', 'bad');
-  showPanel('update-result', 'Couldn’t check the puck from here.', 'bad', [
-    S.updateWhy ? 'Why: ' + S.updateWhy : 'The puck never came back.',
-    'Unplug the puck, plug it back in, reload this page and press Connect. If '
-      + 'it then says the software is up to date, the update worked.',
-    'If it never comes back at all, ' + PUCK_RECOVERY + '.',
-    'Your ride was saved before any of this started, either way.',
-  ]);
+  setStatus('Couldn’t confirm the update.', 'bad');
+  showPanel('update-result', null, 'bad', [], {
+    body: 'Unplug the puck, plug it back in, reload this page and press '
+        + 'Connect. If it says the software is up to date, it worked. If the '
+        + 'puck won’t come back, ' + PRESS_TWICE + '.',
+  });
 }
 
 // -------------------------------------------------------------------- chips
@@ -2793,6 +2703,10 @@ window.__sync = {
     update_offer: updateOffer(),
     update_step: S.updateStep,
     update_src_after: S.updateSrcAfter,
+    // The puck's own words when it refused to restart (2026-09-12). They left
+    // the screen with the copy change and live here and in device.log, so a
+    // test can prove the reading happened (CLAUDE.md rule 3).
+    update_why: S.updateWhy,
     fw_src: FW ? FW.src : null,
     fw_file: FW ? FW.file : null,
   } : { phase: 'boot', auto: false, connected: false, verified: false, delivered: false,
@@ -2800,7 +2714,7 @@ window.__sync = {
         trace_bytes_device: null, trace_bytes_after: null, trace_bytes_got: null,
         f22_band_applied: false, f22_note: null, growth_note: null,
         bundle: null, update_offer: null, update_step: null,
-        update_src_after: null,
+        update_src_after: null, update_why: null,
         fw_src: FW ? FW.src : null, fw_file: FW ? FW.file : null }),
   lastBundle: () => lastBundle,
 };
@@ -2826,10 +2740,10 @@ function init() {
   const hasSerial = !!navigator.serial;
   connectKind = hasSerial ? 'usb' : (navigator.bluetooth ? 'ble' : null);
   if (connectKind === 'ble') {
-    // The page's default copy is written for the Mac — "your Mac", "charging
-    // cable". On the phone shape none of that is true.
-    $('lede').textContent = 'With the puck switched on and next to you, press '
-      + 'Connect over Bluetooth. Everything after that happens on its own.';
+    // The page's default copy is written for the Mac — "plug in the puck". On
+    // the phone shape that is not true.
+    $('lede').textContent = 'Turn on the puck, keep it next to your phone, '
+      + 'then press Connect.';
   }
   // #btn-pull is the "Try again" button now; it runs the whole chain again,
   // not just the copy, so a retry ends where the first attempt was going to.
@@ -2853,13 +2767,9 @@ function init() {
   if (IS_MOCK) setupMock();
   else if (!navigator.bluetooth && !navigator.serial) {
     // The last-resort branch: neither transport exists, so this is Safari (or
-    // something older). The Mac case leads because it is the rider's ONE
-    // configuration and the one remedy he can act on in ten seconds; the
-    // Android and iPhone sentences stay because this page is also the phone
-    // fallback and Bluefy is the only iPhone browser that reaches the puck.
-    setStatus('This browser can’t reach the puck. On a Mac, open this page in '
-            + 'Chrome and use the cable. On Android, use Chrome. On an iPhone, '
-            + 'open it in the free Bluefy app.', 'bad');
+    // something older). One sentence, the rider's ONE configuration (2026-09-12
+    // copy); the Android/Bluefy sentences it used to carry are gone with it.
+    setStatus('Open this page in Chrome on a Mac and use the cable.', 'bad');
   }
 }
 
