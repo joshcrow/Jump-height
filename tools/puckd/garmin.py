@@ -129,6 +129,10 @@ class GarminDownloadError(RuntimeError):
 _pending_mfa: Optional[dict] = None
 
 
+LOGIN_FAILED_COPY = "Couldn't sign in. Check your email and password."
+MFA_FAILED_COPY = "That code didn't work. Try again."
+
+
 def login(email: str, password: str, mfa_code: Optional[str] = None) -> LoginResult:
     """Setup screen 3's [Sign in]. Two shapes of call:
 
@@ -163,14 +167,24 @@ def login(email: str, password: str, mfa_code: Optional[str] = None) -> LoginRes
                 _pending_mfa = result[1]
                 return LoginResult(ok=False, needs_mfa=True, error=None)
             oauth1, oauth2 = result
-    except garth.exc.GarthException as exc:
-        return LoginResult(ok=False, needs_mfa=False, error=str(exc))
+    except garth.exc.GarthException:
+        # garth's own text (an HTTP status, a URL) is not for a screen.
+        if mfa_code is not None:
+            # still pending: the code field stays, and he tries again
+            return LoginResult(ok=False, needs_mfa=True, error=MFA_FAILED_COPY)
+        return LoginResult(ok=False, needs_mfa=False, error=LOGIN_FAILED_COPY)
 
     client.oauth1_token, client.oauth2_token = oauth1, oauth2
     token_dir = _token_dir()
     token_dir.mkdir(parents=True, exist_ok=True)
     client.dump(str(token_dir))
     return LoginResult(ok=True, needs_mfa=False, error=None)
+
+
+def ever_signed_in() -> bool:
+    """A token file exists at all. The daemon nags about an EXPIRED
+    sign-in only; someone who pressed Skip at setup is never asked."""
+    return _oauth1_token_path().exists() or _oauth2_token_path().exists()
 
 
 def is_signed_in() -> bool:

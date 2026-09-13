@@ -85,39 +85,30 @@ GARMIN_SEEN_FILENAME = "garmin_last_seen.json"
 FIRMWARE_CACHE_DIRNAME = "firmware"
 FITS_CACHE_DIRNAME = "fits"
 
-# No repo document records the deployed site's domain (grepped docs/*.md,
-# DECISIONS.md, web/sync/ -- the page itself uses a *relative*
-# '../firmware/latest.json', which only works from inside the site; a
-# standalone Mac process needs an absolute one). Left env-configurable
-# rather than guessed: flash.latest_manifest("") returns None (its own
-# never-raises contract), so an unset site_url just means "no update this
-# cycle", never a crash or a wrong host contacted.
+# The deployed site. web/ is the GitHub Pages root: the rider page is
+# <site>/sync/ and reads ../firmware/latest.json, so the manifest is at
+# <site>/firmware/latest.json (flash.py's own _MANIFEST_PATH). PUCKD_SITE_URL
+# overrides it for a bench against a local server.
+DEFAULT_SITE_URL = "https://joshcrow.github.io/Jump-height"
 SITE_URL_ENV = "PUCKD_SITE_URL"
 
-# docs/sync-agent-plan.md:13's own example -- reused verbatim (CLAUDE.md/the
-# build brief: "every user-facing string in it is final -- do not invent
-# copy") for every needs_you whose cause is the PUCK itself not answering
-# the way a completed step requires: a pull that didn't finish structurally
-# (serial_job.PullFailed), a clear that didn't confirm empty, or a flash
-# that touched the device and didn't come back running the new build (G4:
-# "no src after flash -> Needs you").
-PUCK_RESET_LINE = "reset the puck"
+SPOOL_RETRY_INTERVAL_S = 600.0   # bundles Drive has not confirmed are retried quietly
+PENDING_MAX_AGE_S = 24 * 3600.0  # ...and Nick hears about it only after a day
+SENT_DIRNAME = "sent"            # spool/sent/ holds what Drive has confirmed
+LOG_FILENAME = "daemon.log"      # one line per thing Josh would want to know
+
+# The three "Needs you" messages, and no others. docs/sync-agent-plan.md:
+# "ONE notification, ONE action, always phrased the same way." Everything
+# the PUCK gets wrong -- a pull that did not complete, a clear that did not
+# confirm, a flash that did not come back -- gets the same words, because
+# Nick cannot tell those apart and the fix is the same. Drive and Garmin
+# both send him to the one place that fixes them.
+PUCK_RESET_LINE = "check the puck"
 PUCK_RESET_ACTION = "Press the small button on the puck twice."
-
-# No literal string for an upload failure exists in the spec -- G1 is a
-# Drive/network problem, not a puck one, so PUCK_RESET_ACTION would send
-# Nick to press a button that fixes nothing. The one thing that actually
-# retries it is a fresh plug-in (docs/sync-agent-plan.md:41 runs the whole
-# job again), so that is the action named.
-NEEDS_YOU_UPLOAD_LINE = "reconnect the puck"
-NEEDS_YOU_UPLOAD_ACTION = "Unplug the puck and plug it back in."
-
-# docs/sync-agent-plan.md:39's own literal title ("Token expiry ->
-# 'Needs you: sign in to Garmin again'"). The action is this module's own
-# words, naming the real menu item ("Set up...", docs/sync-agent-plan.md's
-# menu-bar section) rather than inventing a new one.
+NEEDS_YOU_UPLOAD_LINE = "reconnect Google Drive"
+NEEDS_YOU_UPLOAD_ACTION = "Open Set up in the menu bar."
 NEEDS_YOU_GARMIN_LINE = "sign in to Garmin again"
-NEEDS_YOU_GARMIN_ACTION = "Sign in again from Set up in the menu bar."
+NEEDS_YOU_GARMIN_ACTION = "Open Set up in the menu bar."
 
 
 # ------------------------------------------------------------ port finding
@@ -288,7 +279,7 @@ def build_config(*, home_dir: "Path | str | None" = None,
     return DaemonConfig(
         home_dir=home,
         spool_dir=home / "spool",
-        site_url=site_url if site_url is not None else os.environ.get(SITE_URL_ENV, ""),
+        site_url=site_url if site_url is not None else (os.environ.get(SITE_URL_ENV) or DEFAULT_SITE_URL),
     )
 
 
@@ -297,6 +288,82 @@ def build_config(*, home_dir: "Path | str | None" = None,
 def _fire_needs_you(cfg: DaemonConfig, line: str, action: str) -> None:
     notify.notify("needs_you", runner=cfg.notifier, line=line, action=action)
     cfg.runtime["needs_you_active"] = True
+    _log(cfg, f"needs you: {line}")
+
+
+def _log(cfg: DaemonConfig, msg: str) -> None:
+    """Append one timestamped line to PUCKD_HOME/daemon.log. Never raises.
+    Nick never reads this; Josh does, over the phone."""
+    try:
+        path = Path(cfg.home_dir) / LOG_FILENAME
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a") as f:
+            f.write(f"{datetime.now().astimezone().isoformat(timespec='seconds')} {msg}\n")
+    except OSError:
+        pass
+
+
+# ------------------------------------------------------------- the spool
+
+def _pending_bundles(cfg: DaemonConfig) -> "list[Path]":
+    """Bundles Drive has not confirmed: every .zip in the spool root.
+    Confirmed ones live in spool/sent/."""
+    return sorted(Path(cfg.spool_dir).glob("*.zip"))
+
+
+def _mark_sent(cfg: DaemonConfig, bundle_path: "Path | str") -> Path:
+    src = Path(bundle_path)
+    sent = Path(cfg.spool_dir) / SENT_DIRNAME
+    sent.mkdir(parents=True, exist_ok=True)
+    dest = sent / src.name
+    n = 2
+    while dest.exists():
+        dest = sent / f"{src.stem}-{n}{src.suffix}"
+        n += 1
+    src.replace(dest)
+    return dest
+
+
+def _upload_bundle(cfg: DaemonConfig, bundle_path: "Path | str") -> "tuple[bool, Optional[Path]]":
+    """G1's remote-size check lives in upload.upload(); this only moves a
+    CONFIRMED bundle into spool/sent/ so the spool root is exactly the
+    retry list. Returns (ok, new path)."""
+    result = upload.upload(bundle_path, cfg.inbox_dir)
+    if getattr(result, "ok", False):
+        cfg.runtime["drive_needs_you_sent"] = False
+        return True, _mark_sent(cfg, bundle_path)
+    _log(cfg, f"upload did not confirm: {Path(bundle_path).name}: {getattr(result, 'error', '')}")
+    return False, None
+
+
+def _drive_needs_you_if_due(cfg: DaemonConfig) -> None:
+    """An upload that fails is retried, not announced. Nick hears about
+    Drive in exactly two cases: the remote is gone (setup undone, token
+    revoked) or a ride has sat unconfirmed for PENDING_MAX_AGE_S. Once per
+    episode; a confirmed upload re-arms it."""
+    pending = _pending_bundles(cfg)
+    if not pending or cfg.runtime.get("drive_needs_you_sent"):
+        return
+    oldest_age = cfg.now() - min(p.stat().st_mtime for p in pending)
+    if oldest_age >= PENDING_MAX_AGE_S or not upload.is_authorized():
+        _fire_needs_you(cfg, NEEDS_YOU_UPLOAD_LINE, NEEDS_YOU_UPLOAD_ACTION)
+        cfg.runtime["drive_needs_you_sent"] = True
+
+
+def retry_spool(cfg: DaemonConfig) -> int:
+    """Upload whatever Drive has not confirmed yet. Returns how many
+    confirmed this time. Never raises."""
+    n = 0
+    for p in _pending_bundles(cfg):
+        try:
+            ok, _ = _upload_bundle(cfg, p)
+        except Exception as exc:  # noqa: BLE001 -- the loop must outlive rclone
+            _log(cfg, f"upload raised: {exc!r}")
+            ok = False
+        if ok:
+            n += 1
+    _drive_needs_you_if_due(cfg)
+    return n
 
 
 # --------------------------------------------------------------- the job
@@ -318,6 +385,7 @@ class JobCycleReport:
     needs_you: "Optional[tuple[str, str]]"
     bundle_path: "Optional[Path]"
     src: "Optional[str]"
+    empty: bool = False   # the puck had no ride: nothing pulled, nothing said
 
 
 def _maybe_flash(
@@ -359,6 +427,7 @@ def _maybe_flash(
     )
     if result.ok:
         notify.notify("updated", runner=cfg.notifier)
+        _log(cfg, f"puck updated to {result.src_after}")
         return True, None
     if result.stage_reached != flash.STAGE_SHA256:
         needs_you = (PUCK_RESET_LINE, PUCK_RESET_ACTION)
@@ -370,44 +439,55 @@ def _maybe_flash(
 def run_job_cycle(port_path: str, cfg: DaemonConfig) -> JobCycleReport:
     """One plug-in, steps 1-9 (docs/sync-agent-plan.md:42-55).
 
-    serial_job.run_job() itself covers steps 1-5 (open, pull, verify, write
-    the bundle) and never clears or uploads -- G1's other half, and step 7,
-    are this function's job:
+    A fresh `stats` comes first. A puck with no ride on it (stored_jumps=0
+    AND trace_bytes=0) is the everyday case -- Nick charges it every night --
+    and the answer to it is silence: nothing pulled, nothing uploaded,
+    nothing said. Only the update check runs, since that same reading is
+    G2's "puck empty" clause.
+
+    Otherwise serial_job.run_job() covers steps 1-5 (open, pull, verify,
+    write the bundle) and never clears or uploads -- G1's other half, and
+    step 7, are this function's job:
 
         PullFailed (the pull did not complete structurally) -> needs_you,
             nothing uploaded, nothing cleared, the puck untouched (G3).
-        uploaded == False (G1's remote-size check) -> needs_you, NO clear.
-        uploaded AND verified -> "synced", THEN clear_puck() (step 7); a
-            clear that doesn't confirm -> needs_you (G4: "no stats -> no
-            clear" reads as "a stats that then says otherwise refuses the
-            clear", which clear_puck() itself already enforces -- this is
-            the needs_you for that refusal reaching the surface).
-        uploaded AND NOT verified -> nothing cleared, nothing said to Nick:
-            the ride is already safe on Drive and there is nothing for HIM
-            to do about a content-level question; CONTRACT.md's own words
-            for exactly this bundle -- "an unverified bundle is exactly the
-            one Josh most wants to look at" -- are why it is Josh's spool
-            to find, not Nick's notification to receive.
+        upload not confirmed (G1) -> NO clear, NO notification: the bundle
+            stays in the spool root and retry_spool() owns it from here.
+            The puck keeps its data, so the next plug-in pulls it again.
+        upload confirmed AND verified -> clear_puck() (step 7); a clear
+            that doesn't confirm -> needs_you (G4). Only a CONFIRMED clear
+            says "Ride synced" (step 9): synced means safe on Drive AND off
+            the puck, in that order.
+        upload confirmed AND NOT verified -> nothing cleared, nothing said:
+            the ride is safe on Drive and there is nothing for Nick to do
+            about a content-level question; CONTRACT.md's own words for
+            exactly this bundle -- "an unverified bundle is exactly the one
+            Josh most wants to look at" -- are why it is Josh's Drive
+            folder to find, not Nick's notification to receive.
 
     Step 8 (flash) only runs once clear_puck() has itself just confirmed
     the puck empty -- see _maybe_flash().
 
-    Everything from the upload on is wrapped in a broad except: an
-    unexpected exception out of upload.py/flash.py (not one of their own
-    documented never-raises paths -- e.g. a misconfigured PUCKD_RCLONE
-    naming a binary that no longer exists, verified 2026-09-12 to raise
-    FileNotFoundError straight through upload.upload()'s own two
-    try/excepts, which catch RcloneNotFound and TimeoutExpired but not
-    that) must never take the WHOLE daemon loop down with it -- G3's "a job
-    interrupted anywhere leaves the puck recoverable" applies to the
-    daemon's own process staying up, not only to the puck's data. The
-    bundle is already safely on disk by this point (run_job() already
-    returned), so nothing is lost; the daemon still owes Nick the same
-    needs_you an ordinary upload failure would.
+    Everything from the upload on is wrapped in a broad except so an
+    unexpected exception out of upload.py/flash.py can never take the loop
+    down (G3 applies to the daemon's own process staying up, not only to
+    the puck's data). The bundle is already on disk by then; the spool
+    retry owns it.
     """
+    pre = serial_job.read_stats(port_path, device_factory=cfg.device_factory)
+    if pre.get("stored_jumps") == 0 and pre.get("trace_bytes") == 0:
+        src = serial_job.read_src(port_path, device_factory=cfg.device_factory)
+        flashed, needs_you = _maybe_flash(port_path, src, cfg)
+        return JobCycleReport(
+            port=port_path, pulled=False, verified=None, jumps=0, reasons=[],
+            uploaded=False, cleared=False, flashed=flashed, needs_you=needs_you,
+            bundle_path=None, src=src, empty=True,
+        )
+
     try:
         result = serial_job.run_job(port_path, cfg.spool_dir, device_factory=cfg.device_factory)
     except serial_job.PullFailed as exc:
+        _log(cfg, "pull failed: " + "; ".join(exc.reasons))
         _fire_needs_you(cfg, PUCK_RESET_LINE, PUCK_RESET_ACTION)
         return JobCycleReport(
             port=port_path, pulled=False, verified=None, jumps=None,
@@ -419,45 +499,38 @@ def run_job_cycle(port_path: str, cfg: DaemonConfig) -> JobCycleReport:
     cleared = False
     flashed = False
     needs_you: "Optional[tuple[str, str]]" = None
+    bundle_path: Path = Path(result.bundle_path)
+    if not result.verified:
+        _log(cfg, f"unverified: {bundle_path.name}: " + "; ".join(result.reasons))
 
     try:
-        upload_result = upload.upload(result.bundle_path, cfg.inbox_dir)
-        uploaded = bool(getattr(upload_result, "ok", False))
+        uploaded, sent_path = _upload_bundle(cfg, bundle_path)
+        if uploaded:
+            bundle_path = sent_path
 
         if not uploaded:
-            needs_you = (NEEDS_YOU_UPLOAD_LINE, NEEDS_YOU_UPLOAD_ACTION)
-            _fire_needs_you(cfg, *needs_you)
+            _drive_needs_you_if_due(cfg)
         elif result.verified:
-            # Fired here, not after clear/flash (docs/sync-agent-plan.md's
-            # own numbered list puts "notify Ride synced" at step 9, after
-            # clear (7) and flash (8)) -- deliberately: THIS is the exact
-            # moment the fact it reports becomes true (the ride is safe,
-            # uploaded and verified), and a clear or flash problem afterward
-            # is a separate, secondary concern that must not delay or
-            # suppress telling Nick his ride itself is safe.
-            notify.notify("synced", runner=cfg.notifier, jumps=result.jumps)
-            cfg.runtime["needs_you_active"] = False
             clear_result = serial_job.clear_puck(port_path, device_factory=cfg.device_factory)
             cleared = clear_result.ok
             if not cleared:
+                _log(cfg, "clear did not confirm")
                 needs_you = (PUCK_RESET_LINE, PUCK_RESET_ACTION)
                 _fire_needs_you(cfg, *needs_you)
             else:
+                notify.notify("synced", runner=cfg.notifier, jumps=result.jumps)
+                cfg.runtime["needs_you_active"] = False
+                _log(cfg, f"ride synced: {result.jumps} jumps: {bundle_path.name}")
                 flashed, flash_needs_you = _maybe_flash(port_path, result.src, cfg)
                 needs_you = needs_you or flash_needs_you
         # else: uploaded but not verified -- see the docstring above.
-    except Exception:
-        # Whatever already succeeded (uploaded/cleared/flashed, each still
-        # holding its own real value from above) stays reported as true --
-        # only the step that actually raised, and everything after it,
-        # never ran.
-        needs_you = (NEEDS_YOU_UPLOAD_LINE, NEEDS_YOU_UPLOAD_ACTION)
-        _fire_needs_you(cfg, *needs_you)
+    except Exception as exc:  # noqa: BLE001 -- see the docstring
+        _log(cfg, f"job raised after the pull: {exc!r}")
 
     return JobCycleReport(
         port=port_path, pulled=True, verified=result.verified, jumps=result.jumps,
         reasons=list(result.reasons), uploaded=uploaded, cleared=cleared, flashed=flashed,
-        needs_you=needs_you, bundle_path=result.bundle_path, src=result.src,
+        needs_you=needs_you, bundle_path=bundle_path, src=result.src,
     )
 
 
@@ -478,6 +551,10 @@ def _run_garmin(cfg: DaemonConfig) -> None:
     try:
         g = cfg.garmin_module
         if not g.is_signed_in():
+            # Skipped Garmin at setup -> never signed in -> never nagged.
+            ever = getattr(g, "ever_signed_in", None)
+            if ever is not None and not ever():
+                return
             if not cfg.runtime.get("garmin_needs_you_sent"):
                 _fire_needs_you(cfg, NEEDS_YOU_GARMIN_LINE, NEEDS_YOU_GARMIN_ACTION)
                 cfg.runtime["garmin_needs_you_sent"] = True
@@ -587,6 +664,7 @@ def run_forever(
     current_port: "Optional[str]" = None
     session: "Optional[AttachmentSession]" = None
     last_garmin = cfg.now()
+    last_spool = cfg.now()
 
     i = 0
     while max_iterations is None or i < max_iterations:
@@ -602,6 +680,8 @@ def run_forever(
                 _record_ride(cfg, report.jumps or 0, report.bundle_path)
             if on_cycle is not None:
                 on_cycle(report)
+            if report.uploaded:
+                retry_spool(cfg)        # the network is evidently back
             poll_attached(port, cfg, session)
             _update_menubar(app, cfg, session)
             last_garmin = now
@@ -619,6 +699,9 @@ def run_forever(
         if now - last_garmin >= cfg.garmin_interval_s:
             last_garmin = now
             _run_garmin(cfg)
+        if now - last_spool >= SPOOL_RETRY_INTERVAL_S:
+            last_spool = now
+            retry_spool(cfg)
 
         cfg.sleep(POLL_INTERVAL_S)
 
@@ -638,6 +721,13 @@ def run_once_report(port_path: "Optional[str]", cfg: DaemonConfig) -> str:
     _run_garmin(cfg)
 
     lines = [f"port: {report.port}"]
+    if report.empty:
+        lines.append("puck: empty, nothing to sync")
+        lines.append(f"src: {report.src}")
+        lines.append(f"flashed: {report.flashed}")
+        if report.needs_you:
+            lines.append(f"needs_you: {report.needs_you[0]} -- {report.needs_you[1]}")
+        return "\n".join(lines)
     if not report.pulled:
         lines.append("pull: FAILED")
         lines.extend(f"  - {r}" for r in report.reasons)

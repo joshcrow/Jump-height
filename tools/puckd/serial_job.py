@@ -888,6 +888,29 @@ def clear_puck(port_path: str, *,
 
 # --------------------------------------------------------------- read_stats
 
+def read_src(port_path: str, *,
+             device_factory: "Callable[[str], object] | None" = None) -> "Optional[str]":
+    """The firmware build on the puck, from `info` (src=...). Never raises;
+    None when the puck did not answer, which needs_update() reads as
+    "unknown, do not flash"."""
+    jump = _jump()
+    device_factory = device_factory or jump.Device
+    try:
+        dev = device_factory(port_path)
+    except Exception:
+        return None
+    try:
+        dev.drain_boot()
+        try:
+            lines = dev.command("info", timeout=_INFO_TIMEOUT_S)
+        except TimeoutError:
+            return None
+        kv = jump._last_tagged(lines, "INFO ")
+        return kv.get("src") if kv else None
+    finally:
+        dev.close()
+
+
 def read_stats(port_path: str, *,
                device_factory: "Callable[[str], object] | None" = None) -> dict:
     """The battery poll (docs/sync-agent-plan.md item 10): one `stats`,

@@ -137,7 +137,8 @@ _FAKE_RCLONE_SRC = textwrap.dedent(
             print("{}")
             return 0
         if cmd == "listremotes":
-            print("gdrive:")
+            if not os.environ.get("FAKE_RCLONE_NO_REMOTE"):
+                print("gdrive:")
             return 0
         if cmd == "copy":
             src, dst = args[1], args[2]
@@ -182,13 +183,17 @@ class _FakeGarmin:
     fetch_new, last_seen, mark_seen); garth-level mocking is
     test_puckd_garmin.py's own job, not this file's to repeat."""
 
-    def __init__(self, signed_in=True):
+    def __init__(self, signed_in=True, ever=True):
         self.signed_in = signed_in
+        self.ever = ever
         self.fetch_calls = []
         self.marked = []
 
     def is_signed_in(self):
         return self.signed_in
+
+    def ever_signed_in(self):
+        return self.ever
 
     def fetch_new(self, since_iso, out_dir):
         self.fetch_calls.append((since_iso, out_dir))
@@ -327,7 +332,7 @@ class TestNeedsYouCopy(unittest.TestCase):
         from puckd import notify
         title, body = notify.render(
             "needs_you", line=daemon.PUCK_RESET_LINE, action=daemon.PUCK_RESET_ACTION)
-        self.assertEqual(title, "Needs you: reset the puck")
+        self.assertEqual(title, "Needs you: check the puck")
         self.assertEqual(body, "Press the small button on the puck twice.")
 
     def test_garmin_reauth_title_matches_the_spec_literal(self):
@@ -398,7 +403,7 @@ class TestRunJobCycleHappyPath(_DaemonTestBase):
 
 
 class TestRunJobCycleUploadFailure(_DaemonTestBase):
-    def test_upload_short_fires_one_needs_you_and_never_clears(self):
+    def test_upload_short_is_silent_keeps_the_bundle_pending_and_never_clears(self):
         proc, port = _spawn_fake("session")
         marker = self.tmp / "short.flag"
         marker.write_text("down")
@@ -415,17 +420,17 @@ class TestRunJobCycleUploadFailure(_DaemonTestBase):
         self.assertTrue(report.verified, report.reasons)
         self.assertFalse(report.uploaded)
         self.assertFalse(report.cleared)
-        self.assertEqual(report.needs_you,
-                         (daemon.NEEDS_YOU_UPLOAD_LINE, daemon.NEEDS_YOU_UPLOAD_ACTION))
+        self.assertIsNone(report.needs_you)
         self.assertEqual(stats["stored_jumps"], 4)  # untouched
 
-        self.assertEqual(self.recorder.titled("Ride synced"), [])
-        needs_you = self.recorder.titled("Needs you")
-        self.assertEqual(len(needs_you), 1, self.recorder.calls)
-        self.assertEqual(needs_you[0],
-                         ("Needs you: reconnect the puck", "Unplug the puck and plug it back in."))
+        # Nothing said: a Drive hiccup is the daemon's problem, not Nick's.
+        self.assertEqual(self.recorder.calls, [])
+        # The bundle waits in the spool root -- the retry list -- not in sent/.
+        self.assertEqual([p.name for p in daemon._pending_bundles(cfg)],
+                         [report.bundle_path.name])
+        self.assertFalse((self.spool / daemon.SENT_DIRNAME).exists())
 
-    def test_an_unexpected_upload_exception_degrades_to_needs_you_not_a_crash(self):
+    def test_an_unexpected_upload_exception_is_contained_not_a_crash(self):
         """Reproduces a real, verified upload.py gap: PUCKD_RCLONE naming a
         binary that does not exist raises FileNotFoundError straight
         through upload.upload() (its own two try/excepts catch
@@ -445,9 +450,11 @@ class TestRunJobCycleUploadFailure(_DaemonTestBase):
         self.assertTrue(report.bundle_path.exists())  # nothing lost
         self.assertFalse(report.uploaded)
         self.assertFalse(report.cleared)
-        self.assertEqual(report.needs_you,
-                         (daemon.NEEDS_YOU_UPLOAD_LINE, daemon.NEEDS_YOU_UPLOAD_ACTION))
-        self.assertEqual(len(self.recorder.titled("Needs you")), 1)
+        # A missing rclone IS "not authorized" from where Nick sits: one
+        # "reconnect Google Drive", and the bundle waits.
+        self.assertEqual(report.needs_you, None)
+        self.assertEqual(self.recorder.titled("Needs you"),
+                         [("Needs you: reconnect Google Drive", "Open Set up in the menu bar.")])
 
 
 class TestRunJobCyclePullFailed(_DaemonTestBase):
@@ -465,7 +472,7 @@ class TestRunJobCyclePullFailed(_DaemonTestBase):
         self.assertFalse(report.cleared)
         self.assertEqual(report.needs_you, (daemon.PUCK_RESET_LINE, daemon.PUCK_RESET_ACTION))
         self.assertEqual(self.recorder.calls,
-                         [("Needs you: reset the puck", "Press the small button on the puck twice.")])
+                         [("Needs you: check the puck", "Press the small button on the puck twice.")])
 
 
 class TestRunJobCycleUnverifiedButUploaded(_DaemonTestBase):
@@ -492,7 +499,7 @@ class TestRunJobCycleUnverifiedButUploaded(_DaemonTestBase):
 
 
 class TestClearDoesNotConfirm(_DaemonTestBase):
-    def test_a_lying_clear_refuses_and_fires_needs_you_not_synced_first(self):
+    def test_a_lying_clear_refuses_and_fires_needs_you_and_never_says_synced(self):
         proc, port = _spawn_fake("session")
         try:
             with patch.dict(os.environ, self.rclone_env()):
@@ -505,9 +512,9 @@ class TestClearDoesNotConfirm(_DaemonTestBase):
         self.assertTrue(report.verified)
         self.assertFalse(report.cleared)
         self.assertEqual(report.needs_you, (daemon.PUCK_RESET_LINE, daemon.PUCK_RESET_ACTION))
-        # "Ride synced" still fires -- the ride itself DID sync; it is the
-        # separate clear step that failed to confirm.
-        self.assertEqual(self.recorder.titled("Ride synced"), [("Ride synced · 4 jumps", None)])
+        # "Ride synced" means safe on Drive AND off the puck (spec step 9).
+        # The puck still holds it, so the word is not said.
+        self.assertEqual(self.recorder.titled("Ride synced"), [])
         self.assertEqual(len(self.recorder.titled("Needs you")), 1)
 
     def test_flash_is_never_offered_when_clear_did_not_confirm(self):
@@ -587,7 +594,7 @@ class TestMaybeFlashGate(_DaemonTestBase):
             daemon._maybe_flash("/dev/x", "aaaa", cfg),
             (False, (daemon.PUCK_RESET_LINE, daemon.PUCK_RESET_ACTION)))
         self.assertEqual(self.recorder.calls,
-                         [("Needs you: reset the puck", "Press the small button on the puck twice.")])
+                         [("Needs you: check the puck", "Press the small button on the puck twice.")])
 
     def test_sha256_refusal_never_touched_the_device_so_no_needs_you(self):
         uf2 = self.tmp / "x.uf2"
@@ -673,7 +680,7 @@ class TestGarminLeg(_DaemonTestBase):
         daemon._run_garmin(cfg)
         self.assertEqual(self.recorder.calls,
                          [("Needs you: sign in to Garmin again",
-                           "Sign in again from Set up in the menu bar.")])
+                           "Open Set up in the menu bar.")])
 
     def test_signed_in_fetches_and_never_raises_into_the_caller(self):
         g = _FakeGarmin(signed_in=True)
@@ -727,7 +734,7 @@ class TestRunForeverRetryFromSpool(_DaemonTestBase):
         self.assertTrue(second.cleared)
 
         self.assertEqual(len(self.recorder.titled("Ride synced")), 1)
-        self.assertEqual(len(self.recorder.titled("Needs you")), 1)
+        self.assertEqual(len(self.recorder.titled("Needs you")), 0)
 
     def test_the_same_attachment_never_reruns_the_job_on_later_ticks(self):
         proc, port = _spawn_fake("session")

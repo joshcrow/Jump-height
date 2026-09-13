@@ -7,10 +7,16 @@
 
 Plug the puck in to charge. Nothing else, ever.
 
-Three notifications exist and no others:
+Four notifications exist and no others:
     Ride synced · 12 jumps        (or "Ride synced · no jumps")
     Puck charged
-    Needs you: <one line>          body: the single action, e.g. "Press the small button on the puck twice."
+    Puck updated
+    Needs you: <one line>          body: the single action. Exactly three of these exist:
+        check the puck             Press the small button on the puck twice.      (anything the puck got wrong)
+        reconnect Google Drive     Open Set up in the menu bar.                    (remote gone, or a ride waited a day)
+        sign in to Garmin again    Open Set up in the menu bar.                    (only if he ever signed in)
+
+A puck with no ride on it produces nothing at all. He charges it every night.
 
 A menu-bar icon shows state at a glance (idle / syncing / attention). Click it:
     Puck 86% · charging
@@ -39,6 +45,7 @@ There is no window after setup. Nothing to remember. No steps.
 Re-runnable from the menu bar; each step individually. Token expiry → "Needs you: sign in to Garmin again" opens step 3 alone.
 
 ## What the agent does when the puck appears (the job)
+  0. stats. stored_jumps=0 AND trace_bytes=0 → no ride: skip to step 8 (that reading is G2's "empty"), say nothing
   1. open the port; info, stats                     (tools/jump's Device — proven serial layer)
   2. jumps; traceraw → falls back to trace           (page's exact command order, CONTRACT.md §3.2)
   3. stats again; selftest
@@ -47,12 +54,15 @@ Re-runnable from the menu bar; each step individually. Token expiry → "Needs y
   5. write the bundle to ~/Library/Application Support/JumpHeight/spool/<name>.zip
                                                      (CONTRACT.md §2 manifest, so ./tools/jump ingest is unchanged)
   6. rclone copy → gdrive:JumpHeight/inbox/ ; confirm with rclone lsjson that remote size == local size
+     not confirmed → the bundle stays in the spool root and is retried every 10 min, silently; the puck is not cleared
+     confirmed → the bundle moves to spool/sent/
   7. ONLY THEN: clear; confirm with stats (stored_jumps=0, trace_bytes=0); tracecheck where available
+     confirmed → "Ride synced · N jumps"  (synced = safe on Drive AND off the puck, in that order)
   8. fetch <site>/firmware/latest.json; if puck src != latest.src AND puck is empty: flash
         send uf2 → wait for /Volumes/XIAO-SENSE (mount via diskutil if present-but-unmounted — measured 2026-09-11)
         → copy the .uf2 (a "Device not configured" error on the copy is the SUCCESS signature)
         → wait for the port to return → info → src must equal latest.src → "Puck updated"
-  9. notify "Ride synced · N jumps"
+  9. (the notification fired at 7; a flash gets its own "Puck updated")
  10. while attached: stats every 60 s → menu-bar %; notify "Puck charged" once when chg goes 1→0 with batt_pct ≥ 95
 Garmin: on every job and every 6 h — garth: list activities since last_seen, download ORIGINAL FIT zips,
         rclone copy to gdrive:JumpHeight/fits/. Never blocks the puck job. Strava OAuth is the v2 fallback.
@@ -66,7 +76,8 @@ Garmin: on every job and every 6 h — garth: list activities since last_seen, d
 
 ## Layout
   tools/puckd/                      Python 3.11+, one package
-    serial_job.py    steps 1–5, 7      tests: tools/fake_device.py (has tracecheck, fillstore, region_full knobs)
+    serial_job.py    steps 0–5, 7      tests: tools/fake_device.py (knobs: --trace-bytes-overreport, --tracecheck-slow-delta,
+                                        --tracecheck-silent, --no-traceraw, --traceraw-error; fillstore is a firmware command, not a knob)
     upload.py        rclone wrapper    tests: a fake rclone on PATH
     garmin.py        garth wrapper     tests: recorded fixtures; no live Garmin in CI
     flash.py         step 8            tests: host harness for the sequencing; silicon rehearsal by the owner
@@ -84,6 +95,8 @@ Garmin: on every job and every 6 h — garth: list activities since last_seen, d
         each: implement against the contract above, tests included, tests must fail on revert
   P2  (Sonnet)  daemon.py composing P1; end-to-end test with fake device + fake rclone
   P3  (Opus)    adversarial review of G1–G5 with mutation checks; full suite; no verification logic reimplemented
+                DONE 2026-09-13: three fixes in serial_job (chatter counted as data, spool clobber, G3/G5 untested);
+                the owner's rulings on its findings are the rules written above and tools/tests/test_puckd_rulings.py
   P4  (owner)   bench rehearsal on the Puck: plug in → job → Drive test folder → empty → flash → "Puck charged"
   P5  (Sonnet)  packaging + Rosetta verification + a one-paragraph install note for Josh
   P6  (Nick)    right-click → Open, four screens, done

@@ -140,7 +140,8 @@ class TestLogin(PuckdGarminTestCase):
 
         self.assertFalse(result.ok)
         self.assertFalse(result.needs_mfa)
-        self.assertEqual(result.error, str(exc))
+        self.assertEqual(result.error, "Couldn't sign in. Check your email and password.")
+        self.assertNotIn(str(exc), result.error)
         # A rejected password must never leave a partial token dir behind.
         self.assertFalse(self.token_dir().exists())
 
@@ -207,7 +208,8 @@ class TestLogin(PuckdGarminTestCase):
             result = garmin.login("nick@example.com", "hunter2", mfa_code="111111")
 
         self.assertFalse(result.ok)
-        self.assertEqual(result.error, "wrong code")
+        self.assertEqual(result.error, "That code didn't work. Try again.")
+        self.assertTrue(result.needs_mfa, "the code field must stay on screen")
         # Still pending: the next call can retry the code without
         # re-asking for email/password.
         self.assertIs(garmin._pending_mfa, pending_before)

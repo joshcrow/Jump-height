@@ -273,8 +273,9 @@ class TestGoogleConnect(_PuckdSetupCase):
         self._to_screen_two()
         self.page.click("[data-testid=btn-google]")
         self.page.wait_for_selector("[data-testid=google-status]:visible")
+        # Whatever rclone raised, the screen shows one fixed sentence.
         self.assertEqual(self.page.locator("[data-testid=google-status]").inner_text(),
-                          "the browser closed before consent finished")
+                          "Google sign-in did not complete.")
         # Still screen 2, still exactly the one Connect button — a failure
         # does not advance the wizard or leave zero pressable buttons.
         self.assertEqual(self._visible_screen(), 2)

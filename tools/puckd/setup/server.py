@@ -221,7 +221,8 @@ def make_handler(
             except Exception as exc:  # noqa: BLE001 — any failure becomes the
                 # screen's own error text; the rider/owner has no other way
                 # to read a raised exception from a background HTTP call.
-                self._send_json({"ok": False, "account": None, "error": str(exc)})
+                self._send_json({"ok": False, "account": None,
+                                 "error": "Google sign-in did not complete."})
                 return
             if not account:
                 self._send_json({
@@ -240,7 +241,8 @@ def make_handler(
             try:
                 result = garmin_login(email, password, mfa_code)
             except Exception as exc:  # noqa: BLE001 — see _handle_google_start
-                self._send_json({"ok": False, "needs_mfa": False, "error": str(exc)})
+                self._send_json({"ok": False, "needs_mfa": False,
+                                 "error": "Garmin sign-in did not complete."})
                 return
             ok = bool(_field(result, "ok", False))
             needs_mfa = bool(_field(result, "needs_mfa", False))

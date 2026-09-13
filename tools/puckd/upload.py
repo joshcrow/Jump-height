@@ -100,7 +100,7 @@ def authorize(timeout: float = _AUTHORIZE_TIMEOUT_S) -> bool:
             ["config", "create", REMOTE_NAME, "drive", "scope", "drive"],
             timeout=timeout,
         )
-    except (RcloneNotFound, subprocess.TimeoutExpired):
+    except (RcloneNotFound, subprocess.TimeoutExpired, OSError):
         return False
     return proc.returncode == 0
 
@@ -117,7 +117,7 @@ def is_authorized() -> bool:
     """
     try:
         proc = _run(["listremotes"], timeout=_LISTREMOTES_TIMEOUT_S)
-    except (RcloneNotFound, subprocess.TimeoutExpired):
+    except (RcloneNotFound, subprocess.TimeoutExpired, OSError):
         return False
     if proc.returncode != 0:
         return False
@@ -152,7 +152,9 @@ def upload(local_path: str | Path, remote_dir: str) -> UploadResult:
 
     try:
         copy_proc = _run(["copy", str(local), remote_spec], timeout=_COPY_TIMEOUT_S)
-    except RcloneNotFound as exc:
+    except (RcloneNotFound, OSError) as exc:
+        # OSError: PUCKD_RCLONE names a binary that is not there (verified
+        # 2026-09-12 to surface as FileNotFoundError from subprocess).
         return UploadResult(ok=False, remote_size=None, local_size=local_size,
                              error=str(exc))
     except subprocess.TimeoutExpired:
@@ -170,9 +172,9 @@ def upload(local_path: str | Path, remote_dir: str) -> UploadResult:
     # believed via a fresh lsjson read.
     try:
         ls_proc = _run(["lsjson", remote_spec], timeout=_LSJSON_TIMEOUT_S)
-    except subprocess.TimeoutExpired:
+    except (subprocess.TimeoutExpired, OSError):
         return UploadResult(ok=False, remote_size=None, local_size=local_size,
-                             error="rclone lsjson timed out")
+                             error="rclone lsjson did not run")
 
     if ls_proc.returncode != 0:
         return UploadResult(
