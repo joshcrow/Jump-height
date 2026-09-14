@@ -19,6 +19,15 @@
     <key>ProgramArguments</key>
     <array>
         <string>/Applications/JumpHeight Sync.app/Contents/MacOS/JumpHeight Sync</string>
+        <!--
+          REQUIRED. Without it the launchd-started copy runs
+          packaging/src/launcher.py's self-install again: it boots ITSELF
+          out, bootstraps a fresh copy, which does the same, forever, with
+          KeepAlive putting it back every time. launcher.py writes this
+          argument itself (LAUNCHD_FLAG); this hand-written template is the
+          one place it could go missing.
+        -->
+        <string>--launchd</string>
     </array>
 
     <key>RunAtLoad</key>

@@ -93,6 +93,16 @@ def main() -> None:
 
 LABEL = "com.jumpheight.puckd"
 LAUNCHD_FLAG = "--launchd"
+# Where a bundle opened from a mounted .dmg installs itself to. A module
+# constant, not an inline literal, so the install can be exercised against a
+# scratch directory in tools/tests/test_puckd_launcher.py -- the copy/rename
+# ordering below is the part that decides whether a second open can destroy a
+# working install, and it is not something to find out on Nick's Mac.
+APPLICATIONS_DIR = Path("/Applications")
+# The mounted-.dmg prefix that means "this bundle is not installed yet".
+# Named for the same reason APPLICATIONS_DIR is: so the install path can be
+# rehearsed off a scratch directory instead of only on a rider's Mac.
+DMG_PREFIX = "/Volumes/"
 
 
 def _bundle_path(resources: Path) -> Path:
@@ -100,48 +110,115 @@ def _bundle_path(resources: Path) -> Path:
 
 
 def _copy_to_applications(bundle: Path) -> Path:
+    """Copy the .dmg's bundle to /Applications, NEVER by deleting the copy
+    that is already there first.
+
+    The old order was rmtree(dest) then copytree(). Two ways that bites, and
+    both are ordinary rider behaviour, not edge cases:
+
+      * the launchd copy is RUNNING out of /Applications — very likely, since
+        installing is what put it there — and rmtree pulls the .app out from
+        under a live process that may be mid-job. py2app's interpreter reads
+        from the bundle lazily (site-packages.zip, the bundled rclone), so
+        the running agent does not fail cleanly; it fails whenever it next
+        touches a file.
+      * copytree dies part-way (a full disk, an ejected volume) and there is
+        now NO app in /Applications at all, while the LaunchAgent plist still
+        points at the executable inside it. Nothing syncs, and the menu bar
+        is not there to say so.
+
+    So: stage the new copy beside the destination, then swap it into place
+    with one rename, and only then delete the old one. The window in which
+    /Applications has no app is a single rename long, and a failed copy
+    leaves the working install untouched.
+    """
     import shutil
-    dest = Path("/Applications") / bundle.name
+    dest = APPLICATIONS_DIR / bundle.name
+    staged = dest.with_name(dest.name + ".new")
+    old = dest.with_name(dest.name + ".old")
+    for leftover in (staged, old):
+        if leftover.exists():
+            shutil.rmtree(leftover, ignore_errors=True)
+    shutil.copytree(bundle, staged, symlinks=True)
     if dest.exists():
-        shutil.rmtree(dest)
-    shutil.copytree(bundle, dest, symlinks=True)
+        os.rename(dest, old)                       # same volume: atomic
+    os.rename(staged, dest)
+    shutil.rmtree(old, ignore_errors=True)
     return dest
 
 
 def _install_and_hand_off(resources: Path) -> bool:
+    """Write the LaunchAgent and hand the daemon over to launchd. Returns
+    True only when launchd has actually been told to run it -- a False means
+    THIS process runs the daemon itself, so a failed handoff is never a
+    silently dead agent behind a menu bar that never appears."""
     import plistlib
     import subprocess
 
     if LAUNCHD_FLAG in sys.argv[1:]:
         return False
     bundle = _bundle_path(resources)
-    if str(bundle).startswith("/Volumes/"):
+    exe = bundle / "Contents" / "MacOS" / "JumpHeight Sync"
+    if not exe.is_file() and not str(bundle).startswith(DMG_PREFIX):
+        return False                               # not a bundle; a dev run
+    domain = f"gui/{os.getuid()}"
+
+    def run(*args):
+        try:
+            return subprocess.run(["launchctl", *args], capture_output=True)
+        except OSError:
+            return subprocess.CompletedProcess(args, 1, b"", b"launchctl missing")
+
+    # Stop the running copy BEFORE touching the bundle on disk. Opening the
+    # app a second time while the launchd copy is mid-job used to rmtree the
+    # very bundle that copy is executing from; booting it out first makes the
+    # second open a clean replace. A job killed here is exactly G3's case:
+    # nothing wrote the bootloader, the spool keeps the bundle, and the next
+    # plug-in retries.
+    run("bootout", f"{domain}/{LABEL}")
+
+    if str(bundle).startswith(DMG_PREFIX):
         try:
             bundle = _copy_to_applications(bundle)
         except OSError:
             pass                                   # run from where it is
-    exe = bundle / "Contents" / "MacOS" / "JumpHeight Sync"
+        exe = bundle / "Contents" / "MacOS" / "JumpHeight Sync"
     if not exe.is_file():
-        return False                               # not a bundle; a dev run
+        return False
+
     agents = Path.home() / "Library" / "LaunchAgents"
     agents.mkdir(parents=True, exist_ok=True)
     plist = agents / f"{LABEL}.plist"
+    logs = Path.home() / "Library" / "Logs"
+    logs.mkdir(parents=True, exist_ok=True)
     plist.write_bytes(plistlib.dumps({
         "Label": LABEL,
         "ProgramArguments": [str(exe), LAUNCHD_FLAG],
         "RunAtLoad": True,
         "KeepAlive": {"SuccessfulExit": False},
         "ProcessType": "Interactive",
+        # Where a crash before daemon.py's own logging goes. Josh reads this
+        # over the phone from 300 miles away; without it an agent that dies
+        # at import time leaves no trace anywhere on the machine.
+        "StandardOutPath": str(logs / f"{LABEL}.out.log"),
+        "StandardErrorPath": str(logs / f"{LABEL}.err.log"),
     }))
-    domain = f"gui/{os.getuid()}"
 
-    def run(*args):
-        return subprocess.run(["launchctl", *args], capture_output=True)
-
-    run("bootout", f"{domain}/{LABEL}")            # replace a running copy
-    if run("bootstrap", domain, str(plist)).returncode != 0:
-        run("load", "-w", str(plist))              # the older spelling
-    return True
+    # `bootstrap gui/<uid>` is the modern spelling and the right DOMAIN for a
+    # GUI agent (a menu bar needs an Aqua session; user/<uid> has none). Two
+    # things can still make it fail: the older `launchctl load -w` is all
+    # some systems accept, and a service left registered by a bootout that
+    # did not complete makes bootstrap return EALREADY. kickstart covers the
+    # second. If NONE of the three worked, say so by returning False and run
+    # the daemon in this process -- an install that quietly started nothing
+    # is the failure mode the rider cannot see and cannot report.
+    if run("bootstrap", domain, str(plist)).returncode == 0:
+        return True
+    if run("load", "-w", str(plist)).returncode == 0:
+        return True
+    if run("kickstart", "-k", f"{domain}/{LABEL}").returncode == 0:
+        return True
+    return False
 
 
 if __name__ == "__main__":

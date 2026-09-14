@@ -170,10 +170,12 @@ class TestMenubarLines(unittest.TestCase):
     def test_ride_line_never_synced(self):
         self.assertEqual(menubar.format_ride_line(None, None), "Last ride —")
 
-    def test_icon_title_idle_vs_attention(self):
-        self.assertEqual(menubar.format_icon_title(False), menubar.ICON_IDLE)
-        self.assertEqual(menubar.format_icon_title(True), menubar.ICON_ATTENTION)
-        self.assertNotEqual(menubar.ICON_IDLE, menubar.ICON_ATTENTION)
+    def test_no_title_ever_the_glyph_carries_attention(self):
+        # State is encoded by redrawing the wing, never by a title or badge.
+        self.assertIsNone(menubar.format_icon_title(False))
+        self.assertIsNone(menubar.format_icon_title(True))
+        self.assertNotEqual(menubar.glyph_state(False, None, True),
+                            menubar.glyph_state(True, None, True))
 
 
 class TestMenubarOpeners(unittest.TestCase):

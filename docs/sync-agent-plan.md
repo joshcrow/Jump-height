@@ -18,8 +18,15 @@ Four notifications exist and no others:
 
 A puck with no ride on it produces nothing at all. He charges it every night.
 
-A menu-bar icon shows state at a glance (idle / syncing / attention). Click it:
-    Puck 86% · charging
+A menu-bar icon shows state at a glance. Four glyph states and no more (the
+five-state collapse from the ambient-UI report, minus "paused", which this app
+does not have), each a redraw of the wing, never a badge:
+    dormant    wing at 35 %        no puck attached           (environment, not the app)
+    idle       wing                puck attached, up to date
+    working    wing + water line   a job is running; the panel names the phase in words
+    attention  wing + dot          Nick needs to do one thing; reserved ruthlessly
+Click it:
+    Puck 86% · charging            (or: No puck · Reading the puck… · Uploading… · Emptying the puck… · Updating the puck…)
     Last ride Tue 4:52 pm · 12 jumps
     Open rides folder
     Set up…

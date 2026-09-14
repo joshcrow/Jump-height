@@ -61,7 +61,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -81,6 +81,17 @@ ORIGINAL_DOWNLOAD_PATH = "/download-service/files/activity/{activity_id}"
 
 LIST_PAGE_SIZE = 20  # garth.Activity.list's own default
 MAX_PAGES = 25  # a bounded search, not an infinite one, if since_iso is old
+
+# How far BEFORE last_seen fetch_new() still looks. An activity's
+# start_time_gmt is when the RIDE happened; it appears in Garmin Connect only
+# when the watch next syncs to the phone, which can be days later. daemon.py
+# advances last_seen to "now" after any successful fetch, so without this
+# window a ride that started on Tuesday and uploaded on Thursday -- the
+# ordinary case for a watch that only syncs when the phone is nearby -- sorts
+# older than last_seen and is never downloaded, silently, forever. Re-listing
+# a week costs a page or two; re-DOWNLOADING costs nothing, because the
+# `dest.exists()` skip below already dedupes by activity id.
+LOOKBACK_S = 7 * 24 * 3600
 
 # First run: no last_seen yet recorded. Far enough in the past that "list
 # activities since last_seen" means "all of them" without a magic sentinel.
@@ -167,7 +178,15 @@ def login(email: str, password: str, mfa_code: Optional[str] = None) -> LoginRes
                 _pending_mfa = result[1]
                 return LoginResult(ok=False, needs_mfa=True, error=None)
             oauth1, oauth2 = result
-    except garth.exc.GarthException:
+    except Exception:  # noqa: BLE001 -- garth.exc.GarthException is only the
+        # errors garth RAISES ITSELF. The wire under it is `requests`, so a
+        # dropped wifi, a DNS failure or a TLS error arrives as
+        # requests.ConnectionError, and garth's SSO flow also parses HTML it
+        # did not write (an AttributeError/IndexError the day Garmin changes
+        # that page -- this route "has broken and been fixed before", the
+        # module docstring). Either one used to come out of here as a
+        # traceback through the setup window's button handler. Every one of
+        # them means the same thing on screen and takes the same action.
         # garth's own text (an HTTP status, a URL) is not for a screen.
         if mfa_code is not None:
             # still pending: the code field stays, and he tries again
@@ -241,7 +260,8 @@ def _parse_iso(iso: str) -> datetime:
 
 
 def fetch_new(since_iso: str, out_dir: "str | Path") -> list:
-    """List activities strictly newer than since_iso and download each
+    """List activities newer than since_iso (less LOOKBACK_S -- see that
+    constant: a watch uploads a ride days after it happened) and download each
     one's ORIGINAL FIT zip into out_dir, skipping any activity id whose
     zip is already there. Returns the paths actually written this call
     (already-seen ids are not re-downloaded and are not in the list).
@@ -256,7 +276,7 @@ def fetch_new(since_iso: str, out_dir: "str | Path") -> list:
     applies to the puck's own stats/verify reads).
     """
     client = _load_client()
-    since_dt = _parse_iso(since_iso)
+    since_dt = _parse_iso(since_iso) - timedelta(seconds=LOOKBACK_S)
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 

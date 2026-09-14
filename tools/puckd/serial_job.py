@@ -119,11 +119,23 @@ class PullFailed(RuntimeError):
     mirrors web/sync/sync.js's endPullFailed(): "a pull that stopped part-way
     has no bundle to build". The puck is untouched either way (G3); the
     caller's remedy is to retry the whole job on the next plug-in, not to
-    salvage a partial bundle from this exception."""
+    salvage a partial bundle from this exception.
 
-    def __init__(self, message: str, reasons: "list[str] | None" = None):
+    `port_gone` marks the one variety the rider did not cause and cannot
+    fix: the port itself went away (he unplugged the puck mid-job, or macOS
+    renumbered it). The data is still on the puck and the next plug-in
+    re-runs the whole job, so the daemon keeps that one SILENT instead of
+    telling him to press a button on a puck that is in his hand -- the
+    "errors are prevented by gates, not explained afterwards" rule
+    (docs/sync-agent-plan.md:24) applied to the one failure that is not a
+    failure.
+    """
+
+    def __init__(self, message: str, reasons: "list[str] | None" = None,
+                 port_gone: bool = False):
         super().__init__(message)
         self.reasons = reasons if reasons is not None else [message]
+        self.port_gone = port_gone
 
 
 # ------------------------------------------------------------------ results
@@ -618,10 +630,24 @@ def run_job(port_path: str, spool_dir: "Path | str", *,
     wants to look at".
 
     Never calls `clear` -- that is clear_puck()'s job, called by the daemon
-    only once upload.py has confirmed the bundle landed (G1)."""
+    only once upload.py has confirmed the bundle landed (G1).
+
+    Any OTHER exception raised while talking to the port -- the cable pulled
+    mid-pull, so pyserial's own SerialException (an OSError) comes out of
+    drain_boot() or command() rather than the TimeoutError each call site
+    catches -- is re-raised as PullFailed too. Measured 2026-09-13: before
+    this, an unplug mid-job put an OSError through run_job_cycle(), through
+    run_forever(), and off the end of the daemon THREAD, leaving the menu bar
+    up and syncing dead until the app was quit (CLAUDE.md rule 3: a silent
+    failure must never look like a pass)."""
     jump = _jump()
     device_factory = device_factory or jump.Device
-    dev = device_factory(port_path)
+    try:
+        dev = device_factory(port_path)
+    except Exception as e:  # noqa: BLE001 -- the port vanished between the
+        # poll that found it and this open; that is a pull that did not
+        # happen, not a crash.
+        raise PullFailed(f"couldn't open {port_path}: {e}", port_gone=True) from e
     device_log: "list[str]" = []
     try:
         dev.drain_boot()
@@ -819,8 +845,20 @@ def run_job(port_path: str, spool_dir: "Path | str", *,
             reasons=verify.reasons, jumps=jump_rows,
             stats_before=stats_before_line, stats_after=stats_after_line,
             puck_name=puck_name, src=info_kv.get("src"))
+    except PullFailed:
+        raise
+    except Exception as e:  # noqa: BLE001 -- see the docstring: an unplug
+        # mid-pull surfaces as pyserial's SerialException (an OSError), not
+        # as the TimeoutError each command() call site catches. Nothing was
+        # written, the puck was never cleared (G3); the caller's remedy is
+        # the same one every other PullFailed gets.
+        raise PullFailed(f"the puck stopped answering mid-pull: {e}",
+                         port_gone=True) from e
     finally:
-        dev.close()
+        try:
+            dev.close()
+        except Exception:  # noqa: BLE001 -- closing a port that already went
+            pass           # away must not replace the real failure above.
 
 
 # --------------------------------------------------------------- clear_puck
@@ -844,10 +882,19 @@ def clear_puck(port_path: str, *,
 
     Never raises: every failure -- a `clear` that errors or times out, a
     `stats` that errors, times out, or is silent -- comes back as
-    ok=False, exactly like this module's read_stats()."""
+    ok=False, exactly like this module's read_stats() -- INCLUDING the port
+    going away between the poll that found it and this call (pyserial raises
+    SerialException, an OSError, out of the open or out of drain_boot; that
+    is not a TimeoutError and was escaping to the daemon thread before
+    2026-09-13). A clear that cannot be CONFIRMED is a refusal, and an
+    exception is the loudest possible "not confirmed"."""
     jump = _jump()
     device_factory = device_factory or jump.Device
-    dev = device_factory(port_path)
+    try:
+        dev = device_factory(port_path)
+    except Exception:  # noqa: BLE001
+        return ClearResult(ok=False, stored_jumps_after=None,
+                           trace_bytes_after=None, tracecheck=None)
     try:
         dev.drain_boot()
 
@@ -882,8 +929,14 @@ def clear_puck(port_path: str, *,
 
         return ClearResult(ok=ok, stored_jumps_after=jumps_after,
                            trace_bytes_after=bytes_after, tracecheck=tracecheck)
+    except Exception:  # noqa: BLE001 -- "never raises", measured, not claimed
+        return ClearResult(ok=False, stored_jumps_after=None,
+                           trace_bytes_after=None, tracecheck=None)
     finally:
-        dev.close()
+        try:
+            dev.close()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 # --------------------------------------------------------------- read_stats
@@ -907,8 +960,13 @@ def read_src(port_path: str, *,
             return None
         kv = jump._last_tagged(lines, "INFO ")
         return kv.get("src") if kv else None
+    except Exception:  # noqa: BLE001 -- the port going away mid-read is
+        return None    # pyserial's SerialException, not a TimeoutError.
     finally:
-        dev.close()
+        try:
+            dev.close()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def read_stats(port_path: str, *,
@@ -966,5 +1024,15 @@ def read_stats(port_path: str, *,
             "trace_full": None if fs_down else (kv.get("trace_full") == "1"),
             "error": None,
         }
+    except Exception as e:  # noqa: BLE001 -- "never raises" is a promise the
+        # 2 s loop and the 60 s poll both depend on, and only the OPEN was
+        # guarded before: an unplug during drain_boot()/command() raises
+        # pyserial's SerialException (an OSError), which is not a
+        # TimeoutError. Measured 2026-09-13: it escaped all the way out of
+        # run_forever() and killed the daemon thread.
+        return {**empty, "error": f"the puck stopped answering: {e}"}
     finally:
-        dev.close()
+        try:
+            dev.close()
+        except Exception:  # noqa: BLE001
+            pass

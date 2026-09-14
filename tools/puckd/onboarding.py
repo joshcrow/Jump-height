@@ -66,6 +66,12 @@ class Screen:
     fields: "list[str]" = field(default_factory=list)   # placeholders, in order
     buttons: "list[tuple[str, str]]" = field(default_factory=list)
     busy: bool = False
+    # How the status line should READ, not what it says: "" plain, "ok" the
+    # step succeeded, "bad" it didn't and he can try again. The window turns
+    # this into a checkmark or a calm grey line; it never changes the words,
+    # which are the spec's. Kept here, in the tested layer, so "which state
+    # is this" is never re-derived by string-matching in the AppKit code.
+    tone: str = ""
 
 
 @dataclass
@@ -94,16 +100,20 @@ class OnboardingModel:
         if self.step == "connect":
             if self.connected:
                 return Screen("connect", TITLE_CONNECT, BODY_CONNECT, self.status,
-                              [], [(BTN_CONTINUE, "next")])
+                              [], [(BTN_CONTINUE, "next")], tone="ok")
+            tone = "bad" if self.status == STATUS_CONNECT_FAILED else ""
             return Screen("connect", TITLE_CONNECT, BODY_CONNECT, self.status,
-                          [], [(BTN_CONNECT, "connect")], busy=self.busy)
+                          [], [(BTN_CONNECT, "connect")], busy=self.busy, tone=tone)
         if self.step == "watch":
             if self.signed_in:
                 return Screen("watch", TITLE_WATCH, BODY_WATCH, STATUS_SIGNED_IN,
-                              [], [(BTN_CONTINUE, "next")])
+                              [], [(BTN_CONTINUE, "next")], tone="ok")
             fields = [PLACEHOLDER_CODE] if self.needs_mfa else [PLACEHOLDER_EMAIL, PLACEHOLDER_PASSWORD]
+            # A wrong password is "bad"; "Garmin sent you a code." is not a
+            # failure — it is the next instruction, so it stays plain.
+            tone = "bad" if (self.status and not self.busy and not self.needs_mfa) else ""
             return Screen("watch", TITLE_WATCH, BODY_WATCH, self.status, fields,
-                          [(BTN_SIGN_IN, "signin"), (BTN_SKIP, "skip")], busy=self.busy)
+                          [(BTN_SIGN_IN, "signin"), (BTN_SKIP, "skip")], busy=self.busy, tone=tone)
         return Screen("done", TITLE_DONE, BODY_DONE, "", [], [(BTN_CLOSE, "close")])
 
     # ---- actions (synchronous; the window runs them off the main thread)
@@ -169,17 +179,79 @@ class OnboardingModel:
 
 
 # -------------------------------------------------------------- window
+# Layout, in points. ONE margin (PAD) down both edges, gaps that go with the
+# hierarchy rather than with each control, and a height computed from the
+# content — the 460x300 fixed frame this replaced left a third of the window
+# empty on every screen. W is fixed because the window does not resize.
+W = 440
+PAD = 24
+TOP = 22
+BOTTOM = 20
+GAP_ICON = 14          # icon -> title
+GAP_TITLE = 6          # title -> body
+GAP_BODY = 18          # body -> the first control
+GAP_FIELD = 8          # between fields
+GAP_STATUS = 14        # last control -> status line
+GAP_BUTTONS = 20       # whatever is last -> the button row
+ICON = 56
+FIELD_H = 24
+BTN_H = 28
+BTN_MIN_W = 96
+BTN_GAP = 10
+GLYPH_W = 20           # the spinner/checkmark gutter, so status text aligns
+
+
+def app_icon():
+    """The app's icon: the bundle's .icns when we are one, the repo's PNG
+    when we are not, and None if neither is there — the window opens either
+    way, per the brief's "gracefully absent"."""
+    from pathlib import Path
+
+    from AppKit import NSImage
+    from Foundation import NSBundle
+
+    here = Path(__file__).resolve()
+    candidates = []
+    res = NSBundle.mainBundle().resourcePath()
+    if res:
+        candidates.append(Path(str(res)) / "JumpHeight.icns")
+    icons = here.parents[2] / "packaging" / "icon"
+    candidates += [icons / "JumpHeight.icns", icons / "JumpHeight-1024.png"]
+    for path in candidates:
+        try:
+            if not path.is_file():
+                continue
+        except OSError:
+            continue
+        img = NSImage.alloc().initWithContentsOfFile_(str(path))
+        if img is not None:
+            return img
+    return None
+
+
+_WINDOW_CLASS = None
+
 
 def build_window_class():
     """Import AppKit and build the window class. Only the real app calls
-    this; tests drive OnboardingModel directly."""
-    from AppKit import (NSApp, NSBackingStoreBuffered, NSButton, NSColor, NSFont,
-                        NSMakeRect, NSSecureTextField, NSTextField, NSWindow,
-                        NSWindowStyleMaskClosable, NSWindowStyleMaskTitled)
-    from Foundation import NSObject
-    from PyObjCTools import AppHelper
+    this; tests drive OnboardingModel directly. Built once and cached: a
+    second definition of an Objective-C class with the same name raises."""
+    global _WINDOW_CLASS
+    if _WINDOW_CLASS is not None:
+        return _WINDOW_CLASS
 
-    W, PAD = 460, 28
+    from AppKit import (NSApp, NSBackingStoreBuffered, NSBezelStyleRounded,
+                        NSButton, NSColor, NSControlSizeSmall, NSFont,
+                        NSFontAttributeName, NSFontWeightBold,
+                        NSFontWeightSemibold, NSForegroundColorAttributeName,
+                        NSImageScaleProportionallyUpOrDown, NSImageView,
+                        NSMakeRect, NSMakeSize, NSProgressIndicator,
+                        NSProgressIndicatorStyleSpinning, NSSecureTextField,
+                        NSTextField, NSView, NSWindow,
+                        NSWindowStyleMaskClosable, NSWindowStyleMaskTitled)
+    import objc
+    from Foundation import NSAttributedString, NSObject
+    from PyObjCTools import AppHelper
 
     class OnboardingWindow(NSObject):
         """Owns one NSWindow and re-lays it out from model.screen()."""
@@ -191,82 +263,214 @@ def build_window_class():
             self.model = model
             self.window = None
             self.inputs = []
+            self._actions = []
+            self._typed = {}        # placeholder -> what he typed, kept across renders
             return self
 
         # ---- showing
         def show(self):
-            if self.window is None:
+            first = self.window is None
+            if first:
                 style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
                 self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
-                    NSMakeRect(0, 0, W, 300), style, NSBackingStoreBuffered, False)
+                    NSMakeRect(0, 0, W, 200), style, NSBackingStoreBuffered, False)
                 self.window.setTitle_(WINDOW_TITLE)
                 self.window.setReleasedWhenClosed_(False)
+                # The red close button is the Cancel of this window: it ends
+                # setup the same way the Close button does (on_finished, which
+                # quits `python -m puckd setup` and is a no-op inside the
+                # daemon). Nothing it does is destructive, so Escape -> close
+                # would be safe too; Escape is left unbound anyway.
+                self.window.setDelegate_(self)
             self.render()
-            self.window.center()
+            if first:
+                self.window.center()
             NSApp.activateIgnoringOtherApps_(True)
             self.window.makeKeyAndOrderFront_(None)
 
+        # ---- layout helpers
+        @objc.python_method
+        def _fit(self, tf, width):
+            """Height this label needs at `width`. Measured, not assumed —
+            the old 20 * (newlines + 2) guess is what left the dead space."""
+            tf.setPreferredMaxLayoutWidth_(width)
+            h = float(tf.fittingSize().height)
+            tf.setFrameSize_(NSMakeSize(width, h))
+            return h
+
+        @objc.python_method
+        def _resize(self, height):
+            """Grow or shrink to the content, keeping the TOP edge still so
+            the window does not hop up the screen between steps."""
+            win = self.window
+            new = win.frameRectForContentRect_(NSMakeRect(0, 0, W, height))
+            old = win.frame()
+            top = old.origin.y + old.size.height
+            win.setFrame_display_(
+                NSMakeRect(old.origin.x, top - new.size.height,
+                           new.size.width, new.size.height), True)
+
+        @objc.python_method
+        def _label(self, text, size, weight, color, wrap):
+            f = (NSFont.systemFontOfSize_weight_(size, weight) if weight is not None
+                 else NSFont.systemFontOfSize_(size))
+            tf = (NSTextField.wrappingLabelWithString_(text) if wrap
+                  else NSTextField.labelWithString_(text))
+            tf.setFont_(f)
+            tf.setTextColor_(color)
+            tf.setSelectable_(False)
+            return tf
+
         def render(self):
             scr = self.model.screen()
+            for f in self.inputs:                     # keep what he typed
+                self._typed[str(f.placeholderString() or "")] = str(f.stringValue())
+            if self.model.signed_in:
+                self._typed.pop(PLACEHOLDER_PASSWORD, None)
             content = self.window.contentView()
             for v in list(content.subviews()):
                 v.removeFromSuperview()
             self.inputs = []
-            # measure from the top; AppKit's origin is bottom-left, so lay
-            # out in a list first and flip at the end.
-            rows = []                                       # (view, height)
-            title = NSTextField.labelWithString_(scr.title)
-            title.setFont_(NSFont.boldSystemFontOfSize_(22))
-            rows.append((title, 30))
-            body = NSTextField.wrappingLabelWithString_(scr.body)
-            body.setFont_(NSFont.systemFontOfSize_(14))
-            body.setTextColor_(NSColor.secondaryLabelColor())
-            body.setSelectable_(False)
-            rows.append((body, 20 * (scr.body.count("\n") + 2)))
+            inner = W - 2 * PAD
+            rows = []                                  # (view, width, height, gap below)
+
+            def add(view, h, gap, width=inner):
+                rows.append((view, width, h, gap))
+
+            # identity: the icon, first screen only, modest
+            if scr.step == "connect":
+                img = app_icon()
+                if img is not None:
+                    iv = NSImageView.alloc().initWithFrame_(NSMakeRect(0, 0, ICON, ICON))
+                    iv.setImage_(img)
+                    iv.setImageScaling_(NSImageScaleProportionallyUpOrDown)
+                    iv.setAccessibilityLabel_(WINDOW_TITLE)
+                    add(iv, ICON, GAP_ICON, ICON)
+
+            title = self._label(scr.title, 22, NSFontWeightSemibold,
+                                NSColor.labelColor(), False)
+            add(title, self._fit(title, inner), GAP_TITLE)
+
+            body = self._label(scr.body, 13, None, NSColor.secondaryLabelColor(), True)
+            add(body, self._fit(body, inner), GAP_BODY)
+
             for ph in scr.fields:
                 cls = NSSecureTextField if ph == PLACEHOLDER_PASSWORD else NSTextField
-                f = cls.alloc().initWithFrame_(NSMakeRect(0, 0, W - 2 * PAD, 28))
+                f = cls.alloc().initWithFrame_(NSMakeRect(0, 0, inner, FIELD_H))
                 f.setPlaceholderString_(ph)
-                f.setFont_(NSFont.systemFontOfSize_(14))
-                rows.append((f, 30))
+                f.setStringValue_(self._typed.get(ph, ""))
+                f.setFont_(NSFont.systemFontOfSize_(13))
+                f.setAccessibilityLabel_(ph)       # VoiceOver reads the placeholder as the label
+                f.setTarget_(self)
+                f.setAction_("fieldReturn:")       # Return in a field = the primary button
+                add(f, FIELD_H, GAP_FIELD)
                 self.inputs.append(f)
+
+            # status: spinner while busy, a green check when the step is done,
+            # a calm grey line when it isn't. The WORDS are the model's, always.
             if scr.status:
-                st = NSTextField.wrappingLabelWithString_(scr.status)
-                st.setFont_(NSFont.systemFontOfSize_(13))
-                st.setSelectable_(False)
-                rows.append((st, 22))
-            btn_row = []
-            for i, (label, action) in enumerate(scr.buttons):
-                b = NSButton.buttonWithTitle_target_action_(label, self, "press:")
+                gutter = GLYPH_W if (scr.busy or scr.tone == "ok") else 0
+                # Full contrast when the line is the outcome of a press
+                # (done, or didn't) and secondary when it is only narration
+                # ("Finish in your browser…"). No red anywhere: a retry is
+                # not an alarm.
+                st = self._label(scr.status, 13, None,
+                                 NSColor.secondaryLabelColor() if (scr.busy or not scr.tone)
+                                 else NSColor.labelColor(), True)
+                h = self._fit(st, inner - gutter)
+                rh = max(h, 17.0)
+                row = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, inner, rh))
+                st.setFrame_(NSMakeRect(gutter, rh - h, inner - gutter, h))
+                row.addSubview_(st)
+                if scr.busy:
+                    sp = NSProgressIndicator.alloc().initWithFrame_(
+                        NSMakeRect(0, rh - 16, 15, 15))
+                    sp.setStyle_(NSProgressIndicatorStyleSpinning)
+                    sp.setControlSize_(NSControlSizeSmall)
+                    sp.setDisplayedWhenStopped_(False)
+                    sp.startAnimation_(None)
+                    row.addSubview_(sp)
+                elif scr.tone == "ok":
+                    ck = self._label("✓", 13, NSFontWeightBold,
+                                     NSColor.systemGreenColor(), False)
+                    ck.setFrame_(NSMakeRect(0, rh - h, GLYPH_W - 4, h))
+                    ck.setAccessibilityLabel_("Done")
+                    row.addSubview_(ck)
+                if rows:
+                    view, width, rowh, _ = rows[-1]
+                    rows[-1] = (view, width, rowh, GAP_STATUS)
+                add(row, rh, GAP_BUTTONS)
+            if rows:
+                view, width, rowh, _ = rows[-1]
+                rows[-1] = (view, width, rowh, GAP_BUTTONS)
+
+            # buttons. scr.buttons[0] is the primary: bottom-right, accent
+            # filled, Return presses it. Anything after it is a plain
+            # text-style button to its LEFT (the old code placed them the
+            # other way round, so Skip sat where Sign in belonged).
+            btns = []
+            for i, (lbl, _action) in enumerate(scr.buttons):
+                b = NSButton.buttonWithTitle_target_action_(lbl, self, "press:")
                 b.setTag_(i)
+                b.setBezelStyle_(NSBezelStyleRounded)
+                b.setFont_(NSFont.systemFontOfSize_(13))
                 b.setEnabled_(not scr.busy)
+                b.sizeToFit()
+                width = float(b.frame().size.width)
                 if i == 0:
                     b.setKeyEquivalent_("\r")
-                btn_row.append(b)
-            # place
-            y = 300 - PAD
-            for view, h in rows:
+                    b.setBezelColor_(NSColor.controlAccentColor())
+                    width = max(width + 16, BTN_MIN_W)
+                else:
+                    b.setBordered_(False)
+                    b.setAttributedTitle_(NSAttributedString.alloc().initWithString_attributes_(
+                        lbl, {NSForegroundColorAttributeName: NSColor.controlAccentColor(),
+                              NSFontAttributeName: NSFont.systemFontOfSize_(13)}))
+                    b.setKeyEquivalent_("")      # Escape must never fire Skip
+                    width = width + 8
+                btns.append((b, width))
+
+            height = TOP + BTN_H + BOTTOM
+            for _view, _w, h, gap in rows:
+                height += h + gap
+            self._resize(height)
+
+            y = height - TOP
+            for view, width, h, _gap in rows:
                 y -= h
-                view.setFrame_(NSMakeRect(PAD, y, W - 2 * PAD, h - 4))
+                view.setFrame_(NSMakeRect(PAD, y, width, h))
                 content.addSubview_(view)
-                y -= 6
-            y -= 8
+                y -= _gap
             x = W - PAD
-            for b in reversed(btn_row):
-                b.sizeToFit()
-                fr = b.frame()
-                bw = max(fr.size.width + 24, 110)
-                x -= bw
-                b.setFrame_(NSMakeRect(x, y - 30, bw, 30))
+            for b, width in btns:                 # primary first = rightmost
+                x -= width
+                b.setFrame_(NSMakeRect(x, BOTTOM, width, BTN_H))
                 content.addSubview_(b)
-                x -= 10
+                x -= BTN_GAP
+
             self._actions = [a for _, a in scr.buttons]
             if self.inputs:
+                for a, nxt in zip(self.inputs, self.inputs[1:]):
+                    a.setNextKeyView_(nxt)
+                self.inputs[-1].setNextKeyView_(btns[0][0])
+                btns[0][0].setNextKeyView_(self.inputs[0])
                 self.window.makeFirstResponder_(self.inputs[0])
 
         # ---- actions
+        def windowWillClose_(self, notification):
+            self.model.close()
+
+        def fieldReturn_(self, sender):
+            self._fire(0)
+
         def press_(self, sender):
-            action = self._actions[sender.tag()]
+            self._fire(sender.tag())
+
+        @objc.python_method
+        def _fire(self, index):
+            if index >= len(self._actions):
+                return
+            action = self._actions[index]
             values = [str(f.stringValue()) for f in self.inputs]
             if action == "next":
                 self.model.next(); self.render()
@@ -280,6 +484,7 @@ def build_window_class():
             elif action == "signin":
                 self._run_async(lambda: self.model.signin(values))
 
+        @objc.python_method
         def _run_async(self, fn):
             self.model.busy = True
             self.model.status = STATUS_CONNECTING if self.model.step == "connect" else STATUS_SIGNING_IN
@@ -296,6 +501,7 @@ def build_window_class():
         import objc
         return objc.super(OnboardingWindow, obj).init()
 
+    _WINDOW_CLASS = OnboardingWindow
     return OnboardingWindow
 
 

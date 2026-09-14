@@ -405,5 +405,93 @@ class TestLastSeenStore(PuckdGarminTestCase):
         self.assertEqual(garmin.last_seen(store), "2026-09-10T18:32:07Z")
 
 
+class TestLateUploadedActivity(PuckdGarminTestCase):
+    """The failure this window exists for: a ride HAPPENS on Tuesday and
+    reaches Garmin Connect on Thursday, when the watch next sees the phone.
+    daemon.py advances last_seen to "now" after any successful fetch, so
+    Tuesday's activity sorts older than Thursday's watermark and, without
+    LOOKBACK_S, is skipped silently and forever -- a ride that never arrives
+    and nothing anywhere says why (CLAUDE.md rule 3)."""
+
+    def setUp(self):
+        super().setUp()
+        self.write_tokens(refresh_token_expires_at=time.time() + 7_776_000)
+        self.out_dir = Path(self._tmp) / "fits"
+
+    def test_an_activity_older_than_last_seen_but_inside_the_window_is_fetched(self):
+        recorded = [_recorded_activity(555002, "2026-09-08 15:00:00")]  # Tuesday
+        mock_client = MagicMock()
+        mock_client.connectapi.return_value = recorded
+        mock_client.download.return_value = _valid_zip_bytes()
+
+        with patch.object(garmin.garth, "Client", return_value=mock_client):
+            got = garmin.fetch_new("2026-09-10T09:00:00Z", str(self.out_dir))
+
+        self.assertEqual(got, [str(self.out_dir / "555002.zip")])
+
+    def test_the_window_is_bounded_not_a_full_history_rescan(self):
+        """Bounded, so the 6-hourly tick never walks the whole account."""
+        recorded = [_recorded_activity(444000, "2026-06-01 10:00:00")]
+        mock_client = MagicMock()
+        mock_client.connectapi.return_value = recorded
+        mock_client.download.return_value = _valid_zip_bytes()
+
+        with patch.object(garmin.garth, "Client", return_value=mock_client):
+            got = garmin.fetch_new("2026-09-10T09:00:00Z", str(self.out_dir))
+
+        self.assertEqual(got, [], "months old: outside the window, not re-fetched")
+        mock_client.download.assert_not_called()
+
+    def test_a_re_listed_activity_is_never_downloaded_twice(self):
+        """What makes the window free: the id-on-disk skip already dedupes."""
+        self.out_dir.mkdir(parents=True)
+        (self.out_dir / "555002.zip").write_bytes(_valid_zip_bytes())
+        recorded = [_recorded_activity(555002, "2026-09-08 15:00:00")]
+        mock_client = MagicMock()
+        mock_client.connectapi.return_value = recorded
+
+        with patch.object(garmin.garth, "Client", return_value=mock_client):
+            got = garmin.fetch_new("2026-09-10T09:00:00Z", str(self.out_dir))
+
+        self.assertEqual(got, [])
+        mock_client.download.assert_not_called()
+
+
+class TestLoginNeverRaisesIntoTheSetupWindow(PuckdGarminTestCase):
+    """login() is wired straight to a button in the native setup window. A
+    dropped wifi is requests.ConnectionError, not a GarthException, and used
+    to come out as a traceback rather than a line of copy."""
+
+    def test_a_network_error_is_the_same_one_line_of_copy(self):
+        with patch.object(garmin.garth, "Client", return_value=MagicMock()), \
+             patch.object(garmin.garth.sso, "login",
+                          side_effect=OSError("Network is unreachable")):
+            result = garmin.login("nick@example.com", "hunter2")
+        self.assertFalse(result.ok)
+        self.assertFalse(result.needs_mfa)
+        self.assertEqual(result.error, garmin.LOGIN_FAILED_COPY)
+
+    def test_a_garmin_page_change_is_not_a_traceback_either(self):
+        with patch.object(garmin.garth, "Client", return_value=MagicMock()), \
+             patch.object(garmin.garth.sso, "login",
+                          side_effect=AttributeError("'NoneType' has no group")):
+            result = garmin.login("nick@example.com", "hunter2")
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error, garmin.LOGIN_FAILED_COPY)
+
+    def test_the_password_is_never_written_to_the_token_dir(self):
+        """docs/sync-agent-plan.md's whole token model: the password is used
+        for one exchange and never produced again."""
+        fake_oauth1, fake_oauth2 = MagicMock(), MagicMock()
+        mock_client = MagicMock()
+        with patch.object(garmin.garth, "Client", return_value=mock_client), \
+             patch.object(garmin.garth.sso, "login",
+                          return_value=(fake_oauth1, fake_oauth2)):
+            self.assertTrue(garmin.login("nick@example.com", "hunter2").ok)
+        for path in Path(self._tmp).rglob("*"):
+            if path.is_file():
+                self.assertNotIn(b"hunter2", path.read_bytes(), str(path))
+
+
 if __name__ == "__main__":
     unittest.main()

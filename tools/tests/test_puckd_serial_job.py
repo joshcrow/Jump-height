@@ -676,5 +676,81 @@ class TestReadStatsTraceFullAndStorageDown(unittest.TestCase):
         self.assertEqual(stats["vbat_mv"], 3920)
 
 
+# ------------------------------------------------- the port going away
+
+class _VanishedDevice:
+    """The cable pulled mid-job. pyserial answers a read on a device node
+    that no longer exists with SerialException -- a subclass of OSError, and
+    NOT the TimeoutError every command() call site in serial_job.py catches.
+    Modelled with the exact errno macOS produces (ENODEV, "Device not
+    configured"), raised from drain_boot() because that is the first thing
+    every one of these entry points does after opening.
+
+    Before 2026-09-13 each of the four tests below raised out of the
+    function under test, through daemon.run_job_cycle(), through
+    daemon.run_forever(), and off the end of the daemon THREAD -- the menu
+    bar stayed up and syncing was dead with nothing saying so.
+    """
+
+    def __init__(self, port=None):
+        pass
+
+    def drain_boot(self, timeout=5.0):
+        raise OSError(6, "Device not configured")
+
+    def command(self, cmd, timeout=20.0):
+        raise OSError(6, "Device not configured")
+
+    def close(self):
+        pass
+
+
+class _UnopenableDevice:
+    """The port is gone before it is even opened -- find_puck_port() saw it
+    2 s ago, the rider unplugged it since."""
+
+    def __init__(self, port=None):
+        raise OSError(2, "No such file or directory")
+
+
+class TestPortVanishesMidCall(unittest.TestCase):
+    def test_read_stats_returns_an_error_reading_never_raises(self):
+        stats = serial_job.read_stats("/dev/cu.usbmodemGONE",
+                                      device_factory=_VanishedDevice)
+        self.assertIsNotNone(stats["error"])
+        self.assertIsNone(stats["batt_pct"])
+        self.assertIsNone(stats["stored_jumps"])
+
+    def test_read_src_is_none_never_raises(self):
+        self.assertIsNone(serial_job.read_src("/dev/cu.usbmodemGONE",
+                                              device_factory=_VanishedDevice))
+
+    def test_clear_puck_refuses_never_raises(self):
+        for factory in (_VanishedDevice, _UnopenableDevice):
+            with self.subTest(factory=factory.__name__):
+                result = serial_job.clear_puck("/dev/cu.usbmodemGONE",
+                                               device_factory=factory)
+                self.assertFalse(result.ok)
+                self.assertIsNone(result.stored_jumps_after)
+
+    def test_run_job_raises_pull_failed_marked_port_gone_not_a_bare_oserror(self):
+        for factory in (_VanishedDevice, _UnopenableDevice):
+            with self.subTest(factory=factory.__name__):
+                with tempfile.TemporaryDirectory() as td:
+                    with self.assertRaises(serial_job.PullFailed) as ctx:
+                        serial_job.run_job("/dev/cu.usbmodemGONE", td,
+                                           device_factory=factory)
+                    self.assertTrue(ctx.exception.port_gone)
+                    self.assertEqual([], list(Path(td).glob("*.zip")),
+                                     "nothing is written for a pull that never started")
+
+    def test_an_ordinary_pull_failure_is_not_marked_port_gone(self):
+        """The flag must separate "he unplugged it" from "the puck refused",
+        or the daemon's silence would swallow the failures Nick DOES need to
+        hear about."""
+        exc = serial_job.PullFailed("the puck refused 'jumps': ERR storage_down")
+        self.assertFalse(exc.port_gone)
+
+
 if __name__ == "__main__":
     unittest.main()

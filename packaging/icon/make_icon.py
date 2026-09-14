@@ -86,13 +86,30 @@ def draw_app_icon(size: int = 1024) -> Image.Image:
     return img
 
 
-def draw_menubar_icon(size: int) -> Image.Image:
-    """The wing alone, black on transparent (a template image)."""
+def draw_menubar_icon(size: int, state: str = "idle") -> Image.Image:
+    """The wing alone, black on transparent (a template image: macOS keeps
+    only the alpha), one drawing per glyph state. State is encoded by
+    redrawing the mark, never by a badge, and the mark stays solid mass so it
+    survives a busy wallpaper under Tahoe's transparent bar.
+
+        idle       the wing                       puck attached, nothing to do
+        dormant    the wing at 35 % opacity       no puck (Apple's own "disabled" opacity)
+        working    the wing with the water line   a job is running (reading / uploading / clearing)
+        attention  the wing with a dot below      Nick needs to do one thing
+    """
     s = size
     img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    d.polygon(_wing(s / 2, s * 0.62, s * 0.92), fill=(0, 0, 0, 255))
-    d.rectangle((s / 2 - max(1, s * 0.04), s * 0.45, s / 2 + max(1, s * 0.04), s * 0.62), fill=(0, 0, 0, 255))
+    a = 90 if state == "dormant" else 255
+    ink = (0, 0, 0, a)
+    cy = s * 0.56 if state in ("working", "attention") else s * 0.62
+    d.polygon(_wing(s / 2, cy, s * 0.92), fill=ink)
+    d.rectangle((s / 2 - max(1, s * 0.04), cy - s * 0.17, s / 2 + max(1, s * 0.04), cy), fill=ink)
+    if state == "working":
+        d.rectangle((s * 0.16, s * 0.84, s * 0.84, s * 0.84 + max(1, s * 0.09)), fill=ink)
+    elif state == "attention":
+        r = s * 0.11
+        d.ellipse((s / 2 - r, s * 0.80 - r, s / 2 + r, s * 0.80 + r), fill=ink)
     return img
 
 
@@ -109,8 +126,10 @@ def main() -> int:
         out = HERE / "JumpHeight.icns"
         subprocess.run(["iconutil", "-c", "icns", str(iconset), "-o", str(out)], check=True)
     ASSETS.mkdir(parents=True, exist_ok=True)
-    draw_menubar_icon(18).save(ASSETS / "menubar.png")
-    draw_menubar_icon(36).save(ASSETS / "menubar@2x.png")
+    for state in ("idle", "dormant", "working", "attention"):
+        suffix = "" if state == "idle" else f"-{state}"
+        draw_menubar_icon(18, state).save(ASSETS / f"menubar{suffix}.png")
+        draw_menubar_icon(36, state).save(ASSETS / f"menubar{suffix}@2x.png")
     print("wrote", out, "and", ASSETS / "menubar.png")
     return 0
 

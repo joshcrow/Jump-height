@@ -719,5 +719,55 @@ class TestFlashDefaultVolumeExists(unittest.TestCase):
             self.assertTrue(volume_path.is_dir())
 
 
+class TestPortReturnPicksTheBoardItFlashed(unittest.TestCase):
+    """Stage 5 waits for "a /dev/cu.usbmodem* port" and then reads src= off
+    whatever it finds. On a bench with more than one board that is a coin
+    toss, and the coin decides whether a flash that never landed reports
+    PASS -- CLAUDE.md ss1: "Unpinned BLE tools answer from whichever replies
+    first -- this has corrupted two analyses and flashed one wrong board."
+    The port we sent `uf2` to is preferred whenever it comes back."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmpdir.name)
+        self.addCleanup(self._tmpdir.cleanup)
+
+    def _flash_with_ports(self, ports, port_path="/dev/cu.usbmodem101"):
+        uf2 = _make_uf2(self.tmp)
+        manifest = dict(REAL_MANIFEST, sha256=_sha256_of(uf2))
+        calls = []
+        volume = self.tmp / "XIAO-SENSE"
+        volume.mkdir()
+        # Every port answers info with the NEW src, so a wrong pick cannot
+        # be caught by the src check -- only by which port was opened.
+        scripts = {p: {"info": [f"INFO src={manifest['src']}"]} for p in ports}
+        scripts[port_path] = {"info": [f"INFO src={manifest['src']}"]}
+        clock = _FakeClock()
+        result = flash.flash(
+            port_path, uf2, manifest,
+            device_factory=_device_factory(scripts, calls),
+            scan_ports=lambda: list(ports),
+            volume_path=volume,
+            list_disks=lambda: "",
+            mount_volume=lambda: None,
+            copy_file=lambda src, dst: None,
+            sleep=clock.sleep, now=clock.now)
+        self.assertTrue(result.ok, result.error)
+        # calls records ("command", port, cmd, timeout) per _FakeDevice.
+        info_ports = [c[1] for c in calls if c[0] == "command" and c[2] == "info"]
+        return info_ports
+
+    def test_the_original_port_wins_over_a_neighbour_that_sorts_first(self):
+        ports = ["/dev/cu.usbmodem001", "/dev/cu.usbmodem101"]
+        self.assertEqual(["/dev/cu.usbmodem101"], self._flash_with_ports(ports))
+
+    def test_a_renumbered_port_still_works_and_is_deterministic(self):
+        """macOS does sometimes hand back a different /dev/cu.usbmodemN.
+        With the original absent the fallback must be the SORTED first, not
+        scan order, so two runs on one bench never disagree."""
+        ports = ["/dev/cu.usbmodem900", "/dev/cu.usbmodem200"]
+        self.assertEqual(["/dev/cu.usbmodem200"], self._flash_with_ports(ports))
+
+
 if __name__ == "__main__":
     unittest.main()

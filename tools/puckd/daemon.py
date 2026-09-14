@@ -252,6 +252,10 @@ class DaemonConfig:
     flash_module: object = None
     fetch_uf2_fn: "Callable[[str, str, Path], Optional[Path]]" = _default_fetch_uf2
     share_fn: "Callable[[str], bool]" = upload.ensure_shared
+    # Called with "reading" / "uploading" / "emptying" / "updating" as the job
+    # moves, and None when it is done -- run_forever() wires it to the menu
+    # bar so the glyph and the first panel line follow the work.
+    on_phase: "Callable[[Optional[str]], None]" = lambda phase: None
     inbox_dir: str = INBOX_DIR
     fits_dir: str = FITS_DIR
     garmin_interval_s: float = GARMIN_INTERVAL_S
@@ -350,8 +354,25 @@ def _drive_needs_you_if_due(cfg: DaemonConfig) -> None:
     pending = _pending_bundles(cfg)
     if not pending or cfg.runtime.get("drive_needs_you_sent"):
         return
-    oldest_age = cfg.now() - min(p.stat().st_mtime for p in pending)
-    if oldest_age >= PENDING_MAX_AGE_S or not upload.is_authorized():
+    # stat() each one defensively: retry_spool() moves a confirmed bundle to
+    # spool/sent/ between the glob above and this read, so a plain
+    # comprehension can raise FileNotFoundError on the very tick an upload
+    # finally succeeded -- the one tick where nothing is wrong at all.
+    mtimes = []
+    for p in pending:
+        try:
+            mtimes.append(p.stat().st_mtime)
+        except OSError:
+            pass
+    if not mtimes:
+        return
+    oldest_age = cfg.now() - min(mtimes)
+    authorized = upload.is_authorized()
+    if not authorized and not (Path(cfg.spool_dir) / SENT_DIRNAME).is_dir():
+        # Drive was never connected at all: that is setup, which the window
+        # is already asking for. "reconnect" would be a lie.
+        return
+    if oldest_age >= PENDING_MAX_AGE_S or not authorized:
         _fire_needs_you(cfg, NEEDS_YOU_UPLOAD_LINE, NEEDS_YOU_UPLOAD_ACTION)
         cfg.runtime["drive_needs_you_sent"] = True
 
@@ -392,6 +413,13 @@ class JobCycleReport:
     bundle_path: "Optional[Path]"
     src: "Optional[str]"
     empty: bool = False   # the puck had no ride: nothing pulled, nothing said
+    # The `stats` this cycle ALREADY read off the puck before doing anything
+    # else. Carried out so run_forever() can seed the attachment session
+    # from it instead of opening the port a fifth time for the same numbers:
+    # every open pays Device.drain_boot()'s 5 s window (docs/STATUS.md:703,
+    # "five opens per cycle; 28 s on the fake"), and a battery percentage
+    # measured 30 s ago is the same percentage.
+    stats: "Optional[dict]" = None
 
 
 def _maybe_flash(
@@ -428,6 +456,7 @@ def _maybe_flash(
     )
     if uf2_path is None:
         return False, None
+    cfg.on_phase("updating")
     result = cfg.flash_module.flash(
         port_path, uf2_path, manifest, device_factory=cfg.device_factory
     )
@@ -480,25 +509,50 @@ def run_job_cycle(port_path: str, cfg: DaemonConfig) -> JobCycleReport:
     the puck's data). The bundle is already on disk by then; the spool
     retry owns it.
     """
+    try:
+        return _run_job_cycle(port_path, cfg)
+    finally:
+        cfg.on_phase(None)
+
+
+def _run_job_cycle(port_path: str, cfg: DaemonConfig) -> JobCycleReport:
+    cfg.on_phase("reading")
     pre = serial_job.read_stats(port_path, device_factory=cfg.device_factory)
     if pre.get("stored_jumps") == 0 and pre.get("trace_bytes") == 0:
         src = serial_job.read_src(port_path, device_factory=cfg.device_factory)
-        flashed, needs_you = _maybe_flash(port_path, src, cfg)
+        try:
+            flashed, needs_you = _maybe_flash(port_path, src, cfg)
+        except Exception as exc:  # noqa: BLE001 -- the flash leg is the one
+            # branch of the empty-puck path that reaches the network and a
+            # third module; it must not be able to end the loop. (The other
+            # _maybe_flash() call, below, is already inside the broad try.)
+            _log(cfg, f"update check raised: {exc!r}")
+            flashed, needs_you = False, None
         return JobCycleReport(
             port=port_path, pulled=False, verified=None, jumps=0, reasons=[],
             uploaded=False, cleared=False, flashed=flashed, needs_you=needs_you,
-            bundle_path=None, src=src, empty=True,
+            bundle_path=None, src=src, empty=True, stats=pre,
         )
 
     try:
         result = serial_job.run_job(port_path, cfg.spool_dir, device_factory=cfg.device_factory)
     except serial_job.PullFailed as exc:
         _log(cfg, "pull failed: " + "; ".join(exc.reasons))
-        _fire_needs_you(cfg, PUCK_RESET_LINE, PUCK_RESET_ACTION)
+        # The port going away is not something Nick did wrong and not
+        # something "press the button twice" fixes -- he pulled the cable, or
+        # macOS renumbered the device. Nothing was cleared, the ride is still
+        # on the puck, and the next plug-in runs the whole job again (G3), so
+        # this one is silent. Every OTHER structural failure still gets the
+        # one "check the puck" line.
+        needs_you = None if getattr(exc, "port_gone", False) else (
+            PUCK_RESET_LINE, PUCK_RESET_ACTION)
+        if needs_you is not None:
+            _fire_needs_you(cfg, *needs_you)
         return JobCycleReport(
             port=port_path, pulled=False, verified=None, jumps=None,
             reasons=list(exc.reasons), uploaded=False, cleared=False, flashed=False,
-            needs_you=(PUCK_RESET_LINE, PUCK_RESET_ACTION), bundle_path=None, src=None,
+            needs_you=needs_you, bundle_path=None, src=None,
+            stats=pre,
         )
 
     uploaded = False
@@ -510,6 +564,7 @@ def run_job_cycle(port_path: str, cfg: DaemonConfig) -> JobCycleReport:
         _log(cfg, f"unverified: {bundle_path.name}: " + "; ".join(result.reasons))
 
     try:
+        cfg.on_phase("uploading")
         uploaded, sent_path = _upload_bundle(cfg, bundle_path)
         if uploaded:
             bundle_path = sent_path
@@ -517,6 +572,7 @@ def run_job_cycle(port_path: str, cfg: DaemonConfig) -> JobCycleReport:
         if not uploaded:
             _drive_needs_you_if_due(cfg)
         elif result.verified:
+            cfg.on_phase("emptying")
             clear_result = serial_job.clear_puck(port_path, device_factory=cfg.device_factory)
             cleared = clear_result.ok
             if not cleared:
@@ -536,7 +592,7 @@ def run_job_cycle(port_path: str, cfg: DaemonConfig) -> JobCycleReport:
     return JobCycleReport(
         port=port_path, pulled=True, verified=result.verified, jumps=result.jumps,
         reasons=list(result.reasons), uploaded=uploaded, cleared=cleared, flashed=flashed,
-        needs_you=needs_you, bundle_path=bundle_path, src=result.src,
+        needs_you=needs_you, bundle_path=bundle_path, src=result.src, stats=pre,
     )
 
 
@@ -572,8 +628,19 @@ def _run_garmin(cfg: DaemonConfig) -> None:
         since_iso = g.last_seen(store)
         out_dir = home / FITS_CACHE_DIRNAME
         downloaded = g.fetch_new(since_iso, out_dir)
-        for fit_path in downloaded:
-            upload.upload(fit_path, cfg.fits_dir)
+        # Upload every FIT on disk that Drive has not confirmed, not just
+        # the ones downloaded THIS tick. The download side dedupes on the
+        # file already being there, so a FIT whose upload failed once (wifi
+        # down for the ten seconds rclone ran) was never offered to Drive
+        # again -- it sat in the cache looking exactly like a success. The
+        # `.sent` marker is the same idea as the puck spool's sent/
+        # directory: a confirmation on disk, not an assumption.
+        for fit_path in sorted(Path(out_dir).glob("*.zip")):
+            marker = fit_path.with_name(fit_path.name + ".sent")
+            if marker.exists():
+                continue
+            if getattr(upload.upload(fit_path, cfg.fits_dir), "ok", False):
+                marker.write_text("")
         if downloaded:
             g.mark_seen(store, datetime.now().astimezone().isoformat(timespec="seconds"))
     except Exception:
@@ -602,7 +669,20 @@ def poll_attached(port_path: str, cfg: DaemonConfig, session: AttachmentSession)
     conditions read off the SAME `stats` reply, never a stale one, and
     `session.charged_notified` makes it exactly-once per attachment even if
     the poll keeps running for hours afterward."""
-    stats = serial_job.read_stats(port_path, device_factory=cfg.device_factory)
+    return apply_stats(
+        serial_job.read_stats(port_path, device_factory=cfg.device_factory),
+        cfg, session)
+
+
+def apply_stats(stats: dict, cfg: DaemonConfig, session: AttachmentSession) -> dict:
+    """poll_attached()'s half that does not open the port, so a `stats`
+    ALREADY read this tick (run_job_cycle()'s own first reading) can feed
+    the charged rule and the menu bar without paying a second
+    Device.drain_boot() -- 5 s per open, five opens a cycle, measured
+    (docs/STATUS.md:703). Pure bookkeeping: same transition rule, same
+    exactly-once flag."""
+    if not isinstance(stats, dict):
+        return {}
     chg = stats.get("chg")
     pct = stats.get("batt_pct")
     if (
@@ -640,7 +720,15 @@ def _update_menubar(app, cfg: DaemonConfig, session: "Optional[AttachmentSession
     pct = session.last_puck_pct if session else None
     charging = session.last_puck_charging if session else False
     attention = bool(cfg.runtime.get("needs_you_active"))
-    app.set_state(pct, charging, last_ride_dt, last_jumps, attention)
+    phase = cfg.runtime.get("phase")
+    try:
+        app.set_state(pct, charging, last_ride_dt, last_jumps, attention,
+                      phase=phase, attached=session is not None)
+    except Exception as exc:  # noqa: BLE001 -- set_state() touches AppKit
+        # (NSStatusItem) from the POLL THREAD, not the main thread. rumps
+        # tolerates that in practice, but a label that fails to redraw must
+        # never be able to cost the job that already succeeded.
+        _log(cfg, f"menu bar update raised: {exc!r}")
 
 
 # ----------------------------------------------------------------- the loop
@@ -668,6 +756,12 @@ def run_forever(
     repo's docs.
     """
     current_port: "Optional[str]" = None
+    session_ref: "list" = [None]
+
+    def on_phase(phase):
+        cfg.runtime["phase"] = phase
+        _update_menubar(app, cfg, session_ref[0])
+    cfg.on_phase = on_phase
     session: "Optional[AttachmentSession]" = None
     last_garmin = cfg.now()
     last_spool = cfg.now()
@@ -675,39 +769,66 @@ def run_forever(
     i = 0
     while max_iterations is None or i < max_iterations:
         i += 1
-        port = find_port()
+        try:
+            port = find_port()
+        except Exception as exc:  # noqa: BLE001 -- pyserial's comports() has
+            # more failure modes than the ImportError find_puck_port() is
+            # written for (a device node disappearing under the IOKit walk).
+            # "No puck this tick" is the honest reading of a scan that did
+            # not complete, and the loop must outlive it either way.
+            _log(cfg, f"port scan raised (continuing): {exc!r}")
+            port = None
         now = cfg.now()
 
-        if port and port != current_port:
-            current_port = port
-            session = AttachmentSession(port=port, last_stats_poll=now)
-            report = run_job_cycle(port, cfg)
-            if report.pulled and report.uploaded and report.verified:
-                _record_ride(cfg, report.jumps or 0, report.bundle_path)
-            if on_cycle is not None:
-                on_cycle(report)
-            if report.uploaded:
-                retry_spool(cfg)        # the network is evidently back
-            poll_attached(port, cfg, session)
-            _update_menubar(app, cfg, session)
-            last_garmin = now
-            _run_garmin(cfg)
-        elif port and port == current_port and session is not None:
-            if now - session.last_stats_poll >= STATS_POLL_INTERVAL_S:
-                session.last_stats_poll = now
-                poll_attached(port, cfg, session)
+        try:
+            if port and port != current_port:
+                current_port = port
+                session = AttachmentSession(port=port, last_stats_poll=now)
+                session_ref[0] = session
+                report = run_job_cycle(port, cfg)
+                if report.pulled and report.uploaded and report.verified:
+                    _record_ride(cfg, report.jumps or 0, report.bundle_path)
+                if on_cycle is not None:
+                    on_cycle(report)
+                if report.uploaded:
+                    retry_spool(cfg)        # the network is evidently back
+                # The cycle's own opening `stats` is this attachment's first
+                # battery reading -- reused instead of opening the port again
+                # for the same numbers (see apply_stats()).
+                apply_stats(report.stats or {}, cfg, session)
                 _update_menubar(app, cfg, session)
-        elif not port and current_port is not None:
-            current_port = None
-            session = None
-            _update_menubar(app, cfg, None)
+                last_garmin = now
+                _run_garmin(cfg)
+            elif port and port == current_port and session is not None:
+                if now - session.last_stats_poll >= STATS_POLL_INTERVAL_S:
+                    session.last_stats_poll = now
+                    poll_attached(port, cfg, session)
+                    _update_menubar(app, cfg, session)
+            elif not port and current_port is not None:
+                current_port = None
+                session = None
+                session_ref[0] = None
+                _update_menubar(app, cfg, None)
 
-        if now - last_garmin >= cfg.garmin_interval_s:
-            last_garmin = now
-            _run_garmin(cfg)
-        if now - last_spool >= SPOOL_RETRY_INTERVAL_S:
-            last_spool = now
-            retry_spool(cfg)
+            if now - last_garmin >= cfg.garmin_interval_s:
+                last_garmin = now
+                _run_garmin(cfg)
+            if now - last_spool >= SPOOL_RETRY_INTERVAL_S:
+                last_spool = now
+                retry_spool(cfg)
+        except Exception as exc:  # noqa: BLE001 -- THE LAST LINE OF DEFENCE.
+            # main() runs this function on a DAEMON THREAD behind rumps: an
+            # exception that reaches here ends the thread, and nothing says
+            # so -- the menu bar stays up, the icon stays idle, and syncing
+            # is dead until the app is quit and reopened. That is exactly
+            # the silent failure CLAUDE.md rule 3 forbids. Measured
+            # 2026-09-13 with a device_factory that raises OSError (an
+            # unplug mid-cycle): the loop died on the first tick.
+            # Everything below this line therefore survives one bad tick and
+            # tries again in POLL_INTERVAL_S, with the reason on disk for
+            # Josh. current_port is deliberately left as it is: a tick that
+            # blew up is retried on the next arrival, not re-run in a spin.
+            _log(cfg, f"loop tick raised (continuing): {exc!r}")
 
         cfg.sleep(POLL_INTERVAL_S)
 

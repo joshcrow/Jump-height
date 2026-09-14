@@ -356,13 +356,25 @@ def flash(
                             f"copy to {dest} failed: {exc}")
 
     # ---- Stage 5: wait for a /dev/cu.usbmodem* port to return -------------
+    # THE PUCK WE JUST FLASHED, not "a puck". macOS usually re-enumerates the
+    # same board at the same /dev/cu.usbmodemN, so port_path itself is
+    # preferred whenever it is back; only if it is not do we fall back to
+    # another usbmodem, and then to the LOWEST-sorted one rather than
+    # whatever order scan_ports() happened to return. On Nick's Mac there is
+    # one board and every rule picks the same port; on a bench with three
+    # (CLAUDE.md ss1: "Three boards can advertise at once ... this has
+    # flashed one wrong board") the old first-match could read `info` off a
+    # neighbour and report src= from a board this flash never touched --
+    # a wrong PASS, not a wrong failure.
     deadline = now() + port_wait_s
     new_port = None
     while new_port is None:
-        for candidate in scan_ports():
-            if fnmatch.fnmatch(candidate, "/dev/cu.usbmodem*"):
-                new_port = candidate
-                break
+        candidates = sorted(
+            c for c in scan_ports() if fnmatch.fnmatch(c, "/dev/cu.usbmodem*"))
+        if port_path in candidates:
+            new_port = port_path
+        elif candidates:
+            new_port = candidates[0]
         if new_port is not None or now() >= deadline:
             break
         sleep(poll_interval_s)

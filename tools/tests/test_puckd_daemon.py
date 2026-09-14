@@ -188,6 +188,7 @@ class _FakeGarmin:
         self.ever = ever
         self.fetch_calls = []
         self.marked = []
+        self.to_download = []   # activity ids fetch_new() should write
 
     def is_signed_in(self):
         return self.signed_in
@@ -197,7 +198,15 @@ class _FakeGarmin:
 
     def fetch_new(self, since_iso, out_dir):
         self.fetch_calls.append((since_iso, out_dir))
-        return []
+        out = Path(out_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        written = []
+        for activity_id in self.to_download:
+            dest = out / f"{activity_id}.zip"
+            if not dest.exists():
+                dest.write_bytes(b"PK-fit-zip-stand-in")
+            written.append(str(dest))
+        return written
 
     def last_seen(self, store):
         return "1970-01-01T00:00:00Z"
@@ -452,11 +461,11 @@ class TestRunJobCycleUploadFailure(_DaemonTestBase):
         self.assertTrue(report.bundle_path.exists())  # nothing lost
         self.assertFalse(report.uploaded)
         self.assertFalse(report.cleared)
-        # A missing rclone IS "not authorized" from where Nick sits: one
-        # "reconnect Google Drive", and the bundle waits.
+        # Drive was never connected on this Mac (no spool/sent/), so this is
+        # setup's job, not a "Needs you": the bundle waits, nothing is said.
         self.assertEqual(report.needs_you, None)
-        self.assertEqual(self.recorder.titled("Needs you"),
-                         [("Needs you: reconnect Google Drive", "Open Set up in the menu bar.")])
+        self.assertEqual(self.recorder.titled("Needs you"), [])
+        self.assertEqual([p.name for p in daemon._pending_bundles(cfg)], [report.bundle_path.name])
 
 
 class TestRunJobCyclePullFailed(_DaemonTestBase):
@@ -751,6 +760,171 @@ class TestRunForeverRetryFromSpool(_DaemonTestBase):
 
         self.assertEqual(len(reports), 1, "one job for one continuous attachment")
         self.assertEqual(len(self.recorder.titled("Ride synced")), 1)
+
+
+# ------------------------------------- the loop outliving a bad tick
+
+class _VanishedDevice:
+    """A port that answers every command with macOS's ENODEV -- the cable
+    pulled between the poll that found it and the job that uses it. Same
+    shape as test_puckd_serial_job.py's device of the same name, written
+    fresh here (CLAUDE.md: never import another test file's fixture)."""
+
+    def __init__(self, port=None):
+        pass
+
+    def drain_boot(self, timeout=5.0):
+        raise OSError(6, "Device not configured")
+
+    def command(self, cmd, timeout=20.0):
+        raise OSError(6, "Device not configured")
+
+    def close(self):
+        pass
+
+
+class TestLoopSurvivesAnUnpluggedPuck(_DaemonTestBase):
+    """main() runs run_forever() on a DAEMON THREAD behind rumps. An
+    exception that reaches the top of the loop ends that thread, and the
+    menu bar -- owning the main thread -- stays up looking perfectly
+    healthy. Measured 2026-09-13: an unplug mid-cycle did exactly that on
+    the first tick. These are the tests that fail on a revert."""
+
+    def test_run_job_cycle_returns_a_report_instead_of_raising(self):
+        cfg = self.make_cfg(device_factory=_VanishedDevice)
+        report = daemon.run_job_cycle("/dev/cu.usbmodemGONE", cfg)
+        self.assertFalse(report.pulled)
+        self.assertFalse(report.cleared)
+        self.assertFalse(report.uploaded)
+
+    def test_an_unplug_is_silent_not_a_needs_you(self):
+        """"check the puck" is the wrong thing to say to a man holding the
+        puck he just unplugged. Nothing was cleared, so the next plug-in
+        re-runs the whole job (G3)."""
+        cfg = self.make_cfg(device_factory=_VanishedDevice)
+        report = daemon.run_job_cycle("/dev/cu.usbmodemGONE", cfg)
+        self.assertIsNone(report.needs_you)
+        self.assertEqual([], self.recorder.titled("Needs you"))
+
+    def test_run_forever_keeps_ticking_and_leaves_the_reason_on_disk(self):
+        cfg = self.make_cfg(device_factory=_VanishedDevice)
+        reports = []
+        daemon.run_forever(cfg, find_port=lambda: "/dev/cu.usbmodemGONE",
+                           on_cycle=reports.append, max_iterations=3)
+        self.assertEqual(len(reports), 1, "one attachment, one attempt, loop alive")
+        log = (self.home / daemon.LOG_FILENAME).read_text()
+        self.assertIn("pull failed", log, "silence to Nick, but never to Josh's log")
+
+    def test_a_find_port_that_raises_does_not_end_the_loop(self):
+        cfg = self.make_cfg()
+        ticks = {"n": 0}
+
+        def exploding_find_port():
+            ticks["n"] += 1
+            raise RuntimeError("IOKit went away under comports()")
+
+        daemon.run_forever(cfg, find_port=exploding_find_port, max_iterations=4)
+        self.assertEqual(ticks["n"], 4, "every tick ran; none killed the thread")
+        log = (self.home / daemon.LOG_FILENAME).read_text()
+        self.assertIn("port scan raised", log)
+
+    def test_an_exploding_menu_bar_cannot_cost_the_loop(self):
+        class _BadApp:
+            def set_state(self, *a):
+                raise RuntimeError("AppKit off the main thread")
+
+        cfg = self.make_cfg()
+        daemon.run_forever(cfg, find_port=lambda: None, app=_BadApp(),
+                           max_iterations=2)
+
+
+class TestOneFewerPortOpenPerCycle(_DaemonTestBase):
+    """Every port open pays Device.drain_boot()'s 5 s window; the cycle used
+    to open the port a fifth time immediately after the job purely to read a
+    battery percentage it had already read (docs/STATUS.md:703). The reading
+    is carried out of the cycle instead."""
+
+    def test_the_cycle_carries_its_opening_stats_out(self):
+        proc, port = _spawn_fake("session")
+        try:
+            with patch.dict(os.environ, self.rclone_env()):
+                cfg = self.make_cfg()
+                report = daemon.run_job_cycle(port, cfg)
+        finally:
+            _kill(proc)
+        self.assertIsNotNone(report.stats)
+        self.assertIsNotNone(report.stats["batt_pct"])
+
+    def test_run_forever_does_not_reopen_the_port_for_the_battery(self):
+        opens = {"n": 0}
+        real_read_stats = daemon.serial_job.read_stats
+
+        def counting_read_stats(port, **kw):
+            opens["n"] += 1
+            return real_read_stats(port, **kw)
+
+        proc, port = _spawn_fake("session")
+        try:
+            with patch.dict(os.environ, self.rclone_env()), \
+                 patch.object(daemon.serial_job, "read_stats", counting_read_stats):
+                cfg = self.make_cfg()
+                daemon.run_forever(cfg, find_port=lambda: port, max_iterations=1)
+        finally:
+            _kill(proc)
+        self.assertEqual(opens["n"], 1,
+                         "one plug-in tick reads stats through read_stats exactly "
+                         "once; the menu bar reuses that reading")
+
+    def test_the_charged_rule_is_unchanged_by_the_reuse(self):
+        """apply_stats() is poll_attached()'s own bookkeeping, so the
+        1->0-at->=95% edge still fires exactly once per attachment."""
+        cfg = self.make_cfg()
+        session = daemon.AttachmentSession(port="/dev/x")
+        daemon.apply_stats({"chg": 1, "batt_pct": 96}, cfg, session)
+        self.assertEqual([], self.recorder.titled("Puck charged"))
+        daemon.apply_stats({"chg": 0, "batt_pct": 96}, cfg, session)
+        daemon.apply_stats({"chg": 0, "batt_pct": 96}, cfg, session)
+        self.assertEqual(1, len(self.recorder.titled("Puck charged")))
+
+
+class TestGarminFitsAreRetriedUntilDriveConfirms(_DaemonTestBase):
+    """A FIT whose upload failed once was never offered to Drive again: the
+    next fetch_new() skips the id because the file is already in the cache,
+    and the leg had no other record of what had actually landed. It looked
+    exactly like a success -- the silent failure CLAUDE.md rule 3 is about,
+    on the one leg nobody watches."""
+
+    def _cfg(self, short_flag=None):
+        g = _FakeGarmin(signed_in=True)
+        g.to_download = [777001]
+        return g, self.make_cfg(garmin_module=g)
+
+    def test_a_failed_fit_upload_is_retried_on_the_next_tick(self):
+        marker = self.tmp / "short.flag"
+        marker.write_text("down")
+        env = self.rclone_env(short_flag=marker)
+        g, cfg = self._cfg()
+        fits = self.home / daemon.FITS_CACHE_DIRNAME
+
+        with patch.dict(os.environ, env):
+            daemon._run_garmin(cfg)
+            self.assertFalse((fits / "777001.zip.sent").exists(),
+                             "nothing claims sent while Drive has not confirmed")
+            marker.unlink()                       # the wifi comes back
+            daemon._run_garmin(cfg)
+
+        self.assertTrue((fits / "777001.zip.sent").exists(),
+                        "the second tick re-offered the same FIT and confirmed it")
+
+    def test_a_confirmed_fit_is_never_uploaded_twice(self):
+        g, cfg = self._cfg()
+        fits = self.home / daemon.FITS_CACHE_DIRNAME
+        with patch.dict(os.environ, self.rclone_env()):
+            daemon._run_garmin(cfg)
+            first = list(fits.glob("*.sent"))
+            daemon._run_garmin(cfg)
+        self.assertEqual(1, len(first))
+        self.assertEqual(1, len(list(fits.glob("*.sent"))))
 
 
 if __name__ == "__main__":

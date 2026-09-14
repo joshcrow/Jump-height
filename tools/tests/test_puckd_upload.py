@@ -23,6 +23,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent.parent
@@ -373,6 +374,35 @@ class TestRcloneBinaryResolution(UploadTestBase):
             result = upload.upload(local, "inbox")
         self.assertTrue(result.ok, result.error)
         self.assertEqual(self.rig.remote_file_bytes("inbox", "ride.zip"), b"q" * 12)
+
+
+class TestTheBinaryDisappearingMidUpload(UploadTestBase):
+    """PUCKD_RCLONE points INSIDE the app bundle. A second open of the .dmg
+    replaces that bundle, so the binary can be there for `copy` and gone by
+    `lsjson`. G4 is unambiguous about what an unread lsjson means -- no
+    lsjson, no clear -- and it has to arrive as ok=False, never as an
+    exception escaping into the job."""
+
+    def test_rclone_vanishing_between_copy_and_lsjson_is_ok_false_not_a_raise(self):
+        local = self.make_local_file("ride.zip", b"a" * 64)
+        real_run = upload._run
+        state = {"n": 0}
+
+        def run_then_vanish(args, timeout):
+            state["n"] += 1
+            if args and args[0] == "lsjson":
+                raise upload.RcloneNotFound("no rclone binary any more")
+            return real_run(args, timeout)
+
+        with _env(self.rig.base_env()), \
+             patch.object(upload, "_run", run_then_vanish):
+            result = upload.upload(local, "inbox")
+
+        self.assertFalse(result.ok)
+        self.assertIn("lsjson", result.error.lower())
+        # The copy itself DID land -- the retry re-uploads it and confirms
+        # then; what must not happen is a clear, or a crash.
+        self.assertEqual(self.rig.remote_file_bytes("inbox", "ride.zip"), b"a" * 64)
 
 
 if __name__ == "__main__":

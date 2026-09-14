@@ -34,17 +34,55 @@ DEFAULT_SETUP_URL = "http://127.0.0.1:17888/setup"
 
 Opener = Callable[[str], None]
 
-# The menu-bar image is tools/puckd/assets/menubar.png (a template image:
-# black on transparent, macOS recolours it). The TITLE beside it is empty
-# except when Nick needs to act, when it is a single "!".
-ICON_PATH = Path(__file__).resolve().parent / "assets" / "menubar.png"
-ICON_IDLE = None
-ICON_ATTENTION = "!"
+# The menu-bar glyph is one of four template images (black on transparent,
+# macOS recolours them) in tools/puckd/assets/ -- the state is encoded by
+# REDRAWING the wing, never by a badge or a title, and there are exactly
+# four states (docs/sync-agent-plan.md, the glyph table):
+#     idle       the wing              puck attached, up to date
+#     dormant    the wing at 35 %      no puck attached
+#     working    wing + water line     a job is running (the panel says which phase)
+#     attention  wing + dot            Nick needs to do one thing
+ASSETS = Path(__file__).resolve().parent / "assets"
+ICON_FILES = {
+    "idle": ASSETS / "menubar.png",
+    "dormant": ASSETS / "menubar-dormant.png",
+    "working": ASSETS / "menubar-working.png",
+    "attention": ASSETS / "menubar-attention.png",
+}
+ICON_PATH = ICON_FILES["idle"]
+ICON_IDLE = None          # no title beside the glyph, ever
+ICON_ATTENTION = None     # the dot in the glyph carries it
+
+# The panel's first line while a job runs: the phase in words, so 28 s of
+# work never looks like a stall (NNG: visibility of system status).
+PHASE_WORDS = {
+    "reading": "Reading the puck\u2026",
+    "uploading": "Uploading\u2026",
+    "emptying": "Emptying the puck\u2026",
+    "updating": "Updating the puck\u2026",
+}
+NO_PUCK = "No puck"
 
 
-def format_puck_line(puck_pct: Optional[int], charging: bool) -> str:
+def glyph_state(attention: bool, phase: Optional[str], attached: bool) -> str:
+    """Which of the four glyphs to show. Attention wins; then working; then
+    whether a puck is there at all."""
+    if attention:
+        return "attention"
+    if phase:
+        return "working"
+    return "idle" if attached else "dormant"
+
+
+def format_puck_line(puck_pct: Optional[int], charging: bool,
+                     phase: Optional[str] = None, attached: bool = True) -> str:
     """"Puck 86% · charging" — `charging` False drops the suffix. `None`
-    (no reading yet) renders as "Puck —"."""
+    (no reading yet) renders as "Puck —". While a job runs the line is the
+    phase in words; with no puck attached it is "No puck"."""
+    if phase:
+        return PHASE_WORDS.get(phase, PHASE_WORDS["reading"])
+    if not attached:
+        return NO_PUCK
     pct_text = "Puck —" if puck_pct is None else f"Puck {puck_pct}%"
     return f"{pct_text} · charging" if charging else pct_text
 
@@ -91,9 +129,10 @@ def build_app_class():
                      setup_url: str = DEFAULT_SETUP_URL,
                      opener: Opener = default_opener,
                      on_setup: "Optional[Callable[[], None]]" = None):
-            icon = str(ICON_PATH) if ICON_PATH.is_file() else None
+            icon = str(ICON_FILES["dormant"]) if ICON_FILES["dormant"].is_file() else None
             super().__init__("JumpHeight", title=format_icon_title(False),
                              icon=icon, template=True)
+            self._glyph = "dormant"
             self._spool_dir = Path(spool_dir)
             self._setup_url = setup_url
             self._opener = opener
@@ -109,12 +148,19 @@ def build_app_class():
 
         def set_state(self, puck_pct: Optional[int], charging: bool,
                       last_ride_dt: Optional[_dt.datetime],
-                      last_jumps: Optional[int], attention: bool) -> None:
-            """Rewrite the two status lines and the icon title. Called
-            after every stats read and every job."""
-            self._status_puck.title = format_puck_line(puck_pct, charging)
+                      last_jumps: Optional[int], attention: bool,
+                      phase: Optional[str] = None, attached: bool = True) -> None:
+            """Rewrite the two status lines and swap the glyph. Called
+            after every stats read, every phase change and every job."""
+            self._status_puck.title = format_puck_line(puck_pct, charging, phase, attached)
             self._status_ride.title = format_ride_line(last_ride_dt, last_jumps)
             self.title = format_icon_title(attention)
+            state = glyph_state(attention, phase, attached)
+            if state != self._glyph:
+                path = ICON_FILES[state]
+                if path.is_file():
+                    self.icon = str(path)
+                self._glyph = state
 
         def _open_rides_folder(self, _sender) -> None:
             self._opener(str(self._spool_dir))

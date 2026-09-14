@@ -160,11 +160,23 @@ class TheSpoolRetries(_DaemonTestBase):
         env["FAKE_RCLONE_NO_REMOTE"] = "1"
         with patch.dict(os.environ, env):
             cfg = self.make_cfg()
+            (self.spool / daemon.SENT_DIRNAME).mkdir(parents=True)   # Drive WAS connected once
             self._pending()
             daemon.retry_spool(cfg)
             daemon.retry_spool(cfg)
         self.assertEqual(self.recorder.calls,
                          [("Needs you: reconnect Google Drive", "Open Set up in the menu bar.")])
+
+    def test_drive_never_connected_is_setups_job_not_a_needs_you(self):
+        marker = self.tmp / "short.flag"
+        marker.write_text("down")
+        env = self.rclone_env(short_flag=marker)
+        env["FAKE_RCLONE_NO_REMOTE"] = "1"
+        with patch.dict(os.environ, env):
+            cfg = self.make_cfg()
+            self._pending()
+            daemon.retry_spool(cfg)
+        self.assertEqual(self.recorder.calls, [], "the setup window is already asking")
 
     def test_a_ride_waiting_a_day_says_reconnect(self):
         marker = self.tmp / "short.flag"
@@ -201,6 +213,30 @@ class TheSpoolRetries(_DaemonTestBase):
                 return None
             daemon.run_forever(cfg, find_port=tick_find_port, max_iterations=2)
         self.assertFalse(p.exists(), "retried without any puck being plugged in")
+
+
+class ThePanelSaysWhatIsHappening(_DaemonTestBase):
+    def test_phases_in_order_then_cleared(self):
+        phases = []
+        proc, port = _spawn_fake("session")
+        try:
+            with patch.dict(os.environ, self.rclone_env()):
+                cfg = self.make_cfg(on_phase=phases.append)
+                daemon.run_job_cycle(port, cfg)
+        finally:
+            _kill(proc)
+        self.assertEqual(phases, ["reading", "uploading", "emptying", None])
+
+    def test_glyph_and_words(self):
+        from puckd import menubar
+        self.assertEqual(menubar.glyph_state(False, None, False), "dormant")
+        self.assertEqual(menubar.glyph_state(False, None, True), "idle")
+        self.assertEqual(menubar.glyph_state(False, "uploading", True), "working")
+        self.assertEqual(menubar.glyph_state(True, "uploading", True), "attention")
+        self.assertEqual(menubar.format_puck_line(None, False, attached=False), "No puck")
+        self.assertEqual(menubar.format_puck_line(80, True, phase="emptying"), "Emptying the puck\u2026")
+        for state, path in menubar.ICON_FILES.items():
+            self.assertTrue(path.is_file(), f"{state} glyph missing: {path}")
 
 
 class GarminNagsOnlyTheSignedIn(_DaemonTestBase):

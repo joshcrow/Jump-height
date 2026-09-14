@@ -722,6 +722,28 @@ does not mark as required. With `drive.file` the app only sees folders it
 made, so after the first confirmed upload it shares its top-level Drive
 folder with joshcrow1193@gmail.com itself (`upload.ensure_shared`).
 
+**Reviewed 2026-09-13 evening (two Opus passes, findings verified by the
+owner's session):** an unplug mid-cycle raised `SerialException` (an
+`OSError`, not the `TimeoutError` every call site caught) through the
+daemon thread behind rumps — the menu bar stayed up, syncing stopped
+forever, nothing said so. Fixed at every level and re-measured
+(`run_forever` survives a vanishing port; `PullFailed.port_gone` stays
+silent because pressing the button fixes nothing). Also fixed: a second
+open of the app deleted the running bundle before copying (now a staged
+rename), the launcher returned True when launchd never took over, the
+hand-written plist lacked `--launchd` (a self-install loop), failed Garmin
+uploads were never retried, late-arriving Garmin rides were skipped
+forever, `flash` could read `src=` off the wrong board on a three-board
+bench, two G4 holes. Setup window rebuilt to the site's standard (icon,
+sized to content, spinner, green check, Return submits, Skip left of the
+primary). Menu bar now has four glyph states (idle / no puck / working /
+needs you) and names the phase in words. NOT fixed, by design or deferred:
+no cross-process port lock (G5 between the launchd copy and `puckd once`
+on the bench — do not run both); an unverified-but-uploaded ride re-uploads
+on every plug-in until someone looks (owner's ruling, no surface says so);
+`osascript` notifications appear to come from Script Editor until the app
+is signed; `set_state` runs on the poll thread.
+
 **Not yet measured, in the order they cost:** the real Puck (board was
 unplugged all night — rehearse `python3 -m puckd once <port>` first, then
 the flash leg with an old image); `clear_puck`'s `tracecheck` after a real

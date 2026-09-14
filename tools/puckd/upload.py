@@ -328,7 +328,13 @@ def upload(local_path: str | Path, remote_dir: str) -> UploadResult:
     # believed via a fresh lsjson read.
     try:
         ls_proc = _run(["lsjson", remote_spec], timeout=_LSJSON_TIMEOUT_S)
-    except (subprocess.TimeoutExpired, OSError):
+    except (RcloneNotFound, subprocess.TimeoutExpired, OSError):
+        # RcloneNotFound belongs here too: PUCKD_RCLONE can name a binary
+        # that went away between the copy and this read (a bundle upgrade
+        # replacing /Applications mid-job). G4 is unambiguous about what an
+        # unread lsjson means -- no lsjson, no clear -- and an uncaught
+        # exception here would have escaped as one, which is the one outcome
+        # that must never be possible.
         return UploadResult(ok=False, remote_size=None, local_size=local_size,
                              error="rclone lsjson did not run")
 
