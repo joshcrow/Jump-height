@@ -59,6 +59,7 @@ PUCKD_HOME env var so tests never touch a real home directory.
 from __future__ import annotations
 
 import json
+import sys
 import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -141,7 +142,23 @@ _pending_mfa: Optional[dict] = None
 
 
 LOGIN_FAILED_COPY = "Couldn't sign in. Check your email and password."
+GARMIN_BLOCKED_COPY = "Garmin isn't accepting sign-ins right now. Skip for now."
+GARMIN_UNREACHABLE_COPY = "Couldn't reach Garmin. Check your connection."
 MFA_FAILED_COPY = "That code didn't work. Try again."
+
+
+def _login_error_copy(exc: BaseException) -> str:
+    """Three honest sentences. Measured 2026-09-13: Garmin answers garth's
+    login endpoint with 429 Too Many Requests before it has looked at any
+    password (the reason garth is deprecated), so 'check your password'
+    would be a lie for the commonest failure."""
+    text = str(exc)
+    if " 429 " in text or "Too Many Requests" in text or " 403 " in text:
+        return GARMIN_BLOCKED_COPY
+    name = type(exc).__name__
+    if "Connection" in name or "Timeout" in name or "NameResolution" in text:
+        return GARMIN_UNREACHABLE_COPY
+    return LOGIN_FAILED_COPY
 
 
 def login(email: str, password: str, mfa_code: Optional[str] = None) -> LoginResult:
@@ -178,7 +195,7 @@ def login(email: str, password: str, mfa_code: Optional[str] = None) -> LoginRes
                 _pending_mfa = result[1]
                 return LoginResult(ok=False, needs_mfa=True, error=None)
             oauth1, oauth2 = result
-    except Exception:  # noqa: BLE001 -- garth.exc.GarthException is only the
+    except Exception as exc:  # noqa: BLE001 -- garth.exc.GarthException is only the
         # errors garth RAISES ITSELF. The wire under it is `requests`, so a
         # dropped wifi, a DNS failure or a TLS error arrives as
         # requests.ConnectionError, and garth's SSO flow also parses HTML it
@@ -188,10 +205,11 @@ def login(email: str, password: str, mfa_code: Optional[str] = None) -> LoginRes
         # traceback through the setup window's button handler. Every one of
         # them means the same thing on screen and takes the same action.
         # garth's own text (an HTTP status, a URL) is not for a screen.
+        print(f"garmin login: {type(exc).__name__}: {str(exc)[:200]}", file=sys.stderr)
         if mfa_code is not None:
             # still pending: the code field stays, and he tries again
             return LoginResult(ok=False, needs_mfa=True, error=MFA_FAILED_COPY)
-        return LoginResult(ok=False, needs_mfa=False, error=LOGIN_FAILED_COPY)
+        return LoginResult(ok=False, needs_mfa=False, error=_login_error_copy(exc))
 
     client.oauth1_token, client.oauth2_token = oauth1, oauth2
     token_dir = _token_dir()

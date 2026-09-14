@@ -501,6 +501,37 @@ def build_window_class():
             b.setBorderColor_(border)
         return b
 
+    def _ensure_edit_menu():
+        """A menu-bar-only app has no main menu, so Command-V, -C, -X and -A
+        do nothing in its text fields (measured: paste into the Garmin
+        password field did nothing, 2026-09-13). A hidden Edit menu wired to
+        the standard responder selectors is all AppKit needs."""
+        from AppKit import NSMenu, NSMenuItem
+        main = NSApp.mainMenu()
+        if main is not None and any(main.itemAtIndex_(i).title() == "Edit" for i in range(main.numberOfItems())):
+            return
+        if main is None:
+            main = NSMenu.alloc().initWithTitle_("Main")
+            NSApp.setMainMenu_(main)
+        edit_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("Edit", None, "")
+        edit = NSMenu.alloc().initWithTitle_("Edit")
+        for title, sel, key in (("Undo", "undo:", "z"), ("Redo", "redo:", "Z"), (None, None, None),
+                                ("Cut", "cut:", "x"), ("Copy", "copy:", "c"), ("Paste", "paste:", "v"),
+                                ("Select All", "selectAll:", "a")):
+            if title is None:
+                edit.addItem_(NSMenuItem.separatorItem())
+            else:
+                edit.addItemWithTitle_action_keyEquivalent_(title, sel, key)
+        edit_item.setSubmenu_(edit)
+        main.addItem_(edit_item)
+
+    def _ok_text_color():
+        """System green fails contrast on a white ground (measured by the
+        owner). Blending it a third of the way toward the label colour
+        darkens it in light mode and lightens it in dark mode, so it stays
+        a green and clears 4.5:1 on both grounds."""
+        return NSColor.systemGreenColor().blendedColorWithFraction_ofColor_(0.35, NSColor.labelColor())
+
     class OnboardingWindow(NSObject):
         """Owns one NSWindow and re-lays it out from model.screen()."""
 
@@ -536,6 +567,7 @@ def build_window_class():
             self.render()
             if first:
                 self.window.center()
+                _ensure_edit_menu()
             NSApp.activateIgnoringOtherApps_(True)
             self.window.makeKeyAndOrderFront_(None)
 
@@ -559,7 +591,7 @@ def build_window_class():
         @objc.python_method
         def _tone_color(self, tone):
             if tone == "ok":
-                return NSColor.systemGreenColor()
+                return _ok_text_color()
             if tone == "plain":
                 return NSColor.secondaryLabelColor()
             return NSColor.tertiaryLabelColor()
