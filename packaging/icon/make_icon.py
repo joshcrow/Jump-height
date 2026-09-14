@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Draw the JumpHeight icon: a jump's arc over dark water, the puck at the apex.
+"""Draw the JumpHeight icon: an up arrow.
 
 Writes packaging/icon/JumpHeight.icns (via iconutil) and the two menu-bar
 template images tools/puckd/assets/menubar.png (18 px) and menubar@2x.png
@@ -37,25 +37,23 @@ def _arc_points(w: float, h: float, x0: float, x1: float, base_y: float, apex_y:
     return pts
 
 
-def _wing(cx: float, cy: float, span: float, n: int = 160):
-    """A wing-foil wing seen head-on: a broad crescent, tips swept down,
-    a short strut under the centre. Upper edge = arc of a big circle,
-    lower edge = arc of a smaller one; the two meet at the tips."""
-    pts = []
-    for i in range(n + 1):                        # leading edge, left to right
-        t = -1 + 2 * i / n
-        x = cx + t * span / 2
-        y = cy - (1 - t * t) * span * 0.34 + abs(t) ** 3 * span * 0.10
-        pts.append((x, y))
-    for i in range(n, -1, -1):                    # trailing edge, right to left
-        t = -1 + 2 * i / n
-        x = cx + t * span / 2
-        y = cy - (1 - t * t) * span * 0.16 + abs(t) ** 3 * span * 0.10
-        pts.append((x, y))
-    return pts
+def _arrow(d: "ImageDraw.ImageDraw", cx: float, cy: float, h: float, ink, weight: float = 0.30):
+    """A solid up arrow: a triangular head over a rounded stem, centred on
+    (cx, cy) with total height h. `weight` is the stem width as a fraction
+    of h. Drawn as one silhouette so it stays solid mass at 16 px."""
+    top = cy - h / 2
+    bottom = cy + h / 2
+    head_h = h * 0.52
+    half_w = h * 0.50
+    d.polygon([(cx, top), (cx - half_w, top + head_h), (cx + half_w, top + head_h)], fill=ink)
+    sw = h * weight
+    d.rounded_rectangle((cx - sw / 2, top + head_h * 0.72, cx + sw / 2, bottom),
+                        radius=sw * 0.35, fill=ink)
 
 
 def draw_app_icon(size: int = 1024) -> Image.Image:
+    """The app icon: an up arrow on deep water, the accent dot at its tip
+    is the puck at the top of the jump."""
     s = size
     img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
     margin = int(s * 0.10)
@@ -72,44 +70,35 @@ def draw_app_icon(size: int = 1024) -> Image.Image:
     img.paste(grad, (0, 0), mask)
     d = ImageDraw.Draw(img)
     w = box[2] - box[0]
-    cx = s / 2
-    # the wing, high in the frame
-    d.polygon(_wing(cx, box[1] + w * 0.46, w * 0.74), fill=ARC)
-    # centre strut
-    d.rounded_rectangle((cx - w * 0.018, box[1] + w * 0.30, cx + w * 0.018, box[1] + w * 0.44),
-                         radius=int(w * 0.018), fill=ARC)
-    # the water, and the rider's arc: a small accent dot at its apex
-    base_y = box[3] - w * 0.16
-    d.line([(box[0] + w * 0.14, base_y), (box[2] - w * 0.14, base_y)], fill=(255, 255, 255, 120), width=int(s * 0.02))
-    r = s * 0.04
-    d.ellipse((cx - r, base_y - w * 0.22 - r, cx + r, base_y - w * 0.22 + r), fill=PUCK)
+    _arrow(d, s / 2, s / 2 + w * 0.02, w * 0.56, ARC)
     return img
 
 
 def draw_menubar_icon(size: int, state: str = "idle") -> Image.Image:
-    """The wing alone, black on transparent (a template image: macOS keeps
-    only the alpha), one drawing per glyph state. State is encoded by
-    redrawing the mark, never by a badge, and the mark stays solid mass so it
-    survives a busy wallpaper under Tahoe's transparent bar.
+    """The arrow alone, black on transparent (a template image: macOS keeps
+    only the alpha). State is encoded by redrawing the mark, never a badge,
+    and the mark is solid mass so it survives a busy wallpaper under
+    Tahoe's transparent bar.
 
-        idle       the wing                       puck attached, nothing to do
-        dormant    the wing at 35 % opacity       no puck (Apple's own "disabled" opacity)
-        working    the wing with the water line   a job is running (reading / uploading / clearing)
-        attention  the wing with a dot below      Nick needs to do one thing
+        idle       the arrow                     puck attached, nothing to do
+        dormant    the arrow at 35 % opacity     no puck (Apple's own "disabled" opacity)
+        working    the arrow over a line         a job is running
+        attention  the arrow over a dot          Nick needs to do one thing
     """
     s = size
     img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    a = 90 if state == "dormant" else 255
-    ink = (0, 0, 0, a)
-    cy = s * 0.56 if state in ("working", "attention") else s * 0.62
-    d.polygon(_wing(s / 2, cy, s * 0.92), fill=ink)
-    d.rectangle((s / 2 - max(1, s * 0.04), cy - s * 0.17, s / 2 + max(1, s * 0.04), cy), fill=ink)
-    if state == "working":
-        d.rectangle((s * 0.16, s * 0.84, s * 0.84, s * 0.84 + max(1, s * 0.09)), fill=ink)
-    elif state == "attention":
-        r = s * 0.11
-        d.ellipse((s / 2 - r, s * 0.80 - r, s / 2 + r, s * 0.80 + r), fill=ink)
+    ink = (0, 0, 0, 90 if state == "dormant" else 255)
+    if state in ("working", "attention"):
+        _arrow(d, s / 2, s * 0.40, s * 0.62, ink)
+        if state == "working":
+            d.rounded_rectangle((s * 0.18, s * 0.82, s * 0.82, s * 0.82 + max(1.5, s * 0.10)),
+                                radius=max(1, s * 0.04), fill=ink)
+        else:
+            r = s * 0.11
+            d.ellipse((s / 2 - r, s * 0.86 - r, s / 2 + r, s * 0.86 + r), fill=ink)
+    else:
+        _arrow(d, s / 2, s * 0.50, s * 0.80, ink)
     return img
 
 

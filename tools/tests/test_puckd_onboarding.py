@@ -27,7 +27,7 @@ import tempfile  # noqa: E402
 INTRO = ("Charge the puck from this Mac and its rides sync themselves: the "
          "recording goes to Google Drive, and the matching GPS track comes "
          "over from Garmin Connect. Two sign-ins, once.")
-FOOT = "You can come back to this from the wing in the menu bar."
+FOOT = "You can come back to this from the arrow in the menu bar."
 
 
 @dataclass
@@ -267,14 +267,14 @@ class TheHowItWorksPage(unittest.TestCase):
     def test_three_cards_each_a_real_piece_of_the_ui(self):
         s = self._settled().screen()
         self.assertEqual([c.art for c in s.cards], ["glyphs", "notification", "menu"])
-        self.assertEqual(s.cards[0].title, "The wing in the menu bar")
+        self.assertEqual(s.cards[0].title, "The arrow in the menu bar")
         self.assertEqual(s.cards[0].body,
                          "Faded: no puck. Solid: puck charging, all synced. "
                          "With a line: syncing now. With a dot: it needs you.")
         self.assertEqual(s.cards[1].title, "One notification per ride")
         self.assertEqual(s.cards[1].body,
                          "Plus “Puck charged”. You never have to open anything.")
-        self.assertEqual(s.cards[2].title, "Click the wing for details")
+        self.assertEqual(s.cards[2].title, "Click the arrow for details")
         self.assertEqual(s.cards[2].body,
                          "Charge, last ride, your rides folder, and this setup again.")
 

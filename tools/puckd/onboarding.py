@@ -6,7 +6,7 @@ page that shows how it works.
                  themselves: …"
                 1  Google Drive     Where the rides go                [Connect]
                 2  Garmin Connect   Optional · the GPS track …        [Sign in]
-                You can come back to this from the wing in the menu bar.
+                You can come back to this from the arrow in the menu bar.
                                                           [Skip for now]
 
                 The primary (Return) is on the FIRST UNDONE row. A done row
@@ -73,7 +73,7 @@ PLACEHOLDER_EMAIL = "Email"
 PLACEHOLDER_PASSWORD = "Password"
 PLACEHOLDER_CODE = "Code"
 
-FOOT_CHECKLIST = "You can come back to this from the wing in the menu bar."
+FOOT_CHECKLIST = "You can come back to this from the arrow in the menu bar."
 FOOT_CODE_HINT = "If Garmin sends a code, a Code field appears here."
 BTN_SKIP_FOR_NOW = "Skip for now"
 BTN_HOW = "How it works"
@@ -81,13 +81,13 @@ BTN_HOW = "How it works"
 # the "how it works" page
 HOW_TITLE = "All set"
 HOW_SUBTITLE = "Here’s what to expect"
-CARD_GLYPHS_TITLE = "The wing in the menu bar"
+CARD_GLYPHS_TITLE = "The arrow in the menu bar"
 CARD_GLYPHS_BODY = ("Faded: no puck. Solid: puck charging, all synced. "
                     "With a line: syncing now. With a dot: it needs you.")
 CARD_NOTIF_TITLE = "One notification per ride"
 CARD_NOTIF_BODY = "Plus “Puck charged”. You never have to open anything."
 CARD_NOTIF_SAMPLE = "Ride synced · 12 jumps"
-CARD_MENU_TITLE = "Click the wing for details"
+CARD_MENU_TITLE = "Click the arrow for details"
 CARD_MENU_BODY = "Charge, last ride, your rides folder, and this setup again."
 CARD_MENU_LINES = ("Puck 86% · charging",
                    "Last ride Tue 4:52 pm · 12 jumps",

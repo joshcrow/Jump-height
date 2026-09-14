@@ -36,12 +36,12 @@ Opener = Callable[[str], None]
 
 # The menu-bar glyph is one of four template images (black on transparent,
 # macOS recolours them) in tools/puckd/assets/ -- the state is encoded by
-# REDRAWING the wing, never by a badge or a title, and there are exactly
+# REDRAWING the arrow, never by a badge or a title, and there are exactly
 # four states (docs/sync-agent-plan.md, the glyph table):
-#     idle       the wing              puck attached, up to date
-#     dormant    the wing at 35 %      no puck attached
-#     working    wing + water line     a job is running (the panel says which phase)
-#     attention  wing + dot            Nick needs to do one thing
+#     idle       the arrow             puck attached, up to date
+#     dormant    the arrow at 35 %     no puck attached
+#     working    arrow over a line     a job is running (the panel says which phase)
+#     attention  arrow over a dot      Nick needs to do one thing
 ASSETS = Path(__file__).resolve().parent / "assets"
 ICON_FILES = {
     "idle": ASSETS / "menubar.png",

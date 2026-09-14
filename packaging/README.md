@@ -40,7 +40,7 @@ so don't open it on a Mac that shouldn't be running the agent.
 
 1. Open **JumpHeight Sync.dmg** and drag the app onto the Applications folder next to it.
 2. Open Applications, **right-click JumpHeight Sync → Open → Open**. Once. (The app is not signed with an Apple Developer ID, so a plain double-click refuses the first time.)
-3. A small wing appears in the menu bar and the setup window opens on its own: connect Google Drive, sign in to the watch (or skip), done.
+3. A small arrow appears in the menu bar and the setup window opens on its own: connect Google Drive, sign in to the watch (or skip), done.
 
 That's it. Opening the app is the install: it registers itself to start at
 login and hands off to that copy, so there is nothing else to run. macOS
