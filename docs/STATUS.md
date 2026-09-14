@@ -744,6 +744,33 @@ on every plug-in until someone looks (owner's ruling, no surface says so);
 `osascript` notifications appear to come from Script Editor until the app
 is signed; `set_state` runs on the poll thread.
 
+**Bench night 2026-09-13, on the Puck (`8673`, USB-only), from source with
+the real rclone, the owner's real Drive and the live site:** the Google
+Drive API had never been enabled on the Cloud project (403 on every call,
+and the reason "about" could not read the owner's address earlier) —
+enabled from Chrome. Then, measured: 88 KB of trace and no jumps pulled and
+verified; the first bundle waited in the spool while Drive was 403 and was
+never announced (correct); after enabling, `retry_spool` confirmed it,
+the folder was shared, the second job uploaded, confirmed, emptied the
+puck and logged "ride synced: 0 jumps"; both bundles are on Drive at
+`JumpHeight/inbox`. The update leg found two silicon bugs in `flash.py`:
+`shutil.copy2` is refused by the bootloader volume (EACCES, metadata) and
+the volume is listed before it is writable — now a raw write with a 10 s
+settle retry; and the bootloader's CDC port carries the SAME
+`/dev/cu.usbmodemN` name as the app's, so "wait for the port to return"
+matched the bootloader at once and lost it mid-`info` — now waits for the
+drop first, then the return, then retries `info` once. The Puck DID take
+54c6826d through the fixed copy (measured `src=54c6826d` afterwards). On
+the final end-to-end attempt the Puck's port stayed enumerated but went
+silent (no reply, no boot chatter, no bootloader disk, the 1200-baud touch
+ignored): a wedged host-side CDC instance, not a verdict on the board —
+CLAUDE.md §2.1 — and it needs a replug or the double-tap, which only a
+hand can do. Every flash result is now written to daemon.log. garth is
+gone: Garmin answers its login with 429 before reading a password
+(measured); `garmin.py` runs on python-garminconnect 0.3.15, whose third
+login route reached Garmin's real credential check here (401 for a fake
+account). Nick's actual sign-in remains unmeasured.
+
 **Not yet measured, in the order they cost:** the real Puck (board was
 unplugged all night — rehearse `python3 -m puckd once <port>` first, then
 the flash leg with an old image); `clear_puck`'s `tracecheck` after a real

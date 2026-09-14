@@ -26,16 +26,36 @@ WHAT GETS BUNDLED AND WHY, in one place:
     computations expect once they land under Contents/Resources/tools/ —
     see packaging/src/launcher.py's docstring for the other half of this.
 
-  * pyserial, garth and rumps are NOT imported anywhere in launcher.py or in
-    any module py2app's dependency scanner (modulegraph) would otherwise
-    walk — menubar.py imports rumps lazily, inside a function body, and
-    every tools/puckd module reachable from launcher.py's static imports is
-    shipped as inert data, per the point above, so modulegraph never scans
-    it for its own imports either. They are named explicitly in `includes`
-    below so modulegraph starts from them directly and pulls in their real
-    transitive dependencies (garth -> requests/oauthlib/requests-oauthlib;
-    rumps -> the pyobjc bridge: objc, Foundation, AppKit) the normal way.
-    pyobjc itself is one of those transitive pulls, not a separate include.
+  * pyserial, garminconnect and rumps are NOT imported anywhere in
+    launcher.py or in any module py2app's dependency scanner (modulegraph)
+    would otherwise walk — menubar.py imports rumps lazily, inside a
+    function body, and every tools/puckd module reachable from launcher.py's
+    static imports is shipped as inert data, per the point above, so
+    modulegraph never scans it for its own imports either. They are named
+    explicitly in `includes` below so modulegraph starts from them directly
+    and pulls in their real transitive dependencies (garminconnect ->
+    requests/urllib3/idna/charset_normalizer/chardet/certifi; rumps -> the
+    pyobjc bridge: objc, Foundation, AppKit) the normal way. pyobjc itself
+    is one of those transitive pulls, not a separate include.
+
+    garth was here until 2026-09-13 and is gone: Garmin's March 2026 login
+    change made its single SSO endpoint answer 429 before reading a
+    password, and its author deprecated it. tools/puckd/garmin.py is built
+    on garminconnect (python-garminconnect) now; nothing in this build
+    imports garth any more.
+
+  * curl_cffi, _cffi_backend and ua_generator are OPTIONAL to garminconnect
+    — its client.py guards all three behind `try: import ... except
+    ImportError` (client.py:31-42) and skips the two cffi login strategies
+    when curl_cffi is absent. They are included anyway because two of the
+    five login strategies (mobile+cffi, widget+cffi) need curl_cffi's TLS
+    fingerprint rotation, which is precisely what gets past Garmin's
+    Cloudflare rate limiting; dropping them would leave the app with only
+    the plain-requests routes. _cffi_backend is named explicitly because
+    nothing imports it from Python source — curl_cffi's compiled
+    _wrapper.abi3.so pulls it in, which modulegraph's bytecode scan cannot
+    see. Both are compiled extensions: see packaging/fix_universal_libs.sh,
+    which patches their arm64-only wheels into universal2.
 
   * The bundled rclone binary (packaging/fetch_rclone.sh's universal2
     build, lipo'd from the two official per-arch downloads — see that
@@ -96,21 +116,27 @@ DATA_FILES = [
 # MEASURED, not guessed (2026-09-13): this Python.org framework install is
 # a shared, general-purpose dev environment (it also carries editable
 # installs of two unrelated AI-agent side projects that pull in fastapi,
-# mcp, anthropic, openai, opentelemetry, pandas, matplotlib, ... via
-# garth's own real dependency, `logfire`). modulegraph's static bytecode
-# scan cannot tell "logfire imports numpy/pandas conditionally, never
-# exercised by garth's actual login flow" from "the app needs numpy" — it
-# only knows the name resolves on THIS machine, so it bundled all of it: a
-# ~330 MB app for a menu-bar rclone/serial daemon. Names below were cut by
-# DIFFING sys.modules before/after `import garth`, `import garth.sso`,
-# `import garth.http`, `import garth.stats`, `import garth.data` (every
-# garth submodule tools/puckd/garmin.py touches) and separately `import
-# rumps` / `import serial` — three real interpreter runs, not a guess —
-# then excluding every third-party top-level name from the first build's
-# actual bundle contents that did NOT show up in any of those three
-# import traces. Excluding a name that garth needed would surface
-# immediately as an ImportError in this build's own Rosetta/native smoke
-# test (see the test transcripts) — it did not.
+# mcp, anthropic, openai, opentelemetry, pandas, matplotlib, ...).
+# modulegraph's static bytecode scan cannot tell "this library imports
+# numpy/pandas conditionally, never exercised by the actual login flow"
+# from "the app needs numpy" — it only knows the name resolves on THIS
+# machine, so it bundled all of it: a ~330 MB app for a menu-bar
+# rclone/serial daemon. Names below were cut by DIFFING sys.modules
+# before/after the real imports — originally `import garth` and its
+# submodules, RE-MEASURED 2026-09-13 against its replacement by importing
+# tools/puckd/garmin.py itself (which is `import garminconnect` plus the
+# three optional extras), and separately `import rumps` / `import serial`
+# — real interpreter runs, not a guess — then excluding every third-party
+# top-level name from the first build's actual bundle contents that did
+# NOT show up in any of those import traces. Excluding a name the client
+# needed would surface immediately as an ImportError in this build's own
+# Rosetta/native smoke test (see the test transcripts) — it did not.
+#
+# `cffi` and `pycparser` STAY excluded after the garminconnect switch, and
+# that is measured, not assumed: curl_cffi's compiled _wrapper.abi3.so
+# imports the `_cffi_backend` EXTENSION only (which is in `includes`
+# above); no module under curl_cffi/ imports the pure-Python `cffi`
+# package, and it did not appear in the sys.modules diff.
 _MEASURED_UNUSED = [
     "annotated_doc", "anthropic", "anyio", "sniffio", "argcomplete",
     "click", "colorama", "contourpy", "cryptography", "cffi", "pycparser",
@@ -124,7 +150,7 @@ _MEASURED_UNUSED = [
     "rpds", "sse_starlette", "starlette", "uvicorn", "watchfiles",
     "wsproto", "yaml", "tkinter", "matplotlib", "pandas", "tornado",
     "websockets",
-    # Not a garth/rumps/serial dependency at all — a compiled mypyc build of
+    # Not a garminconnect/rumps/serial dependency at all — a compiled mypyc build of
     # mypy itself, present only because this shared dev environment has it
     # installed. MEASURED arm64-only (packaging/fix_universal_libs.sh's own
     # scan) with no x86_64 wheel worth chasing for a tool the app never
@@ -142,7 +168,17 @@ OPTIONS = {
             "serial",
             "serial.tools.list_ports",
             "rumps",
-            "garth",
+            # MEASURED 2026-09-13 by diffing sys.modules across
+            # `import tools/puckd/garmin.py` on this framework install:
+            # certifi, chardet, charset_normalizer, curl_cffi, garminconnect,
+            # idna, requests, ua_generator, urllib3 (+ the compiled
+            # _cffi_backend). requests and its own three are named by
+            # garminconnect's source, so modulegraph finds them from here;
+            # the four below are the roots it cannot reach on its own.
+            "garminconnect",
+            "curl_cffi",
+            "_cffi_backend",
+            "ua_generator",
             "certifi",
         ],
         "excludes": _MEASURED_UNUSED,

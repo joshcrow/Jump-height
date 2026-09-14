@@ -72,7 +72,7 @@ Re-runnable from the menu bar; each step individually. Token expiry → "Needs y
         → wait for the port to return → info → src must equal latest.src → "Puck updated"
   9. (the notification fired at 7; a flash gets its own "Puck updated")
  10. while attached: stats every 60 s → menu-bar %; notify "Puck charged" once when chg goes 1→0 with batt_pct ≥ 95
-Garmin: on every job and every 6 h — garth: list activities since last_seen, download ORIGINAL FIT zips,
+Garmin: on every job and every 6 h — python-garminconnect (garth died 2026-03 when Garmin changed its login; swapped 2026-09-13): list activities since last_seen, download ORIGINAL FIT zips,
         rclone copy to gdrive:JumpHeight/fits/. Never blocks the puck job. Strava OAuth is the v2 fallback.
 
 ## Gates (the only things that may ever be adversarially reviewed as "unsafe")
@@ -87,7 +87,7 @@ Garmin: on every job and every 6 h — garth: list activities since last_seen, d
     serial_job.py    steps 0–5, 7      tests: tools/fake_device.py (knobs: --trace-bytes-overreport, --tracecheck-slow-delta,
                                         --tracecheck-silent, --no-traceraw, --traceraw-error; fillstore is a firmware command, not a knob)
     upload.py        rclone wrapper    tests: a fake rclone on PATH
-    garmin.py        garth wrapper     tests: recorded fixtures; no live Garmin in CI
+    garmin.py        garminconnect wrapper   tests: mocked Garmin class; no live Garmin in CI
     flash.py         step 8            tests: host harness for the sequencing; silicon rehearsal by the owner
     notify.py        3 notifications   osascript / UNUserNotification via pyobjc
     menubar.py       rumps
@@ -113,4 +113,4 @@ Garmin: on every job and every 6 h — garth: list activities since last_seen, d
   unsigned app: first open is right-click → Open (a $99/yr Apple signature removes this)
   macOS "background items added" notice on first run
   Garmin two-factor: one code, once
-  the Garmin route is unofficial (garth); it has broken and been fixed before — Strava is the fallback
+  the Garmin route is unofficial (python-garminconnect, on Garmin's web app + JWT); it broke once already (garth, 2026-03) — Strava is the fallback

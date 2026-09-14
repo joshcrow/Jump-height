@@ -45,6 +45,7 @@ it does anything else to the device or the filesystem.
 from __future__ import annotations
 
 import errno
+import pathlib
 import fnmatch
 import hashlib
 import importlib.machinery
@@ -121,6 +122,9 @@ class FlashResult:
 # Stage names, in the order docs/sync-agent-plan.md:52-54 specifies them —
 # also FlashResult.stage_reached's vocabulary, so a caller (or a human
 # reading a "Needs you" log) can tell exactly how far a failed attempt got.
+_COPY_SETTLE_S = 10.0
+_POST_FLASH_SETTLE_S = 2.0   # how long a freshly mounted bootloader volume may refuse writes
+
 STAGE_SHA256 = "sha256"
 STAGE_SEND_UF2 = "send_uf2"
 STAGE_VOLUME_WAIT = "volume_wait"
@@ -209,7 +213,28 @@ def _default_mount_volume() -> None:
 
 
 def _default_copy_file(src: str, dst: str) -> None:
-    shutil.copy2(src, dst)
+    """Raw bytes only. shutil.copy2 also copies metadata, and the
+    bootloader's FAT volume answers that with EACCES ("Permission denied",
+    measured on the Puck 2026-09-13) before the board ever reboots; a plain
+    write is what `cp` does and what the bootloader wants. The volume
+    vanishing mid-write (ENODEV / ENXIO) is the success signature and is
+    left to the caller."""
+    data = pathlib.Path(src).read_bytes()
+    # The volume is listed before it is writable: the first open() for a
+    # couple of seconds after it appears fails with EACCES (measured on the
+    # Puck 2026-09-13; the same open() succeeds moments later). Retry those
+    # for a bounded time; anything else is the caller's to judge.
+    deadline = time.monotonic() + _COPY_SETTLE_S
+    while True:
+        try:
+            with open(dst, "wb", buffering=0) as f:
+                f.write(data)
+            return
+        except OSError as exc:
+            if exc.errno in (errno.EACCES, errno.EBUSY, errno.ENOENT, errno.EPERM) and time.monotonic() < deadline:
+                time.sleep(0.5)
+                continue
+            raise
 
 
 def _is_device_not_configured(exc: BaseException) -> bool:
@@ -219,7 +244,7 @@ def _is_device_not_configured(exc: BaseException) -> bool:
     the copy stage, not a failure. Matched on errno first (robust to
     wording) and the exact string second (what a real OSError/IOError from
     a vanished mount actually says on this platform)."""
-    return (getattr(exc, "errno", None) == errno.ENODEV
+    return (getattr(exc, "errno", None) in (errno.ENODEV, errno.ENXIO, errno.EIO)
             or "Device not configured" in str(exc))
 
 
@@ -366,7 +391,19 @@ def flash(
     # flashed one wrong board") the old first-match could read `info` off a
     # neighbour and report src= from a board this flash never touched --
     # a wrong PASS, not a wrong failure.
+    # Stage 5a: the bootloader's CDC port carries the SAME /dev/cu.usbmodemN
+    # name as the app's (measured on the Puck 2026-09-13: the old wait
+    # "found" the bootloader port at once and then lost it mid-`info`). So
+    # first wait for the reboot itself -- the port disappearing -- bounded
+    # by time AND by poll count so a board that re-enumerates faster than we
+    # poll cannot hang this; if it never drops, carry on to the return wait.
     deadline = now() + port_wait_s
+    polls = 0
+    while now() < deadline and polls < 40:
+        polls += 1
+        if port_path not in (c for c in scan_ports() if fnmatch.fnmatch(c, "/dev/cu.usbmodem*")):
+            break
+        sleep(poll_interval_s)
     new_port = None
     while new_port is None:
         candidates = sorted(
@@ -391,7 +428,14 @@ def flash(
                             f"couldn't reopen {new_port} for info: {exc}")
     try:
         try:
-            info_lines = dev2.command("info", timeout=_INFO_TIMEOUT_S)
+            try:
+                info_lines = dev2.command("info", timeout=_INFO_TIMEOUT_S)
+            except Exception:  # noqa: BLE001 -- the first read right after
+                # re-enumeration can catch the CDC port before it is ready
+                # (measured: "write failed: Device not configured"); one
+                # settle-and-retry, then the normal verdict.
+                sleep(_POST_FLASH_SETTLE_S)
+                info_lines = dev2.command("info", timeout=_INFO_TIMEOUT_S)
         except Exception as exc:
             return FlashResult(
                 False, None, STAGE_INFO,

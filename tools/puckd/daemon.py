@@ -464,6 +464,7 @@ def _maybe_flash(
         notify.notify("updated", runner=cfg.notifier)
         _log(cfg, f"puck updated to {result.src_after}")
         return True, None
+    _log(cfg, f"flash: ok={result.ok} stage={result.stage_reached} src_after={result.src_after} {result.error or ''}")
     if result.stage_reached != flash.STAGE_SHA256:
         needs_you = (PUCK_RESET_LINE, PUCK_RESET_ACTION)
         _fire_needs_you(cfg, *needs_you)

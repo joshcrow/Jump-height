@@ -1,9 +1,9 @@
 """tools/puckd/garmin.py — the watch leg (docs/sync-agent-plan.md's Garmin
 paragraph, lines 57-58):
 
-    "Garmin: on every job and every 6 h -- garth: list activities since
-    last_seen, download ORIGINAL FIT zips, rclone copy to
-    gdrive:JumpHeight/fits/. Never blocks the puck job."
+    "Garmin: on every job and every 6 h -- list activities since last_seen,
+    download ORIGINAL FIT zips, rclone copy to gdrive:JumpHeight/fits/.
+    Never blocks the puck job."
 
 and setup screen 3 (docs/sync-agent-plan.md:37):
 
@@ -11,80 +11,94 @@ and setup screen 3 (docs/sync-agent-plan.md:37):
     only if Garmin asks) -> 'Signed in'  [Continue]"
     "Token expiry -> 'Needs you: sign in to Garmin again' opens step 3 alone."
 
-This module owns exactly the four calls a caller (the setup page's handler,
-and daemon.py's 6-hourly tick) needs and nothing else:
+This module owns exactly the calls a caller (the setup page's handler, and
+daemon.py's 6-hourly tick) needs and nothing else:
 
     login(email, password, mfa_code=None) -> LoginResult
-    is_signed_in() -> bool
+    is_signed_in() / ever_signed_in() -> bool
     fetch_new(since_iso, out_dir) -> list[str]
     last_seen(store) / mark_seen(store, iso)
 
-garth (https://github.com/matin/garth) is the only Garmin client library the
-build is allowed to use. Its shape, verified against the installed
-garth==0.8.0 by reading its source directly (not from memory, since garth's
-own README is thin and it is explicitly deprecated upstream):
+WHY NOT garth ANY MORE (2026-09-13). Garmin changed its login flow in
+March 2026. garth's single mobile SSO endpoint now answers 429 Too Many
+Requests *before it has looked at a password* -- measured on this Mac
+today -- and garth's own author has deprecated the project
+(github.com/matin/garth/discussions/222). A client that cannot reach a
+credential check cannot sign anybody in, so the import is gone entirely.
 
-  * garth.sso.login(email, password, client=c, return_on_mfa=True) returns
-    either (OAuth1Token, OAuth2Token) on success, or the literal string
-    "needs_mfa" as result[0] with a client_state dict as result[1]
-    (garth/sso.py's login()).
-  * garth.sso.resume_login(client_state, mfa_code) finishes that paused
-    flow and returns (OAuth1Token, OAuth2Token) (garth/sso.py's
-    resume_login()).
-  * A garth.http.Client's tokens are persisted with client.dump(dir) /
-    client.load(dir) as oauth1_token.json / oauth2_token.json
-    (garth.http.OAUTH1_TOKEN_FILE / OAUTH2_TOKEN_FILE) -- plain JSON, no
-    encryption, which is exactly why the password itself is never written
-    anywhere by this module.
-  * OAuth2Token.refresh_token_expires_at (garth/http.py) is the field that
-    determines whether garth can still mint new access tokens without the
-    user signing in again; is_signed_in() reads it directly rather than
-    constructing a live Client, so it never makes a network call.
-  * garth.Activity.list(limit=, start=, client=) (garth/data/activity.py)
-    pages the activity list but has no server-side date filter, so
-    fetch_new() paginates newest-first and stops at the first activity at
-    or before `since_iso`.
-  * There is no garth helper for the ORIGINAL-format download; garth.http
-    .Client.download() is a generic GET-and-return-bytes. The endpoint
-    path used here (ORIGINAL_DOWNLOAD_PATH) is the one every unofficial
-    Garmin Connect client (python-garminconnect, GarminDB, ...) uses for
-    it -- garth itself does not document or test it. This path is
-    UNVERIFIED against a live account (see not_done in the build report).
+WHAT REPLACED IT: `garminconnect` (python-garminconnect) 0.3.15, rebuilt
+against Garmin's current web app. Its shape below was read out of the
+INSTALLED SOURCE (site-packages/garminconnect/{__init__,client}.py), not
+recalled:
 
-Token dir = PUCKD_HOME/garth, where PUCKD_HOME defaults to
+  * garminconnect/client.py's Client.login() is a five-strategy chain --
+    mobile+cffi, mobile+requests, widget+cffi, portal+cffi,
+    portal+requests (client.py:517-527). Only a credential error stops the
+    chain; a 429 on one strategy falls through to the next. That is the
+    whole reason this module changed: measured here today, the chain gets
+    429 on mobile and still reaches Garmin's credential check further
+    down, which answered a deliberately fake account with
+    "401 Unauthorized (Invalid Username or Password)".
+  * Garmin(email, password, return_on_mfa=True).login() returns
+    ("needs_mfa", None) instead of blocking on a prompt, and
+    Garmin.resume_login(client_state, mfa_code) finishes that same paused
+    exchange on the SAME instance (__init__.py:738-743, 907-920, and
+    client.py:532-540 where return_on_mfa sets client._mfa_pending). This
+    is the two-call shape setup screen 3 needs; see _pending_mfa below.
+  * Tokens are persisted by client.dump(path) / client.load(path) as ONE
+    file, `garmin_tokens.json`, holding {"di_token", "di_refresh_token",
+    "di_client_id"} (client.py:1504-1556, and token_file_path() at
+    client.py:59 for the directory -> filename rule this module reuses
+    rather than re-deriving). Written 0o600 inside a 0o700 directory by
+    garminconnect itself. The PASSWORD IS NEVER PART OF IT.
+  * Garmin.get_activities(start, limit) returns the raw camelCase list
+    from /activitylist-service/activities/search/activities
+    (__init__.py:2382-2418) -- no server-side "since" filter, so
+    fetch_new() still pages newest-first and stops at the first activity
+    at or before `since_iso`.
+  * Garmin.download_activity(id, dl_fmt=Garmin.ActivityDownloadFormat
+    .ORIGINAL) returns the as-uploaded zip's bytes (__init__.py:3000-3022).
+    Under garth this module had to hardcode that endpoint itself; it no
+    longer does, which is why ORIGINAL_DOWNLOAD_PATH is gone.
+
+Token dir = PUCKD_HOME/garmin (the old PUCKD_HOME/garth directory belonged
+to a token format garminconnect cannot read, so it is deliberately NOT
+reused: a stale garth token pair must read as "not signed in", which is
+true, rather than as a corrupt store). PUCKD_HOME defaults to
 "~/Library/Application Support/JumpHeight" and is overridable via the
 PUCKD_HOME env var so tests never touch a real home directory.
 """
 
 from __future__ import annotations
 
+import base64
 import json
-import sys
 import os
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-import garth
+import garminconnect
+from garminconnect import (
+    GarminConnectAuthenticationError,
+    GarminConnectConnectionError,
+    GarminConnectTooManyRequestsError,
+)
+from garminconnect.client import token_file_path
 
 # --- paths -------------------------------------------------------------
 
 PUCKD_HOME_ENV = "PUCKD_HOME"
 DEFAULT_HOME = Path("~/Library/Application Support/JumpHeight").expanduser()
-TOKEN_SUBDIR = "garth"
+TOKEN_SUBDIR = "garmin"
 
-# Community-documented Garmin Connect endpoint for the as-uploaded
-# ("ORIGINAL") activity file, always zipped by the service even when the
-# original upload was a single .fit. Not part of garth's public API --
-# see the module docstring.
-ORIGINAL_DOWNLOAD_PATH = "/download-service/files/activity/{activity_id}"
-
-LIST_PAGE_SIZE = 20  # garth.Activity.list's own default
+LIST_PAGE_SIZE = 20  # what Garmin Connect's own web app asks for
 MAX_PAGES = 25  # a bounded search, not an infinite one, if since_iso is old
 
 # How far BEFORE last_seen fetch_new() still looks. An activity's
-# start_time_gmt is when the RIDE happened; it appears in Garmin Connect only
+# startTimeGMT is when the RIDE happened; it appears in Garmin Connect only
 # when the watch next syncs to the phone, which can be days later. daemon.py
 # advances last_seen to "now" after any successful fetch, so without this
 # window a ride that started on Tuesday and uploaded on Thursday -- the
@@ -108,12 +122,25 @@ def _token_dir() -> Path:
     return puckd_home() / TOKEN_SUBDIR
 
 
-def _oauth2_token_path() -> Path:
-    return _token_dir() / "oauth2_token.json"
+TOKEN_FILENAME = "garmin_tokens.json"
 
 
-def _oauth1_token_path() -> Path:
-    return _token_dir() / "oauth1_token.json"
+def _token_file() -> Path:
+    """The single JSON file garminconnect's own client.dump()/load() use for
+    a directory tokenstore -- asked of garminconnect (client.token_file_path)
+    rather than hardcoded here, so a rename upstream cannot leave this module
+    looking in a directory that nothing writes to (CLAUDE.md §4).
+
+    token_file_path() REJECTS a path with a symlink anywhere in its ancestry
+    (client.py:59-87, a deliberate anti-redirect check) by raising
+    ValueError. is_signed_in() is called on every daemon tick and must
+    answer a bool, so that case falls back to the same name the upstream
+    rule produces; garminconnect's own dump()/load() will still refuse such
+    a path, loudly, where a refusal belongs."""
+    try:
+        return Path(token_file_path(str(_token_dir())))
+    except ValueError:
+        return _token_dir() / TOKEN_FILENAME
 
 
 # --- login ---------------------------------------------------------------
@@ -130,14 +157,15 @@ class GarminDownloadError(RuntimeError):
     """fetch_new() got a response that is not a zip for an activity id."""
 
 
-# A garth SSO login paused on an MFA prompt returns a client_state dict
-# (the live client + the in-progress login params) that must be handed
-# back into garth.sso.resume_login() with the code. login()'s public
-# signature is (email, password, mfa_code=None) -- there is nowhere in
-# that signature to carry the paused state across the two calls setup
-# screen 3 makes, so it lives here. One desktop app, one setup flow, one
-# signed-in Garmin account at a time (docs/sync-agent-plan.md's whole
-# design): a second, concurrent login attempt is not a supported case.
+# A garminconnect login paused on an MFA prompt lives INSIDE the Garmin
+# instance that started it: client._mfa_pending plus the half-finished SSO
+# session (client.py:532-540, _complete_mfa at client.py:1149), and
+# Garmin.resume_login() continues that same object. login()'s public
+# signature is (email, password, mfa_code=None) -- there is nowhere in that
+# signature to carry the live instance across the two calls setup screen 3
+# makes, so it lives here. One desktop app, one setup flow, one signed-in
+# Garmin account at a time (docs/sync-agent-plan.md's whole design): a
+# second, concurrent login attempt is not a supported case.
 _pending_mfa: Optional[dict] = None
 
 
@@ -146,18 +174,63 @@ GARMIN_BLOCKED_COPY = "Garmin isn't accepting sign-ins right now. Skip for now."
 GARMIN_UNREACHABLE_COPY = "Couldn't reach Garmin. Check your connection."
 MFA_FAILED_COPY = "That code didn't work. Try again."
 
+# Text markers of a failure that never reached Garmin at all. Matched on the
+# message because garminconnect wraps almost everything it catches into its
+# own GarminConnectConnectionError (__init__.py:822-828), so by the time an
+# exception arrives here the requests.ConnectionError underneath is a string.
+_UNREACHABLE_MARKERS = (
+    "Max retries exceeded",
+    "Failed to establish a new connection",
+    "Name or service not known",
+    "NameResolution",
+    "Temporary failure in name resolution",
+    "Network is unreachable",
+    "Connection refused",
+    "Connection reset",
+    "timed out",
+    "Read timed out",
+)
+
+
+def _looks_unreachable(exc: BaseException) -> bool:
+    name = type(exc).__name__
+    # "GarminConnectConnectionError" contains "Connection" and means nothing
+    # of the sort, so the library's own wrappers are judged on their text.
+    if not name.startswith("GarminConnect") and (
+        "Connection" in name or "Timeout" in name
+    ):
+        return True
+    text = str(exc)
+    return any(marker in text for marker in _UNREACHABLE_MARKERS)
+
 
 def _login_error_copy(exc: BaseException) -> str:
-    """Three honest sentences. Measured 2026-09-13: Garmin answers garth's
-    login endpoint with 429 Too Many Requests before it has looked at any
-    password (the reason garth is deprecated), so 'check your password'
-    would be a lie for the commonest failure."""
+    """Four honest sentences for a screen. Measured 2026-09-13: Garmin
+    answers the first login strategy with 429 Too Many Requests before it
+    has looked at any password, so "check your password" would be a lie for
+    a failure that never got that far."""
     text = str(exc)
-    if " 429 " in text or "Too Many Requests" in text or " 403 " in text:
+    if (
+        isinstance(exc, GarminConnectTooManyRequestsError)
+        or "429" in text
+        or "Too Many Requests" in text
+        or "403" in text
+    ):
         return GARMIN_BLOCKED_COPY
-    name = type(exc).__name__
-    if "Connection" in name or "Timeout" in name or "NameResolution" in text:
+    if (
+        isinstance(exc, GarminConnectAuthenticationError)
+        or "401" in text
+        or "Invalid Username or Password" in text
+    ):
+        return LOGIN_FAILED_COPY
+    if _looks_unreachable(exc):
         return GARMIN_UNREACHABLE_COPY
+    if isinstance(exc, GarminConnectConnectionError):
+        # "All login strategies exhausted": every route answered SOMETHING
+        # that was not a credential check -- an HTML challenge, a WAF page.
+        # Garmin was reachable and would not take a sign-in; that is what
+        # the blocked copy says, and it is not the password's fault.
+        return GARMIN_BLOCKED_COPY
     return LOGIN_FAILED_COPY
 
 
@@ -167,11 +240,15 @@ def login(email: str, password: str, mfa_code: Optional[str] = None) -> LoginRes
       login(email, password)            -- first attempt
       login(email, password, mfa_code)  -- the code, after needs_mfa=True
 
-    The password is used only to construct this one garth SSO exchange; it
-    is never written to disk. What login() persists on success is the
-    garth token pair (oauth1_token.json / oauth2_token.json under
-    PUCKD_HOME/garth) -- the whole point of garth's token model is that
-    the password never needs to be produced again.
+    The first call NEVER BLOCKS on an MFA prompt: the Garmin client is
+    constructed with return_on_mfa=True, so a code request comes back as
+    LoginResult(ok=False, needs_mfa=True) and the window draws its code
+    field instead of hanging on a callback that nothing can answer.
+
+    The password is used only for this one SSO exchange and is never
+    written to disk. What login() persists on success is garminconnect's
+    token file (PUCKD_HOME/garmin/garmin_tokens.json) -- the whole point of
+    the token model is that the password never needs to be produced again.
     """
     global _pending_mfa
     try:
@@ -181,73 +258,121 @@ def login(email: str, password: str, mfa_code: Optional[str] = None) -> LoginRes
                     ok=False, needs_mfa=False,
                     error="no Garmin sign-in is waiting for a code",
                 )
-            client = _pending_mfa["client"]
-            oauth1, oauth2 = garth.sso.resume_login(_pending_mfa, mfa_code)
-            _pending_mfa = None  # only the success path consumes it; a
-            # wrong code leaves it in place so the same code prompt can be
+            # The SAME instance that paused: it holds the half-finished SSO
+            # session, so the typed email/password are not asked for again
+            # (and the second call's copies of them are not used at all).
+            api = _pending_mfa["api"]
+            api.resume_login(_pending_mfa["client_state"], mfa_code)
+            _pending_mfa = None  # only the success path consumes it; a wrong
+            # code leaves it in place (client.resume_login keeps _mfa_pending
+            # on a bad code, client.py:1620-1633) so the same prompt can be
             # retried without re-asking for email/password.
         else:
-            client = garth.Client()
-            result = garth.sso.login(
-                email, password, client=client, return_on_mfa=True,
+            api = garminconnect.Garmin(
+                email=email, password=password, return_on_mfa=True,
             )
-            if result[0] == "needs_mfa":
-                _pending_mfa = result[1]
+            # No tokenstore here on purpose: a typed password means "sign me
+            # in", not "reuse whatever is on disk" -- Garmin.login(tokenstore)
+            # would load an existing token and skip the credentials entirely
+            # (__init__.py:680-716).
+            status, client_state = api.login()
+            if status == "needs_mfa":
+                _pending_mfa = {"api": api, "client_state": client_state}
                 return LoginResult(ok=False, needs_mfa=True, error=None)
-            oauth1, oauth2 = result
-    except Exception as exc:  # noqa: BLE001 -- garth.exc.GarthException is only the
-        # errors garth RAISES ITSELF. The wire under it is `requests`, so a
-        # dropped wifi, a DNS failure or a TLS error arrives as
-        # requests.ConnectionError, and garth's SSO flow also parses HTML it
-        # did not write (an AttributeError/IndexError the day Garmin changes
-        # that page -- this route "has broken and been fixed before", the
-        # module docstring). Either one used to come out of here as a
-        # traceback through the setup window's button handler. Every one of
-        # them means the same thing on screen and takes the same action.
-        # garth's own text (an HTTP status, a URL) is not for a screen.
-        print(f"garmin login: {type(exc).__name__}: {str(exc)[:200]}", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001 -- garminconnect's own exception
+        # classes cover only what it recognises. The wire under it is
+        # `requests` (and optionally curl_cffi), so a dropped wifi, a DNS
+        # failure or a TLS error can arrive as anything, and its SSO flow
+        # also parses HTML it did not write (an AttributeError/IndexError the
+        # day Garmin changes that page). Either one used to come out of here
+        # as a traceback through the setup window's button handler. Every one
+        # of them means the same thing on screen and takes the same action.
+        # The library's own text (an HTTP status, a URL) is not for a screen
+        # -- it goes to stderr, where the daemon log keeps it.
+        print(f"garmin login: {type(exc).__name__}: {str(exc)[:300]}", file=sys.stderr)
         if mfa_code is not None:
             # still pending: the code field stays, and he tries again
             return LoginResult(ok=False, needs_mfa=True, error=MFA_FAILED_COPY)
         return LoginResult(ok=False, needs_mfa=False, error=_login_error_copy(exc))
 
-    client.oauth1_token, client.oauth2_token = oauth1, oauth2
     token_dir = _token_dir()
     token_dir.mkdir(parents=True, exist_ok=True)
-    client.dump(str(token_dir))
+    api.client.dump(str(token_dir))
+    # Nothing after this point needs the plaintext password; garminconnect
+    # drops its own copy on the non-MFA path (__init__.py:789-792) but not on
+    # the two return_on_mfa paths this module uses, so drop it here.
+    api.password = None
     return LoginResult(ok=True, needs_mfa=False, error=None)
 
 
 def ever_signed_in() -> bool:
     """A token file exists at all. The daemon nags about an EXPIRED
     sign-in only; someone who pressed Skip at setup is never asked."""
-    return _oauth1_token_path().exists() or _oauth2_token_path().exists()
+    return _token_file().exists()
+
+
+def _jwt_exp(token: str) -> Optional[float]:
+    """The `exp` claim of a JWT, read WITHOUT verifying the signature (the
+    client has no signing key -- garminconnect does the same thing at
+    client.py:263-284 and client.py:1428). None if the token is not a JWT,
+    is unreadable, or carries no usable numeric exp."""
+    try:
+        parts = token.split(".")
+        if len(parts) < 2:
+            return None
+        payload_b64 = parts[1] + "=" * (-len(parts[1]) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64).decode())
+        exp = payload.get("exp")
+        if isinstance(exp, bool) or not isinstance(exp, (int, float)):
+            return None
+        return float(exp)
+    except Exception:  # noqa: BLE001 -- an unreadable token is "no expiry
+        # I can see", never an exception into a caller that only wants a bool
+        return None
 
 
 def is_signed_in() -> bool:
-    """True iff a token pair is on disk and its refresh token has not
-    expired -- i.e. garth can still mint fresh access tokens without the
-    user typing a password again. Read directly off the JSON garth writes
-    (never constructs a live Client, never makes a network call), so this
-    is safe to call on every job tick (docs/sync-agent-plan.md:57) and on
-    every setup-screen re-run (docs/sync-agent-plan.md:39) alike.
+    """True iff a usable token is on disk -- i.e. a Garmin session can be
+    restored without the user typing a password again. Read directly off
+    the JSON garminconnect writes (never constructs a live client, never
+    makes a network call), so this is safe to call on every job tick
+    (docs/sync-agent-plan.md:57) and on every setup-screen re-run
+    (docs/sync-agent-plan.md:39) alike.
 
-    False (never a raised exception) for: no token files, unreadable
-    JSON, a missing expiry field, or an expired refresh token -- every one
-    of those means the same thing to a caller: show [Sign in] again.
+    "Usable" means: a di_refresh_token (with which garminconnect mints a
+    fresh access token by itself, client.py:1378-1419), or failing that a
+    di_token whose own JWT exp is still in the future. garminconnect's
+    token file records no separate refresh-token expiry, so an expired
+    REFRESH token cannot be seen from disk -- that case is caught the only
+    place it can be, in _load_api(): a token the API rejects outright is
+    retired there so this function starts answering False and daemon.py's
+    "sign in to Garmin again" fires instead of nothing happening forever.
+
+    False (never a raised exception) for: no token file, unreadable JSON,
+    no tokens in it, or an expired access token with nothing to refresh
+    from -- every one of those means the same thing to a caller: show
+    [Sign in] again.
     """
-    oauth1_path = _oauth1_token_path()
-    oauth2_path = _oauth2_token_path()
-    if not oauth1_path.is_file() or not oauth2_path.is_file():
+    tokens = _read_tokens()
+    if tokens is None:
         return False
+    if tokens.get("di_refresh_token"):
+        return True
+    access = tokens.get("di_token")
+    if not isinstance(access, str) or not access:
+        return False
+    exp = _jwt_exp(access)
+    if exp is None:
+        return False
+    return exp > _now_epoch()
+
+
+def _read_tokens() -> Optional[dict]:
     try:
-        oauth2 = json.loads(oauth2_path.read_text())
+        data = json.loads(_token_file().read_text())
     except (OSError, ValueError):
-        return False
-    expires_at = oauth2.get("refresh_token_expires_at")
-    if not isinstance(expires_at, (int, float)):
-        return False
-    return expires_at > _now_epoch()
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def _now_epoch() -> float:
@@ -257,24 +382,54 @@ def _now_epoch() -> float:
 # --- fetching activities ---------------------------------------------------
 
 
-def _load_client() -> Any:
+def _retire_rejected_tokens() -> None:
+    """A stored token Garmin itself refuses is not a sign-in; leaving it on
+    disk would keep is_signed_in() answering True forever while every fetch
+    failed silently -- the exact shape CLAUDE.md rule 3 forbids. Renamed
+    rather than deleted, so the evidence survives for a post-mortem."""
+    token = _token_file()
+    try:
+        token.replace(token.with_name(token.name + ".rejected"))
+    except OSError as exc:
+        print(f"garmin: could not retire rejected token: {exc}", file=sys.stderr)
+
+
+def _load_api() -> Any:
+    """An authenticated Garmin client rebuilt from the stored token. No
+    email/password is given to it: with a tokenstore and no credentials,
+    garminconnect loads the token, refreshes it if it is close to expiry,
+    and verifies it against the API (__init__.py:680-758)."""
     if not is_signed_in():
         raise RuntimeError("garmin: not signed in (call login() first)")
-    client = garth.Client()
-    client.load(str(_token_dir()))
-    return client
+    api = garminconnect.Garmin()
+    try:
+        api.login(str(_token_dir()))
+    except GarminConnectAuthenticationError:
+        _retire_rejected_tokens()
+        raise
+    return api
 
 
 def _parse_iso(iso: str) -> datetime:
     """Parse an ISO-8601 timestamp (accepts a trailing 'Z') to a naive UTC
-    datetime, matching the naive datetimes garth attaches to
-    Activity.start_time_gmt (Garmin's API sends "startTimeGMT" with no
-    offset -- it is already UTC, just not marked as such)."""
+    datetime, matching the naive timestamps Garmin Connect puts in
+    "startTimeGMT" ("2026-09-10 18:32:07" -- already UTC, just not marked
+    as such)."""
     text = iso[:-1] + "+00:00" if iso.endswith("Z") else iso
     dt = datetime.fromisoformat(text)
     if dt.tzinfo is not None:
         dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
     return dt
+
+
+def _activity_start(activity: dict) -> Optional[datetime]:
+    raw = activity.get("startTimeGMT")
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        return _parse_iso(raw)
+    except ValueError:
+        return None
 
 
 def fetch_new(since_iso: str, out_dir: "str | Path") -> list:
@@ -283,6 +438,10 @@ def fetch_new(since_iso: str, out_dir: "str | Path") -> list:
     one's ORIGINAL FIT zip into out_dir, skipping any activity id whose
     zip is already there. Returns the paths actually written this call
     (already-seen ids are not re-downloaded and are not in the list).
+
+    The <id>.zip naming is the contract daemon.py's _run_garmin() relies on:
+    it uploads every *.zip in out_dir that has no sibling <name>.sent marker,
+    so a download that happened is re-offered to Drive until Drive confirms.
 
     Raises RuntimeError if not signed in (callers are expected to check
     is_signed_in() first -- daemon.py's Garmin leg "never blocks the puck
@@ -293,7 +452,7 @@ def fetch_new(since_iso: str, out_dir: "str | Path") -> list:
     same "a reading that did not happen is a finding" rule serial_job.py
     applies to the puck's own stats/verify reads).
     """
-    client = _load_client()
+    api = _load_api()
     since_dt = _parse_iso(since_iso) - timedelta(seconds=LOOKBACK_S)
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
@@ -301,24 +460,27 @@ def fetch_new(since_iso: str, out_dir: "str | Path") -> list:
     downloaded: list = []
     start = 0
     for _ in range(MAX_PAGES):
-        page = garth.Activity.list(limit=LIST_PAGE_SIZE, start=start, client=client)
+        page = api.get_activities(start, LIST_PAGE_SIZE)
         if not page:
             break
 
         stop = False
         for activity in page:
-            started = getattr(activity, "start_time_gmt", None)
+            started = _activity_start(activity)
             if started is not None and started <= since_dt:
                 stop = True
                 break
 
-            activity_id = activity.activity_id
+            activity_id = activity.get("activityId")
+            if activity_id is None:
+                continue
             dest = out_path / f"{activity_id}.zip"
             if dest.exists():
                 continue  # already-seen id: not re-downloaded, not returned
 
-            data = client.download(
-                ORIGINAL_DOWNLOAD_PATH.format(activity_id=activity_id)
+            data = api.download_activity(
+                activity_id,
+                dl_fmt=garminconnect.Garmin.ActivityDownloadFormat.ORIGINAL,
             )
             if not data or not data.startswith(b"PK"):
                 raise GarminDownloadError(

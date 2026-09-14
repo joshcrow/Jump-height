@@ -3,13 +3,27 @@
 # universal2 build leaves behind.
 #
 # MEASURED 2026-09-13: even with `--arch=universal2` and a universal2
-# python.org framework, two compiled extensions genuinely needed by garth
-# (garmin.py's own dependency — see packaging/setup.py's _MEASURED_UNUSED
-# comment for how "genuinely needed" was measured) came out of the FIRST
-# py2app build as arm64-only:
+# python.org framework, compiled extensions genuinely needed by
+# garmin.py's Garmin client came out of the py2app build as arm64-only.
+# Under garth those were:
 #
 #   lib-dynload/psutil/_psutil_osx.so
 #   lib-dynload/pydantic_core/_pydantic_core.so
+#
+# garmin.py moved to garminconnect on 2026-09-13 and neither of those is
+# a dependency of it (psutil and pydantic were garth's), so they will
+# normally be absent now — the loop below says so per target and moves on,
+# out loud, rather than silently. What replaced them, MEASURED on this
+# machine with `lipo -archs` against the installed wheels:
+#
+#   curl_cffi/_wrapper.abi3.so                 arm64 only
+#   _cffi_backend.cpython-314-darwin.so        arm64 only
+#
+# Both have an official macOS x86_64 wheel for the EXACT installed version
+# (curl_cffi 0.16.3 cp310-abi3-macosx_10_9_x86_64, cffi 2.0.0
+# cp314-macosx_10_13_x86_64 — checked against PyPI's JSON API), so both are
+# patchable here the same way; neither is a dead end that would force
+# garmin.py onto garminconnect's cffi-free login strategies.
 #
 # This is not a py2app bug: PyPI simply does not publish universal2 wheels
 # for either package (checked their JSON API) — only separate arm64 and
@@ -43,20 +57,39 @@ fi
 rm -rf "$WORK_DIR"
 mkdir -p "$WORK_DIR"
 
-# "import name:pip distribution name:bundled path relative to the .app"
+# "import name:pip distribution name:bundled path (a glob) relative to the .app"
 TARGETS=(
-    "psutil:psutil:Contents/Resources/lib/python3.14/lib-dynload/psutil/_psutil_osx.so"
-    "pydantic_core:pydantic-core:Contents/Resources/lib/python3.14/lib-dynload/pydantic_core/_pydantic_core.so"
+    "curl_cffi:curl_cffi:Contents/Resources/lib/python3.*/lib-dynload/curl_cffi/_wrapper*.so"
+    "_cffi_backend:cffi:Contents/Resources/lib/python3.*/lib-dynload/_cffi_backend*.so"
+    # garth-era leftovers: absent from a garminconnect build, kept so a
+    # framework that still drags them in is still patched rather than
+    # shipping arm64-only.
+    "psutil:psutil:Contents/Resources/lib/python3.*/lib-dynload/psutil/_psutil_osx.so"
+    "pydantic_core:pydantic-core:Contents/Resources/lib/python3.*/lib-dynload/pydantic_core/_pydantic_core.so"
 )
 
 for entry in "${TARGETS[@]}"; do
     IFS=':' read -r name dist_name bundled_rel <<< "$entry"
-    bundled_path="$APP/$bundled_rel"
 
-    if [[ ! -f "$bundled_path" ]]; then
+    # The glob first, then a whole-bundle search by filename. py2app has
+    # moved extensions between lib-dynload/ and the package directory
+    # before; a hardcoded path that stops matching would make a needed
+    # arm64-only .so LOOK like "not in this build" and ship unpatched —
+    # exactly the silent pass CLAUDE.md rule 3 forbids. A real absence
+    # still prints, below.
+    bundled_path=""
+    for candidate in "$APP"/$bundled_rel; do
+        if [[ -f "$candidate" ]]; then bundled_path="$candidate"; break; fi
+    done
+    if [[ -z "$bundled_path" ]]; then
+        bundled_path="$(find "$APP/Contents/Resources" -type f -name "$(basename "$bundled_rel")" 2>/dev/null | head -n1)"
+    fi
+
+    if [[ -z "$bundled_path" || ! -f "$bundled_path" ]]; then
         echo "packaging/fix_universal_libs.sh: $name not present in this build ($bundled_rel) — skipping"
         continue
     fi
+    echo "packaging/fix_universal_libs.sh: $name found at ${bundled_path#$APP/}"
 
     archs="$(lipo -archs "$bundled_path" 2>&1)"
     if [[ "$archs" == *x86_64* && "$archs" == *arm64* ]]; then
