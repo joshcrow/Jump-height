@@ -16,6 +16,7 @@ import datetime
 import importlib
 import subprocess
 import sys
+import importlib.util
 import unittest
 from pathlib import Path
 
@@ -195,6 +196,7 @@ class TestMenubarOpeners(unittest.TestCase):
         self.assertEqual(captured["args"], ["open", "/tmp/somewhere"])
 
 
+@unittest.skipUnless(importlib.util.find_spec("rumps"), "rumps is macOS-only; the wiring tests need it")
 class TestMenubarAppWiring(unittest.TestCase):
     """set_state() and the five-line menu, exercised through the real
     rumps.App (installed in this environment) — but only here, never at

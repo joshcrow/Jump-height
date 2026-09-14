@@ -467,7 +467,8 @@ class GoogleFlowThroughRclone(unittest.TestCase):
             # make the folder exist on the fake remote the way an upload would
             local = Path(self._tmp.name) / "ride.zip"; local.write_bytes(b"PK")
             upload.upload(local, "JumpHeight/inbox")
-            self.assertTrue(upload.ensure_shared("JumpHeight", post_json=post))
+            self.assertTrue(upload.ensure_shared("JumpHeight", email="joshcrow1193@gmail.com", post_json=post),
+                            "share address passed explicitly: google-client.json is not on CI")
         self.assertIn("/files/id-JumpHeight/permissions", posted["url"])
         self.assertEqual(posted["body"], {"role": "writer", "type": "user",
                                           "emailAddress": "joshcrow1193@gmail.com"})
