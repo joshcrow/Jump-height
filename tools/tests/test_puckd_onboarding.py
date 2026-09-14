@@ -209,10 +209,22 @@ class GoogleFlowThroughRclone(unittest.TestCase):
             upload.authorize()
             self.assertIsNone(upload.account_email(fetch_json=lambda u, b: (_ for _ in ()).throw(OSError())))
 
-    def test_token_parser(self):
+    def test_token_parser_raw_json(self):
         out = "Paste the following into your remote machine --->\n{\"access_token\":\"x\"}\n<---End paste\n"
         self.assertEqual(json.loads(upload._token_from_authorize_output(out))["access_token"], "x")
         self.assertIsNone(upload._token_from_authorize_output("nothing here"))
+
+    def test_token_parser_base64_config_token(self):
+        """What current rclone prints (measured 2026-09-13: the raw-JSON-only
+        parser said 'didn't connect' after a successful consent)."""
+        import base64
+        inner = json.dumps({"token": json.dumps({"access_token": "y", "refresh_token": "r"})})
+        blob = base64.b64encode(inner.encode()).decode().rstrip("=")
+        out = f"Paste the following into your remote machine --->\n{blob}\n<---End paste\n"
+        self.assertEqual(json.loads(upload._token_from_authorize_output(out))["access_token"], "y")
+        inner2 = json.dumps({"access_token": "z"})
+        blob2 = base64.b64encode(inner2.encode()).decode()
+        self.assertEqual(json.loads(upload._token_from_authorize_output(blob2))["access_token"], "z")
 
 
 if __name__ == "__main__":

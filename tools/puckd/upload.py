@@ -36,6 +36,7 @@ import re
 import os
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -104,19 +105,49 @@ def google_client() -> dict:
 
 
 def _token_from_authorize_output(text: str) -> "Optional[str]":
-    """`rclone authorize` prints the token between two marker lines:
+    """`rclone authorize` prints its result between two marker lines:
         Paste the following into your remote machine --->
-        {"access_token": ...}
+        <result>
         <---End paste
-    """
-    m = re.search(r"--->\s*(\{.*?\})\s*<---", text, re.S)
-    if m:
-        return m.group(1).strip()
-    for line in text.splitlines():
-        line = line.strip()
-        if line.startswith("{") and "access_token" in line:
-            return line
+    Older builds print the token as raw JSON; current ones print a base64
+    blob (what `rclone config` calls config_token) wrapping JSON that either
+    IS the token or carries it under "token" (as a string or an object).
+    Measured 2026-09-13: the raw-JSON-only parser returned None on a
+    successful consent, so the app said "didn't connect" while the browser
+    said "Connected". Returns the token as a JSON string, or None."""
+    m = re.search(r"--->\s*(.*?)\s*<---", text, re.S)
+    candidates = [m.group(1).strip()] if m else []
+    candidates += [ln.strip() for ln in text.splitlines() if ln.strip()]
+    for c in candidates:
+        tok = _token_from_blob(c)
+        if tok:
+            return tok
     return None
+
+
+def _token_from_blob(blob: str) -> "Optional[str]":
+    def from_obj(obj):
+        if not isinstance(obj, dict):
+            return None
+        if "access_token" in obj:
+            return json.dumps(obj)
+        t = obj.get("token")
+        if isinstance(t, str):
+            try:
+                return from_obj(json.loads(t))
+            except ValueError:
+                return None
+        return from_obj(t) if isinstance(t, dict) else None
+    try:
+        return from_obj(json.loads(blob))
+    except ValueError:
+        pass
+    try:
+        padded = blob + "=" * (-len(blob) % 4)
+        decoded = base64.b64decode(padded, validate=False).decode("utf-8")
+        return from_obj(json.loads(decoded))
+    except Exception:  # noqa: BLE001 -- not base64, not JSON: not a token
+        return None
 
 
 def authorize(timeout: float = _AUTHORIZE_TIMEOUT_S) -> bool:
@@ -151,9 +182,13 @@ def authorize(timeout: float = _AUTHORIZE_TIMEOUT_S) -> bool:
     except (RcloneNotFound, subprocess.TimeoutExpired, OSError):
         return False
     if proc.returncode != 0:
+        print(f"authorize: rclone exited {proc.returncode}: {(proc.stderr or '')[-300:]}", file=sys.stderr)
         return False
     token = _token_from_authorize_output(proc.stdout or "")
     if token is None:
+        out = proc.stdout or ""
+        print(f"authorize: no token in rclone's output ({len(out)} chars, starts {out[:40]!r})",
+              file=sys.stderr)
         return False
     create_args = ["config", "create", REMOTE_NAME, "drive", "scope", scope]
     if cid and secret:
