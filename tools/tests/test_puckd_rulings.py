@@ -10,6 +10,8 @@
      waited a day.
   5. Garmin is nagged only if he ever signed in.
   6. The site URL defaults to the live page.
+  7. The app updates itself silently -- but only on a tick with no puck
+     attached, because `launchctl kickstart -k` kills the process.
 
 SPDX-License-Identifier: MIT
 """
@@ -318,6 +320,156 @@ class SiteUrlDefaultsToTheLivePage(unittest.TestCase):
         with patch.dict(os.environ, {daemon.SITE_URL_ENV: "http://127.0.0.1:9"}):
             cfg = daemon.build_config(home_dir=Path("/tmp/x"))
         self.assertEqual(cfg.site_url, "http://127.0.0.1:9")
+
+
+class _FakeSelfupdate:
+    """A stand-in for cfg.selfupdate_module. The daemon needs exactly four
+    calls (current_version, latest_manifest, needs_update, apply) plus
+    installed_bundle_path -- the real module's own download/sha256/rename
+    sequence is tools/tests/test_puckd_selfupdate.py's job, not this
+    file's to repeat."""
+
+    def __init__(self, latest=None, ok=True):
+        self.latest = latest
+        self.ok = ok
+        self.manifest_calls = []
+        self.apply_calls = []
+
+    def current_version(self):
+        return "1.0.0"
+
+    def installed_bundle_path(self):
+        return Path("/Applications/JumpHeight Sync.app")
+
+    def latest_manifest(self, site_url):
+        self.manifest_calls.append(site_url)
+        return {"version": self.latest, "url": "https://gh/x.zip",
+                "sha256": "a" * 64} if self.latest else None
+
+    def needs_update(self, current, manifest):
+        return bool(manifest) and manifest.get("version", "") > current
+
+    def apply(self, manifest, **kwargs):
+        self.apply_calls.append((manifest, kwargs))
+        return daemon.selfupdate.UpdateResult(self.ok, "restart", None,
+                                              manifest.get("version"))
+
+
+class _StubReport:
+    """What a patched run_job_cycle hands back -- enough for run_forever's
+    own bookkeeping, nothing more."""
+
+    port = "/dev/cu.usbmodemFAKE"
+    pulled = False
+    verified = None
+    jumps = 0
+    reasons = []
+    uploaded = False
+    cleared = False
+    flashed = False
+    needs_you = None
+    bundle_path = None
+    src = None
+    empty = True
+    stats = {}
+
+
+class TheAppUpdatesItselfOnlyWhenIdle(_DaemonTestBase):
+    """7. The app replaces itself silently -- but `launchctl kickstart -k`
+    kills this process, so the check runs ONLY on a tick with no puck
+    attached and no job running. A restart mid-sync is G3 broken from the
+    app's own side, and the rider is 300 miles away when it happens."""
+
+    def _drive(self, su, ports, *, interval=6 * 3600.0, ticks=None):
+        """Run the loop over a scripted list of find_port() answers, with a
+        clock that advances one POLL_INTERVAL_S per tick unless a port
+        answer is the string "+interval" (which jumps the clock instead)."""
+        clock = [1000.0]
+        answers = list(ports)
+        seen = []
+
+        def now():
+            return clock[0]
+
+        def find_port():
+            got = answers[seen.__len__()] if len(seen) < len(answers) else None
+            seen.append(got)
+            if got == "+interval":
+                clock[0] += interval + 1.0
+                return None
+            clock[0] += daemon.POLL_INTERVAL_S
+            return got
+
+        cfg = self.make_cfg(selfupdate_module=su, selfupdate_interval_s=interval,
+                            now=now, site_url="https://site.invalid")
+        with patch.object(daemon, "run_job_cycle", lambda port, c: _StubReport()), \
+             patch.object(daemon, "publish_log", lambda *a, **k: True), \
+             patch.object(daemon, "_run_garmin", lambda c: None):
+            daemon.run_forever(cfg, find_port=find_port,
+                               max_iterations=ticks if ticks is not None else len(answers))
+        return cfg
+
+    def test_the_check_runs_on_the_very_first_idle_tick(self):
+        su = _FakeSelfupdate()
+        self._drive(su, [None])
+        self.assertEqual(su.manifest_calls, ["https://site.invalid"],
+                         "a build that shipped broken must not wait 6 h to fix itself")
+
+    def test_it_does_not_run_again_before_the_interval(self):
+        su = _FakeSelfupdate()
+        self._drive(su, [None, None, None, None])
+        self.assertEqual(len(su.manifest_calls), 1)
+
+    def test_it_runs_again_once_the_interval_has_passed(self):
+        su = _FakeSelfupdate()
+        self._drive(su, [None, "+interval"])
+        self.assertEqual(len(su.manifest_calls), 2)
+
+    def test_a_puck_on_the_bench_defers_the_check_entirely(self):
+        su = _FakeSelfupdate()
+        # Tick 1: a puck arrives (a job runs). Tick 2: still attached.
+        self._drive(su, ["/dev/cu.usbmodemFAKE", "/dev/cu.usbmodemFAKE"])
+        self.assertEqual(su.manifest_calls, [],
+                         "never restart mid-sync: the check does not even fetch")
+        self.assertEqual(su.apply_calls, [])
+
+    def test_the_deferred_check_happens_as_soon_as_the_puck_is_unplugged(self):
+        su = _FakeSelfupdate()
+        self._drive(su, ["/dev/cu.usbmodemFAKE", None])
+        self.assertEqual(len(su.manifest_calls), 1)
+
+    def test_a_newer_version_is_applied_and_logged(self):
+        su = _FakeSelfupdate(latest="1.0.1")
+        cfg = self._drive(su, [None])
+        self.assertEqual(len(su.apply_calls), 1)
+        _manifest, kwargs = su.apply_calls[0]
+        self.assertEqual(kwargs["bundle_path"], Path("/Applications/JumpHeight Sync.app"))
+        self.assertEqual(kwargs["download_dir"],
+                         Path(cfg.home_dir) / daemon.UPDATES_CACHE_DIRNAME)
+        log = (Path(cfg.home_dir) / daemon.LOG_FILENAME).read_text()
+        self.assertIn("app update available: 1.0.0 -> 1.0.1", log)
+        self.assertIn("app updated to 1.0.1", log)
+
+    def test_the_same_version_applies_nothing(self):
+        su = _FakeSelfupdate(latest="1.0.0")
+        self._drive(su, [None])
+        self.assertEqual(su.apply_calls, [])
+
+    def test_a_selfupdate_module_that_explodes_never_kills_the_loop(self):
+        class Boom:
+            def current_version(self):
+                raise RuntimeError("plist on fire")
+        cfg = self._drive(Boom(), [None, None])
+        log = (Path(cfg.home_dir) / daemon.LOG_FILENAME).read_text()
+        self.assertIn("selfupdate raised", log)
+
+    def test_status_json_carries_the_app_version(self):
+        cfg = self.make_cfg(selfupdate_module=_FakeSelfupdate())
+        Path(cfg.home_dir).mkdir(parents=True, exist_ok=True)
+        with patch.dict(os.environ, self.rclone_env()):
+            daemon.publish_log(cfg)
+        status = json.loads((Path(cfg.home_dir) / daemon.STATUS_FILENAME).read_text())
+        self.assertEqual(status["app_version"], "1.0.0")
 
 
 if __name__ == "__main__":

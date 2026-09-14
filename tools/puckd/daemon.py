@@ -64,7 +64,7 @@ sys.path.insert(0, str(REPO / "tools" / "puckd"))  # bare `import garmin` --
 # 'tools' / 'puckd')); import garmin -- no package __init__.py, matches
 # sibling P1 modules already in tools/puckd/".
 
-from puckd import serial_job, upload, notify, menubar, flash  # noqa: E402
+from puckd import serial_job, upload, notify, menubar, flash, selfupdate  # noqa: E402
 import garmin  # noqa: E402
 
 
@@ -74,6 +74,13 @@ SEEED_VID = 0x2886  # Seeed Studio's USB vendor id -- the XIAO Sense's own.
 POLL_INTERVAL_S = 2.0                    # docs/sync-agent-plan.md's own "loop"
 STATS_POLL_INTERVAL_S = 60.0             # spec item 10
 GARMIN_INTERVAL_S = 6 * 3600.0           # spec line 57: "every job and every 6 h"
+# The APP's own update check. Same 6 h cadence as the Garmin leg -- there is
+# nothing urgent about it, and the one thing that MUST be true is that it
+# never lands mid-sync: `launchctl kickstart -k` kills this process, so a
+# check while a puck is attached is G3 ("never leave the puck half-written")
+# broken from the other end. run_forever() therefore only calls it on a tick
+# where no port is attached and no job is running.
+SELFUPDATE_INTERVAL_S = 6 * 3600.0
 CHARGED_BATT_PCT_MIN = 95                # spec item 10
 
 # spec lines 49/58's own paths, verbatim (upload.upload() prefixes "gdrive:").
@@ -84,6 +91,7 @@ STATE_FILENAME = "state.json"            # last ride, under PUCKD_HOME
 GARMIN_SEEN_FILENAME = "garmin_last_seen.json"
 FIRMWARE_CACHE_DIRNAME = "firmware"
 FITS_CACHE_DIRNAME = "fits"
+UPDATES_CACHE_DIRNAME = "updates"   # PUCKD_HOME/updates/<version>.zip and /<version>/
 
 # The deployed site. web/ is the GitHub Pages root: the rider page is
 # <site>/sync/ and reads ../firmware/latest.json, so the manifest is at
@@ -251,6 +259,10 @@ class DaemonConfig:
     notifier: "Callable[[str, Optional[str]], None]" = notify.osascript_runner
     garmin_module: object = None
     flash_module: object = None
+    # tools/puckd/selfupdate.py, injectable exactly like flash_module: the
+    # tests drive the whole timer/idle ruling against a fake rather than
+    # against a real download and a real launchctl.
+    selfupdate_module: object = None
     fetch_uf2_fn: "Callable[[str, str, Path], Optional[Path]]" = _default_fetch_uf2
     share_fn: "Callable[[str], bool]" = upload.ensure_shared
     # Called with "reading" / "uploading" / "emptying" / "updating" as the job
@@ -260,6 +272,7 @@ class DaemonConfig:
     inbox_dir: str = INBOX_DIR
     fits_dir: str = FITS_DIR
     garmin_interval_s: float = GARMIN_INTERVAL_S
+    selfupdate_interval_s: float = SELFUPDATE_INTERVAL_S
     now: "Callable[[], float]" = time.time
     sleep: "Callable[[float], None]" = time.sleep
     # Small cross-call bookkeeping (the Garmin needs_you dedup flag, the
@@ -273,6 +286,8 @@ class DaemonConfig:
             self.garmin_module = garmin
         if self.flash_module is None:
             self.flash_module = flash
+        if self.selfupdate_module is None:
+            self.selfupdate_module = selfupdate
 
 
 def build_config(*, home_dir: "Path | str | None" = None,
@@ -388,6 +403,16 @@ LOG_DIR = "JumpHeight/log"        # where daemon.log and status.json go on Drive
 STATUS_FILENAME = "status.json"
 
 
+def _app_version(cfg: DaemonConfig) -> str:
+    """The installed bundle's version for status.json. Never raises: an
+    unreadable Info.plist reads as selfupdate.DEV_VERSION, the same value a
+    source checkout reports."""
+    try:
+        return cfg.selfupdate_module.current_version()
+    except Exception:  # noqa: BLE001 -- telemetry must never cost a sync
+        return selfupdate.DEV_VERSION
+
+
 def publish_log(cfg: DaemonConfig, report: "Optional[JobCycleReport]" = None,
                 stats: "Optional[dict]" = None) -> bool:
     """Copy daemon.log and a small status.json into the rider's shared Drive
@@ -400,6 +425,11 @@ def publish_log(cfg: DaemonConfig, report: "Optional[JobCycleReport]" = None,
         status.update({
             "written": datetime.now().astimezone().isoformat(timespec="seconds"),
             "site": cfg.site_url,
+            # Which build of the app wrote this. The rider is 300 miles away
+            # and the app now replaces itself silently (see _maybe_selfupdate),
+            # so "which version is he actually running?" has to be answerable
+            # from the file Josh already reads, not by asking him.
+            "app_version": _app_version(cfg),
         })
         if report is not None:
             status["last_job"] = {
@@ -782,6 +812,50 @@ def _update_menubar(app, cfg: DaemonConfig, session: "Optional[AttachmentSession
         _log(cfg, f"menu bar update raised: {exc!r}")
 
 
+# ------------------------------------------------------- the app's own update
+
+def _maybe_selfupdate(cfg: DaemonConfig) -> "Optional[object]":
+    """One check of <site>/app/latest.json, and the swap if it is newer.
+
+    NEVER RAISES and never blocks a sync: run_forever() only reaches here on
+    a tick with no puck attached and no job running (see the call site), so
+    the `launchctl kickstart -k` at the end of a successful apply() -- which
+    kills THIS process -- can never land in the middle of a pull, an upload,
+    or a flash. That is G3 read from the app's side.
+
+    Returns the UpdateResult (or None when there was nothing to do) purely
+    so tests can assert on it; run_forever() ignores it, because on a live
+    Mac a successful apply() does not return at all.
+    """
+    su = cfg.selfupdate_module
+    try:
+        current = su.current_version()
+        manifest = su.latest_manifest(cfg.site_url)
+        if not su.needs_update(current, manifest):
+            return None
+        version = manifest.get("version")
+        _log(cfg, f"app update available: {current} -> {version}")
+        result = su.apply(
+            manifest,
+            bundle_path=su.installed_bundle_path(),
+            download_dir=Path(cfg.home_dir) / UPDATES_CACHE_DIRNAME,
+            log=lambda msg: _log(cfg, msg),
+        )
+        if getattr(result, "ok", False):
+            # Reached only when kickstart did NOT replace this process --
+            # either it failed, or a test injected a fake. Either way the
+            # new bundle IS in place; say so, since the next launch is what
+            # runs it. CLAUDE.md rule 3: never let that look like nothing.
+            _log(cfg, f"app updated to {version}")
+        else:
+            _log(cfg, f"app update did not apply: stage={getattr(result, 'stage', '?')} "
+                      f"error={getattr(result, 'error', None)}")
+        return result
+    except Exception as exc:  # noqa: BLE001 -- an update must never cost a sync
+        _log(cfg, f"selfupdate raised: {exc!r}")
+        return None
+
+
 # ----------------------------------------------------------------- the loop
 
 def run_forever(
@@ -816,6 +890,10 @@ def run_forever(
     session: "Optional[AttachmentSession]" = None
     last_garmin = cfg.now()
     last_spool = cfg.now()
+    # Deliberately in the past, so the app's own update check runs on the
+    # FIRST idle tick rather than six hours after the rider opens the app --
+    # a build that shipped with a bug would otherwise sit there all day.
+    last_selfupdate = cfg.now() - cfg.selfupdate_interval_s
 
     i = 0
     while max_iterations is None or i < max_iterations:
@@ -869,6 +947,17 @@ def run_forever(
                 last_spool = now
                 retry_spool(cfg)
                 publish_log(cfg, None, session.last_stats if session else None)
+            # The app's own update, LAST in the tick and only when the bench
+            # is clear: `port is None and current_port is None` means no puck
+            # is attached and no job ran on this tick, so a successful apply()
+            # -- which ends this process via launchctl kickstart -k -- cannot
+            # interrupt a sync (G3). The clock is only advanced when the check
+            # actually runs, so a puck left plugged in all day defers the
+            # check rather than silently skipping six hours of them.
+            if (port is None and current_port is None
+                    and now - last_selfupdate >= cfg.selfupdate_interval_s):
+                last_selfupdate = now
+                _maybe_selfupdate(cfg)
         except Exception as exc:  # noqa: BLE001 -- THE LAST LINE OF DEFENCE.
             # main() runs this function on a DAEMON THREAD behind rumps: an
             # exception that reaches here ends the thread, and nothing says

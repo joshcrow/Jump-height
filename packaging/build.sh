@@ -71,4 +71,26 @@ hdiutil create -volname "JumpHeight Sync" -srcfolder "$STAGE" -ov -format UDZO -
 rm -rf "$STAGE"
 echo "dmg:      $DMG_PATH ($(du -sh "$DMG_PATH" | awk '{print $1}'))"
 
+# The self-update payload. The .dmg above is what a HUMAN installs; this zip
+# is what the installed app downloads and swaps in by itself
+# (tools/puckd/selfupdate.py). `ditto -c -k --keepParent` is the macOS
+# spelling: it preserves the symlinks and xattrs inside the bundle (zip(1)
+# does not) and puts "JumpHeight Sync.app" at the ROOT of the archive, which
+# is exactly what selfupdate._find_app() looks for.
+#
+# The sha256 and byte count printed here are what packaging/release.sh puts
+# into web/app/latest.json, and what selfupdate.py's gate verifies before it
+# unpacks anything. A build that prints them is a build whose manifest can be
+# written without re-deriving a single number by hand.
+APP_VERSION="$("$PYTHON" -c "import re,sys;print(re.search(r'^APP_VERSION = \"([^\"]+)\"', open('$HERE/setup.py').read(), re.M).group(1))")"
+ZIP_PATH="$HERE/dist/JumpHeight-Sync-$APP_VERSION.zip"
+echo "== packaging/build.sh: building the self-update zip (v$APP_VERSION) =="
+rm -f "$ZIP_PATH"
+ditto -c -k --keepParent "$APP_PATH" "$ZIP_PATH"
+ZIP_SHA256="$(shasum -a 256 "$ZIP_PATH" | awk '{print $1}')"
+ZIP_BYTES="$(stat -f%z "$ZIP_PATH")"
+echo "zip:      $ZIP_PATH"
+echo "bytes:    $ZIP_BYTES"
+echo "sha256:   $ZIP_SHA256"
+
 echo "== packaging/build.sh: done. Nothing installed: opening the app is the install. =="
