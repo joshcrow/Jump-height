@@ -15,6 +15,7 @@ SPDX-License-Identifier: MIT
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 import time
@@ -272,6 +273,24 @@ class ClickingTheIconOpensTheWindow(_DaemonTestBase):
         self.assertTrue(daemon.consume_open_flag(cfg))
         self.assertFalse(daemon.consume_open_flag(cfg), "consumed")
         self.assertFalse((self.home / daemon.OPEN_SETUP_FLAG).exists())
+
+
+class TheLogGoesToDrive(_DaemonTestBase):
+    def test_after_a_job_the_log_and_status_land_in_the_shared_folder(self):
+        proc, port = _spawn_fake("session")
+        try:
+            with patch.dict(os.environ, self.rclone_env()):
+                cfg = self.make_cfg()
+                daemon.run_forever(cfg, find_port=lambda: port, max_iterations=1)
+        finally:
+            _kill(proc)
+        logdir = self.tmp / "drive" / daemon.LOG_DIR
+        self.assertTrue((logdir / daemon.LOG_FILENAME).is_file(), "daemon.log on Drive")
+        status = json.loads((logdir / daemon.STATUS_FILENAME).read_text())
+        self.assertEqual(status["last_job"]["jumps"], 4)
+        self.assertTrue(status["last_job"]["cleared"])
+        self.assertIn("batt_pct", status["puck"])
+        self.assertEqual(status["last_ride_jumps"], 4)
 
 
 class GarminNagsOnlyTheSignedIn(_DaemonTestBase):

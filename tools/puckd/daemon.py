@@ -384,6 +384,47 @@ def _drive_needs_you_if_due(cfg: DaemonConfig) -> None:
         cfg.runtime["drive_needs_you_sent"] = True
 
 
+LOG_DIR = "JumpHeight/log"        # where daemon.log and status.json go on Drive
+STATUS_FILENAME = "status.json"
+
+
+def publish_log(cfg: DaemonConfig, report: "Optional[JobCycleReport]" = None,
+                stats: "Optional[dict]" = None) -> bool:
+    """Copy daemon.log and a small status.json into the rider's shared Drive
+    folder, so Josh can read what happened without asking. Called after
+    every job and on the spool-retry tick. A few KB; rclone overwrites in
+    place. Never raises; False when Drive did not confirm."""
+    try:
+        home = Path(cfg.home_dir)
+        status = load_state(home)
+        status.update({
+            "written": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "site": cfg.site_url,
+        })
+        if report is not None:
+            status["last_job"] = {
+                "port": report.port, "empty": report.empty, "pulled": report.pulled,
+                "verified": report.verified, "jumps": report.jumps, "uploaded": report.uploaded,
+                "cleared": report.cleared, "flashed": report.flashed, "src": report.src,
+                "needs_you": report.needs_you,
+                "bundle": Path(report.bundle_path).name if report.bundle_path else None,
+            }
+        if stats:
+            status["puck"] = {k: stats.get(k) for k in
+                              ("vbat_mv", "batt_pct", "chg", "trace_bytes", "stored_jumps", "trace_full", "error")}
+        sp = home / STATUS_FILENAME
+        sp.write_text(json.dumps(status, indent=2, default=str))
+        ok = True
+        for name in (LOG_FILENAME, STATUS_FILENAME):
+            f = home / name
+            if f.is_file():
+                ok = bool(getattr(upload.upload(f, LOG_DIR), "ok", False)) and ok
+        return ok
+    except Exception as exc:  # noqa: BLE001 -- telemetry must never cost a sync
+        _log(cfg, f"publish_log raised: {exc!r}")
+        return False
+
+
 def retry_spool(cfg: DaemonConfig) -> int:
     """Upload whatever Drive has not confirmed yet. Returns how many
     confirmed this time. Never raises."""
@@ -669,6 +710,7 @@ class AttachmentSession:
     last_stats_poll: float = 0.0
     last_puck_pct: "Optional[int]" = None
     last_puck_charging: bool = False
+    last_stats: "Optional[dict]" = None
 
 
 def poll_attached(port_path: str, cfg: DaemonConfig, session: AttachmentSession) -> dict:
@@ -683,6 +725,7 @@ def poll_attached(port_path: str, cfg: DaemonConfig, session: AttachmentSession)
 
 
 def apply_stats(stats: dict, cfg: DaemonConfig, session: AttachmentSession) -> dict:
+    session.last_stats = stats
     """poll_attached()'s half that does not open the port, so a `stats`
     ALREADY read this tick (run_job_cycle()'s own first reading) can feed
     the charged rule and the menu bar without paying a second
@@ -800,6 +843,7 @@ def run_forever(
                     on_cycle(report)
                 if report.uploaded:
                     retry_spool(cfg)        # the network is evidently back
+                publish_log(cfg, report, report.stats)
                 # The cycle's own opening `stats` is this attachment's first
                 # battery reading -- reused instead of opening the port again
                 # for the same numbers (see apply_stats()).
@@ -824,6 +868,7 @@ def run_forever(
             if now - last_spool >= SPOOL_RETRY_INTERVAL_S:
                 last_spool = now
                 retry_spool(cfg)
+                publish_log(cfg, None, session.last_stats if session else None)
         except Exception as exc:  # noqa: BLE001 -- THE LAST LINE OF DEFENCE.
             # main() runs this function on a DAEMON THREAD behind rumps: an
             # exception that reaches here ends the thread, and nothing says
