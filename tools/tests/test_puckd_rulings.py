@@ -474,3 +474,114 @@ class TheAppUpdatesItselfOnlyWhenIdle(_DaemonTestBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---- added by the post-faa08a9 adversarial review -------------------------
+
+
+class _BrokenFetchGarmin(_FakeGarmin):
+    """Signed in, with a FIT already on disk, whose fetch_new() raises the
+    way garmin.fetch_new() does when one activity's download does not come
+    back as a zip -- permanently, since the bad activity is still there
+    next tick."""
+
+    def fetch_new(self, since_iso, out_dir):
+        self.fetch_calls.append((since_iso, out_dir))
+        raise RuntimeError("activity 42: response is not a zip (0 bytes)")
+
+
+class TheGarminLegFailsInHalves(_DaemonTestBase):
+    """A listing that cannot be read must not cancel the upload of FITs
+    that were already downloaded. With one try around both, a single
+    permanently-broken activity stopped every FIT on disk from ever
+    reaching Drive -- and said nothing at all."""
+
+    def test_a_fetch_that_raises_still_uploads_what_is_on_disk(self):
+        cfg = self.make_cfg(garmin_module=_BrokenFetchGarmin())
+        fits = Path(cfg.home_dir) / daemon.FITS_CACHE_DIRNAME
+        fits.mkdir(parents=True, exist_ok=True)
+        (fits / "1111.zip").write_bytes(b"PK-fit-zip-stand-in")
+
+        with patch.dict(os.environ, self.rclone_env()):
+            daemon._run_garmin(cfg)
+
+        self.assertTrue((fits / "1111.zip.sent").exists(),
+                        "the FIT already on disk was offered to Drive anyway")
+        uploaded = sorted(p.name for p in (self.tmp / "drive" / daemon.FITS_DIR).glob("*.zip"))
+        self.assertEqual(uploaded, ["1111.zip"])
+
+    def test_a_fetch_that_raises_is_written_down_not_swallowed_in_silence(self):
+        cfg = self.make_cfg(garmin_module=_BrokenFetchGarmin())
+        with patch.dict(os.environ, self.rclone_env()):
+            daemon._run_garmin(cfg)
+        log = (Path(cfg.home_dir) / daemon.LOG_FILENAME).read_text()
+        self.assertIn("garmin fetch failed", log)
+
+
+class TheLogIsBounded(_DaemonTestBase):
+    """publish_log() copies daemon.log to Drive after every job and on every
+    10-minute spool tick. One repeating fault writes a line every 2 s, so an
+    unbounded log is an unbounded upload."""
+
+    def test_it_rolls_over_instead_of_growing_forever(self):
+        cfg = self.make_cfg()
+        path = Path(cfg.home_dir) / daemon.LOG_FILENAME
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"x" * (daemon.LOG_MAX_BYTES + 1))
+
+        daemon._log(cfg, "the line that tips it over")
+
+        self.assertLess(path.stat().st_size, daemon.LOG_MAX_BYTES,
+                        "the live log started again")
+        self.assertIn("the line that tips it over", path.read_text())
+        self.assertTrue(path.with_name(path.name + ".1").is_file(),
+                        "the previous megabyte is still readable")
+
+
+class StatusJsonNamesTheRunningBuildNotTheOneOnDisk(_DaemonTestBase):
+    """A swap that landed with a restart that did not leaves the plist
+    saying 1.0.1 while this process still runs 1.0.0. Josh reads
+    app_version to answer "which build is he on?"."""
+
+    def test_app_version_is_the_running_one_and_the_disk_one_is_beside_it(self):
+        class _Su:
+            def running_version(self):
+                return "1.0.0"
+
+            def current_version(self):
+                return "1.0.1"
+
+        cfg = self.make_cfg(selfupdate_module=_Su())
+        Path(cfg.home_dir).mkdir(parents=True, exist_ok=True)
+        with patch.dict(os.environ, self.rclone_env()):
+            daemon.publish_log(cfg)
+        status = json.loads((Path(cfg.home_dir) / daemon.STATUS_FILENAME).read_text())
+        self.assertEqual(status["app_version"], "1.0.0")
+        self.assertEqual(status["installed_version"], "1.0.1")
+
+    def test_the_update_check_compares_against_the_running_version(self):
+        seen = []
+
+        class _Su(_FakeSelfupdate):
+            def running_version(self):
+                return "1.0.0"
+
+            def current_version(self):
+                return "9.9.9"      # the swap already landed on disk
+
+            def needs_update(self, current, manifest):
+                seen.append(current)
+                return _FakeSelfupdate.needs_update(self, current, manifest)
+
+        su = _Su(latest="1.0.1")
+        self._drive_for(su)
+        self.assertEqual(seen, ["1.0.0"],
+                         "comparing against the disk would answer 'up to date' forever")
+
+    def _drive_for(self, su):
+        cfg = self.make_cfg(selfupdate_module=su, site_url="https://site.invalid")
+        with patch.object(daemon, "run_job_cycle", lambda port, c: _StubReport()), \
+             patch.object(daemon, "publish_log", lambda *a, **k: True), \
+             patch.object(daemon, "_run_garmin", lambda c: None):
+            daemon.run_forever(cfg, find_port=lambda: None, max_iterations=1)
+        return cfg

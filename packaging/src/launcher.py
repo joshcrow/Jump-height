@@ -172,6 +172,25 @@ def _agent_is_running(run, domain: str) -> bool:
     return proc.returncode == 0 and "pid = " in out
 
 
+def _launchagent_plist() -> Path:
+    return Path.home() / "Library" / "LaunchAgents" / f"{LABEL}.plist"
+
+
+def _registered_program(plist_path: Path) -> "str | None":
+    """The executable the installed LaunchAgent actually points at, or None
+    if there is no readable plist naming one."""
+    import plistlib
+    try:
+        with open(plist_path, "rb") as f:
+            data = plistlib.load(f)
+    except Exception:  # noqa: BLE001 -- missing, unreadable, not a plist
+        return None
+    args = data.get("ProgramArguments")
+    if isinstance(args, list) and args and isinstance(args[0], str):
+        return args[0]
+    return None
+
+
 def _install_and_hand_off(resources: Path) -> bool:
     """Write the LaunchAgent and hand the daemon over to launchd. Returns
     True only when launchd has actually been told to run it -- a False means
@@ -199,7 +218,17 @@ def _install_and_hand_off(resources: Path) -> bool:
     # the rider clicked the Dock icon during his first sync, and the old
     # behaviour booted the running agent out mid-job. Leave a flag the
     # agent's loop consumes (daemon.OPEN_SETUP_FLAG) and exit.
-    if _agent_is_running(run, domain) and not str(bundle).startswith(DMG_PREFIX):
+    #
+    # "FROM THIS BUNDLE" is checked, not assumed. The test used to be only
+    # "an agent is running, and I am not on a dmg" -- which is also true of
+    # a NEWER copy opened from ~/Downloads while the old one runs out of
+    # /Applications. That click installed nothing, wrote a flag, and exited:
+    # the rider saw the setup window open and had every reason to believe he
+    # had upgraded, while the old build kept running. The LaunchAgent plist
+    # on disk names the executable launchd was given, so compare against it.
+    same_bundle = _registered_program(_launchagent_plist()) == str(exe)
+    if (_agent_is_running(run, domain) and same_bundle
+            and not str(bundle).startswith(DMG_PREFIX)):
         try:
             flag = _puckd_home() / OPEN_SETUP_FLAG
             flag.parent.mkdir(parents=True, exist_ok=True)

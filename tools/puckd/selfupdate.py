@@ -144,6 +144,41 @@ def current_version(*, bundle_path: "Optional[Path]" = None) -> str:
     return value.strip()
 
 
+_RUNNING_VERSION: "Optional[str]" = None
+
+
+# The one place a build may come from. The manifest carries the sha256 of
+# the file it names, so a manifest-only compromise could name any file and
+# its own hash; pinning the host means it can at least only name a file
+# that someone with write access to THIS repository's releases put there.
+RELEASE_URL_PREFIX = "https://github.com/joshcrow/Jump-height/releases/download/"
+
+
+def running_version() -> str:
+    """The version of the code THIS PROCESS IS EXECUTING — which is not the
+    same question as current_version().
+
+    current_version() reads Info.plist off disk. apply() replaces that
+    bundle underneath a still-running process, so from the instant a swap
+    lands until launchd actually restarts us, the plist says 1.0.1 while
+    this interpreter is still running 1.0.0's code. Two things were wrong
+    because of that:
+
+      * a kickstart that did not fire (apply() returns ok=True,
+        stage=restart) left needs_update() answering False forever, so the
+        restart was never retried and the rider kept running the old code;
+      * status.json's app_version — the one answer to "which build is he
+        actually running?", read by Josh from 300 miles away — named the
+        build on disk, not the one running. CLAUDE.md rule 3.
+
+    So this memoises the FIRST reading, which is taken before any swap can
+    have happened, and never changes for the life of the process."""
+    global _RUNNING_VERSION
+    if _RUNNING_VERSION is None:
+        _RUNNING_VERSION = current_version()
+    return _RUNNING_VERSION
+
+
 def _parse_version(text: "str | None") -> "tuple[int, ...]":
     """"1.0.10" -> (1, 0, 10). Non-numeric junk in a component contributes
     its leading digits only, so DEV_VERSION ("0.0.0-dev") parses as
@@ -206,7 +241,7 @@ def latest_manifest(site_url: str) -> "dict | None":
     asset = manifest.get("url")
     if not isinstance(version, str) or not _VERSION_RE.match(version.strip()):
         return None
-    if not isinstance(asset, str) or not asset.startswith("https://"):
+    if not isinstance(asset, str) or not asset.startswith(RELEASE_URL_PREFIX):
         return None
     return manifest
 
@@ -293,6 +328,95 @@ def _find_app(unpack_dir: Path) -> "Optional[Path]":
     return apps[0] if len(apps) == 1 else None
 
 
+def _bundle_complaint(app: Path, version: str) -> "Optional[str]":
+    """Why `app` must NOT be swapped in, or None if it may be.
+
+    The sha256 gate proves the bytes are the bytes the manifest named. It
+    proves nothing about whether those bytes are a launchable app: a zip
+    built from a half-finished tree, or one whose CFBundleShortVersionString
+    does not match what the manifest advertises, passes it intact. Both
+    end the same way and there is no way back — the swap lands, launchd
+    restarts into a bundle that cannot start, and the agent is gone from a
+    Mac 300 miles away with no Finder window to notice.
+
+    Two readings, both off the staged copy and both cheap:
+
+      structure   Contents/Info.plist and at least one file under
+                  Contents/MacOS/ (the executable launchd's plist names).
+      version     CFBundleShortVersionString == the manifest's version.
+                  An Info.plist we cannot read is NOT a complaint (a
+                  bundle can be valid and unreadable to plistlib here);
+                  a version we CAN read and that disagrees is, because
+                  that is exactly a release.sh run whose APP_VERSION bump
+                  did not take, and installing it makes needs_update()
+                  true forever: a rider's Mac kickstarting itself every
+                  six hours, silently, for good."""
+    if not (app / "Contents" / "Info.plist").is_file():
+        return "staged bundle has no Contents/Info.plist"
+    macos = app / "Contents" / "MacOS"
+    if not macos.is_dir() or not any(p.is_file() for p in macos.iterdir()):
+        return "staged bundle has no executable under Contents/MacOS"
+    staged_version = current_version(bundle_path=app)
+    if (staged_version != DEV_VERSION and version
+            and _compare(staged_version, version) != 0):
+        return (f"staged bundle is version {staged_version}, manifest says "
+                f"{version} — refusing to install a build that does not "
+                f"match the version it is published as")
+    return None
+
+
+def _prune_downloads(download_dir: Path, keep: str) -> None:
+    """Everything in PUCKD_HOME/updates that is not this attempt's. A
+    failed unpack leaves a <version>.zip behind and a failed download a
+    <version>.zip.part; without this they accumulate one ~110 MB file per
+    release that never installed, on the disk of somebody who will never
+    look in that directory. Never raises."""
+    try:
+        for child in Path(download_dir).iterdir():
+            name = child.name
+            if name in (f"{keep}.zip", f"{keep}.zip.part", keep, ".lock"):
+                continue
+            if child.is_dir():
+                shutil.rmtree(child, ignore_errors=True)
+            else:
+                _unlink(child)
+    except OSError:
+        pass
+
+
+class _AlreadyRunning(Exception):
+    pass
+
+
+def _update_lock(download_dir: Path):
+    """An exclusive, non-blocking lock so two agents cannot swap the same
+    bundle at once.
+
+    That is not hypothetical: packaging/src/launcher.py hands off to
+    launchd, and a rider who opens the app again (or whose old LaunchAgent
+    copy is still registered) can have two frozen processes alive with the
+    SAME RESOURCEPATH. Both would download to the same
+    updates/<version>.zip — interleaved writes, a sha256 that fails for
+    reasons nothing explains — and then both would rename the same
+    installed bundle, where the loser's rollback deletes the winner's app.
+
+    flock is held by the KERNEL on behalf of the process, so the one exit
+    this module cannot tidy up after — `launchctl kickstart -k` killing us
+    mid-apply — releases it for free. No stale lock is possible."""
+    try:
+        import fcntl
+    except ImportError:      # not macOS: no second agent to race with
+        return None
+    Path(download_dir).mkdir(parents=True, exist_ok=True)
+    fh = open(Path(download_dir) / ".lock", "a+")
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        fh.close()
+        raise _AlreadyRunning("another agent is already applying an update")
+    return fh
+
+
 # ------------------------------------------------------------------- apply
 
 def apply(
@@ -363,14 +487,62 @@ def apply(
                             f"installed bundle not found: {bundle_path}", version)
 
     url = (manifest or {}).get("url")
-    if not isinstance(url, str) or not url.startswith("https://"):
+    if not isinstance(url, str) or not url.startswith(RELEASE_URL_PREFIX):
         return UpdateResult(False, STAGE_DOWNLOAD, "manifest has no https url", version)
 
+    # ---- Stage 0: is it already sitting there? -------------------------
+    # The swap can land and the kickstart still fail (launchd refusing the
+    # domain, a bootout in flight). The bundle on disk is then ALREADY this
+    # version while this process is still running the old code, and what is
+    # owed is a restart, not another 110 MB download every six hours until
+    # the rider next logs out. running_version() is what keeps
+    # needs_update() true across that gap.
+    if version and _compare(current_version(bundle_path=bundle_path), version) == 0:
+        log(f"selfupdate: {version} is already installed; asking launchd to restart")
+        try:
+            ok = bool(kickstart_fn())
+        except Exception as exc:  # noqa: BLE001
+            return UpdateResult(True, STAGE_RESTART, repr(exc), version)
+        return UpdateResult(True, STAGE_RESTART,
+                            None if ok else "kickstart returned non-zero", version)
+
+    # One agent at a time. Held until this call returns, or until the
+    # kernel releases it because kickstart -k killed us.
+    try:
+        lock = _update_lock(Path(download_dir))
+    except _AlreadyRunning as exc:
+        log("selfupdate: another agent holds the update lock — skipping this check")
+        return UpdateResult(False, STAGE_DOWNLOAD, str(exc), version)
+    except OSError as exc:
+        return UpdateResult(False, STAGE_DOWNLOAD, repr(exc), version)
+    try:
+        return _apply_locked(
+            manifest, version=version, url=url, bundle_path=bundle_path,
+            download_dir=Path(download_dir), log=log, download_fn=download_fn,
+            unpack_fn=unpack_fn, copytree_fn=copytree_fn, rename_fn=rename_fn,
+            rmtree_fn=rmtree_fn, kickstart_fn=kickstart_fn)
+    finally:
+        try:
+            if lock is not None:
+                lock.close()
+        except OSError:
+            pass
+
+
+def _apply_locked(
+    manifest: dict, *, version: str, url: str, bundle_path: Path,
+    download_dir: Path, log, download_fn, unpack_fn, copytree_fn, rename_fn,
+    rmtree_fn, kickstart_fn,
+) -> UpdateResult:
+    """apply()'s body, with the lock held. Split out only so the lock has a
+    single, unmissable release point; the ordering and every guarantee in
+    apply()'s docstring are here."""
     # ---- Stage 1: download -------------------------------------------
     try:
         down = Path(download_dir)
         down.mkdir(parents=True, exist_ok=True)
         zip_path = down / f"{version or 'update'}.zip"
+        _prune_downloads(down, version or "update")
         log(f"selfupdate: downloading {version} from {url}")
         download_fn(url, zip_path)
         if not zip_path.is_file():
@@ -406,6 +578,10 @@ def apply(
         if new_app is None:
             return UpdateResult(False, STAGE_UNPACK,
                                 f"no single .app at the root of {zip_path.name}", version)
+        complaint = _bundle_complaint(new_app, version)
+        if complaint is not None:
+            log(f"selfupdate: {complaint} — nothing swapped")
+            return UpdateResult(False, STAGE_UNPACK, complaint, version)
     except Exception as exc:  # noqa: BLE001
         log(f"selfupdate: unpack failed: {exc!r}")
         return UpdateResult(False, STAGE_UNPACK, repr(exc), version)

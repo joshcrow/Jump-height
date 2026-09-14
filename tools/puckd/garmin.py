@@ -298,6 +298,9 @@ def login(email: str, password: str, mfa_code: Optional[str] = None) -> LoginRes
     token_dir = _token_dir()
     token_dir.mkdir(parents=True, exist_ok=True)
     api.client.dump(str(token_dir))
+    # A brand-new token starts with a clean slate: the strike left behind by
+    # the token it replaces must not count toward retiring THIS one.
+    _clear_auth_strikes()
     # Nothing after this point needs the plaintext password; garminconnect
     # drops its own copy on the non-MFA path (__init__.py:789-792) but not on
     # the two return_on_mfa paths this module uses, so drop it here.
@@ -394,19 +397,71 @@ def _retire_rejected_tokens() -> None:
         print(f"garmin: could not retire rejected token: {exc}", file=sys.stderr)
 
 
+AUTH_STRIKES_FILENAME = "auth_strikes.json"
+AUTH_STRIKES_TO_RETIRE = 2
+
+
+def _strikes_file() -> Path:
+    return _token_dir() / AUTH_STRIKES_FILENAME
+
+
+def _auth_strikes() -> int:
+    try:
+        data = json.loads(_strikes_file().read_text())
+    except (OSError, ValueError):
+        return 0
+    n = data.get("strikes") if isinstance(data, dict) else None
+    return n if isinstance(n, int) and not isinstance(n, bool) and n > 0 else 0
+
+
+def _record_auth_strike() -> int:
+    n = _auth_strikes() + 1
+    try:
+        _strikes_file().parent.mkdir(parents=True, exist_ok=True)
+        _strikes_file().write_text(json.dumps({"strikes": n}))
+    except OSError:
+        pass
+    return n
+
+
+def _clear_auth_strikes() -> None:
+    try:
+        _strikes_file().unlink()
+    except OSError:
+        pass
+
+
 def _load_api() -> Any:
     """An authenticated Garmin client rebuilt from the stored token. No
     email/password is given to it: with a tokenstore and no credentials,
     garminconnect loads the token, refreshes it if it is close to expiry,
-    and verifies it against the API (__init__.py:680-758)."""
+    and verifies it against the API (__init__.py:680-758).
+
+    A rejected token is retired only on the SECOND consecutive refusal.
+    The first one is written down and the token is left alone. Reason: an
+    expired refresh token and a Garmin that is having a bad hour arrive
+    here as the same GarminConnectAuthenticationError -- the unofficial
+    route (this module's own docstring) answers a maintenance window with
+    whatever it feels like, and garminconnect turns a 401 from any of its
+    five strategies into this class. Retiring on the first one costs the
+    rider a "sign in to Garmin again" notification, his password and an
+    MFA code, to fix a token that was never broken. The daemon's leg runs
+    every 6 h, so a genuinely dead token is still retired the same day,
+    and a strike is cleared the moment a login succeeds."""
     if not is_signed_in():
         raise RuntimeError("garmin: not signed in (call login() first)")
     api = garminconnect.Garmin()
     try:
         api.login(str(_token_dir()))
     except GarminConnectAuthenticationError:
-        _retire_rejected_tokens()
+        strikes = _record_auth_strike()
+        if strikes >= AUTH_STRIKES_TO_RETIRE:
+            _retire_rejected_tokens()
+        else:
+            print(f"garmin: token refused ({strikes}/{AUTH_STRIKES_TO_RETIRE}); "
+                  "keeping it until the next attempt also fails", file=sys.stderr)
         raise
+    _clear_auth_strikes()
     return api
 
 

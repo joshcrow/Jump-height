@@ -172,6 +172,15 @@ class TestInstallOrdering(LauncherTestCase):
                 return _sp.CompletedProcess(argv, 0, b"\tpid = 4242\n\tstate = running\n", b"")
             return proc
         bundle = _make_bundle(self.apps)
+        # The LaunchAgent launchd is holding names THIS bundle -- the state a
+        # rider's Mac is in when he clicks the icon of his installed app.
+        # (That it names this bundle and not another one is the whole check;
+        # TestAClickIsOnlyAClickFromTheInstalledBundle covers the other side.)
+        import plistlib as _plistlib
+        (self.home / "Library" / "LaunchAgents" / f"{launcher.LABEL}.plist").write_bytes(
+            _plistlib.dumps({"Label": launcher.LABEL, "ProgramArguments": [
+                str(bundle / "Contents" / "MacOS" / "JumpHeight Sync"),
+                launcher.LAUNCHD_FLAG]}))
         home = self.tmp / "puckd-home"
         with patch("subprocess.run", with_pid), \
              patch.dict(os.environ, {"PUCKD_HOME": str(home)}):
@@ -250,3 +259,77 @@ class TestHandoffFailure(LauncherTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---- added by the post-faa08a9 adversarial review -------------------------
+
+
+class TestAClickIsOnlyAClickFromTheInstalledBundle(LauncherTestCase):
+    """"The agent is already running" is not the same question as "I am the
+    bundle it is running". A newer copy opened from ~/Downloads while the
+    old one runs out of /Applications answers yes to the first and no to the
+    second -- and must INSTALL, not write a flag and exit believing it
+    upgraded anything."""
+
+    def _running(self, recorder):
+        import subprocess as _sp
+        real = recorder.__call__
+
+        def with_pid(argv, **kw):
+            if argv[1] == "print":
+                return _sp.CompletedProcess(argv, 0, b"\tpid = 4242\n", b"")
+            return real(argv, **kw)
+        return with_pid
+
+    def _register(self, bundle):
+        """Write the LaunchAgent plist launchd would be holding for this
+        bundle -- what the rider's Mac actually looks like."""
+        import plistlib
+        exe = bundle / "Contents" / "MacOS" / "JumpHeight Sync"
+        path = self.home / "Library" / "LaunchAgents" / f"{launcher.LABEL}.plist"
+        path.write_bytes(plistlib.dumps({
+            "Label": launcher.LABEL,
+            "ProgramArguments": [str(exe), launcher.LAUNCHD_FLAG],
+        }))
+
+    def test_the_registered_bundle_clicking_itself_only_shows_the_window(self):
+        bundle = _make_bundle(self.apps)
+        self._register(bundle)
+        recorder = _LaunchctlRecorder()
+        home = self.tmp / "puckd-home"
+        with patch("subprocess.run", self._running(recorder)), \
+             patch.dict(os.environ, {"PUCKD_HOME": str(home)}):
+            handed = launcher._install_and_hand_off(bundle / "Contents" / "Resources")
+        self.assertTrue(handed)
+        self.assertTrue((home / launcher.OPEN_SETUP_FLAG).exists())
+        self.assertNotIn("bootout", recorder.subcommands_all())
+
+    def test_a_different_bundle_installs_itself_instead_of_writing_a_flag(self):
+        installed = _make_bundle(self.apps)
+        self._register(installed)                     # launchd runs THAT one
+        newer = _make_bundle(self.tmp / "Downloads")  # the rider's new copy
+        recorder = _LaunchctlRecorder()
+        home = self.tmp / "puckd-home"
+        with patch("subprocess.run", self._running(recorder)), \
+             patch.dict(os.environ, {"PUCKD_HOME": str(home)}):
+            handed = launcher._install_and_hand_off(newer / "Contents" / "Resources")
+        self.assertTrue(handed)
+        self.assertFalse((home / launcher.OPEN_SETUP_FLAG).exists(),
+                         "a flag here means the new build was never installed")
+        self.assertIn("bootout", recorder.subcommands_all())
+        self.assertEqual(
+            self.plist_data()["ProgramArguments"][0],
+            str(newer / "Contents" / "MacOS" / "JumpHeight Sync"),
+            "launchd now points at the bundle that was opened")
+
+    def test_no_plist_at_all_is_not_assumed_to_be_this_bundle(self):
+        # A registration with nothing on disk naming it: unknown, so the
+        # safe reading is "install me", not "somebody else has this".
+        bundle = _make_bundle(self.apps)
+        recorder = _LaunchctlRecorder()
+        home = self.tmp / "puckd-home"
+        with patch("subprocess.run", self._running(recorder)), \
+             patch.dict(os.environ, {"PUCKD_HOME": str(home)}):
+            launcher._install_and_hand_off(bundle / "Contents" / "Resources")
+        self.assertFalse((home / launcher.OPEN_SETUP_FLAG).exists())
+        self.assertIn("bootstrap", recorder.subcommands_all())

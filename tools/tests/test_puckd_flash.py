@@ -771,3 +771,68 @@ class TestPortReturnPicksTheBoardItFlashed(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---- added by the post-faa08a9 adversarial review -------------------------
+
+
+class TestTheRawCopyWritesEveryByte(unittest.TestCase):
+    """_default_copy_file opens the destination with buffering=0. A raw
+    file's write() is one write(2) and is ALLOWED to return short without
+    raising -- there is no buffered layer left to finish the job. A short
+    write puts a truncated .uf2 on the bootloader's volume: the image is
+    ignored, the board comes back on the old src, and stage 6 reports a
+    mismatch that looks like a bad build."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmpdir.name)
+        self.addCleanup(self._tmpdir.cleanup)
+
+    def test_a_destination_that_takes_64_bytes_at_a_time_still_gets_all_of_it(self):
+        src = self.tmp / "firmware.uf2"
+        payload = bytes(range(256)) * 40          # 10240 bytes
+        src.write_bytes(payload)
+        dst = self.tmp / "XIAO-SENSE.img"
+        written = bytearray()
+
+        class _ShortWriter:
+            def write(self, view):
+                chunk = bytes(view[:64])
+                written.extend(chunk)
+                return len(chunk)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        with patch("builtins.open", lambda *a, **k: _ShortWriter()):
+            flash._default_copy_file(str(src), str(dst))
+
+        self.assertEqual(bytes(written), payload,
+                         "every byte of the image reached the volume")
+
+    def test_a_write_that_makes_no_progress_is_a_failure_not_a_success(self):
+        # errno.EIO/ENODEV/ENXIO are flash's SUCCESS signature (the board
+        # rebooting mid-copy). A stalled write must not be raised as one of
+        # them, or a copy that never happened reads as a flash that did.
+        src = self.tmp / "firmware.uf2"
+        src.write_bytes(b"x" * 100)
+
+        class _Stalled:
+            def write(self, view):
+                return 0
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        with patch("builtins.open", lambda *a, **k: _Stalled()):
+            with self.assertRaises(OSError) as caught:
+                flash._default_copy_file(str(src), str(self.tmp / "dst"))
+        self.assertFalse(flash._is_device_not_configured(caught.exception),
+                         "a stalled write must never read as the reboot")

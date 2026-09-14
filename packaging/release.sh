@@ -60,6 +60,19 @@ ASSET_URL="https://github.com/joshcrow/Jump-height/releases/download/$TAG/$ZIP_N
 echo "== release.sh: bumping APP_VERSION in packaging/setup.py to $VERSION =="
 /usr/bin/sed -i '' -E "s/^APP_VERSION = \"[^\"]*\"/APP_VERSION = \"$VERSION\"/" "$HERE/setup.py"
 grep -n '^APP_VERSION' "$HERE/setup.py"
+# ASSERT it took. sed exits 0 whether or not the pattern matched, so a
+# renamed constant or a changed spelling would leave the OLD version in the
+# bundle while this script publishes a manifest claiming the new one. The
+# installed agent would then download ~110 MB, swap in a bundle whose
+# Info.plist still says the old version, and -- because the manifest still
+# reads newer -- do it again six hours later, forever, on a Mac 300 miles
+# away. selfupdate.apply() refuses such a bundle at its unpack stage now;
+# this stops it ever being published.
+if ! grep -q "^APP_VERSION = \"$VERSION\"$" "$HERE/setup.py"; then
+    echo "release.sh: APP_VERSION in packaging/setup.py is not $VERSION after the bump" >&2
+    echo "            (the sed pattern did not match -- fix it before releasing)" >&2
+    exit 1
+fi
 
 echo "== release.sh: building =="
 "$HERE/build.sh"

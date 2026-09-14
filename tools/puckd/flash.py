@@ -228,7 +228,25 @@ def _default_copy_file(src: str, dst: str) -> None:
     while True:
         try:
             with open(dst, "wb", buffering=0) as f:
-                f.write(data)
+                # buffering=0 gives a RAW file object, whose write() is one
+                # write(2) and is allowed to return SHORT without raising --
+                # there is no buffered layer left to finish the job. A short
+                # write here puts a truncated .uf2 on the volume: the
+                # bootloader ignores an incomplete image, the board comes
+                # back on the OLD src, and stage 6 reports a mismatch that
+                # looks like a bad build. Loop until the bytes are gone; a
+                # write that fails because the board rebooted still raises
+                # ENODEV, which is this stage's success signature.
+                view = memoryview(data)
+                while view:
+                    written = f.write(view)
+                    if not written:
+                        # NOT an errno _is_device_not_configured() reads as
+                        # success: a write that made no progress is a
+                        # failure, and must never be mistaken for the
+                        # reboot that ends a good copy.
+                        raise OSError(errno.ENOSPC, f"short write to {dst}")
+                    view = view[written:]
             return
         except OSError as exc:
             if exc.errno in (errno.EACCES, errno.EBUSY, errno.ENOENT, errno.EPERM) and time.monotonic() < deadline:

@@ -151,16 +151,16 @@ class AManifestThatCannotBeTrustedIsNoUpdate(unittest.TestCase):
 
     def test_the_path_is_app_latest_json(self):
         self._fetch(json.dumps({"version": "1.0.1",
-                                "url": "https://gh/x.zip"}).encode())
+                                "url": "https://github.com/joshcrow/Jump-height/releases/download/v9/x.zip"}).encode())
         self.assertEqual(self.url, "https://site.invalid/app/latest.json")
 
     def test_a_good_manifest_parses(self):
-        m = self._fetch(json.dumps({"version": "1.0.1", "url": "https://gh/x.zip",
+        m = self._fetch(json.dumps({"version": "1.0.1", "url": "https://github.com/joshcrow/Jump-height/releases/download/v9/x.zip",
                                     "sha256": "a" * 64}).encode())
         self.assertEqual(m["version"], "1.0.1")
 
     def test_non_200_is_none(self):
-        self.assertIsNone(self._fetch(b'{"version":"9.9.9","url":"https://g/x"}', 404))
+        self.assertIsNone(self._fetch(b'{"version":"9.9.9","url":"https://github.com/joshcrow/Jump-height/releases/download/v9/x"}', 404))
 
     def test_not_json_is_none(self):
         self.assertIsNone(self._fetch(b"<html>404</html>"))
@@ -169,7 +169,7 @@ class AManifestThatCannotBeTrustedIsNoUpdate(unittest.TestCase):
         self.assertIsNone(self._fetch(b'["1.0.1"]'))
 
     def test_a_bad_version_is_none(self):
-        self.assertIsNone(self._fetch(b'{"version":"latest","url":"https://g/x.zip"}'))
+        self.assertIsNone(self._fetch(b'{"version":"latest","url":"https://github.com/joshcrow/Jump-height/releases/download/v9/x.zip"}'))
 
     def test_a_non_https_url_is_none(self):
         self.assertIsNone(self._fetch(b'{"version":"1.0.1","url":"http://g/x.zip"}'))
@@ -183,7 +183,7 @@ class AManifestThatCannotBeTrustedIsNoUpdate(unittest.TestCase):
     def test_a_missing_sha256_is_passed_through_for_the_gate_to_refuse(self):
         # flash.py:140-148's rule: "cannot verify" must be reported by the
         # gate, not collapse into the same silence "no manifest" produces.
-        m = self._fetch(b'{"version":"1.0.1","url":"https://g/x.zip"}')
+        m = self._fetch(b'{"version":"1.0.1","url":"https://github.com/joshcrow/Jump-height/releases/download/v9/x.zip"}')
         self.assertIsNotNone(m)
         self.assertIsNone(m.get("sha256"))
 
@@ -218,7 +218,7 @@ class _ApplyHarness(unittest.TestCase):
         self.order = []
 
     def manifest(self, **over):
-        m = {"version": "1.0.1", "url": "https://gh/JumpHeight-Sync-1.0.1.zip",
+        m = {"version": "1.0.1", "url": "https://github.com/joshcrow/Jump-height/releases/download/v9/JumpHeight-Sync-1.0.1.zip",
              "sha256": self.sha, "bytes": len(self.payload)}
         m.update(over)
         return m
@@ -445,3 +445,142 @@ class TheRealUnpackHandlesARealZip(_ApplyHarness):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---- added by the post-faa08a9 adversarial review -------------------------
+
+
+class TheStagedBundleIsInspectedBeforeItIsSwappedIn(_ApplyHarness):
+    """The sha256 gate proves the bytes are the bytes the manifest named.
+    It proves nothing about whether they are a LAUNCHABLE app, or about
+    whether the build inside is the version the manifest advertises. Both
+    failures are unrecoverable from 300 miles away."""
+
+    def _zip_of(self, app_dir: Path):
+        """Re-zip `app_dir` as the payload, with the manifest's sha updated."""
+        zp = self.tmp / "payload2.zip"
+        with zipfile.ZipFile(zp, "w") as zf:
+            for p in sorted(app_dir.rglob("*")):
+                if p.is_file():
+                    zf.write(p, Path("JumpHeight Sync.app") / p.relative_to(app_dir))
+        self.payload = zp.read_bytes()
+        self.sha = hashlib.sha256(self.payload).hexdigest()
+
+    def test_a_bundle_with_no_executable_is_refused(self):
+        broken = self.tmp / "broken" / "JumpHeight Sync.app"
+        (broken / "Contents" / "MacOS").mkdir(parents=True)
+        with open(broken / "Contents" / "Info.plist", "wb") as f:
+            plistlib.dump({"CFBundleShortVersionString": "1.0.1"}, f)
+        self._zip_of(broken)          # no file under Contents/MacOS at all
+        result = self.apply()
+        self.assertFalse(result.ok, result)
+        self.assertEqual(result.stage, selfupdate.STAGE_UNPACK)
+        self.assertIn("Contents/MacOS", result.error)
+        self.assertEqual(_tree_digest(self.installed), self.before,
+                         "the working app must be untouched")
+        self.assertEqual(self.kicked, [])
+
+    def test_a_bundle_whose_version_disagrees_with_the_manifest_is_refused(self):
+        # release.sh's APP_VERSION bump silently not taking: a manifest that
+        # says 1.0.1 carrying a bundle that is still 1.0.0. Installing it
+        # leaves needs_update() true forever -- a rider's Mac kickstarting
+        # itself every six hours for good.
+        stale = _make_bundle(self.tmp / "stale" / "JumpHeight Sync.app",
+                             "1.0.0", "a build whose version bump did not take")
+        self._zip_of(stale)
+        result = self.apply()
+        self.assertFalse(result.ok, result)
+        self.assertEqual(result.stage, selfupdate.STAGE_UNPACK)
+        self.assertIn("does not match the version it is published as", result.error)
+        self.assertEqual(_tree_digest(self.installed), self.before)
+        self.assertEqual(self.kicked, [])
+
+
+class ASwapThatLandedAndARestartThatDidNot(_ApplyHarness):
+    """apply() can return ok=True with the new bundle in place and the
+    process still running the old code. Two things must hold across that
+    gap, or the rider silently keeps running the old build."""
+
+    def test_running_version_is_the_one_read_first_not_the_one_on_disk(self):
+        before = selfupdate._RUNNING_VERSION
+        self.addCleanup(setattr, selfupdate, "_RUNNING_VERSION", before)
+        selfupdate._RUNNING_VERSION = None
+        with patch.object(selfupdate, "current_version", lambda **k: "1.0.0"):
+            first = selfupdate.running_version()
+            self.assertEqual(first, "1.0.0")
+        # The plist on disk now says 1.0.1; the running process has not changed.
+        with patch.object(selfupdate, "current_version", lambda **k: "1.0.1"):
+            self.assertEqual(selfupdate.running_version(), "1.0.0")
+            self.assertTrue(selfupdate.needs_update(selfupdate.running_version(),
+                                                    {"version": "1.0.1"}),
+                            "the restart it still owes must stay visible")
+
+    def test_a_second_attempt_restarts_instead_of_downloading_110mb_again(self):
+        self.assertTrue(self.apply().ok)                 # 1.0.1 is now installed
+        self.order.clear()
+        result = self.apply()                            # same manifest again
+        self.assertTrue(result.ok, result)
+        self.assertEqual(result.stage, selfupdate.STAGE_RESTART)
+        self.assertEqual(self.order, ["kickstart"],
+                         "nothing is downloaded or unpacked a second time")
+
+
+class OnlyOneAgentMaySwapTheBundle(_ApplyHarness):
+    def test_a_second_apply_while_one_holds_the_lock_refuses(self):
+        held = selfupdate._update_lock(self.downloads)
+        if held is None:
+            self.skipTest("no fcntl on this platform")
+        try:
+            result = self.apply()
+        finally:
+            held.close()
+        self.assertFalse(result.ok, result)
+        self.assertIn("another agent", result.error)
+        self.assertEqual(_tree_digest(self.installed), self.before)
+        self.assertEqual(self.order, [], "nothing was even downloaded")
+
+    def test_the_lock_is_released_when_apply_returns(self):
+        self.assertTrue(self.apply().ok)
+        again = selfupdate._update_lock(self.downloads)
+        self.assertIsNotNone(again)
+        again.close()
+
+
+class TheUpdatesDirectoryDoesNotGrowForever(_ApplyHarness):
+    def test_a_previous_versions_leftovers_are_pruned(self):
+        self.downloads.mkdir(parents=True, exist_ok=True)
+        stale_zip = self.downloads / "0.9.9.zip"
+        stale_zip.write_bytes(b"x" * 1000)
+        stale_part = self.downloads / "0.9.8.zip.part"
+        stale_part.write_bytes(b"y" * 1000)
+        stale_dir = self.downloads / "0.9.9"
+        stale_dir.mkdir()
+        (stale_dir / "junk").write_text("an unpack that never installed")
+
+        self.assertTrue(self.apply().ok)
+
+        self.assertFalse(stale_zip.exists())
+        self.assertFalse(stale_part.exists())
+        self.assertFalse(stale_dir.exists())
+
+
+class TheDownloadHostIsPinned(unittest.TestCase):
+    """A manifest carries its own sha256, so a manifest-only compromise could
+    name any file and its hash; the host is the one thing it cannot choose."""
+
+    def test_a_foreign_host_is_refused_by_the_manifest_parser(self):
+        import json
+        from unittest.mock import patch
+        body = json.dumps({"version": "9.9.9", "url": "https://evil.example/JumpHeight-Sync-9.9.9.zip",
+                           "sha256": "ab" * 32, "bytes": 1}).encode()
+        class R:
+            status = 200
+            def read(self): return body
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+        with patch.object(selfupdate.urllib.request, "urlopen", return_value=R()):
+            self.assertIsNone(selfupdate.latest_manifest("https://site.invalid"))
+
+    def test_the_pinned_prefix_is_this_repositorys_releases(self):
+        self.assertEqual(selfupdate.RELEASE_URL_PREFIX,
+                         "https://github.com/joshcrow/Jump-height/releases/download/")

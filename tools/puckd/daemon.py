@@ -104,6 +104,7 @@ SPOOL_RETRY_INTERVAL_S = 600.0   # bundles Drive has not confirmed are retried q
 PENDING_MAX_AGE_S = 24 * 3600.0  # ...and Nick hears about it only after a day
 SENT_DIRNAME = "sent"            # spool/sent/ holds what Drive has confirmed
 LOG_FILENAME = "daemon.log"      # one line per thing Josh would want to know
+LOG_MAX_BYTES = 1024 * 1024      # ...and no more than this before it rolls over
 OPEN_SETUP_FLAG = "open-setup"   # the launcher leaves this when the icon is clicked while running
 
 # The three "Needs you" messages, and no others. docs/sync-agent-plan.md:
@@ -325,6 +326,16 @@ def _log(cfg: DaemonConfig, msg: str) -> None:
         # own exception handler, which killed the loop thread while the menu
         # bar stayed up (measured 2026-09-14 07:58). A log line must never
         # be able to end the thing it is logging.
+        # Bounded. publish_log() copies this whole file to Drive after every
+        # job and on every 10-minute spool tick, and one repeating fault --
+        # a port scan that raises on every 2 s tick -- writes 43,000 lines a
+        # day into it. Unbounded growth here is unbounded upload there.
+        # One rollover, so the previous LOG_MAX_BYTES is still readable.
+        try:
+            if path.stat().st_size >= LOG_MAX_BYTES:
+                path.replace(path.with_name(path.name + ".1"))
+        except OSError:
+            pass
         with path.open("a", encoding="utf-8", errors="replace") as f:
             f.write(f"{datetime.now().astimezone().isoformat(timespec='seconds')} {msg}\n")
     except Exception:  # noqa: BLE001 -- see above; a lost line is the lesser harm
@@ -404,12 +415,34 @@ STATUS_FILENAME = "status.json"
 
 
 def _app_version(cfg: DaemonConfig) -> str:
-    """The installed bundle's version for status.json. Never raises: an
-    unreadable Info.plist reads as selfupdate.DEV_VERSION, the same value a
-    source checkout reports."""
+    """The version of the code THIS PROCESS IS RUNNING, for status.json.
+
+    Not current_version(): that reads Info.plist off disk, and a selfupdate
+    whose swap landed but whose kickstart did not fire leaves the plist
+    saying 1.0.1 while this interpreter is still executing 1.0.0. Josh
+    reads this field to answer "which build is he on?" from 300 miles away;
+    a field that names the build on disk rather than the one running is
+    exactly the confident wrong reading CLAUDE.md rule 3 forbids. See
+    selfupdate.running_version(); getattr keeps an injected test double
+    that only implements current_version() working.
+
+    Never raises: an unreadable Info.plist reads as selfupdate.DEV_VERSION,
+    the same value a source checkout reports."""
+    su = cfg.selfupdate_module
+    try:
+        return getattr(su, "running_version", su.current_version)()
+    except Exception:  # noqa: BLE001 -- telemetry must never cost a sync
+        return selfupdate.DEV_VERSION
+
+
+def _installed_version(cfg: DaemonConfig) -> str:
+    """What is on disk right now -- equal to _app_version() except in the
+    one window that matters: a swap that landed and a restart that did
+    not. Published beside it so that window is visible rather than
+    invisible."""
     try:
         return cfg.selfupdate_module.current_version()
-    except Exception:  # noqa: BLE001 -- telemetry must never cost a sync
+    except Exception:  # noqa: BLE001
         return selfupdate.DEV_VERSION
 
 
@@ -430,6 +463,11 @@ def publish_log(cfg: DaemonConfig, report: "Optional[JobCycleReport]" = None,
             # so "which version is he actually running?" has to be answerable
             # from the file Josh already reads, not by asking him.
             "app_version": _app_version(cfg),
+            # What is on disk. Differs from app_version only while a swap
+            # has landed and the restart has not -- the one state in which
+            # "which version is he running?" has two answers, so both are
+            # written rather than one of them guessed at.
+            "installed_version": _installed_version(cfg),
         })
         if report is not None:
             status["last_job"] = {
@@ -706,7 +744,18 @@ def _run_garmin(cfg: DaemonConfig) -> None:
         store = home / GARMIN_SEEN_FILENAME
         since_iso = g.last_seen(store)
         out_dir = home / FITS_CACHE_DIRNAME
-        downloaded = g.fetch_new(since_iso, out_dir)
+        # A LISTING/DOWNLOAD failure must not cancel the UPLOAD sweep below.
+        # fetch_new() raises GarminDownloadError on an activity whose
+        # download does not come back as a zip -- and if that activity is
+        # permanently broken it raises on every tick, forever. With the
+        # sweep inside the same try, every FIT already on disk stopped being
+        # offered to Drive the day that happened, silently. The two halves
+        # fail independently now.
+        downloaded = []
+        try:
+            downloaded = g.fetch_new(since_iso, out_dir)
+        except Exception as exc:  # noqa: BLE001 -- unofficial API; see above
+            _log(cfg, f"garmin fetch failed (the upload sweep still runs): {exc!r}")
         # Upload every FIT on disk that Drive has not confirmed, not just
         # the ones downloaded THIS tick. The download side dedupes on the
         # file already being there, so a FIT whose upload failed once (wifi
@@ -722,8 +771,14 @@ def _run_garmin(cfg: DaemonConfig) -> None:
                 marker.write_text("")
         if downloaded:
             g.mark_seen(store, datetime.now().astimezone().isoformat(timespec="seconds"))
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 -- still swallowed: the Garmin
+        # leg never blocks the puck job. But a bare `pass` made a leg that
+        # had stopped working indistinguishable from one with nothing to
+        # do, on a Mac nobody can look at -- CLAUDE.md rule 3. One line.
+        try:
+            _log(cfg, f"garmin leg raised: {exc!r}")
+        except Exception:  # noqa: BLE001
+            pass
 
 
 # -------------------------------------------------------- attached polling
@@ -829,7 +884,12 @@ def _maybe_selfupdate(cfg: DaemonConfig) -> "Optional[object]":
     """
     su = cfg.selfupdate_module
     try:
-        current = su.current_version()
+        # The RUNNING version, not the one on disk: a previous swap whose
+        # kickstart did not fire has already written the new Info.plist,
+        # and comparing against that would answer "up to date" forever
+        # while the rider kept running the old code. apply() sees the same
+        # disagreement and answers it with a restart, not a re-download.
+        current = getattr(su, "running_version", su.current_version)()
         manifest = su.latest_manifest(cfg.site_url)
         if not su.needs_update(current, manifest):
             return None
@@ -1065,11 +1125,16 @@ def main() -> None:
             win.show()
         rumps.Timer(first_run, 1.0).start()      # once the run loop is up
 
-    if win is not None:
-        def icon_clicked(_timer):
-            if consume_open_flag(cfg):
-                win.show()
-        rumps.Timer(icon_clicked, 1.0).start()   # a click on the app icon = show the window
+    # Unconditional, even with no window: the launcher writes the flag
+    # whenever the agent is already running (launcher.py:202-209), and
+    # nothing else on the machine removes it. Started only when `win` was
+    # built, an AppKit-less install left the file behind for good -- so the
+    # first launch that DID have a window opened one nobody had just asked
+    # for. Consume it either way; only show a window when there is one.
+    def icon_clicked(_timer):
+        if consume_open_flag(cfg) and win is not None:
+            win.show()
+    rumps.Timer(icon_clicked, 1.0).start()   # a click on the app icon = show the window
     app.run()
 
 

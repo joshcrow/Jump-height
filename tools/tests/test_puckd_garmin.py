@@ -509,6 +509,39 @@ class TestFetchNew(PuckdGarminTestCase):
         self.assertEqual(got, [])
         api.download_activity.assert_not_called()
 
+    def test_the_first_refusal_keeps_the_token(self):
+        """Garmin having a bad hour and an expired refresh token arrive here
+        as the SAME exception class -- garminconnect turns a 401 from any of
+        its five login strategies into it. Retiring on the first one costs
+        the rider a notification, his password and an MFA code to replace a
+        token that was never broken. The leg runs every 6 h; a genuinely
+        dead token is still retired the same day."""
+        api = self.mock_api()
+        api.login.side_effect = GarminConnectAuthenticationError("token rejected")
+        patcher, _ = self.patch_garmin_class(api)
+        with patcher, self.assertRaises(GarminConnectAuthenticationError):
+            garmin.fetch_new("2026-09-01T00:00:00Z", str(self.out_dir))
+
+        self.assertTrue(self.token_file().is_file(), "one 401 is not a verdict")
+        self.assertTrue(garmin.is_signed_in())
+        self.assertEqual(garmin._auth_strikes(), 1)
+
+    def test_a_success_between_two_refusals_clears_the_strike(self):
+        ok_api = self.mock_api()
+        bad_api = self.mock_api()
+        bad_api.login.side_effect = GarminConnectAuthenticationError("token rejected")
+        for api, raises in ((bad_api, True), (ok_api, False), (bad_api, True)):
+            patcher, _ = self.patch_garmin_class(api)
+            if raises:
+                with patcher, self.assertRaises(GarminConnectAuthenticationError):
+                    garmin.fetch_new("2026-09-01T00:00:00Z", str(self.out_dir))
+            else:
+                with patcher:
+                    garmin.fetch_new("2026-09-01T00:00:00Z", str(self.out_dir))
+        self.assertTrue(self.token_file().is_file(),
+                        "two refusals a working session apart are not consecutive")
+        self.assertEqual(garmin._auth_strikes(), 1)
+
     def test_a_token_garmin_itself_rejects_is_retired_not_left_to_rot(self):
         """CLAUDE.md rule 3: garminconnect's token file records no
         refresh-token expiry, so an expired refresh token is invisible to
@@ -518,8 +551,9 @@ class TestFetchNew(PuckdGarminTestCase):
         api = self.mock_api()
         api.login.side_effect = GarminConnectAuthenticationError("token rejected")
         patcher, _ = self.patch_garmin_class(api)
-        with patcher, self.assertRaises(GarminConnectAuthenticationError):
-            garmin.fetch_new("2026-09-01T00:00:00Z", str(self.out_dir))
+        for _ in range(garmin.AUTH_STRIKES_TO_RETIRE):
+            with patcher, self.assertRaises(GarminConnectAuthenticationError):
+                garmin.fetch_new("2026-09-01T00:00:00Z", str(self.out_dir))
 
         self.assertFalse(self.token_file().exists())
         self.assertFalse(garmin.is_signed_in())
