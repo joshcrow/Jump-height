@@ -1,8 +1,8 @@
 {
-  "version": "1.0.0",
-  "url": "https://github.com/joshcrow/Jump-height/releases/download/v1.0.0/JumpHeight-Sync-1.0.0.zip",
-  "sha256": "",
-  "bytes": 0,
-  "built_utc": "",
-  "note": "PLACEHOLDER — packaging/release.sh writes the real one. sha256 is empty on purpose: tools/puckd/selfupdate.py's gate refuses to unpack anything whose manifest carries no usable sha256, so this file can never cause an update. GitHub Pages caps a file at 100 MB and the zipped app is ~110 MB, so Pages serves this manifest and GitHub Releases serves the zip it points at."
+  "version": "1.0.1",
+  "url": "https://github.com/joshcrow/Jump-height/releases/download/v1.0.1/JumpHeight-Sync-1.0.1.zip",
+  "sha256": "d7aac2045530828440b3df20e65145ea5d10756c9f9f3c519cf02039cb80171a",
+  "bytes": 100769011,
+  "built_utc": "2026-09-14T15:48:35Z",
+  "note": "Written by packaging/release.sh. tools/puckd/selfupdate.py verifies this sha256 against the downloaded zip before it unpacks anything."
 }

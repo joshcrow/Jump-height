@@ -78,7 +78,7 @@ PUCKD_DIR = TOOLS_DIR / "puckd"
 JUMP_FILE = TOOLS_DIR / "jump"
 VENDOR_RCLONE = HERE / "vendor" / "rclone" / "rclone"
 
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 
 if not JUMP_FILE.is_file():
     sys.exit(f"packaging/setup.py: {JUMP_FILE} not found — run from a full checkout")
