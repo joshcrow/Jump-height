@@ -73,7 +73,7 @@ def osascript_runner(title: str, body: Optional[str]) -> None:
         title=_osascript_escape(title),
     )
     proc = subprocess.run(["osascript", "-e", script], check=False,
-                          capture_output=True, text=True)
+                          capture_output=True, encoding="utf-8", errors="replace")
     # A notification that did not appear must not look like one that did
     # (CLAUDE.md 2.3). Nothing is retried — by the time this fires the ride
     # is already safe on Drive — but the daemon's log says it was lost

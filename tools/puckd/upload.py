@@ -82,7 +82,7 @@ def _run(args: list[str], timeout: float) -> subprocess.CompletedProcess:
     return subprocess.run(
         [bin_path, *args],
         capture_output=True,
-        text=True,
+        encoding="utf-8", errors="replace",
         timeout=timeout,
     )
 

@@ -292,7 +292,7 @@ def _default_unpack(zip_path: Path, dest_dir: Path) -> None:
     dest_dir.mkdir(parents=True, exist_ok=True)
     try:
         proc = subprocess.run(["ditto", "-x", "-k", str(zip_path), str(dest_dir)],
-                              capture_output=True, text=True, timeout=600)
+                              capture_output=True, encoding="utf-8", errors="replace", timeout=600)
         if proc.returncode == 0:
             return
     except (OSError, subprocess.TimeoutExpired):

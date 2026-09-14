@@ -836,3 +836,24 @@ class TestTheRawCopyWritesEveryByte(unittest.TestCase):
                 flash._default_copy_file(str(src), str(self.tmp / "dst"))
         self.assertFalse(flash._is_device_not_configured(caught.exception),
                          "a stalled write must never read as the reboot")
+
+
+class DiskutilOutputIsDecodedAsUtf8(unittest.TestCase):
+    """Measured on the rider's Mac 2026-09-14: diskutil prints volume names
+    wrapped in U+2068/U+2069, and a locale-decoded subprocess raised
+    UnicodeDecodeError out of the flash leg on every job."""
+
+    def test_default_list_disks_passes_an_explicit_encoding(self):
+        import inspect
+        src = inspect.getsource(flash._default_list_disks)
+        self.assertIn('encoding="utf-8"', src)
+        self.assertNotIn("text=True", src)
+
+    def test_non_ascii_diskutil_output_does_not_raise(self):
+        from unittest.mock import patch
+        import subprocess as sp
+        fake = sp.CompletedProcess(["diskutil", "list"], 0,
+                                   "   1: APFS Volume \u2068JumpHeight Sync\u2069 274 MB disk3s1\n", "")
+        with patch.object(flash.subprocess, "run", return_value=fake):
+            out = flash._default_list_disks()
+        self.assertIn("JumpHeight Sync", out)

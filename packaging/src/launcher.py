@@ -191,6 +191,26 @@ def _registered_program(plist_path: Path) -> "str | None":
     return None
 
 
+def _plist_bytes(exe: Path) -> bytes:
+    """The LaunchAgent, as bytes, from one place -- so a reinstall can tell
+    whether the one on disk is stale."""
+    import plistlib
+    logs = Path.home() / "Library" / "Logs"
+    return plistlib.dumps({
+        "Label": LABEL,
+        "ProgramArguments": [str(exe), LAUNCHD_FLAG],
+        "RunAtLoad": True,
+        "KeepAlive": {"SuccessfulExit": False},
+        "ProcessType": "Interactive",
+        "EnvironmentVariables": {"PYTHONUTF8": "1", "LANG": "en_US.UTF-8"},
+        # Where a crash before daemon.py's own logging goes. Josh reads this
+        # over the phone from 300 miles away; without it an agent that dies
+        # at import time leaves no trace anywhere on the machine.
+        "StandardOutPath": str(logs / f"{LABEL}.out.log"),
+        "StandardErrorPath": str(logs / f"{LABEL}.err.log"),
+    })
+
+
 def _install_and_hand_off(resources: Path) -> bool:
     """Write the LaunchAgent and hand the daemon over to launchd. Returns
     True only when launchd has actually been told to run it -- a False means
@@ -229,6 +249,19 @@ def _install_and_hand_off(resources: Path) -> bool:
     same_bundle = _registered_program(_launchagent_plist()) == str(exe)
     if (_agent_is_running(run, domain) and same_bundle
             and not str(bundle).startswith(DMG_PREFIX)):
+        # A newer build dropped over the old one in Finder reaches this path
+        # too, so refresh the LaunchAgent plist if its content is stale (the
+        # UTF-8 environment was added after the rider's first install and
+        # never reached his plist this way -- measured 2026-09-14). It takes
+        # effect at the next start, which the self-updater's kickstart is.
+        try:
+            wanted = _plist_bytes(exe)
+            current = _launchagent_plist()
+            if not current.is_file() or current.read_bytes() != wanted:
+                current.parent.mkdir(parents=True, exist_ok=True)
+                current.write_bytes(wanted)
+        except OSError:
+            pass
         try:
             flag = _puckd_home() / OPEN_SETUP_FLAG
             flag.parent.mkdir(parents=True, exist_ok=True)
@@ -258,19 +291,7 @@ def _install_and_hand_off(resources: Path) -> bool:
     plist = agents / f"{LABEL}.plist"
     logs = Path.home() / "Library" / "Logs"
     logs.mkdir(parents=True, exist_ok=True)
-    plist.write_bytes(plistlib.dumps({
-        "Label": LABEL,
-        "ProgramArguments": [str(exe), LAUNCHD_FLAG],
-        "RunAtLoad": True,
-        "KeepAlive": {"SuccessfulExit": False},
-        "ProcessType": "Interactive",
-        "EnvironmentVariables": {"PYTHONUTF8": "1", "LANG": "en_US.UTF-8"},
-        # Where a crash before daemon.py's own logging goes. Josh reads this
-        # over the phone from 300 miles away; without it an agent that dies
-        # at import time leaves no trace anywhere on the machine.
-        "StandardOutPath": str(logs / f"{LABEL}.out.log"),
-        "StandardErrorPath": str(logs / f"{LABEL}.err.log"),
-    }))
+    plist.write_bytes(_plist_bytes(exe))
 
     # `bootstrap gui/<uid>` is the modern spelling and the right DOMAIN for a
     # GUI agent (a menu bar needs an Aqua session; user/<uid> has none). Two

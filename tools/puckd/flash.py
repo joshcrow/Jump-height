@@ -195,7 +195,7 @@ def _default_list_disks() -> str:
     exception — the wait loop above just keeps polling either way."""
     try:
         proc = subprocess.run(["diskutil", "list"], capture_output=True,
-                               text=True, timeout=10.0)
+                               encoding="utf-8", errors="replace", timeout=10.0)
     except (OSError, subprocess.TimeoutExpired):
         return ""
     return proc.stdout or ""
@@ -207,7 +207,7 @@ def _default_mount_volume() -> None:
     read, never this call's own success/failure."""
     try:
         subprocess.run(["diskutil", "mount", str(UF2_VOLUME_PATH)],
-                        capture_output=True, text=True, timeout=10.0)
+                        capture_output=True, encoding="utf-8", errors="replace", timeout=10.0)
     except (OSError, subprocess.TimeoutExpired):
         pass
 
