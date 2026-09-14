@@ -30,6 +30,11 @@
         <string>--launchd</string>
     </array>
 
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PYTHONUTF8</key><string>1</string>
+        <key>LANG</key><string>en_US.UTF-8</string>
+    </dict>
     <key>RunAtLoad</key>
     <true/>
 

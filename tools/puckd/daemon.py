@@ -303,9 +303,15 @@ def _log(cfg: DaemonConfig, msg: str) -> None:
     try:
         path = Path(cfg.home_dir) / LOG_FILENAME
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a") as f:
+        # encoding pinned: under launchd there is no locale, so the bundled
+        # Python's default is ASCII, and the first em dash in a message
+        # raised UnicodeEncodeError out of the LOGGER -- inside the loop's
+        # own exception handler, which killed the loop thread while the menu
+        # bar stayed up (measured 2026-09-14 07:58). A log line must never
+        # be able to end the thing it is logging.
+        with path.open("a", encoding="utf-8", errors="replace") as f:
             f.write(f"{datetime.now().astimezone().isoformat(timespec='seconds')} {msg}\n")
-    except OSError:
+    except Exception:  # noqa: BLE001 -- see above; a lost line is the lesser harm
         pass
 
 
@@ -829,7 +835,10 @@ def run_forever(
             # tries again in POLL_INTERVAL_S, with the reason on disk for
             # Josh. current_port is deliberately left as it is: a tick that
             # blew up is retried on the next arrival, not re-run in a spin.
-            _log(cfg, f"loop tick raised (continuing): {exc!r}")
+            try:
+                _log(cfg, f"loop tick raised (continuing): {exc!r}")
+            except Exception:  # noqa: BLE001 -- the handler must outlive its own logging
+                pass
 
         cfg.sleep(POLL_INTERVAL_S)
 
@@ -907,6 +916,7 @@ def main() -> None:
     a daemon thread behind it. The first launch (no Drive remote yet) opens
     the setup window by itself; "Set up…" in the menu opens it again."""
     cfg = build_config()
+    _log(cfg, f"agent started: site={cfg.site_url} home={cfg.home_dir}")
     win = _onboarding()
     app = menubar.make_app(spool_dir=cfg.spool_dir, opener=menubar.default_opener,
                            on_setup=(win.show if win is not None else None))

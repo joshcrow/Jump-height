@@ -239,6 +239,31 @@ class ThePanelSaysWhatIsHappening(_DaemonTestBase):
             self.assertTrue(path.is_file(), f"{state} glyph missing: {path}")
 
 
+class TheLogCanNeverKillTheLoop(_DaemonTestBase):
+    def test_an_em_dash_is_written_as_utf8(self):
+        cfg = self.make_cfg()
+        daemon._log(cfg, "device went silent during 'info' \u2014 is the right firmware flashed?")
+        text = (self.home / daemon.LOG_FILENAME).read_bytes().decode("utf-8")
+        self.assertIn("\u2014", text)
+
+    def test_an_unwritable_log_is_swallowed(self):
+        cfg = self.make_cfg()
+        self.home.mkdir(parents=True, exist_ok=True)
+        (self.home / daemon.LOG_FILENAME).mkdir()          # a directory where the file should be
+        daemon._log(cfg, "must not raise")                 # OSError inside -> swallowed
+
+    def test_the_loop_survives_a_tick_whose_error_message_has_an_em_dash(self):
+        calls = []
+        def find_port():
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError("port scan \u2014 exploded")
+            return None
+        cfg = self.make_cfg()
+        daemon.run_forever(cfg, find_port=find_port, max_iterations=3)
+        self.assertEqual(len(calls), 3, "the loop kept ticking after the failure")
+
+
 class GarminNagsOnlyTheSignedIn(_DaemonTestBase):
     def test_never_signed_in_is_never_asked(self):
         cfg = self.make_cfg(garmin_module=_FakeGarmin(signed_in=False, ever=False))

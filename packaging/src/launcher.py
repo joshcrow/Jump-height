@@ -62,6 +62,14 @@ def _resource_path() -> Path:
 
 
 def main() -> None:
+    # launchd starts us with no locale: Python's stdio and default file
+    # encoding come up ASCII, and the first non-ASCII character printed or
+    # logged raises. Never let text encoding be a way to crash.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except Exception:  # noqa: BLE001
+            pass
     resources = _resource_path()
     tools_dir = resources / "tools"
 
@@ -197,6 +205,7 @@ def _install_and_hand_off(resources: Path) -> bool:
         "RunAtLoad": True,
         "KeepAlive": {"SuccessfulExit": False},
         "ProcessType": "Interactive",
+        "EnvironmentVariables": {"PYTHONUTF8": "1", "LANG": "en_US.UTF-8"},
         # Where a crash before daemon.py's own logging goes. Josh reads this
         # over the phone from 300 miles away; without it an agent that dies
         # at import time leaves no trace anywhere on the machine.
