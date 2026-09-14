@@ -25,6 +25,7 @@ Run via: python3 -m pytest tools/tests/test_puckd_launcher.py -q
 from __future__ import annotations
 
 import importlib.util
+import os
 import subprocess
 import sys
 import tempfile
@@ -54,20 +55,24 @@ def _make_bundle(root: Path, name: str = "JumpHeight Sync.app") -> Path:
 
 class _LaunchctlRecorder:
     """Stands in for subprocess.run: records every launchctl argv and
-    answers with a scripted return code per SUBCOMMAND."""
+    answers with a scripted return code per SUBCOMMAND. `print` (the
+    is-it-running probe) answers "not running" unless a test wraps it."""
 
     def __init__(self, codes=None):
         self.calls = []
         self.codes = codes or {}
 
     def __call__(self, argv, **kwargs):
-        self.calls.append(list(argv))
+        self.calls.append(argv)
         code = self.codes.get(argv[1], 0)
         return subprocess.CompletedProcess(argv, code, b"", b"")
 
+    def subcommands_all(self):
+        return [a[1] for a in self.calls]
+
     @property
     def subcommands(self):
-        return [c[1] for c in self.calls]
+        return [a[1] for a in self.calls if a[1] != "print"]
 
 
 class LauncherTestCase(unittest.TestCase):
@@ -150,8 +155,30 @@ class TestInstallOrdering(LauncherTestCase):
 
         self.assertTrue(handed_off)
         self.assertEqual("bootout", recorder.subcommands[0])
-        self.assertEqual(1, copy_order[0][1],
-                         "the copy happened AFTER the bootout, not before")
+        bootout_at = recorder.subcommands_all().index("bootout")
+        self.assertGreater(copy_order[0][1], bootout_at,
+                           "the copy happened AFTER the bootout, not before")
+
+    def test_a_click_while_the_agent_runs_shows_the_window_not_a_reinstall(self):
+        """launchctl print reports a pid -> the launcher leaves the open-setup
+        flag for the running agent and touches nothing (measured need:
+        2026-09-14, the rider clicked the Dock icon mid-sync)."""
+        import subprocess as _sp
+        recorder = _LaunchctlRecorder()
+        real = recorder.__call__
+        def with_pid(argv, **kw):
+            proc = real(argv, **kw)
+            if argv[1] == "print":
+                return _sp.CompletedProcess(argv, 0, b"\tpid = 4242\n\tstate = running\n", b"")
+            return proc
+        bundle = _make_bundle(self.apps)
+        home = self.tmp / "puckd-home"
+        with patch("subprocess.run", with_pid), \
+             patch.dict(os.environ, {"PUCKD_HOME": str(home)}):
+            handed = launcher._install_and_hand_off(bundle / "Contents" / "Resources")
+        self.assertTrue(handed)
+        self.assertTrue((home / launcher.OPEN_SETUP_FLAG).exists(), "the flag the agent's timer consumes")
+        self.assertNotIn("bootout", recorder.subcommands_all(), "a running agent is never restarted by a click")
 
     def test_the_plist_carries_the_launchd_flag(self):
         """Without it the launchd copy self-installs again -- bootout,

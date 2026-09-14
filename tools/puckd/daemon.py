@@ -96,6 +96,7 @@ SPOOL_RETRY_INTERVAL_S = 600.0   # bundles Drive has not confirmed are retried q
 PENDING_MAX_AGE_S = 24 * 3600.0  # ...and Nick hears about it only after a day
 SENT_DIRNAME = "sent"            # spool/sent/ holds what Drive has confirmed
 LOG_FILENAME = "daemon.log"      # one line per thing Josh would want to know
+OPEN_SETUP_FLAG = "open-setup"   # the launcher leaves this when the icon is clicked while running
 
 # The three "Needs you" messages, and no others. docs/sync-agent-plan.md:
 # "ONE notification, ONE action, always phrased the same way." Everything
@@ -922,14 +923,34 @@ def main() -> None:
                            on_setup=(win.show if win is not None else None))
     t = threading.Thread(target=run_forever, args=(cfg,), kwargs={"app": app}, daemon=True)
     t.start()
-    if win is not None and not upload.is_authorized():
-        import rumps
+    import rumps
 
+    if win is not None and not upload.is_authorized():
         def first_run(_timer):
             _timer.stop()
             win.show()
         rumps.Timer(first_run, 1.0).start()      # once the run loop is up
+
+    if win is not None:
+        def icon_clicked(_timer):
+            if consume_open_flag(cfg):
+                win.show()
+        rumps.Timer(icon_clicked, 1.0).start()   # a click on the app icon = show the window
     app.run()
+
+
+def consume_open_flag(cfg: DaemonConfig) -> bool:
+    """True once per click on the app icon: the launcher writes
+    PUCKD_HOME/open-setup instead of restarting a running agent; the menu
+    bar's timer removes it and shows the window. Never raises."""
+    try:
+        flag = Path(cfg.home_dir) / OPEN_SETUP_FLAG
+        if flag.exists():
+            flag.unlink()
+            return True
+    except OSError:
+        pass
+    return False
 
 
 if __name__ == "__main__":  # pragma: no cover -- exercised via `python -m puckd`

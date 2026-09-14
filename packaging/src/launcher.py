@@ -155,6 +155,23 @@ def _copy_to_applications(bundle: Path) -> Path:
     return dest
 
 
+OPEN_SETUP_FLAG = "open-setup"   # same name as daemon.OPEN_SETUP_FLAG
+
+
+def _puckd_home() -> Path:
+    override = os.environ.get("PUCKD_HOME")
+    return Path(override).expanduser() if override else Path.home() / "Library" / "Application Support" / "JumpHeight"
+
+
+def _agent_is_running(run, domain: str) -> bool:
+    """launchctl print shows a `pid = N` line only for a running service."""
+    proc = run("print", f"{domain}/{LABEL}")
+    out = (getattr(proc, "stdout", b"") or b"")
+    if isinstance(out, bytes):
+        out = out.decode("utf-8", "replace")
+    return proc.returncode == 0 and "pid = " in out
+
+
 def _install_and_hand_off(resources: Path) -> bool:
     """Write the LaunchAgent and hand the daemon over to launchd. Returns
     True only when launchd has actually been told to run it -- a False means
@@ -177,12 +194,25 @@ def _install_and_hand_off(resources: Path) -> bool:
         except OSError:
             return subprocess.CompletedProcess(args, 1, b"", b"launchctl missing")
 
+    # Already installed and running from THIS bundle? Then a click on the
+    # icon means "show me the window", not "reinstall". Measured 2026-09-14:
+    # the rider clicked the Dock icon during his first sync, and the old
+    # behaviour booted the running agent out mid-job. Leave a flag the
+    # agent's loop consumes (daemon.OPEN_SETUP_FLAG) and exit.
+    if _agent_is_running(run, domain) and not str(bundle).startswith(DMG_PREFIX):
+        try:
+            flag = _puckd_home() / OPEN_SETUP_FLAG
+            flag.parent.mkdir(parents=True, exist_ok=True)
+            flag.write_text("open")
+        except OSError:
+            pass
+        return True
+
     # Stop the running copy BEFORE touching the bundle on disk. Opening the
-    # app a second time while the launchd copy is mid-job used to rmtree the
+    # app from the dmg while the launchd copy is mid-job used to rmtree the
     # very bundle that copy is executing from; booting it out first makes the
-    # second open a clean replace. A job killed here is exactly G3's case:
-    # nothing wrote the bootloader, the spool keeps the bundle, and the next
-    # plug-in retries.
+    # replace clean. A job killed here is exactly G3's case: nothing wrote
+    # the bootloader, the spool keeps the bundle, and the next plug-in retries.
     run("bootout", f"{domain}/{LABEL}")
 
     if str(bundle).startswith(DMG_PREFIX):

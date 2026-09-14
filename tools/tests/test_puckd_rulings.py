@@ -264,6 +264,16 @@ class TheLogCanNeverKillTheLoop(_DaemonTestBase):
         self.assertEqual(len(calls), 3, "the loop kept ticking after the failure")
 
 
+class ClickingTheIconOpensTheWindow(_DaemonTestBase):
+    def test_flag_is_consumed_once(self):
+        cfg = self.make_cfg()
+        self.home.mkdir(parents=True, exist_ok=True)
+        (self.home / daemon.OPEN_SETUP_FLAG).write_text("open")
+        self.assertTrue(daemon.consume_open_flag(cfg))
+        self.assertFalse(daemon.consume_open_flag(cfg), "consumed")
+        self.assertFalse((self.home / daemon.OPEN_SETUP_FLAG).exists())
+
+
 class GarminNagsOnlyTheSignedIn(_DaemonTestBase):
     def test_never_signed_in_is_never_asked(self):
         cfg = self.make_cfg(garmin_module=_FakeGarmin(signed_in=False, ever=False))
