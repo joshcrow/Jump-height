@@ -848,6 +848,22 @@ gone: Garmin answers its login with 429 before reading a password
 login route reached Garmin's real credential check here (401 for a fake
 account). Nick's actual sign-in remains unmeasured.
 
+**The post-`uf2` "silent puck" is explained (2026-09-15, 9 scripted cycles
+on the bench Puck, kernel log read):** the board enters its bootloader
+every time (0.6-0.7 s, USB idProduct 0x0045 vs the app's 0x8045). macOS's
+SCSI layer then sends MODE SENSE(6), which this bootloader always fails;
+on 8 of 9 cycles macOS shrugs and publishes the disk ~1 s later, on 1 of
+9 it retries forever (263 times in 6 min) and never publishes a disk. The
+bootloader keeps the SAME /dev/cu.usbmodemN name and USB serial, so the
+port looks like a dead puck: opens, answers nothing. Not our sequence
+(closing the port before or after the detach made no difference), not the
+board, not Apple Silicon-specific (a kernel SCSI path). Once it recovered
+by itself after 6 min 40 s; the night before it was still wedged after
+66 min, so self-recovery cannot be relied on. The bootloader's serial port
+is live throughout and speaks Nordic serial DFU, which is the unattended
+way out; the 1200-baud touch cannot reach it (by design, main.cpp:1309).
+`flash.py` now reads idProduct to say WHICH failure it is.
+
 **Not yet measured, in the order they cost:** the real Puck (board was
 unplugged all night — rehearse `python3 -m puckd once <port>` first, then
 the flash leg with an old image); `clear_puck`'s `tracecheck` after a real
