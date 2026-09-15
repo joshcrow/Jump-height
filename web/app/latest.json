@@ -1,8 +1,8 @@
 {
-  "version": "1.0.4",
-  "url": "https://github.com/joshcrow/Jump-height/releases/download/v1.0.4/JumpHeight-Sync-1.0.4.zip",
-  "sha256": "580eb33b8114eb3b91873b2c90ffa7599df369a8efcc67d9b8a06199acfc50c3",
-  "bytes": 100774899,
-  "built_utc": "2026-09-15T01:28:26Z",
+  "version": "1.0.5",
+  "url": "https://github.com/joshcrow/Jump-height/releases/download/v1.0.5/JumpHeight-Sync-1.0.5.zip",
+  "sha256": "01a71e1eb756d508b9838c6a5b2debe16b4f574642bde4b2c24036c3bc778f05",
+  "bytes": 100777504,
+  "built_utc": "2026-09-15T04:06:41Z",
   "note": "Written by packaging/release.sh. tools/puckd/selfupdate.py verifies this sha256 against the downloaded zip before it unpacks anything."
 }
