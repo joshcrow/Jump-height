@@ -358,13 +358,14 @@ class _RideLoopTestBase(unittest.TestCase):
         return p
 
     def put_fit_zip(self, name: str, activity_id: str, start_utc: str, end_utc: str,
-                    fail: bool = False) -> Path:
+                    fail: bool = False, **summary_extra) -> Path:
         buf_path = self.tmp / f"_stage_{name}"
         with zipfile.ZipFile(buf_path, "w") as zf:
             zf.writestr(f"{activity_id}_ACTIVITY.fit", b"not a real fit, fake-parsed")
         p = self.put_ro_file(ride_loop.default_config(self.repo_dir).fits_dir, name,
                              buf_path.read_bytes())
-        window = {"fail": True} if fail else {"start_utc": start_utc, "end_utc": end_utc}
+        window = {"fail": True} if fail else {"start_utc": start_utc, "end_utc": end_utc,
+                                              **summary_extra}
         (self.fit_windows_dir / (name + ".window.json")).write_text(json.dumps(window))
         return p
 
@@ -656,16 +657,29 @@ class TestSessionTraceWindow(_RideLoopTestBase):
         self.assertEqual(start, datetime(2026, 9, 14, 20, 0, 10, tzinfo=timezone.utc))
         self.assertEqual(end, datetime(2026, 9, 14, 20, 1, 10, tzinfo=timezone.utc))
 
-    def test_uses_min_max_not_first_last_row(self):
-        # A boot-reset trace can log an early small t AFTER a later one in
-        # file order; min/max still yields a window that CONTAINS the
-        # activity rather than a narrower, wrong one (see the function's
-        # own docstring).
+    def test_only_the_last_boot_counts(self):
+        # A flash ring buffer that survived a power cycle: t runs 500..900
+        # from an EARLIER boot, then restarts at 5 for the boot the epoch
+        # actually describes. The old min/max window (t=5..900) put an
+        # earlier boot's rows on this boot's clock; measured on the real
+        # corpus that produced an 81.3 h window and one ending two days in
+        # the future (docs/garmin-corpus-2026-09-15.md, finding 10).
         sess = self.tmp / "sess"
-        self._write_session(sess, "2026-09-14T20:00:00Z", [(500.0, 1.0), (5.0, 1.0)])
+        self._write_session(sess, "2026-09-14T20:00:00Z",
+                            [(500.0, 1.0), (900.0, 1.0), (5.0, 1.0), (65.0, 1.0)])
         start, end = ride_loop.session_trace_window(sess)
         self.assertEqual(start, datetime(2026, 9, 14, 20, 0, 5, tzinfo=timezone.utc))
-        self.assertEqual(end, datetime(2026, 9, 14, 20, 8, 20, tzinfo=timezone.utc))
+        self.assertEqual(end, datetime(2026, 9, 14, 20, 1, 5, tzinfo=timezone.utc))
+
+    def test_sub_second_jitter_is_not_a_reboot(self):
+        # sim/score.py records backward steps smaller than 1 s as jitter,
+        # not resets; the window must not be cut at one.
+        sess = self.tmp / "sess"
+        self._write_session(sess, "2026-09-14T20:00:00Z",
+                            [(10.0, 1.0), (10.5, 1.0), (10.45, 1.0), (70.0, 1.0)])
+        start, end = ride_loop.session_trace_window(sess)
+        self.assertEqual(start, datetime(2026, 9, 14, 20, 0, 10, tzinfo=timezone.utc))
+        self.assertEqual(end, datetime(2026, 9, 14, 20, 1, 10, tzinfo=timezone.utc))
 
     def test_missing_trace_epoch_is_none_not_a_guess(self):
         sess = self.tmp / "sess"
@@ -692,6 +706,20 @@ class TestGarminMatching(_RideLoopTestBase):
         self.assertEqual(window, (
             datetime(2026, 9, 14, 20, 15, tzinfo=timezone.utc),
             datetime(2026, 9, 14, 20, 16, tzinfo=timezone.utc)))
+
+    def test_fit_summary_is_cached_next_to_the_zips(self):
+        # Second read of the same zip must not run fitread again (338 zips
+        # per new session at ~1 s each was minutes per cycle on 2026-09-15).
+        cfg = self.make_cfg()
+        fit = self.put_fit_zip("111_activity.zip", "111",
+                               "2026-09-14T20:15:00Z", "2026-09-14T20:16:00Z",
+                               sport="windsurfing")
+        first = ride_loop.fit_activity_summary(cfg, fit)
+        self.assertEqual(first.get("sport"), "windsurfing")
+        cfg.fitread_argv = [sys.executable, "-c", "import sys; sys.exit(9)"]  # would fail
+        again = ride_loop.fit_activity_summary(cfg, fit)
+        self.assertEqual(again, first)
+        self.assertTrue((cfg.fits_cache_dir / ride_loop._SUMMARY_CACHE_NAME).is_file())
 
     def test_fit_activity_window_none_on_fitread_failure(self):
         cfg = self.make_cfg()
@@ -730,6 +758,44 @@ class TestGarminMatching(_RideLoopTestBase):
         chosen = ride_loop.pick_matching_fit(cfg, session_window,
                                              [the_ride, evening_walk])
         self.assertEqual(chosen, the_ride)
+
+    def test_pick_matching_fit_never_attaches_on_zero_shared_seconds(self):
+        # 2026-08-22: a 0.7-second, 1-record windsurfing false start touched a
+        # session window at its endpoint and was attached on 0.0 s of shared
+        # time (docs/garmin-corpus-2026-09-15.md, finding 10).
+        cfg = self.make_cfg()
+        session_window = (datetime(2026, 9, 14, 20, 0, tzinfo=timezone.utc),
+                          datetime(2026, 9, 14, 21, 0, tzinfo=timezone.utc))
+        touching = self.put_fit_zip("touch.zip", "1",
+                                    "2026-09-14T21:00:00Z", "2026-09-14T21:30:00Z")
+        self.assertIsNone(ride_loop.pick_matching_fit(cfg, session_window, [touching]))
+
+    def test_pick_matching_fit_skips_a_false_start_shorter_than_five_minutes(self):
+        cfg = self.make_cfg()
+        session_window = (datetime(2026, 9, 14, 20, 0, tzinfo=timezone.utc),
+                          datetime(2026, 9, 14, 21, 0, tzinfo=timezone.utc))
+        false_start = self.put_fit_zip("blip.zip", "1",
+                                       "2026-09-14T20:30:00Z", "2026-09-14T20:30:01Z",
+                                       sport="windsurfing")
+        self.assertIsNone(ride_loop.pick_matching_fit(cfg, session_window, [false_start]))
+
+    def test_pick_matching_fit_skips_sports_that_are_never_the_ride(self):
+        # The dog walk overlaps more of the day than the ride does; sport
+        # decides before overlap does. A summary with NO sport stays eligible.
+        cfg = self.make_cfg()
+        session_window = (datetime(2026, 9, 14, 9, 0, tzinfo=timezone.utc),
+                          datetime(2026, 9, 14, 22, 0, tzinfo=timezone.utc))
+        walk = self.put_fit_zip("walk.zip", "1",
+                                "2026-09-14T10:00:00Z", "2026-09-14T14:00:00Z",
+                                sport="walking", sub_sport="generic")
+        ride = self.put_fit_zip("ride.zip", "2",
+                                "2026-09-14T20:00:00Z", "2026-09-14T21:30:00Z",
+                                sport="windsurfing", sub_sport="generic")
+        self.assertEqual(ride_loop.pick_matching_fit(cfg, session_window, [walk, ride]), ride)
+        untagged = self.put_fit_zip("untagged.zip", "3",
+                                    "2026-09-14T10:00:00Z", "2026-09-14T14:00:00Z")
+        self.assertEqual(ride_loop.pick_matching_fit(cfg, session_window, [walk, untagged]),
+                         untagged)
 
     def test_pick_matching_fit_none_when_nothing_overlaps(self):
         cfg = self.make_cfg()

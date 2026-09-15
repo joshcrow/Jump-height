@@ -92,6 +92,14 @@ _COPY_TIMEOUT_S = 900.0    # a full-region Garmin/ride zip is a few MB, not huge
 _INGEST_TIMEOUT_S = 300.0
 _SCORE_TIMEOUT_S = 600.0
 _FITREAD_TIMEOUT_S = 60.0
+_BOOT_RESET_DROP_S = 1.0        # a backward step in trace `t` larger than this is a reboot (sim/score.py uses the same 1 s)
+_MIN_FIT_ACTIVITY_S = 300.0     # shorter than this is a false start, not a ride (measured: a 0.7 s, 1-record windsurfing FIT on 2026-08-22)
+# Sports that are never the ride. Everything else (windsurfing, kiteboarding,
+# surfing, generic/track_me, or a summary with no sport at all) stays eligible.
+_NEVER_THE_RIDE_SPORTS = frozenset({
+    "walking", "hiking", "running", "swimming", "cycling", "jump_rope",
+    "training", "inline_skating", "alpine_skiing", "kayaking", "rowing",
+})
 
 
 class RcloneNotFound(RuntimeError):
@@ -502,13 +510,17 @@ def session_trace_window(session_dir: Path) -> "Optional[tuple[datetime, datetim
     """The session's coarse wall-clock span: session.json's `trace_epoch_utc`
     (the wall clock at trace t=0) plus trace.csv's own min/max `t`.
 
-    Deliberately NOT the multi-boot-aware version `sim/score.py`'s Timebase
-    computes (boot resets, the excluded-rows rule) — this is only used to
-    pick a Garmin file to attach, not to align anything scored; `jump score`
-    is the source of truth for the session once it runs. min/max rather than
-    first/last row so a boot reset that runs `t` backward still yields a
-    window that CONTAINS the real activity instead of a wrong, narrower one
-    that quietly excludes it."""
+    Only the LAST boot's rows count. trace.csv is a flash ring buffer that
+    survives a power cycle, and `trace_epoch_utc` pins the boot that was
+    running at sync and no other (sim/score.py's Timebase, the excluded-rows
+    rule). Rows before the last backward step in `t` belong to an earlier
+    boot with an unknown epoch: adding THEIR `t` to this epoch is not a wide
+    window, it is a wrong one. Measured 2026-09-15 across the 24 dated
+    sessions (docs/garmin-corpus-2026-09-15.md, finding 10): with min/max
+    over every row, 20260910-103108-E2C4 got an 81.3 h window that put the
+    real 09-09 ride outside it, and one window ended 2026-09-17 — in the
+    future. A reset is any drop in `t` larger than `_BOOT_RESET_DROP_S`;
+    the sub-second jitter the scorer also records is not one."""
     try:
         sess = json.loads((session_dir / "session.json").read_text())
     except (OSError, ValueError):
@@ -520,7 +532,7 @@ def session_trace_window(session_dir: Path) -> "Optional[tuple[datetime, datetim
         epoch_dt = _parse_iso(epoch)
     except ValueError:
         return None
-    tmin = tmax = None
+    tmin = tmax = prev = None
     try:
         with (session_dir / "trace.csv").open() as f:
             next(f, None)  # header: "t,mag"
@@ -532,6 +544,9 @@ def session_trace_window(session_dir: Path) -> "Optional[tuple[datetime, datetim
                     t = float(cell)
                 except ValueError:
                     continue
+                if prev is not None and prev - t > _BOOT_RESET_DROP_S:
+                    tmin = tmax = None      # a new boot: forget the old one
+                prev = t
                 tmin = t if tmin is None else min(tmin, t)
                 tmax = t if tmax is None else max(tmax, t)
     except OSError:
@@ -541,8 +556,11 @@ def session_trace_window(session_dir: Path) -> "Optional[tuple[datetime, datetim
     return epoch_dt + timedelta(seconds=tmin), epoch_dt + timedelta(seconds=tmax)
 
 
-def fit_activity_window(cfg: Config, fit_path: Path) -> "Optional[tuple[datetime, datetime]]":
-    """The FIT's own recorded start/end, via `tools/fitread.py --out <tmp>`
+def fit_activity_summary(cfg: Config, fit_path: Path) -> "Optional[dict]":
+    """`tools/fitread.py --out <tmp>`'s fit-summary.json for one zip: the
+    activity's own start_utc/end_utc plus, when the reader supplies them,
+    sport/sub_sport/records. Everything `fit_activity_window()` and
+    `pick_matching_fit()` know about a FIT comes through here.
     (the project's already-tested FIT reader, docs/STATUS.md, 41 tests) run
     as a SUBPROCESS rather than imported — `fitread.read_fit_bytes()` calls
     `sys.exit(2)` on a malformed input (its own documented contract), which
@@ -550,6 +568,59 @@ def fit_activity_window(cfg: Config, fit_path: Path) -> "Optional[tuple[datetime
     still-uploading zip. Shelling out is the same "one place owns the
     analysis" precedent `./tools/jump score`/`replay`/`eval` already use for
     sim/score.py, sim/run.py and sim/evaluate.py."""
+    cache_key = None
+    try:
+        st = fit_path.stat()
+        cache_key = f"{fit_path.name}:{st.st_size}:{int(st.st_mtime)}"
+        cached = _summary_cache_get(cfg, cache_key)
+        if cached is not None:
+            return cached
+    except OSError:
+        pass
+    summary = _fit_activity_summary_uncached(cfg, fit_path)
+    if summary is not None and cache_key is not None:
+        _summary_cache_put(cfg, cache_key, summary)
+    return summary
+
+
+_SUMMARY_CACHE_NAME = ".fit-summaries.json"
+
+
+def _summary_cache_path(cfg: Config) -> Path:
+    return cfg.fits_cache_dir / _SUMMARY_CACHE_NAME
+
+
+def _summary_cache_get(cfg: Config, key: str) -> "Optional[dict]":
+    """A FIT never changes once written, so its summary is keyed on
+    name+size+mtime and kept next to the zips. Without this the picker ran
+    tools/fitread.py once per cached zip per NEW session — 338 subprocesses
+    on 2026-09-15, minutes per session — and the every-ride loop paid it
+    every cycle a bundle arrived."""
+    try:
+        return json.loads(_summary_cache_path(cfg).read_text()).get(key)
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def _summary_cache_put(cfg: Config, key: str, summary: dict) -> None:
+    path = _summary_cache_path(cfg)
+    try:
+        data = json.loads(path.read_text())
+        if not isinstance(data, dict):
+            data = {}
+    except (OSError, ValueError):
+        data = {}
+    data[key] = summary
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(data))
+        tmp.replace(path)
+    except OSError:
+        pass
+
+
+def _fit_activity_summary_uncached(cfg: Config, fit_path: Path) -> "Optional[dict]":
     with tempfile.TemporaryDirectory(prefix="ride_loop_fit_") as td:
         try:
             proc = subprocess.run(cfg.fitread_argv + [str(fit_path), "--out", td],
@@ -567,6 +638,12 @@ def fit_activity_window(cfg: Config, fit_path: Path) -> "Optional[tuple[datetime
         except (OSError, ValueError) as exc:
             log(cfg, f"fitread for {fit_path.name}: unreadable fit-summary.json: {exc!r}")
             return None
+    return summary if isinstance(summary, dict) else None
+
+
+def _summary_window(summary: "Optional[dict]") -> "Optional[tuple[datetime, datetime]]":
+    if not summary:
+        return None
     start, end = summary.get("start_utc"), summary.get("end_utc")
     if not start or not end:
         return None
@@ -574,6 +651,11 @@ def fit_activity_window(cfg: Config, fit_path: Path) -> "Optional[tuple[datetime
         return _parse_iso(start), _parse_iso(end)
     except ValueError:
         return None
+
+
+def fit_activity_window(cfg: Config, fit_path: Path) -> "Optional[tuple[datetime, datetime]]":
+    """The FIT's own recorded start/end (see fit_activity_summary)."""
+    return _summary_window(fit_activity_summary(cfg, fit_path))
 
 
 def _overlap_seconds(a: "tuple[datetime, datetime]", b: "tuple[datetime, datetime]") -> float:
@@ -604,17 +686,31 @@ def pick_matching_fit(cfg: Config, session_window: "tuple[datetime, datetime]",
     overlapping" then attaches the evening dog walk to the morning's foil
     session — silently, and into a corpus whose whole purpose is accuracy
     comparison. Shared duration picks the activity actually recorded
-    alongside the trace."""
-    best: "Optional[tuple[Path, tuple[datetime, datetime], float]]" = None
+    alongside the trace.
+
+    Three gates, each from a measured mis-pick (docs/garmin-corpus-2026-09-15.md,
+    finding 10): shared time must be > 0 s (on 2026-08-22 the old rule attached
+    a 0.7-second, 1-record `windsurfing` false start on 0.0 s of shared time);
+    the activity must be at least `_MIN_FIT_ACTIVITY_S` long (same file); and
+    a sport that is never the ride (`_NEVER_THE_RIDE_SPORTS`) is skipped, so
+    the day's dog walk cannot win on overlap. A summary with no sport at all
+    stays eligible — absence of a tag is not evidence of a walk."""
+    best: "Optional[tuple[Path, float, datetime]]" = None
     for p in fit_paths:
-        w = fit_activity_window(cfg, p)
+        summary = fit_activity_summary(cfg, p)
+        w = _summary_window(summary)
         if w is None:
             continue
-        if not _windows_overlap(session_window, w):
+        sport = (summary.get("sport") or "").lower()
+        if sport in _NEVER_THE_RIDE_SPORTS:
+            continue
+        if (w[1] - w[0]).total_seconds() < _MIN_FIT_ACTIVITY_S:
             continue
         shared = _overlap_seconds(session_window, w)
-        if best is None or (shared, w[1]) > (best[2], best[1][1]):
-            best = (p, w, shared)
+        if shared <= 0:
+            continue
+        if best is None or (shared, w[1]) > (best[1], best[2]):
+            best = (p, shared, w[1])
     return best[0] if best else None
 
 
