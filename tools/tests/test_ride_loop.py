@@ -1058,3 +1058,17 @@ class TestInstall(_RideLoopTestBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ThePlistFindsRclone(unittest.TestCase):
+    """launchd's default PATH is /usr/bin:/bin:/usr/sbin:/sbin; rclone lives
+    in /opt/homebrew/bin. Measured 2026-09-15: every launchd run logged
+    "gdrive-ro not ready" while a shell run copied fine."""
+
+    def test_plist_names_rclone_and_a_path_with_homebrew(self):
+        import plistlib
+        from pathlib import Path
+        d = plistlib.loads((Path(__file__).resolve().parents[2] / "packaging" / "com.jumpheight.rideloop.plist").read_bytes())
+        env = d.get("EnvironmentVariables", {})
+        self.assertEqual(env.get("RIDE_LOOP_RCLONE"), "/opt/homebrew/bin/rclone")
+        self.assertIn("/opt/homebrew/bin", env.get("PATH", ""), "launchd_default_path lacks homebrew")

@@ -18,6 +18,7 @@ import subprocess
 import sys
 import importlib.util
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent.parent
@@ -115,7 +116,8 @@ class TestNotifyFires(unittest.TestCase):
         original = subprocess.run
         subprocess.run = fake_run
         try:
-            notify.osascript_runner('He said "hi"', "line with \\ backslash")
+            with patch.object(notify, "native_runner", lambda t, b: False):
+                notify.osascript_runner('He said "hi"', "line with \\ backslash")
         finally:
             subprocess.run = original
 
@@ -134,7 +136,8 @@ class TestNotifyFires(unittest.TestCase):
         original = subprocess.run
         subprocess.run = fake_run
         try:
-            notify.osascript_runner("Puck charged", None)
+            with patch.object(notify, "native_runner", lambda t, b: False):
+                notify.osascript_runner("Puck charged", None)
         finally:
             subprocess.run = original
 
@@ -271,3 +274,20 @@ class TestMenubarLazyImport(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NativeFirst(unittest.TestCase):
+    def test_native_success_skips_osascript(self):
+        calls = []
+        with patch.object(notify, "native_runner", lambda t, b: True), \
+             patch.object(notify.subprocess, "run", lambda *a, **k: calls.append(a)):
+            notify.osascript_runner("Ride synced", None)
+        self.assertEqual(calls, [], "osascript must not run when the bundle posted it")
+
+    def test_native_failure_falls_back_to_osascript(self):
+        calls = []
+        with patch.object(notify, "native_runner", lambda t, b: False), \
+             patch.object(notify.subprocess, "run", lambda *a, **k: calls.append(a) or type("P", (), {"returncode": 0, "stderr": ""})()):
+            notify.osascript_runner("Ride synced", None)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0][0], "osascript")

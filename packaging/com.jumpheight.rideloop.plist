@@ -2,24 +2,24 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
     "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  packaging/com.jumpheight.rideloop.plist — LaunchAgent TEMPLATE for
+  packaging/com.jumpheight.rideloop.plist - LaunchAgent TEMPLATE for
   tools/ride_loop.py, the ride watcher that runs on the OWNER's Mac (this
-  machine), not Nick's — the counterpart to com.jumpheight.puckd.plist,
+  machine), not Nick's - the counterpart to com.jumpheight.puckd.plist,
   which is Nick's.
 
   This is a TEMPLATE, not the installed file. __PYTHON__ and __SCRIPT__ are
-  placeholders that `python3 tools/ride_loop.py --install` fills in with
+  placeholders that `python3 tools/ride_loop.py -install` fills in with
   sys.executable and this checkout's own absolute path to tools/ride_loop.py
   (ride_loop.render_plist()), then writes the RESULT to
   ~/Library/LaunchAgents/com.jumpheight.rideloop.plist and loads it with
-  `launchctl bootstrap gui/$UID` — CLAUDE.md §4: one template, filled in at
+  `launchctl bootstrap gui/$UID` - CLAUDE.md §4: one template, filled in at
   install time, rather than two independently hand-maintained plists (one
-  here, one on disk) that can drift apart. Never run --install from an
+  here, one on disk) that can drift apart. Never run -install from an
   automated session; the owner runs it by hand.
 
   StartInterval, not RunAtLoad+KeepAlive (contrast com.jumpheight.puckd.plist,
-  a persistent menu-bar app): tools/ride_loop.py is a periodic BATCH job —
-  one pass, then it exits — so launchd starts it fresh every interval rather
+  a persistent menu-bar app): tools/ride_loop.py is a periodic BATCH job -
+  one pass, then it exits - so launchd starts it fresh every interval rather
   than keeping one process alive forever. 600 s matches the task's own "every
   10 min" and tools/ride_loop.py's docstring; RunAtLoad also picks up
   anything that landed while this Mac was asleep or the agent unloaded.
@@ -37,6 +37,10 @@
 
     <key>EnvironmentVariables</key>
     <dict>
+        <key>RIDE_LOOP_RCLONE</key>
+        <string>/opt/homebrew/bin/rclone</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>PYTHONUTF8</key><string>1</string>
         <key>LANG</key><string>en_US.UTF-8</string>
     </dict>

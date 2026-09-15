@@ -54,20 +54,36 @@ def _osascript_escape(text: str) -> str:
     return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def osascript_runner(title: str, body: Optional[str]) -> None:
-    """The real runner: fire a macOS notification via osascript. Never
-    called from tests — they pass their own `runner` to notify().
+def native_runner(title: str, body: Optional[str]) -> bool:
+    """Post through the app bundle's own notification center, so the
+    notification carries the app's name and icon instead of Script Editor's.
+    NSUserNotificationCenter is deprecated but present through macOS 26 and
+    needs no signing or authorization prompt (measured 2026-09-15: delivered
+    from the installed, unsigned bundle with bundle id com.jumpheight.puckd).
+    Returns False when the framework is unavailable (a dev checkout, Linux
+    CI, or Apple finally removing it), so the caller can fall back."""
+    try:
+        from Foundation import NSUserNotification, NSUserNotificationCenter  # type: ignore
+        center = NSUserNotificationCenter.defaultUserNotificationCenter()
+        if center is None:
+            return False
+        n = NSUserNotification.alloc().init()
+        n.setTitle_(title)
+        if body:
+            n.setInformativeText_(body)
+        center.deliverNotification_(n)
+        return True
+    except Exception:  # noqa: BLE001 -- any failure here means "use osascript"
+        return False
 
-    KNOWN, NOT FIXED — the apparent sender. Notification Centre attributes
-    an `osascript` notification to Script Editor, so Nick sees that name and
-    that icon, not JumpHeight's. The only way to change it is
-    UNUserNotificationCenter, which needs a code-signed bundle and a granted
-    authorization; this app is deliberately unsigned (docs/sync-agent-plan.md,
-    "Known friction": first open is right-click -> Open). Changing the
-    delivery mechanism is neither small nor safe, and it would trade a
-    wrong-looking notification for none at all, so it stays until the app is
-    signed. It is a $99/yr fix, the same one that removes the right-click.
-    """
+
+def osascript_runner(title: str, body: Optional[str]) -> None:
+    """The real runner. First the bundle's own notification center (the
+    app's name and icon); if that is unavailable, `osascript display
+    notification`, which Notification Centre attributes to Script Editor.
+    Never called from tests -- they pass their own `runner` to notify()."""
+    if native_runner(title, body):
+        return
     script = "display notification {body} with title {title}".format(
         body=_osascript_escape(body or ""),
         title=_osascript_escape(title),
@@ -75,8 +91,8 @@ def osascript_runner(title: str, body: Optional[str]) -> None:
     proc = subprocess.run(["osascript", "-e", script], check=False,
                           capture_output=True, encoding="utf-8", errors="replace")
     # A notification that did not appear must not look like one that did
-    # (CLAUDE.md 2.3). Nothing is retried — by the time this fires the ride
-    # is already safe on Drive — but the daemon's log says it was lost
+    # (CLAUDE.md 2.3). Nothing is retried -- by the time this fires the ride
+    # is already safe on Drive -- but the daemon's log says it was lost
     # instead of swallowing the exit code.
     code = getattr(proc, "returncode", 0)
     if code:
