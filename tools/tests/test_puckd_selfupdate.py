@@ -584,3 +584,24 @@ class TheDownloadHostIsPinned(unittest.TestCase):
     def test_the_pinned_prefix_is_this_repositorys_releases(self):
         self.assertEqual(selfupdate.RELEASE_URL_PREFIX,
                          "https://github.com/joshcrow/Jump-height/releases/download/")
+
+
+class NotEnoughDisk(_ApplyHarness):
+    """The rider's Mac was full (measured 2026-09-14): the download and then
+    the unpack failed every six hours. Now the check refuses up front, names
+    the numbers, and downloads nothing."""
+
+    def test_refuses_before_downloading_when_the_disk_is_short(self):
+        calls = []
+        manifest = dict(self.manifest()); manifest["bytes"] = 100_000_000
+        r = self.apply(manifest, download_fn=lambda u, d: calls.append(u),
+                       free_bytes_fn=lambda p: 50_000_000)
+        self.assertFalse(r.ok)
+        self.assertEqual(r.stage, selfupdate.STAGE_DOWNLOAD)
+        self.assertIn("not enough free disk", r.error)
+        self.assertIn("400 MB needed", r.error)
+        self.assertEqual(calls, [], "nothing was downloaded")
+
+    def test_space_needed_is_four_zips(self):
+        self.assertEqual(selfupdate._space_needed({"bytes": 10}), 40)
+        self.assertEqual(selfupdate._space_needed({}), 480_000_000)

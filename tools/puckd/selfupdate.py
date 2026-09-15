@@ -365,6 +365,24 @@ def _bundle_complaint(app: Path, version: str) -> "Optional[str]":
     return None
 
 
+SPACE_FACTOR = 4   # zip + unpacked copy + staged copy + headroom, in zip sizes
+
+
+def _space_needed(manifest: dict) -> int:
+    size = manifest.get("bytes") if isinstance(manifest, dict) else None
+    size = size if isinstance(size, int) and size > 0 else 120_000_000
+    return size * SPACE_FACTOR
+
+
+def free_bytes(path: "Path | str") -> "Optional[int]":
+    """Free bytes on the volume holding `path`; None if it cannot be read."""
+    import shutil
+    try:
+        return shutil.disk_usage(str(path)).free
+    except OSError:
+        return None
+
+
 def _prune_downloads(download_dir: Path, keep: str) -> None:
     """Everything in PUCKD_HOME/updates that is not this attempt's. A
     failed unpack leaves a <version>.zip behind and a failed download a
@@ -432,6 +450,7 @@ def apply(
     rename_fn: "Callable[[Path, Path], None]" = os.rename,
     rmtree_fn: "Callable[[Path], None] | None" = None,
     kickstart_fn: "Callable[[], bool]" = _default_kickstart,
+    free_bytes_fn=free_bytes,
 ) -> UpdateResult:
     """Download, verify, and swap in the app named by `manifest`.
 
@@ -520,7 +539,7 @@ def apply(
             manifest, version=version, url=url, bundle_path=bundle_path,
             download_dir=Path(download_dir), log=log, download_fn=download_fn,
             unpack_fn=unpack_fn, copytree_fn=copytree_fn, rename_fn=rename_fn,
-            rmtree_fn=rmtree_fn, kickstart_fn=kickstart_fn)
+            rmtree_fn=rmtree_fn, kickstart_fn=kickstart_fn, free_bytes_fn=free_bytes_fn)
     finally:
         try:
             if lock is not None:
@@ -533,6 +552,7 @@ def _apply_locked(
     manifest: dict, *, version: str, url: str, bundle_path: Path,
     download_dir: Path, log, download_fn, unpack_fn, copytree_fn, rename_fn,
     rmtree_fn, kickstart_fn,
+    free_bytes_fn=free_bytes,
 ) -> UpdateResult:
     """apply()'s body, with the lock held. Split out only so the lock has a
     single, unmissable release point; the ordering and every guarantee in
@@ -543,6 +563,15 @@ def _apply_locked(
         down.mkdir(parents=True, exist_ok=True)
         zip_path = down / f"{version or 'update'}.zip"
         _prune_downloads(down, version or "update")
+        need = _space_needed(manifest)
+        free = free_bytes_fn(down)
+        if free is not None and free < need:
+            # Measured on the rider's Mac 2026-09-14: a full disk failed the
+            # download, then the unpack, every six hours, with nothing said
+            # in his words. Say the number once and skip the 110 MB attempt.
+            return UpdateResult(False, STAGE_DOWNLOAD,
+                                f"not enough free disk: {free // 1_000_000} MB free, "
+                                f"about {need // 1_000_000} MB needed", version)
         log(f"selfupdate: downloading {version} from {url}")
         download_fn(url, zip_path)
         if not zip_path.is_file():

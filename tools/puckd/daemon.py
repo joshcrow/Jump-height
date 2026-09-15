@@ -477,6 +477,11 @@ def publish_log(cfg: DaemonConfig, report: "Optional[JobCycleReport]" = None,
                 "needs_you": report.needs_you,
                 "bundle": Path(report.bundle_path).name if report.bundle_path else None,
             }
+        try:
+            import shutil
+            status["disk_free_mb"] = shutil.disk_usage(str(home)).free // 1_000_000
+        except OSError:
+            pass
         if stats:
             status["puck"] = {k: stats.get(k) for k in
                               ("vbat_mv", "batt_pct", "chg", "trace_bytes", "stored_jumps", "trace_full", "error")}
