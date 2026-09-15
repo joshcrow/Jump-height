@@ -1,0 +1,1006 @@
+{
+  "units": "SI unless named otherwise",
+  "kind": "ANALYSIS unless tagged MEASURED",
+  "s3_1_support_table": [
+    {
+      "constant_upward_support_g": 0.1,
+      "ballistic_over_true_ratio": 1.1111111111111112,
+      "overestimate_pct": 11.111111111111116
+    },
+    {
+      "constant_upward_support_g": 0.2,
+      "ballistic_over_true_ratio": 1.25,
+      "overestimate_pct": 25.0
+    },
+    {
+      "constant_upward_support_g": 0.3,
+      "ballistic_over_true_ratio": 1.4285714285714286,
+      "overestimate_pct": 42.85714285714286
+    },
+    {
+      "constant_upward_support_g": 0.4,
+      "ballistic_over_true_ratio": 1.6666666666666667,
+      "overestimate_pct": 66.66666666666667
+    }
+  ],
+  "s3_1_arm_ceiling": {
+    "cap_body_weights": 0.4,
+    "force_elevation_deg": 35.0,
+    "vertical_component_g": 0.22943057454041843,
+    "airtime_overestimate_pct": 29.77416011588856,
+    "note": "0.40*sin(35deg); wing_model.aero_model uses sin for a_up, so the report's reading of the code is correct."
+  },
+  "s3_1_absolute_error_of_airtime_formula": [
+    {
+      "T_s": 0.5,
+      "L=0.1000_abs_error_m": 0.03064578125,
+      "L=0.2000_abs_error_m": 0.0612915625,
+      "L=0.3000_abs_error_m": 0.09193734375,
+      "L=0.2294_abs_error_m": 0.07031079199427483
+    },
+    {
+      "T_s": 1.0,
+      "L=0.1000_abs_error_m": 0.122583125,
+      "L=0.2000_abs_error_m": 0.24516625,
+      "L=0.3000_abs_error_m": 0.367749375,
+      "L=0.2294_abs_error_m": 0.2812431679770993
+    },
+    {
+      "T_s": 1.5,
+      "L=0.1000_abs_error_m": 0.27581203125,
+      "L=0.2000_abs_error_m": 0.5516240625,
+      "L=0.3000_abs_error_m": 0.8274360937499999,
+      "L=0.2294_abs_error_m": 0.6327971279484734
+    },
+    {
+      "T_s": 2.0,
+      "L=0.1000_abs_error_m": 0.4903325,
+      "L=0.2000_abs_error_m": 0.980665,
+      "L=0.3000_abs_error_m": 1.4709975,
+      "L=0.2294_abs_error_m": 1.1249726719083972
+    },
+    {
+      "T_s": 3.0,
+      "L=0.1000_abs_error_m": 1.103248125,
+      "L=0.2000_abs_error_m": 2.20649625,
+      "L=0.3000_abs_error_m": 3.3097443749999997,
+      "L=0.2294_abs_error_m": 2.5311885117938937
+    },
+    {
+      "T_s": 4.0,
+      "L=0.1000_abs_error_m": 1.96133,
+      "L=0.2000_abs_error_m": 3.92266,
+      "L=0.3000_abs_error_m": 5.88399,
+      "L=0.2294_abs_error_m": 4.499890687633589
+    }
+  ],
+  "s3_1_max_airtime_within_target_for_constant_support": {
+    "L=0.05": 1.576856370670893,
+    "L=0.1": 1.1150058326585965,
+    "L=0.2": 0.7884281853354465,
+    "L=0.3": 0.6437489176334436,
+    "L=0.4": 0.5575029163292983
+  },
+  "s3_3_late_support_counterexample": {
+    "T_s": 1.5,
+    "late_fraction": 0.48,
+    "late_support_g": 0.3,
+    "v0_mps_closed_form": 6.846610764,
+    "apex_closed_form_m": 2.3900148854971204,
+    "apex_time_closed_form_s": 0.6981600000000001,
+    "apex_before_support_starts": true,
+    "apex_numeric_m": 2.3900185826578055,
+    "ballistic_airtime_height_m": 2.7581203125,
+    "physical_error_pct": 15.401804785258232,
+    "absolute_error_m": 0.3681054270028796,
+    "report_value_pct": 15.40199388889798
+  },
+  "s3_3_equal_mean_support_paths": {
+    "constant_0.2g": {
+      "apex_numeric_m": 2.2064962500020924,
+      "apex_time_s": 0.75,
+      "v0_mps": 5.883990000003866,
+      "apex_closed_form_m": 2.20649625,
+      "mean_support_g": 0.2
+    },
+    "central_half_0.4g": {
+      "apex_numeric_m": 1.9306842187913351,
+      "apex_time_s": 0.75,
+      "v0_mps": 5.883982644992494,
+      "apex_closed_form_m": 1.9306842187499997,
+      "mean_support_g": 0.2
+    },
+    "edge_quarters_0.4g": {
+      "apex_numeric_m": 2.4823082811940087,
+      "apex_time_s": 0.75,
+      "v0_mps": 5.883997354989545,
+      "apex_closed_form_m": 2.48230828125,
+      "mean_support_g": 0.2
+    },
+    "spread_edges_minus_central_m": 0.5516240625000002
+  },
+  "s3_3_kernel_weights_check": {
+    "int_K(T/2,s)ds_over_whole_T": 0.28125,
+    "int_K(T/2,s)ds_over_central_half": 0.2109375,
+    "int_K(T/2,s)ds_over_edge_quarters": 0.0703125,
+    "derivation": "K(T/2,s)=s/2 for s<T/2, (T-s)/2 for s>T/2; the three closed-form factors 0.8/0.7/0.9 follow exactly."
+  },
+  "notes_kernel_identities": {
+    "constant_bias_max_path_error_closed_form_m": 0.027581203125000002,
+    "constant_bias_max_path_error_numeric_m": 0.027581203125025315,
+    "affine_b1_max_path_error_rule": "|b1| T^3/(9*sqrt(3)) at t=T/sqrt(3)",
+    "affine_check_b1_1mps3_T1.5_closed_form_m": 0.21650635094610968,
+    "affine_check_b1_1mps3_T1.5_numeric_m": 0.21650635094603976
+  },
+  "s5_2_bias_table": [
+    {
+      "T_s": 1,
+      "err_5mg_cm": 0.612915625,
+      "err_10mg_cm": 1.22583125,
+      "err_40mg_cm": 4.903325,
+      "sole_error_ceiling_mg": 124.32380068626902
+    },
+    {
+      "T_s": 2,
+      "err_5mg_cm": 2.4516625,
+      "err_10mg_cm": 4.903325,
+      "err_40mg_cm": 19.6133,
+      "sole_error_ceiling_mg": 31.080950171567256
+    },
+    {
+      "T_s": 3,
+      "err_5mg_cm": 5.516240625,
+      "err_10mg_cm": 11.03248125,
+      "err_40mg_cm": 44.129925,
+      "sole_error_ceiling_mg": 13.813755631807668
+    },
+    {
+      "T_s": 4,
+      "err_5mg_cm": 9.80665,
+      "err_10mg_cm": 19.6133,
+      "err_40mg_cm": 78.4532,
+      "sole_error_ceiling_mg": 7.770237542891814
+    }
+  ],
+  "s5_2_endpoint_rule": {
+    "rule": "dz(t) = (t/T) dD; at a midpoint apex the coefficient is 1/2",
+    "dD_0.10m_at_midpoint_cm": 5.0,
+    "numeric_check_cm": 5.0
+  },
+  "s5_2_tilt_leak": {
+    "first_order_mg_at_0.3g_horizontal_1deg": 5.235987755982989,
+    "exact_mg_incl_second_order_term_fv_0.2g": 5.205260962463306,
+    "err_at_3s_cm": 5.776593674311189,
+    "err_at_4s_cm": 10.269499865442114
+  },
+  "s5_2_boundary_timing": {
+    "excluded_20ms_at_4mps_cm": 8.0,
+    "dH_from_duration_error_rule": "q*T*dT/4 for constant q, D=0",
+    "q0.8g_T3_dT20ms_cm": 11.767979999999998
+  },
+  "s5_2_time_scale": {
+    "exact_factor": 1.0100249999999997,
+    "first_order_rule": 1.01,
+    "relative_error_of_first_order": 2.499999999971969e-05
+  },
+  "s5_noise": {
+    "report_convention_0.02g_per_sample": {
+      "50Hz_T1.5": 0.007354987500000001,
+      "200Hz_T1.5": 0.0036774937500000005
+    },
+    "datasheet_130ug_rtHz_ODR104": {
+      "per_sample_sd_mg": 0.9374433316206371,
+      "midpoint_sd_mm": {
+        "1": 0.13011531317451688,
+        "2": 0.3680216811276488,
+        "3": 0.676098999782998,
+        "4": 1.040922505396135
+      }
+    },
+    "datasheet_130ug_rtHz_ODR208": {
+      "per_sample_sd_mg": 1.3257450735341239,
+      "midpoint_sd_mm": {
+        "1": 0.13011531317451686,
+        "2": 0.36802168112764877,
+        "3": 0.6760989997829979,
+        "4": 1.0409225053961348
+      }
+    },
+    "datasheet_130ug_rtHz_ODR416": {
+      "per_sample_sd_mg": 1.8748866632412742,
+      "midpoint_sd_mm": {
+        "1": 0.13011531317451688,
+        "2": 0.3680216811276488,
+        "3": 0.676098999782998,
+        "4": 1.040922505396135
+      }
+    },
+    "quantization_sd_mg_at_0.488mg_LSB": 0.1408734656822687
+  },
+  "s12_3_half_g_3p3s": {
+    "height_m": 6.674651156249999
+  },
+  "s3_2_dynamic_pressure_ratio": {
+    "downwind_apparent_mps": 3,
+    "crosswind_apparent_mps": 13.601470508735444,
+    "squared_ratio": 20.555555555555557
+  },
+  "s6_6_barometer": {
+    "Pa_per_15.24cm_at_sea_level": 1.8308034885000002,
+    "dynamic_pressure_at_10mps_Pa": 61.25000000000001,
+    "height_equivalent_of_full_dynamic_pressure_m": 5.0985810648896415
+  },
+  "new_a_gyro_attitude": {
+    "datasheet_rows": {
+      "G_TyOff_dps": 3.0,
+      "G_OffDr_dps_per_degC": 0.05,
+      "Rn_mdps_rtHz": 5.0,
+      "G_So_mdps_per_LSB_at_2000dps": 70.0,
+      "source": "LSM6DS3TR-C datasheet Table 3, DocID030071 Rev 3, pp.21-22"
+    },
+    "bias_estimate_noise_floor_dps": {
+      "average_1s": 0.005,
+      "average_10s": 0.0015811388300841897,
+      "average_60s": 0.0006454972243679028,
+      "average_300s": 0.00028867513459481284
+    },
+    "tilt_deg_after": {
+      "uncalibrated_datasheet_TyOff": {
+        "1": 3.0,
+        "2": 6.0,
+        "3": 9.0,
+        "4": 12.0
+      },
+      "bench_six_position_then_20degC_swing": {
+        "1": 1.0,
+        "2": 2.0,
+        "3": 3.0,
+        "4": 4.0
+      },
+      "bench_calibrated_temp_compensated": {
+        "1": 0.1,
+        "2": 0.2,
+        "3": 0.30000000000000004,
+        "4": 0.4
+      },
+      "re_zeroed_immediately_before_the_jump": {
+        "1": 0.02,
+        "2": 0.04,
+        "3": 0.06,
+        "4": 0.08
+      }
+    },
+    "height_error_cm_fh_0.3g": {
+      "uncalibrated_datasheet_TyOff": {
+        "1": 0.9881830852926385,
+        "2": 7.905464682341108,
+        "3": 26.680943302901238,
+        "4": 63.24371745872887
+      },
+      "bench_six_position_then_20degC_swing": {
+        "1": 0.32939436176421283,
+        "2": 2.6351548941137026,
+        "3": 8.893647767633746,
+        "4": 21.08123915290962
+      },
+      "bench_calibrated_temp_compensated": {
+        "1": 0.03293943617642128,
+        "2": 0.26351548941137026,
+        "3": 0.8893647767633748,
+        "4": 2.108123915290962
+      },
+      "re_zeroed_immediately_before_the_jump": {
+        "1": 0.006587887235284256,
+        "2": 0.05270309788227405,
+        "3": 0.17787295535267492,
+        "4": 0.4216247830581924
+      }
+    },
+    "height_error_cm_fh_0.5g": {
+      "uncalibrated_datasheet_TyOff": {
+        "1": 1.646971808821064,
+        "2": 13.175774470568513,
+        "3": 44.46823883816874,
+        "4": 105.4061957645481
+      },
+      "bench_six_position_then_20degC_swing": {
+        "1": 0.5489906029403547,
+        "2": 4.391924823522838,
+        "3": 14.822746279389579,
+        "4": 35.1353985881827
+      },
+      "bench_calibrated_temp_compensated": {
+        "1": 0.05489906029403547,
+        "2": 0.43919248235228375,
+        "3": 1.4822746279389576,
+        "4": 3.51353985881827
+      },
+      "re_zeroed_immediately_before_the_jump": {
+        "1": 0.010979812058807095,
+        "2": 0.08783849647045676,
+        "3": 0.2964549255877916,
+        "4": 0.7027079717636541
+      }
+    },
+    "scale_factor_tilt_deg": {
+      "1pct_over_30deg_of_real_rotation": 0.3,
+      "1pct_over_90deg_of_real_rotation": 0.9,
+      "1pct_over_180deg_of_real_rotation": 1.8,
+      "2pct_over_30deg_of_real_rotation": 0.6,
+      "2pct_over_90deg_of_real_rotation": 1.8,
+      "2pct_over_180deg_of_real_rotation": 3.6,
+      "3pct_over_30deg_of_real_rotation": 0.8999999999999999,
+      "3pct_over_90deg_of_real_rotation": 2.6999999999999997,
+      "3pct_over_180deg_of_real_rotation": 5.3999999999999995
+    },
+    "scale_factor_height_error_cm_fh_0.3g_T2": {
+      "1pct_over_30deg": 0.7702124899081586,
+      "1pct_over_90deg": 2.310637469724476,
+      "1pct_over_180deg": 4.621274939448952,
+      "2pct_over_30deg": 1.5404249798163172,
+      "2pct_over_90deg": 4.621274939448952,
+      "2pct_over_180deg": 9.242549878897904,
+      "3pct_over_30deg": 2.3106374697244756,
+      "3pct_over_90deg": 6.931912409173427,
+      "3pct_over_180deg": 13.863824818346854
+    }
+  },
+  "new_b_accel_bias": {
+    "datasheet_rows": {
+      "LA_TyOff_mg": 40.0,
+      "LA_OffDr_mg_per_degC": 0.5,
+      "LA_SoDr_pct_per_degC": 0.01,
+      "An_ug_rtHz_at_16g": 130.0,
+      "LA_So_mg_per_LSB_at_16g": 0.488,
+      "source": "LSM6DS3TR-C datasheet Table 3, DocID030071 Rev 3, pp.21-22"
+    },
+    "six_position_fit_residual_sources_mg": {
+      "pose_tilt_1deg_each_face": 0.15230484360873042,
+      "pose_tilt_2deg_each_face": 0.6091729809042379,
+      "averaging_noise_60s_at_ODR208": 0.011867322079278597,
+      "quantization_0.488mg_LSB_mean_of_many": 0.0
+    },
+    "temperature_residual_mg": {
+      "dT_5degC": 2.5,
+      "dT_10degC": 5.0,
+      "dT_20degC": 10.0,
+      "dT_30degC": 15.0
+    },
+    "scale_temp_effect_mg_during_0.2g_flight": {
+      "dT_10degC": 0.2,
+      "dT_20degC": 0.4,
+      "dT_30degC": 0.6000000000000001
+    },
+    "scale_temp_effect_if_wrongly_applied_to_full_g_mg": {
+      "dT_10degC": 1.0,
+      "dT_20degC": 2.0,
+      "dT_30degC": 3.0
+    },
+    "height_error_cm": {
+      "1mg": {
+        "0.5": 0.03064578125,
+        "1": 0.122583125,
+        "1.5": 0.27581203125,
+        "2": 0.4903325,
+        "3": 1.103248125,
+        "4": 1.96133
+      },
+      "2mg": {
+        "0.5": 0.0612915625,
+        "1": 0.24516625,
+        "1.5": 0.5516240625,
+        "2": 0.980665,
+        "3": 2.20649625,
+        "4": 3.92266
+      },
+      "5mg": {
+        "0.5": 0.15322890625,
+        "1": 0.612915625,
+        "1.5": 1.37906015625,
+        "2": 2.4516625,
+        "3": 5.516240625,
+        "4": 9.80665
+      },
+      "10mg": {
+        "0.5": 0.3064578125,
+        "1": 1.22583125,
+        "1.5": 2.7581203125,
+        "2": 4.903325,
+        "3": 11.03248125,
+        "4": 19.6133
+      },
+      "15mg": {
+        "0.5": 0.45968671875,
+        "1": 1.838746875,
+        "1.5": 4.13718046875,
+        "2": 7.3549875,
+        "3": 16.548721875,
+        "4": 29.41995
+      },
+      "40mg": {
+        "0.5": 1.22583125,
+        "1": 4.903325,
+        "1.5": 11.03248125,
+        "2": 19.6133,
+        "3": 44.129925,
+        "4": 78.4532
+      }
+    }
+  },
+  "new_c_acquisition": {
+    "pacer_interval_us": 5000.0,
+    "odr_hz": 208.0,
+    "odr_period_us": 4807.692307692308,
+    "rtc_tick_us": 976.5625,
+    "poll_interval_min_us": 4882.8125,
+    "poll_interval_max_us": 5859.375,
+    "poll_interval_mean_us": 5000.0,
+    "duplicate_reads_per_s": 0.0,
+    "never_read_odr_samples_per_s": 8.0,
+    "duplicate_onset_odr_hz": 204.8,
+    "odr_margin_to_duplicates_pct": 1.538461538461533,
+    "accel_gyro_read_separation_us_estimate": 315.0,
+    "note": "two separate I2C transactions: readAccelG(0x28) then readGyroDps(0x22), lsm6ds3_min.h:174,194",
+    "attitude_mismatch_deg_at_60dps": {
+      "same_odr_tick_0.2ms": 0.012,
+      "worst_case_one_odr_period_4.8ms": 0.28846153846153844
+    },
+    "attitude_mismatch_deg_at_150dps": {
+      "same_odr_tick_0.2ms": 0.030000000000000002,
+      "worst_case_one_odr_period_4.8ms": 0.7211538461538461
+    },
+    "attitude_mismatch_deg_at_375dps": {
+      "same_odr_tick_0.2ms": 0.075,
+      "worst_case_one_odr_period_4.8ms": 1.8028846153846152
+    },
+    "trace_decimation": {
+      "accel_LPF1_bandwidth_hz": 104.0,
+      "host_poll_nyquist_hz": 100.0,
+      "log_hz_09_14_data": 50.0,
+      "log_nyquist_09_14_hz": 25.0,
+      "log_hz_current_config": 100.0,
+      "log_nyquist_current_hz": 50.0,
+      "aliased_band_09_14_hz": [
+        25.0,
+        104.0
+      ],
+      "note": "no digital low-pass is applied before either decimation (main.cpp LOG_DECIMATE is a plain counter)"
+    }
+  },
+  "new_c_clock_scale": {
+    "rule": "dH/H = 2*epsilon for equal endpoints",
+    "H=2m_error_cm": {
+      "eps_2e-05": 0.008,
+      "eps_0.00025": 0.1,
+      "eps_0.005": 2.0,
+      "eps_0.02": 8.0
+    },
+    "note": "nRF52840 LFCLK: LFXO is typically <=+/-250 ppm with a crystal; the internal LFRC is +/-2% uncalibrated. Which one this build uses was NOT established in this review."
+  },
+  "new_fg_geometry": {
+    "assumptions": "mast 75-90 cm; foiling ride height 30-45 cm; sensor lever r = 0.5-0.7 m from the board reference point",
+    "endpoint_D_error_cm": {
+      "dD_0.1m": 5.0,
+      "dD_0.2m": 10.0,
+      "dD_0.3m": 15.0,
+      "dD_0.45m": 22.5,
+      "dD_0.6m": 30.0
+    },
+    "pitch_change_sensor_rise_cm": {
+      "r=0.5m_symmetric_+/-1.5deg": 2.617694830787315,
+      "r=0.5m_symmetric_+/-5deg": 8.715574274765817,
+      "r=0.5m_symmetric_+/-10deg": 17.364817766693033,
+      "r=0.6m_symmetric_+/-1.5deg": 3.1412337969447783,
+      "r=0.6m_symmetric_+/-5deg": 10.45868912971898,
+      "r=0.6m_symmetric_+/-10deg": 20.837781320031638,
+      "r=0.7m_symmetric_+/-1.5deg": 3.6647727631022415,
+      "r=0.7m_symmetric_+/-5deg": 12.201803984672143,
+      "r=0.7m_symmetric_+/-10deg": 24.310744873370247
+    },
+    "pitch_change_sensor_rise_cm_one_sided": {
+      "r=0.6m_5deg_change": 5.22934456485949,
+      "r=0.6m_10deg_change": 10.418890660015819,
+      "r=0.6m_15deg_change": 15.529142706151244,
+      "r=0.6m_20deg_change": 20.521208599540124
+    }
+  },
+  "new_e_mount": {
+    "assumptions": "Hammond 1551WHGY + Sense + 250 mAh EEMB ~ 55-75 g; two nitrile O-rings in shear, k 1e4-1e5 N/m total",
+    "resonance_hz": {
+      "m=55g_k=1e+04Nm": 67.863895757457,
+      "m=55g_k=3e+04Nm": 117.5437154514735,
+      "m=55g_k=1e+05Nm": 214.60448148580193,
+      "m=75g_k=1e+04Nm": 58.11516831325473,
+      "m=75g_k=3e+04Nm": 100.65842420897408,
+      "m=75g_k=1e+05Nm": 183.7762984739307
+    },
+    "displacement_for_1g_at_resonance_Q3_mm": {
+      "f=60Hz": 0.20700445532627748,
+      "f=100Hz": 0.07452160391745986,
+      "f=200Hz": 0.018630400979364966
+    }
+  },
+  "new_i_surfr_consistency": [
+    {
+      "height_ft": 6.32,
+      "height_m": 1.9263360000000003,
+      "airtime_s": 3.07,
+      "implied_constant_support_g": 0.8332658340486965,
+      "ballistic_airtime_for_that_height_s": 1.253576021099016,
+      "airtime_ratio_reported_over_ballistic": 2.4489938769796478,
+      "ballistic_height_for_that_airtime_m": 11.553336948124999,
+      "required_sustained_vertical_force_N_at_85kg": 694.5814432752601,
+      "available_force_N_at_C=1.0_5m2_13.6mps": 566.5625000000001,
+      "required_vertical_force_coefficient": 1.2259573185222459
+    },
+    {
+      "height_ft": 5.74,
+      "height_m": 1.7495520000000002,
+      "airtime_s": 3.39,
+      "implied_constant_support_g": 0.8758070994963176,
+      "ballistic_airtime_for_that_height_s": 1.1946703444374807,
+      "airtime_ratio_reported_over_ballistic": 2.8376028716074027,
+      "ballistic_height_for_that_airtime_m": 14.087375308125,
+      "required_sustained_vertical_force_N_at_85kg": 730.0423638434228,
+      "available_force_N_at_C=1.0_5m2_13.6mps": 566.5625000000001,
+      "required_vertical_force_coefficient": 1.2885469190838128
+    },
+    {
+      "height_ft": 9.1,
+      "height_m": 2.77368,
+      "airtime_s": 3.8,
+      "implied_constant_support_g": 0.8433037969189684,
+      "ballistic_airtime_for_that_height_s": 1.5042251069870147,
+      "airtime_ratio_reported_over_ballistic": 2.5262176401319723,
+      "ballistic_height_for_that_airtime_m": 17.701003249999996,
+      "required_sustained_vertical_force_N_at_85kg": 702.9487403047091,
+      "available_force_N_at_C=1.0_5m2_13.6mps": 566.5625000000001,
+      "required_vertical_force_coefficient": 1.2407258516133859
+    }
+  ],
+  "measured": {
+    "MEASURED_per_jump_rotation_test": [
+      {
+        "n": 1,
+        "airtime_raw_s": 0.38,
+        "height_m": 0.195,
+        "med_a_g": 0.055,
+        "med_w_dps": 375.0,
+        "n_air": 60,
+        "lever_arm_m_needed_if_all_rotation": 0.012591170197894023,
+        "true_apex_m_if_med_a_were_constant_support": 0.18442011498553124
+      },
+      {
+        "n": 2,
+        "airtime_raw_s": 0.881,
+        "height_m": 0.993,
+        "med_a_g": 0.869,
+        "med_w_dps": 57.0,
+        "n_air": 160,
+        "lever_arm_m_needed_if_all_rotation": 8.610651364557027,
+        "true_apex_m_if_med_a_were_constant_support": 0.13007295393749999
+      },
+      {
+        "n": 3,
+        "airtime_raw_s": 0.931,
+        "height_m": 1.106,
+        "med_a_g": 0.798,
+        "med_w_dps": 58.0,
+        "n_air": 170,
+        "lever_arm_m_needed_if_all_rotation": 7.636825103474864,
+        "true_apex_m_if_med_a_were_constant_support": 0.22347516603124992
+      },
+      {
+        "n": 4,
+        "airtime_raw_s": 0.4,
+        "height_m": 0.216,
+        "med_a_g": 0.555,
+        "med_w_dps": 49.0,
+        "n_air": 64,
+        "lever_arm_m_needed_if_all_rotation": 7.441607561536936,
+        "true_apex_m_if_med_a_were_constant_support": 0.09622530146249995
+      },
+      {
+        "n": 5,
+        "airtime_raw_s": 0.33,
+        "height_m": 0.15,
+        "med_a_g": 0.695,
+        "med_w_dps": 39.0,
+        "n_air": 50,
+        "lever_arm_m_needed_if_all_rotation": 14.710300039564862,
+        "true_apex_m_if_med_a_were_constant_support": 0.045538778984781245
+      },
+      {
+        "n": 6,
+        "airtime_raw_s": 0.351,
+        "height_m": 0.168,
+        "med_a_g": 0.749,
+        "med_w_dps": 50.0,
+        "n_air": 54,
+        "lever_arm_m_needed_if_all_rotation": 9.645122534545862,
+        "true_apex_m_if_med_a_were_constant_support": 0.042121890829374994
+      },
+      {
+        "n": 7,
+        "airtime_raw_s": 0.395,
+        "height_m": 0.21,
+        "med_a_g": 0.542,
+        "med_w_dps": 48.0,
+        "n_air": 74,
+        "lever_arm_m_needed_if_all_rotation": 7.5732579981118615,
+        "true_apex_m_if_med_a_were_constant_support": 0.09622697839964997
+      },
+      {
+        "n": 8,
+        "airtime_raw_s": 0.346,
+        "height_m": 0.163,
+        "med_a_g": 0.675,
+        "med_w_dps": 37.0,
+        "n_air": 53,
+        "lever_arm_m_needed_if_all_rotation": 15.873264939613806,
+        "true_apex_m_if_med_a_were_constant_support": 0.05307619469140624
+      },
+      {
+        "n": 9,
+        "airtime_raw_s": 0.358,
+        "height_m": 0.175,
+        "med_a_g": 0.569,
+        "med_w_dps": 23.0,
+        "n_air": 55,
+        "lever_arm_m_needed_if_all_rotation": 34.62761137191489,
+        "true_apex_m_if_med_a_were_constant_support": 0.07549037077207502
+      },
+      {
+        "n": 10,
+        "airtime_raw_s": 0.42,
+        "height_m": 0.236,
+        "med_a_g": 1.217,
+        "med_w_dps": 67.0,
+        "n_air": 68,
+        "lever_arm_m_needed_if_all_rotation": 8.727842755620637,
+        "true_apex_m_if_med_a_were_constant_support": 0.0
+      },
+      {
+        "n": 11,
+        "airtime_raw_s": 0.26,
+        "height_m": 0.095,
+        "med_a_g": 0.211,
+        "med_w_dps": 86.0,
+        "n_air": 36,
+        "lever_arm_m_needed_if_all_rotation": 0.9184414873288675,
+        "true_apex_m_if_med_a_were_constant_support": 0.07528632503135627
+      }
+    ],
+    "MEASURED_jumps_csv": {
+      "n": 11,
+      "median_height_m": 0.195,
+      "max_height_m": 1.106,
+      "median_airtime_raw_s": 0.38,
+      "max_airtime_raw_s": 0.931,
+      "median_med_a_g": 0.675,
+      "min_med_a_g": 0.055,
+      "max_med_a_g": 1.217,
+      "median_med_w_dps": 50.0,
+      "max_med_w_dps": 375.0,
+      "n_with_med_a_above_0.35g": 9,
+      "n_with_med_a_above_0.07g": 10,
+      "predicted_ballistic_band_g": [
+        0.0,
+        0.07
+      ],
+      "source": "data/sessions/20260914-210637-E2C4/jumps.csv; the band is firmware/src/main.cpp:351 'predicted band 0-0.07 g'"
+    },
+    "MEASURED_trace_peak": {
+      "rows": 648808,
+      "max_mag_g": 19.496,
+      "at_t_s": 12928.827,
+      "samples_ge_8g": 14,
+      "samples_ge_16g": 1,
+      "per_axis_rail_g": 15.990784,
+      "magnitude_rail_if_all_three_axes_railed_g": 27.69685034085948,
+      "note": "trace is a 4:1 decimation of the 200 Hz stream (log_hz=50), so the true per-sample peak is >= this"
+    },
+    "MEASURED_selftest_rest_magnitude_g": {
+      "value": 1.033,
+      "source": "data/sessions/20260914-210637-E2C4/session.json manifest.selftest_lines: 'SELFTEST accel PASS detail=1.033g'",
+      "implied_composite_offset_plus_scale_error_mg": 33.0,
+      "note": "main.cpp:749 adopts this as g_baseline and divides |a| by it. That is a SCALE correction; if the error is an OFFSET it survives almost intact at low specific force.",
+      "residual_at_0.2g_if_error_is_pure_offset_mg": 25.5566311713456
+    }
+  },
+  "budget_table_ANALYSIS": {
+    "scenario_inputs": {
+      "best": {
+        "bias_mg": 2.0,
+        "initial_tilt_deg": 0.2,
+        "gyro_bias_dps": 0.05,
+        "horizontal_force_g": 0.2,
+        "endpoint_uncertainty_m": 0.1,
+        "timing_error_s": 0.005,
+        "pitch_change_deg": 1.5,
+        "clock_scale_eps": 0.00025
+      },
+      "realistic": {
+        "bias_mg": 10.0,
+        "initial_tilt_deg": 0.5,
+        "gyro_bias_dps": 0.3,
+        "horizontal_force_g": 0.3,
+        "endpoint_uncertainty_m": 0.3,
+        "timing_error_s": 0.02,
+        "pitch_change_deg": 5.0,
+        "clock_scale_eps": 0.00025
+      },
+      "worst": {
+        "bias_mg": 40.0,
+        "initial_tilt_deg": 2.0,
+        "gyro_bias_dps": 3.0,
+        "horizontal_force_g": 0.5,
+        "endpoint_uncertainty_m": 0.6,
+        "timing_error_s": 0.06,
+        "pitch_change_deg": 10.0,
+        "clock_scale_eps": 0.02
+      }
+    },
+    "rows": [
+      {
+        "T_s": 0.5,
+        "plausible_apex_m": 0.3,
+        "implied_net_down_accel_g": 0.9789275644588111,
+        "implied_constant_support_g": 0.021072435541188872,
+        "airtime_formula_error_m": 0.006457812499999995,
+        "best": {
+          "bias_cm": 0.0612915625,
+          "tilt_cm": 0.022767267893688627,
+          "endpoint_cm": 5.0,
+          "timing_cm": 0.6,
+          "clock_cm": 0.015,
+          "pitch_geometry_cm": 1.5706168984723892,
+          "same_sign_sum_cm": 7.269675728866078,
+          "rss_cm": 5.275541436278182,
+          "within_15.24cm_same_sign": true,
+          "within_15.24cm_rss": true
+        },
+        "realistic": {
+          "bias_cm": 0.3064578125,
+          "tilt_cm": 0.0925827562649245,
+          "endpoint_cm": 15.0,
+          "timing_cm": 2.4,
+          "clock_cm": 0.015,
+          "pitch_geometry_cm": 5.22934456485949,
+          "same_sign_sum_cm": 23.043385133624415,
+          "rss_cm": 16.068875428468086,
+          "within_15.24cm_same_sign": false,
+          "within_15.24cm_rss": false
+        },
+        "worst": {
+          "bias_cm": 1.22583125,
+          "tilt_cm": 0.7407412607610765,
+          "endpoint_cm": 30.0,
+          "timing_cm": 7.199999999999999,
+          "clock_cm": 1.2,
+          "pitch_geometry_cm": 10.418890660015819,
+          "same_sign_sum_cm": 50.7854631707769,
+          "rss_cm": 32.61724455643418,
+          "within_15.24cm_same_sign": false,
+          "within_15.24cm_rss": false
+        }
+      },
+      {
+        "T_s": 1.0,
+        "plausible_apex_m": 1.0,
+        "implied_net_down_accel_g": 0.8157729703823426,
+        "implied_constant_support_g": 0.18422702961765736,
+        "airtime_formula_error_m": 0.22583124999999993,
+        "best": {
+          "bias_cm": 0.24516625,
+          "tilt_cm": 0.09655897760415806,
+          "endpoint_cm": 5.0,
+          "timing_cm": 1.0,
+          "clock_cm": 0.05,
+          "pitch_geometry_cm": 1.5706168984723892,
+          "same_sign_sum_cm": 7.962342126076548,
+          "rss_cm": 5.342168807522095,
+          "within_15.24cm_same_sign": true,
+          "within_15.24cm_rss": true
+        },
+        "realistic": {
+          "bias_cm": 1.22583125,
+          "tilt_cm": 0.4197401793243299,
+          "endpoint_cm": 15.0,
+          "timing_cm": 4.0,
+          "clock_cm": 0.05,
+          "pitch_geometry_cm": 5.22934456485949,
+          "same_sign_sum_cm": 25.924915994183824,
+          "rss_cm": 16.432510114089123,
+          "within_15.24cm_same_sign": false,
+          "within_15.24cm_rss": false
+        },
+        "worst": {
+          "bias_cm": 4.903325,
+          "tilt_cm": 3.7864509474548376,
+          "endpoint_cm": 30.0,
+          "timing_cm": 12.0,
+          "clock_cm": 4.0,
+          "pitch_geometry_cm": 10.418890660015819,
+          "same_sign_sum_cm": 65.10866660747065,
+          "rss_cm": 34.74094255224621,
+          "within_15.24cm_same_sign": false,
+          "within_15.24cm_rss": false
+        }
+      },
+      {
+        "T_s": 1.5,
+        "plausible_apex_m": 1.5,
+        "implied_net_down_accel_g": 0.5438486469215618,
+        "implied_constant_support_g": 0.45615135307843824,
+        "airtime_formula_error_m": 1.2581203125,
+        "best": {
+          "bias_cm": 0.5516240625,
+          "tilt_cm": 0.22960998817551362,
+          "endpoint_cm": 5.0,
+          "timing_cm": 1.0,
+          "clock_cm": 0.075,
+          "pitch_geometry_cm": 1.5706168984723892,
+          "same_sign_sum_cm": 8.426850949147903,
+          "rss_cm": 5.3693083627936655,
+          "within_15.24cm_same_sign": true,
+          "within_15.24cm_rss": true
+        },
+        "realistic": {
+          "bias_cm": 2.7581203125,
+          "tilt_cm": 1.0555860005751643,
+          "endpoint_cm": 15.0,
+          "timing_cm": 4.0,
+          "clock_cm": 0.075,
+          "pitch_geometry_cm": 5.22934456485949,
+          "same_sign_sum_cm": 28.118050877934653,
+          "rss_cm": 16.645514682365963,
+          "within_15.24cm_same_sign": false,
+          "within_15.24cm_rss": false
+        },
+        "worst": {
+          "bias_cm": 11.03248125,
+          "tilt_cm": 10.372357916697084,
+          "endpoint_cm": 30.0,
+          "timing_cm": 12.0,
+          "clock_cm": 6.0,
+          "pitch_geometry_cm": 10.418890660015819,
+          "same_sign_sum_cm": 79.8237298267129,
+          "rss_cm": 37.654411877880065,
+          "within_15.24cm_same_sign": false,
+          "within_15.24cm_rss": false
+        }
+      },
+      {
+        "T_s": 2.0,
+        "plausible_apex_m": 2.0,
+        "implied_net_down_accel_g": 0.4078864851911713,
+        "implied_constant_support_g": 0.5921135148088287,
+        "airtime_formula_error_m": 2.9033249999999997,
+        "best": {
+          "bias_cm": 0.980665,
+          "tilt_cm": 0.4301551586518606,
+          "endpoint_cm": 5.0,
+          "timing_cm": 1.0,
+          "clock_cm": 0.1,
+          "pitch_geometry_cm": 1.5706168984723892,
+          "same_sign_sum_cm": 9.08143705712425,
+          "rss_cm": 5.442754334388686,
+          "within_15.24cm_same_sign": true,
+          "within_15.24cm_rss": true
+        },
+        "realistic": {
+          "bias_cm": 4.903325,
+          "tilt_cm": 2.0742339514143753,
+          "endpoint_cm": 15.0,
+          "timing_cm": 4.0,
+          "clock_cm": 0.1,
+          "pitch_geometry_cm": 5.22934456485949,
+          "same_sign_sum_cm": 31.306903516273866,
+          "rss_cm": 17.225013414184925,
+          "within_15.24cm_same_sign": false,
+          "within_15.24cm_rss": false
+        },
+        "worst": {
+          "bias_cm": 19.6133,
+          "tilt_cm": 21.733691025103607,
+          "endpoint_cm": 30.0,
+          "timing_cm": 12.0,
+          "clock_cm": 8.0,
+          "pitch_geometry_cm": 10.418890660015819,
+          "same_sign_sum_cm": 101.76588168511942,
+          "rss_cm": 45.536668137337784,
+          "within_15.24cm_same_sign": false,
+          "within_15.24cm_rss": false
+        }
+      },
+      {
+        "T_s": 3.0,
+        "plausible_apex_m": 2.0,
+        "implied_net_down_accel_g": 0.18128288230718725,
+        "implied_constant_support_g": 0.8187171176928127,
+        "airtime_formula_error_m": 9.03248125,
+        "best": {
+          "bias_cm": 2.20649625,
+          "tilt_cm": 1.0666674154959503,
+          "endpoint_cm": 5.0,
+          "timing_cm": 0.6666666666666666,
+          "clock_cm": 0.1,
+          "pitch_geometry_cm": 1.5706168984723892,
+          "same_sign_sum_cm": 10.610447230635007,
+          "rss_cm": 5.824747802502384,
+          "within_15.24cm_same_sign": true,
+          "within_15.24cm_rss": true
+        },
+        "realistic": {
+          "bias_cm": 11.03248125,
+          "tilt_cm": 5.556391167445718,
+          "endpoint_cm": 15.0,
+          "timing_cm": 2.6666666666666665,
+          "clock_cm": 0.1,
+          "pitch_geometry_cm": 5.22934456485949,
+          "same_sign_sum_cm": 39.584883648971875,
+          "rss_cm": 20.299169466419237,
+          "within_15.24cm_same_sign": false,
+          "within_15.24cm_rss": false
+        },
+        "worst": {
+          "bias_cm": 44.129925,
+          "tilt_cm": 63.72355108587271,
+          "endpoint_cm": 30.0,
+          "timing_cm": 7.999999999999999,
+          "clock_cm": 8.0,
+          "pitch_geometry_cm": 10.418890660015819,
+          "same_sign_sum_cm": 164.27236674588855,
+          "rss_cm": 84.52629487966936,
+          "within_15.24cm_same_sign": false,
+          "within_15.24cm_rss": false
+        }
+      },
+      {
+        "T_s": 4.0,
+        "plausible_apex_m": 2.8,
+        "implied_net_down_accel_g": 0.14276026981690995,
+        "implied_constant_support_g": 0.8572397301830901,
+        "airtime_formula_error_m": 16.813299999999998,
+        "best": {
+          "bias_cm": 3.92266,
+          "tilt_cm": 2.0719746204892697,
+          "endpoint_cm": 5.0,
+          "timing_cm": 0.7,
+          "clock_cm": 0.13999999999999999,
+          "pitch_geometry_cm": 1.5706168984723892,
+          "same_sign_sum_cm": 13.40525151896166,
+          "rss_cm": 6.903388859489133,
+          "within_15.24cm_same_sign": true,
+          "within_15.24cm_rss": true
+        },
+        "realistic": {
+          "bias_cm": 19.6133,
+          "tilt_cm": 11.459121678593945,
+          "endpoint_cm": 15.0,
+          "timing_cm": 2.8,
+          "clock_cm": 0.13999999999999999,
+          "pitch_geometry_cm": 5.22934456485949,
+          "same_sign_sum_cm": 54.24176624345344,
+          "rss_cm": 27.860341905885633,
+          "within_15.24cm_same_sign": false,
+          "within_15.24cm_rss": false
+        },
+        "worst": {
+          "bias_cm": 78.4532,
+          "tilt_cm": 139.6378619826885,
+          "endpoint_cm": 30.0,
+          "timing_cm": 8.399999999999999,
+          "clock_cm": 11.2,
+          "pitch_geometry_cm": 10.418890660015819,
+          "same_sign_sum_cm": 278.1099526427043,
+          "rss_cm": 163.8846862032012,
+          "within_15.24cm_same_sign": false,
+          "within_15.24cm_rss": false
+        }
+      }
+    ],
+    "excluded": "mount compliance / aliased vibration and accelerometer clipping are NOT in these numbers: neither has been measured on this unit in this enclosure."
+  }
+}
