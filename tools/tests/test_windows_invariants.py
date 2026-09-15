@@ -94,7 +94,8 @@ JUMP_CLI = REPO / "tools" / "jump"
 
 # The device log rate, and the window geometry the module documents. LITERALS
 # on purpose: a test that reads the constant it pins moves with it.
-LOG_HZ = 50.0          # config/params.json firmware.log_hz
+LOG_HZ = 50.0          # the FIXTURE rate for the geometry tests below (bin 25 = n//2, 7 windows in 200 samples...)
+DEVICE_LOG_HZ = 100.0  # config/params.json firmware.log_hz -- the device's rate, pinned by the tripwire at the bottom
 WINDOW_S = 1.0         # windows.py:26 "1 s windows"
 WINDOW_FLOOR_N = 2     # windows.py:272 max(2, ...), paired with :195 n < 2
 
@@ -566,9 +567,10 @@ class TheFallbackRateIsTheDeviceLogRate(unittest.TestCase):
         want = float(json.loads(PARAMS_JSON.read_text())["firmware"]["log_hz"])
         here = Path(__file__).parent
         declarations = {
-            "test_windows.py": r"FS_HZ\s*=\s*([0-9.]+)",
-            "test_trace_codec.py": r"LOG_HZ\s*=\s*([0-9.]+)",
-            "test_codec_contracts.py": r"LOG_HZ\s*=\s*([0-9.]+)",
+            # test_windows.py's FS_HZ is a FIXTURE rate since 2026-09-15 (its
+            # comment says so); nothing in the suite claims to match
+            # params.json by a bare constant any more. The table stays so the
+            # next file that does claim it can be added here.
         }
         drifted = {}
         for fname, pattern in declarations.items():
@@ -590,20 +592,24 @@ class TheFallbackRateIsTheDeviceLogRate(unittest.TestCase):
             "claims it matches; a confident wrong citation is worse than no "
             "citation (CLAUDE.md rule 6).")
 
-    def test_the_log_rate_is_still_fifty(self) -> None:
+    def test_the_device_log_rate_is_the_one_we_chose_on_purpose(self) -> None:
         """The literal, stated once, so params.json cannot be edited to make
-        the provenance tests above pass. 50 Hz is a SUPPORTED choice, not an
-        arbitrary one: archived docs/research.md records "50 Hz retained
-        after verification of adequacy" (Gomes 2019, 1 s windows, 90.3 % wave
-        detection vs video). Changing it is legitimate; changing it without
-        re-reading that is not."""
+        the provenance tests above pass. 50 Hz was a SUPPORTED choice
+        (archived docs/research.md: "50 Hz retained after verification of
+        adequacy", Gomes 2019, 1 s windows, wave detection vs video). It moved
+        to 100 Hz on 2026-09-15 (firmware batch 1, src=c5eea285) after the
+        prior-art brief (docs/prior-art-2026-09-14.md sections 4-5): every
+        method that survives lift integrates measured acceleration through a
+        1-4 s flight, Surfr refuses devices under 100 Hz for that reason, and
+        the sensor already samples at 200. Changing it again is legitimate;
+        changing it without re-reading those two documents is not."""
         got = float(json.loads(PARAMS_JSON.read_text())["firmware"]["log_hz"])
         self.assertEqual(
-            got, LOG_HZ,
-            f"config/params.json's firmware.log_hz is now {got}, not 50. "
-            "Every stored-trace test in this suite and the whole windowing "
-            "geometry are written against 50 Hz; update them and this "
-            "assertion in the same commit.")
+            got, DEVICE_LOG_HZ,
+            f"config/params.json's firmware.log_hz is now {got}, not {DEVICE_LOG_HZ}. "
+            "Re-read docs/prior-art-2026-09-14.md and the store budget in "
+            "docs/STATUS.md (100 Hz holds ~2.7 h; 200 Hz held 1.36 h, less "
+            "than a session), then update this literal in the same commit.")
 
 
 # ------------------------------------------------------------ reboot split

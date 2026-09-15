@@ -30,7 +30,7 @@ sys.path.insert(0, str(REPO / "sim"))
 
 import windows  # noqa: E402  (path insert must come first)
 
-FS_HZ = 50.0  # matches config/params.json's firmware.log_hz default
+FS_HZ = 50.0  # the FIXTURE rate for these synthetic windows; the module infers the real rate from timestamps and is not tied to config/params.json (which moved to 100 Hz, 2026-09-15)
 
 
 # ------------------------------------------------------- synthetic regimes

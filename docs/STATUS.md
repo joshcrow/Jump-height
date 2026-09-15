@@ -170,7 +170,7 @@ The change, and nothing else in this batch: `firmware.log_hz` 50 → **100**
 (`pio run -e host`, scripted IMU holding the gate open, `trace` read back):
 2,001 rows in 20.00 s, **100.0 Hz, median gap 0.0100 s**; `info` reports
 `log_hz=100 src=c5eea285`. The literature wants ≥100 Hz (prior-art brief);
-200 Hz was built and measured first (`0304ab97`) and rejected: the 2 MiB
+200 Hz was built and measured first (`0304ab97 (the rejected 200 Hz build; c5eea285 is what shipped)`) and rejected: the 2 MiB
 trace region holds **5.21 h** at 50 Hz (measured from the OG's full region
 of 2026-09-07: 937,644 samples, 15,917,153 B), **1.36 h** at 200 Hz — less
 than one of the rider's sessions — and **~2.7 h** at 100 Hz.
@@ -862,7 +862,7 @@ has been installed nowhere.
 
 Stated plainly so an absence is never mistaken for a pass:
 
-- **No 200 Hz sample has ever been written to real flash.** `src=0304ab97` is
+- **No 200 Hz sample has ever been written to real flash.** `src=0304ab97 (the rejected 200 Hz build; c5eea285 is what shipped)` is
   on the Puck and reports `log_hz=200`, but the Puck sits still, so its motion
   gate never opened and `trace_bytes` has read 0 since the flash. The
   200.0000 Hz reading is the real `main.cpp` on the host seam; the **1.36 h**

@@ -25,7 +25,7 @@ sys.path.insert(0, str(REPO / "sim"))
 import trace_codec  # noqa: E402  (path insert must come first)
 
 HARNESS_SRC = REPO / "firmware" / "test" / "trace_codec_harness.cpp"
-LOG_HZ = 50  # matches config/params.json's firmware.log_hz default; the codec
+LOG_HZ = 50  # the FIXTURE rate: these literals describe 0.020 s spacing; the codec is rate-agnostic (a block is one second of N samples) and is NOT tied to config/params.json
              # itself takes this as a parameter (see trace_codec.h) rather
              # than hardcoding it, so the test states its own value explicitly.
 

@@ -81,10 +81,48 @@ import trace_codec  # noqa: E402  (path insert must come first)
 STORE_HOST_DIR = REPO / "firmware" / "test" / "store_host"
 JH_STORE_CPP = REPO / "firmware" / "src" / "platform" / "nrf52" / "jh_store.cpp"
 
-# JH_LOG_HZ from config/params.json, mirrored the same way
-# tools/tests/test_trace_codec.py states its own LOG_HZ explicitly rather
-# than parsing params.gen.h.
-LOG_HZ = 50
+# JH_LOG_HZ, read from the SAME compiled header _build_harness() points g++
+# at below (firmware/include/params.gen.h) rather than hardcoded — the
+# harness is the real jh_store.cpp, and its decode path (decode_one_block(),
+# called from both the CSV read-back and the traceraw path) reconstructs
+# every sample after a block's first from JH_LOG_HZ alone; a Python-side
+# constant that drifted from what's actually compiled would silently
+# mis-predict those reconstructed times/byte lengths the moment
+# config/params.json's firmware.log_hz changed, exactly the class of bug
+# this suite exists to catch in jh_store.cpp itself. Unlike
+# tools/tests/test_trace_codec.py (which drives trace_codec_harness.cpp
+# directly with an explicit log_hz argument per call and has no compiled
+# header to go stale against), this suite has no such degree of freedom —
+# so it reads the one value that actually governs the harness it built.
+def _log_hz_from_header() -> int:
+    text = (REPO / "firmware" / "include" / "params.gen.h").read_text()
+    m = re.search(r"#define\s+JH_LOG_HZ\s+(\d+)", text)
+    if not m:
+        raise AssertionError(
+            "firmware/include/params.gen.h has no JH_LOG_HZ define — "
+            "run ./tools/jump gen to regenerate it from config/params.json")
+    return int(m.group(1))
+
+
+LOG_HZ = _log_hz_from_header()
+
+
+def _t(whole: float, k: int = 0) -> float:
+    """Time of the k-th sample (0-indexed) after `whole` seconds, spaced at
+    1/LOG_HZ — e.g. _t(0, 1) is this suite's old hardcoded '0.020' literal
+    from when LOG_HZ was a fixed 50; at any other LOG_HZ it is the same
+    position in the block, 1/LOG_HZ seconds in. Samples in these fixtures
+    deliberately start at k=1, not k=0 (see e.g.
+    test_reboot_continuity_jumps_and_trace) — that is a fixture choice
+    unrelated to genericity, preserved as-is."""
+    return whole + k / LOG_HZ
+
+
+def _ts(whole: float, k: int = 0) -> str:
+    """`_t` formatted exactly like trace_codec's CSV rows (3 decimal
+    places) — what TRACE_APPEND command literals and decoded-row
+    assertions below are built from instead of a bare '0.020' string."""
+    return f"{_t(whole, k):.3f}"
 
 # ---------------------------------------------------------------------------
 # jh_store.cpp's own private on-flash geometry (its file header: "on-disk
@@ -286,7 +324,7 @@ class TestStoreHost(unittest.TestCase):
             "INIT",
             "JUMPS_APPEND 1 10.0 0.90 0.90 1.00",
             "JUMPS_APPEND 2 20.0 1.02 1.02 1.28",
-            "TRACE_FILL 99999 50 0.0 1.0",   # fill to the cap
+            f"TRACE_FILL 99999 {LOG_HZ} 0.0 1.0",   # fill to the cap
             "TRACE_IS_FULL",
             "JUMPS_SCAN",
             "TRACE_CLEAR",
@@ -296,7 +334,7 @@ class TestStoreHost(unittest.TestCase):
             "OK",
             # the reclaimed region must actually be usable again, or the
             # auto-clear would "free" space into a dead store
-            "TRACE_APPEND 1.0,1.001;1.02,1.002",
+            f"TRACE_APPEND {_ts(1.0, 0)},1.001;{_ts(1.0, 1)},1.002",
             "TRACE_BYTES",
         ], backing=backing)
         self.assertEqual(r.returncode, 0)
@@ -377,8 +415,8 @@ class TestStoreHost(unittest.TestCase):
             "INIT",
             "JUMPS_APPEND 1 1.000 0.300 0.280 0.550",
             "JUMPS_APPEND 2 2.000 0.310 0.290 0.610",
-            "TRACE_APPEND 0.020,1.001;0.040,1.002;0.060,0.998",
-            "TRACE_APPEND 1.020,1.010",
+            f"TRACE_APPEND {_ts(0, 1)},1.001;{_ts(0, 2)},1.002;{_ts(0, 3)},0.998",
+            f"TRACE_APPEND {_ts(1, 1)},1.010",
             "OPEN_READ TRACE",
             "CLOSE_READ",
             "JUMPS_SCAN",
@@ -392,7 +430,8 @@ class TestStoreHost(unittest.TestCase):
         self.assertEqual(int(scan1["count"]), 2)
         self.assertAlmostEqual(float(scan1["best_m"]), 0.610, places=3)
         # header(6) + block1(3 samples) + block2(1 sample), all flushed.
-        expected_csv_bytes1 = 6 + 3 * len("0.020,1.001\n") + 1 * len("1.020,1.010\n")
+        expected_csv_bytes1 = (6 + 3 * len(f"{_ts(0, 1)},1.001\n")
+                               + 1 * len(f"{_ts(1, 1)},1.010\n"))
         self.assertEqual(bytes1, expected_csv_bytes1)
 
         # --- reboot: fresh OS process, same backing file ---
@@ -416,7 +455,7 @@ class TestStoreHost(unittest.TestCase):
         r3 = run_harness(self.harness, [
             "INIT",
             "JUMPS_APPEND 3 3.000 0.320 0.300 0.700",
-            "TRACE_APPEND 5.000,2.000;5.020,2.001",
+            f"TRACE_APPEND {_ts(5, 0)},2.000;{_ts(5, 1)},2.001",
             "OPEN_READ TRACE",
             "CLOSE_READ",
             "JUMPS_SCAN",
@@ -431,7 +470,7 @@ class TestStoreHost(unittest.TestCase):
         self.assertEqual(int(scan3["count"]), 3)
         self.assertAlmostEqual(float(scan3["best_m"]), 0.700, places=3)
         bytes3 = int(last(r3.events, "TRACE_BYTES")["n"])
-        self.assertEqual(bytes3, bytes1 + 2 * len("5.000,2.000\n"))
+        self.assertEqual(bytes3, bytes1 + 2 * len(f"{_ts(5, 0)},2.000\n"))
         free3 = int(last(r3.events, "FREE_BYTES")["n"])
         # free_bytes() tracks PHYSICAL flash consumed, not the CSV-equivalent
         # estimate — the whole point of binary trace v2 (see jh_store.cpp's
@@ -733,7 +772,7 @@ class TestStoreHost(unittest.TestCase):
             "INIT",
             "JUMPS_APPEND 1 1.0 0.3 0.28 0.5",
             "JUMPS_APPEND 2 2.0 0.3 0.28 0.6",
-            "TRACE_APPEND 0.020,1.001;0.040,1.002",
+            f"TRACE_APPEND {_ts(0, 1)},1.001;{_ts(0, 2)},1.002",
             "OPEN_READ TRACE", "CLOSE_READ",
             "CLEAR",
             "JUMPS_SCAN",
@@ -741,7 +780,7 @@ class TestStoreHost(unittest.TestCase):
             "TRACE_IS_FULL",
             "FREE_BYTES",
             "JUMPS_APPEND 1 10.0 0.3 0.28 0.42",
-            "TRACE_APPEND 0.020,3.000",
+            f"TRACE_APPEND {_ts(0, 1)},3.000",
             "OPEN_READ TRACE", "CLOSE_READ",
             "JUMPS_SCAN",
             "TRACE_BYTES",
@@ -759,7 +798,7 @@ class TestStoreHost(unittest.TestCase):
                          "clear() must give back all the space the pre-clear session used")
 
         self.assertEqual(int(scans[1]["count"]), 1, "reused region starts counting from zero")
-        self.assertEqual(int(trace_bytes_events[1]["n"]), 6 + len("0.020,3.000\n"))
+        self.assertEqual(int(trace_bytes_events[1]["n"]), 6 + len(f"{_ts(0, 1)},3.000\n"))
 
         dump = r1.read_alls[0]
         rows = [ln for ln in dump.splitlines() if ln and not ln.startswith("n,")]
@@ -769,7 +808,7 @@ class TestStoreHost(unittest.TestCase):
         # And clear() survives a reboot too (it isn't just an in-RAM reset).
         r2 = run_harness(self.harness, ["INIT", "JUMPS_SCAN", "TRACE_BYTES"], backing=backing)
         self.assertEqual(int(last(r2.events, "JUMPS_SCAN")["count"]), 1)
-        self.assertEqual(int(last(r2.events, "TRACE_BYTES")["n"]), 6 + len("0.020,3.000\n"))
+        self.assertEqual(int(last(r2.events, "TRACE_BYTES")["n"]), 6 + len(f"{_ts(0, 1)},3.000\n"))
 
     # --------------------------------------------------------- power loss
 
@@ -924,8 +963,8 @@ class TestStoreHost(unittest.TestCase):
 
         r1 = run_harness(self.harness, [
             "INIT",
-            "TRACE_APPEND 0.020,1.001;0.040,1.002",  # block A: closes on the next line
-            "TRACE_APPEND 1.020,1.010",               # block B: torn below
+            f"TRACE_APPEND {_ts(0, 1)},1.001;{_ts(0, 2)},1.002",  # block A: closes on the next line
+            f"TRACE_APPEND {_ts(1, 1)},1.010",               # block B: torn below
             "FAULT_AFTER 4",
             "OPEN_READ TRACE", "CLOSE_READ",          # forces block B's write — this tears
         ], backing=backing)
@@ -934,7 +973,7 @@ class TestStoreHost(unittest.TestCase):
         r2 = run_harness(self.harness, [
             "INIT",
             "TRACE_BYTES",
-            "TRACE_APPEND 5.000,2.000;5.020,2.001",
+            f"TRACE_APPEND {_ts(5, 0)},2.000;{_ts(5, 1)},2.001",
             "TRACE_APPEND 9.000,3.000",
             "OPEN_READ TRACE", "CLOSE_READ",
             "TRACE_BYTES",
@@ -942,14 +981,14 @@ class TestStoreHost(unittest.TestCase):
         ], backing=backing)
         self.assertEqual(r2.returncode, 0)
         bytes_events = all_of(r2.events, "TRACE_BYTES")
-        self.assertEqual(int(bytes_events[0]["n"]), 6 + 2 * len("0.020,1.001\n"),
+        self.assertEqual(int(bytes_events[0]["n"]), 6 + 2 * len(f"{_ts(0, 1)},1.001\n"),
                          "only block A survives the torn block B")
         self.assertGreater(int(bytes_events[1]["n"]), int(bytes_events[0]["n"]),
                            "the fix: the retry blocks are now counted too")
         dump = r2.read_alls[0]
         rows = [ln for ln in dump.splitlines() if ln and ln != "t,mag"]
-        self.assertEqual(rows, ["0.020,1.001", "0.040,1.002", "5.000,2.000",
-                                "5.020,2.001", "9.000,3.000"],
+        self.assertEqual(rows, [f"{_ts(0, 1)},1.001", f"{_ts(0, 2)},1.002", f"{_ts(5, 0)},2.000",
+                                f"{_ts(5, 1)},2.001", "9.000,3.000"],
                          "the fix: every sample survives — the pre-fix block B's damage "
                          "would have hidden the retry blocks entirely")
 
@@ -1096,7 +1135,7 @@ class TestStoreHost(unittest.TestCase):
             "INIT",
             "JUMPS_APPEND 1 1.000 0.300 0.280 0.550",
             "JUMPS_APPEND 2 2.000 0.300 0.280 0.900",
-            "TRACE_APPEND 0.020,1.001;0.040,1.002",
+            f"TRACE_APPEND {_ts(0, 1)},1.001;{_ts(0, 2)},1.002",
             "OPEN_READ TRACE", "CLOSE_READ",
             "JUMPS_SCAN", "TRACE_BYTES", "OK",
             "FAIL_NEXT_ERASE",
@@ -1148,9 +1187,9 @@ class TestStoreHost(unittest.TestCase):
         # Three distinct one-second blocks: 3, 2, and 4 samples respectively.
         r1 = run_harness(self.harness, [
             "INIT",
-            "TRACE_APPEND 0.020,1.001;0.040,1.002;0.060,1.003",
-            "TRACE_APPEND 1.020,1.010;1.040,1.011",
-            "TRACE_APPEND 2.020,1.020;2.040,1.021;2.060,1.022;2.080,1.023",
+            f"TRACE_APPEND {_ts(0, 1)},1.001;{_ts(0, 2)},1.002;{_ts(0, 3)},1.003",
+            f"TRACE_APPEND {_ts(1, 1)},1.010;{_ts(1, 2)},1.011",
+            f"TRACE_APPEND {_ts(2, 1)},1.020;{_ts(2, 2)},1.021;{_ts(2, 3)},1.022;{_ts(2, 4)},1.023",
             "OPEN_READ TRACE", "CLOSE_READ",
             "TRACE_BYTES",
         ], backing=backing)
@@ -1180,7 +1219,7 @@ class TestStoreHost(unittest.TestCase):
         # and block 3 (otherwise perfectly valid) is never even reached,
         # exactly like trace_codec.h's own decode()/decode_one_block()
         # contract (stop at the first bad block, never look past it).
-        expected_bytes = 6 + 3 * len("0.020,1.001\n")
+        expected_bytes = 6 + 3 * len(f"{_ts(0, 1)},1.001\n")
         self.assertEqual(int(last(r2.events, "TRACE_BYTES")["n"]), expected_bytes)
         self.assertLess(int(last(r2.events, "TRACE_BYTES")["n"]), bytes_all_three)
 
@@ -1203,9 +1242,9 @@ class TestStoreHost(unittest.TestCase):
         backing = self._backing("cross_lang.bin")
         r = run_harness(self.harness, [
             "INIT",
-            "TRACE_APPEND 0.020,1.001;0.040,1.002;0.060,1.003",
-            "TRACE_APPEND 1.020,1.010;1.040,1.011",
-            "TRACE_APPEND 2.020,1.777",
+            f"TRACE_APPEND {_ts(0, 1)},1.001;{_ts(0, 2)},1.002;{_ts(0, 3)},1.003",
+            f"TRACE_APPEND {_ts(1, 1)},1.010;{_ts(1, 2)},1.011",
+            f"TRACE_APPEND {_ts(2, 1)},1.777",
             "OPEN_READ TRACE", "CLOSE_READ",  # force the last block's flush
             "TRACE_BYTES",
         ], backing=backing)
@@ -1352,9 +1391,9 @@ class TestStoreHost(unittest.TestCase):
         to produce."""
         r = run_harness(self.harness, [
             "INIT",
-            "TRACE_APPEND 0.020,1.001;0.040,1.002;0.060,1.003",
-            "TRACE_APPEND 1.020,1.010;1.040,1.011",
-            "TRACE_APPEND 2.020,1.020;2.040,1.021;2.060,1.022;2.080,1.023",
+            f"TRACE_APPEND {_ts(0, 1)},1.001;{_ts(0, 2)},1.002;{_ts(0, 3)},1.003",
+            f"TRACE_APPEND {_ts(1, 1)},1.010;{_ts(1, 2)},1.011",
+            f"TRACE_APPEND {_ts(2, 1)},1.020;{_ts(2, 2)},1.021;{_ts(2, 3)},1.022;{_ts(2, 4)},1.023",
         ] + self._RAW_TAIL, backing=self._backing("traceraw_clean.bin"))
         raw = self._assert_raw_export_matches_dump(r, expect_damage=False)
         self.assertGreater(len(raw), 0, "the fixture must actually store blocks")
@@ -1380,8 +1419,8 @@ class TestStoreHost(unittest.TestCase):
         would hand the next sync a session that no longer exists."""
         r = run_harness(self.harness, [
             "INIT",
-            "TRACE_APPEND 0.020,1.001;0.040,1.002;0.060,1.003",
-            "TRACE_APPEND 1.020,1.010;1.040,1.011",
+            f"TRACE_APPEND {_ts(0, 1)},1.001;{_ts(0, 2)},1.002;{_ts(0, 3)},1.003",
+            f"TRACE_APPEND {_ts(1, 1)},1.010;{_ts(1, 2)},1.011",
             "OPEN_READ TRACE", "CLOSE_READ",   # force the last block out first
             "CLEAR",
         ] + self._RAW_TAIL, backing=self._backing("traceraw_cleared.bin"))
@@ -1412,8 +1451,8 @@ class TestStoreHost(unittest.TestCase):
         by name."""
         r = run_harness(self.harness, [
             "INIT",
-            "TRACE_APPEND 0.020,1.001;0.040,1.002;0.060,1.003",
-            "TRACE_APPEND 1.020,1.010;1.040,1.011",   # still OPEN at this point
+            f"TRACE_APPEND {_ts(0, 1)},1.001;{_ts(0, 2)},1.002;{_ts(0, 3)},1.003",
+            f"TRACE_APPEND {_ts(1, 1)},1.010;{_ts(1, 2)},1.011",   # still OPEN at this point
             # Raw first. TRACE_RAW_BYTES sits AFTER the open on purpose: the
             # append offset only includes that last block once the open has
             # closed it, which is exactly what jh_store.h promises ("exact
@@ -1425,8 +1464,8 @@ class TestStoreHost(unittest.TestCase):
         raw = self._assert_raw_export_matches_dump(r, expect_damage=False)
 
         rows = trace_codec.region_to_csv(raw, log_hz=LOG_HZ).splitlines()
-        self.assertEqual(rows, ["0.020,1.001", "0.040,1.002", "0.060,1.003",
-                                "1.020,1.010", "1.040,1.011"],
+        self.assertEqual(rows, [f"{_ts(0, 1)},1.001", f"{_ts(0, 2)},1.002", f"{_ts(0, 3)},1.003",
+                                f"{_ts(1, 1)},1.010", f"{_ts(1, 2)},1.011"],
                          "the raw export dropped the still-open block — the "
                          "tail of the session, silently, with no CSV read to "
                          "have flushed it first")
@@ -1474,8 +1513,8 @@ class TestStoreHost(unittest.TestCase):
 
         r1 = run_harness(self.harness, [
             "INIT",
-            "TRACE_APPEND 0.020,1.001;0.040,1.002",  # block A: closes on the next line
-            "TRACE_APPEND 1.020,1.010",               # block B: torn below
+            f"TRACE_APPEND {_ts(0, 1)},1.001;{_ts(0, 2)},1.002",  # block A: closes on the next line
+            f"TRACE_APPEND {_ts(1, 1)},1.010",               # block B: torn below
             "FAULT_AFTER 4",
             "OPEN_READ TRACE", "CLOSE_READ",          # forces block B's write — this tears
         ], backing=backing)
@@ -1485,13 +1524,13 @@ class TestStoreHost(unittest.TestCase):
         # Reboot: append past the damage, then read both ways.
         r2 = run_harness(self.harness, [
             "INIT",
-            "TRACE_APPEND 5.000,2.000;5.020,2.001",
+            f"TRACE_APPEND {_ts(5, 0)},2.000;{_ts(5, 1)},2.001",
             "TRACE_APPEND 9.000,3.000",
         ] + self._RAW_TAIL, backing=backing)
         raw2 = self._assert_raw_export_matches_dump(r2, expect_damage=True)
         rows = [ln for ln in r2.read_alls[0].splitlines() if ln and ln != "t,mag"]
-        self.assertEqual(rows, ["0.020,1.001", "0.040,1.002", "5.000,2.000",
-                                "5.020,2.001", "9.000,3.000"],
+        self.assertEqual(rows, [f"{_ts(0, 1)},1.001", f"{_ts(0, 2)},1.002", f"{_ts(5, 0)},2.000",
+                                f"{_ts(5, 1)},2.001", "9.000,3.000"],
                          "samples on BOTH sides of the damage must survive — "
                          "this is what the raw export has to reproduce")
 
@@ -1531,8 +1570,9 @@ class TestStoreHost(unittest.TestCase):
         backing = self._backing("nan_inf.bin")
         r = run_harness(self.harness, [
             "INIT",
-            "TRACE_APPEND 0.020,1.001;0.040,nan;0.060,1.002;0.080,inf;0.100,1.003",
-            "TRACE_APPEND nan,1.500;0.120,1.004",
+            f"TRACE_APPEND {_ts(0, 1)},1.001;{_ts(0, 2)},nan;{_ts(0, 3)},1.002;"
+            f"{_ts(0, 4)},inf;{_ts(0, 5)},1.003",
+            f"TRACE_APPEND nan,1.500;{_ts(0, 6)},1.004",
             "OPEN_READ TRACE", "CLOSE_READ",
             "TRACE_BYTES",
             "OPEN_READ TRACE", "READ_ALL", "CLOSE_READ",
@@ -1540,7 +1580,8 @@ class TestStoreHost(unittest.TestCase):
         self.assertEqual(r.returncode, 0, "a non-finite sample must never crash the process")
 
         rows = [ln for ln in r.read_alls[0].splitlines() if ln and ln != "t,mag"]
-        self.assertEqual(rows, ["0.020,1.001", "0.040,1.002", "0.060,1.003", "0.080,1.004"],
+        self.assertEqual(rows, [f"{_ts(0, 1)},1.001", f"{_ts(0, 2)},1.002",
+                                f"{_ts(0, 3)},1.003", f"{_ts(0, 4)},1.004"],
                          "the 3 non-finite lines (mag=nan, mag=inf, t=nan) are dropped; "
                          "the 4 well-formed magnitudes (1.001/1.002/1.003/1.004) all "
                          "survive, in order, packed densely from the block's t0")
@@ -1824,3 +1865,89 @@ class TraceCsvByteCounterParity(unittest.TestCase):
             binary, tmp, "remount.bin", ["TRACE_FILL 2000 50 100.0 1.000"])
         self.assertTrue(agree, f"after remount: {fast} != {slow}")
         self.assertGreater(slow, 100000, "fixture should hold real data")
+
+
+class RateGenericAcrossLogHz(unittest.TestCase):
+    """Proof that this suite's fixture derivation (LOG_HZ / _t() / _ts(),
+    module level above) is genuinely rate-generic, not merely correct by
+    coincidence because it happens to read whatever firmware/include/
+    params.gen.h says right now.
+
+    Builds a SECOND, throwaway harness against an on-the-fly JH_LOG_HZ
+    override — firmware/ itself is never written to; the override lives in
+    a temp include directory that shadows the real header for this one
+    extra g++ invocation only (quote-form `#include "params.gen.h"`
+    resolves against the FIRST matching `-I` path, so putting the shadow
+    directory ahead of the real `firmware/include` is enough) — and re-runs
+    a representative round trip (two trace blocks, spanning a block
+    boundary, read back and compared byte-for-byte) at a rate DELIBERATELY
+    different from whatever the tree's real params.gen.h currently holds.
+
+    This is the concrete answer to "does it still pass at 50 Hz": rather
+    than trusting that config/params.json's firmware.log_hz happens to be
+    50 whenever this file runs, it forces the question at both 50 and 100
+    every time, regardless of what the rest of this suite's default
+    LOG_HZ/_build_harness() are exercising.
+    """
+
+    def _build_harness_at(self, tmpdir: Path, log_hz: int) -> str:
+        real_header = (REPO / "firmware" / "include" / "params.gen.h").read_text()
+        patched, n = re.subn(r"#define\s+JH_LOG_HZ\s+\d+",
+                             f"#define JH_LOG_HZ {log_hz}", real_header)
+        assert n == 1, ("expected exactly one JH_LOG_HZ #define in "
+                        "params.gen.h to override")
+        shadow_include = tmpdir / f"include_override_{log_hz}"
+        shadow_include.mkdir()
+        (shadow_include / "params.gen.h").write_text(patched)
+
+        binp = str(tmpdir / f"store_host_harness_at_{log_hz}")
+        r = subprocess.run(
+            [_gxx(), "-std=c++14", "-Wall", "-Wextra",
+             "-I", str(shadow_include),               # shadows the real header
+             "-I", str(STORE_HOST_DIR / "shim"),
+             "-I", str(REPO / "firmware" / "include"),
+             str(STORE_HOST_DIR / "mock_flash.cpp"),
+             str(STORE_HOST_DIR / "store_host_harness.cpp"),
+             str(JH_STORE_CPP),
+             "-o", binp],
+            capture_output=True, text=True)
+        if r.returncode != 0:
+            raise AssertionError(f"store_host_harness (JH_LOG_HZ={log_hz} "
+                                 f"override) failed to compile:\n{r.stderr}")
+        return binp
+
+    def _round_trip_at(self, log_hz: int) -> None:
+        global LOG_HZ
+        tmp = Path(tempfile.mkdtemp())
+        binary = self._build_harness_at(tmp, log_hz)
+        saved = LOG_HZ
+        LOG_HZ = log_hz  # _t()/_ts() below must derive from THIS override
+        try:
+            backing = tmp / f"round_trip_{log_hz}.bin"
+            r = run_harness(binary, [
+                "INIT",
+                f"TRACE_APPEND {_ts(0, 1)},1.001;{_ts(0, 2)},1.002;{_ts(0, 3)},0.998",
+                f"TRACE_APPEND {_ts(1, 1)},1.010",
+                "OPEN_READ TRACE", "CLOSE_READ",
+                "TRACE_BYTES",
+                "OPEN_READ TRACE", "READ_ALL", "CLOSE_READ",
+            ], backing=backing)
+            self.assertEqual(r.returncode, 0, r.raw_stdout)
+            expected_bytes = (6 + 3 * len(f"{_ts(0, 1)},1.001\n")
+                             + len(f"{_ts(1, 1)},1.010\n"))
+            self.assertEqual(int(last(r.events, "TRACE_BYTES")["n"]), expected_bytes,
+                             f"byte count wrong at an overridden JH_LOG_HZ={log_hz}")
+            rows = [ln for ln in r.read_alls[0].splitlines() if ln and ln != "t,mag"]
+            self.assertEqual(rows, [f"{_ts(0, 1)},1.001", f"{_ts(0, 2)},1.002",
+                                    f"{_ts(0, 3)},0.998", f"{_ts(1, 1)},1.010"],
+                             f"decoded row content wrong at an overridden "
+                             f"JH_LOG_HZ={log_hz} — the fixture derivation is "
+                             f"not actually rate-generic")
+        finally:
+            LOG_HZ = saved
+
+    def test_round_trip_at_log_hz_50(self) -> None:
+        self._round_trip_at(50)
+
+    def test_round_trip_at_log_hz_100(self) -> None:
+        self._round_trip_at(100)

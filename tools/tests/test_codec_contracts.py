@@ -54,7 +54,7 @@ UINT16_MAX = 65535
 
 EXPECTED_MAX_SAMPLES = 255
 EXPECTED_HEADER_BYTES = 5
-LOG_HZ = 50  # config/params.json firmware.log_hz; decode_one_block needs a rate
+LOG_HZ = 50  # the FIXTURE rate: these literals describe 0.020 s spacing; the codec is rate-agnostic (a block is one second of N samples) and is NOT tied to config/params.json
 
 
 def _enc():

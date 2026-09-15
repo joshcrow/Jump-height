@@ -134,7 +134,11 @@ class FakeDevice:
 
     def _preload_session(self):
         """Populate storage exactly as a real logged session would."""
-        times, mag = synth_session(DEMO_JUMPS, fs_hz=50.0, seed=3)
+        # log_hz first: the synth rate below is DERIVED from it, not the
+        # other way around — see the round-trip note below for why the two
+        # must always agree.
+        log_hz = self._log_hz()
+        times, mag = synth_session(DEMO_JUMPS, fs_hz=float(log_hz), seed=3)
         det = Detector(self.params)
         n = 0
         trace_pairs: list[tuple[float, float]] = []
@@ -153,30 +157,23 @@ class FakeDevice:
         # decoded), and 'stats' trace_bytes (a plain sum over these rows,
         # see `handle()`) all agree by construction, exactly the three-way
         # cross-check tools/jump's sync path runs on real hardware. This
-        # only round-trips exactly because fs_hz=50.0 above equals
-        # config/params.json's firmware.log_hz: synth_session's times are
-        # `i/fs_hz`, which IS trace_codec's own "evenly spaced at 1/log_hz
-        # from the block's first sample" assumption (sim/trace_codec.py's
-        # module doc). A demo trace sampled at any other rate would NOT
-        # round-trip losslessly and this fake would need to keep the synth
-        # rows and the wire rows separate.
-        log_hz = self._log_hz()
-        if log_hz != 50:
-            # A reference device must never drift silently. Verified both
-            # halves of this claim by hand (2026-09-07): at log_hz=50 the
-            # round trip is exact (0 differing rows out of 1750 samples); at
-            # log_hz=100 (a scratch config override) every wire check still
-            # printed ✅ — crc32 is over raw bytes, it doesn't know what rate
-            # they get decoded at — while trace.csv silently carried
-            # 0.010s-spaced timestamps for 50 Hz-spaced data, and the ONLY
-            # visible symptom was an unexplained "offline re-analysis
-            # differs", with nothing pointing at the cause.
-            raise SystemExit(
-                f"fake_device: firmware.log_hz={log_hz} but the demo trace "
-                "above is synthesized at a fixed 50 Hz (fs_hz=50.0) — the "
-                "trace_codec round trip would silently time-warp it. Fix "
-                "config/params.json's firmware.log_hz, or make this fake "
-                "synthesize at fs_hz=float(log_hz) instead.")
+        # only round-trips exactly because fs_hz=float(log_hz) above equals
+        # config/params.json's firmware.log_hz BY CONSTRUCTION now (it used
+        # to be a fixed 50.0, refused whenever log_hz differed — see git
+        # history): synth_session's times are `i/fs_hz`, which IS
+        # trace_codec's own "evenly spaced at 1/log_hz from the block's
+        # first sample" assumption (sim/trace_codec.py's module doc). Verified
+        # by hand (2026-09-07, before this fix): at log_hz=50 with fs_hz
+        # pinned to 50.0 the round trip was exact (0 differing rows out of
+        # 1750 samples); at log_hz=100 with fs_hz still pinned to 50.0 every
+        # wire check still printed OK — crc32 is over raw bytes, it doesn't
+        # know what rate they get decoded at — while trace.csv silently
+        # carried 0.010s-spaced timestamps for 50 Hz-spaced data, and the
+        # ONLY visible symptom was an unexplained "offline re-analysis
+        # differs", with nothing pointing at the cause. Deriving fs_hz from
+        # log_hz directly (instead of a separate constant that could drift
+        # from it) removes the possibility of that mismatch outright rather
+        # than merely detecting it.
         image = encode_region(trace_pairs, log_hz)
         self.trace_rows = region_to_csv(image, log_hz).splitlines()
 

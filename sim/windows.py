@@ -246,7 +246,7 @@ def compute_window_features(
     return WindowFeatures(segment, t_start, rms_dev, sd, ptp, crest, low_e, high_e)
 
 
-def _infer_fs_hz(seg: List[Row], default_hz: float = 50.0) -> float:
+def _infer_fs_hz(seg: List[Row], default_hz: float = 100.0) -> float:
     dts = [seg[i][0] - seg[i - 1][0] for i in range(1, len(seg))]
     dts = [d for d in dts if d > 0.0]
     if not dts:

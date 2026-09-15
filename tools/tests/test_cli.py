@@ -757,7 +757,7 @@ class TestTracerawLogHzFallback(unittest.TestCase):
         self.assertIsNotNone(via)
         out = buf.getvalue()
         self.assertIn("carried no log_hz", out)
-        self.assertIn("50", out)  # config/params.json's default
+        self.assertIn("100", out)  # config/params.json's firmware.log_hz (100 since batch 1)
 
 
 class TestTracerawVerification(unittest.TestCase):
