@@ -1,3 +1,5 @@
+> **SUPERSEDED 2026-09-15 (evening).** The owner decided to keep the Hammond 1551WHGY and add a factory CA-USBW1 capped USB-C extension plugged into the Sense's native socket — no carrier PCB, no desoldering. This design (Same Sky UJ31 on a carrier, WOO-body envelope) is kept as a study. Its adversarial review (REVIEW.md, 21 refuted items) was never applied; do not print from it. Decision record: BUILD.md enclosure row; `/Users/joshcrow/Jump-height-race-openai/hardware/enclosure/HANDOFF-2026-09-15.md`.
+
 # woo-fit — a waterproof puck that drops into a WOO cradle
 
 A parametric enclosure for the XIAO nRF52840 Sense puck, sized to the WOO 4.0
