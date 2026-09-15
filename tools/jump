@@ -4336,6 +4336,26 @@ def cmd_eval(args) -> int:
     return subprocess.run(cmd, cwd=str(REPO)).returncode
 
 
+# ---------------------------------------------------------------------- score
+# Align a real session to its ground truth (Garmin FIT + the rider's Surfr
+# screenshot), generate load-band jump candidates, score them, and write
+# <session>/score.md — the loop in docs/accuracy-plan.md. Shells to
+# sim/score.py exactly as replay shells to sim/run.py and eval to
+# sim/evaluate.py, so cwd handling and the "one place owns the analysis"
+# split stay identical across all three.
+
+
+def cmd_score(args) -> int:
+    cmd = [sys.executable, "sim/score.py"]
+    for s in args.sessions or []:
+        cmd.append(os.path.abspath(s))
+    if args.root:
+        cmd += ["--root", os.path.abspath(args.root)]
+    if args.no_write:
+        cmd.append("--no-write")
+    return subprocess.run(cmd, cwd=str(REPO)).returncode
+
+
 # -------------------------------------------------------------------- wizard
 
 STATE_PATH_NAME = "wizard_state.json"
@@ -4758,6 +4778,19 @@ def main() -> int:
     p.add_argument("--verbose", "-v", action="store_true", help="per-session table")
     p.add_argument("--save", help="write summary metrics JSON (a regression baseline)")
     p.add_argument("--baseline", help="compare vs a saved baseline; nonzero exit on regression")
+
+    # score works entirely on on-disk sessions — no device, so it is registered
+    # directly to skip the serial --port that add() attaches, exactly as eval is.
+    p = sub.add_parser("score",
+                       help="align a session to Garmin/Surfr, generate load-band "
+                            "jump candidates, write score.md (docs/accuracy-plan.md)")
+    p.set_defaults(fn=cmd_score)
+    p.add_argument("sessions", nargs="*",
+                   help="session directories (default: every data/sessions/* "
+                        "that has a trace.csv)")
+    p.add_argument("--root", help="sessions root (default data/sessions)")
+    p.add_argument("--no-write", action="store_true",
+                   help="print the scorecard without writing <session>/score.md")
 
     # ingest imports an offline bundle (web/sync/'s zip, or its unzipped dir)
     # — no live device involved, so it skips the serial --port exactly like
