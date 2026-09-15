@@ -14,3 +14,24 @@ project.manifest = manifest.xml
 
 base.sourcePath = source;tests
 base.resourcePath = resources
+
+# The `bench` / `nowrist` split (added 2026-09-14).
+#
+# Everything annotated (:bench) is stripped from THIS build; everything
+# annotated (:nowrist) is kept. NOT `:release` — that name is reserved by the
+# compiler ("will not be included in debug builds", SDK
+# doc/docs/Monkey_C/Annotations.html) and using it here broke every non-`-r`
+# build while the shipped `-r` build compiled clean.
+#
+# This split is the whole safety mechanism holding Toybox.Sensor out of the
+# shipped data field, and it exists because SDK 9.2.0's reference says every
+# instance function of that module "will cause an app crash if called from a
+# data field app" (doc/Toybox/Sensor.html, all nine of them). Read
+# source/WristProbe.mc's header for the full citation.
+#
+# bench.jungle is the inverse build, for the Epix dev bench only. It is a
+# STANDALONE jungle (`monkeyc -f bench.jungle -d epix2 ...`), not an overlay:
+# it needs its own manifest for the Sensor permission, and a second jungle
+# may not reset project.manifest. A build made that way must never be
+# submitted to the store.
+base.excludeAnnotations = bench

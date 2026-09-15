@@ -46,6 +46,13 @@ class JumpFieldView extends WatchUi.DataField {
     const UI_RECONNECTING = 2;
     const UI_NO_BLE = 3;
 
+    // baro_src bitmask (FitOut id 6). Sticky OR across the whole session, so
+    // one glance at the SESSION value says which barometric API ever
+    // answered — not merely which one answered on the last tick.
+    const BARO_SRC_RAW_PA = 1;   // Activity.Info.rawAmbientPressure
+    const BARO_SRC_FILT_PA = 2;  // Activity.Info.ambientPressure (fallback)
+    const BARO_SRC_ALT = 4;      // Activity.Info.altitude
+
     // Geometry constants and math live in Layout.mc (pure, unit-tested —
     // see LayoutTest.mc). This class draws; Layout computes.
 
@@ -55,6 +62,8 @@ class JumpFieldView extends WatchUi.DataField {
     hidden var _fitOut;          // null if FitContributor setup ever throws
     hidden var _puckName as String;
     hidden var _linkStarted = false;
+    hidden var _baroSrc = 0;     // sticky BARO_SRC_* bitmask for the session
+    hidden var _wrist = null;    // WristProbe, bench builds only — WristProbe.mc
 
     function initialize() {
         DataField.initialize();
@@ -83,6 +92,63 @@ class JumpFieldView extends WatchUi.DataField {
     function onAppStop() as Void {
         _puckLink.stop();
         _linkStarted = false;  // a later activity start re-registers and rescans
+        _wristStop();
+    }
+
+    // ---- wrist accelerometer: BENCH BUILDS ONLY ----
+    //
+    // Both halves of each pair below are required by the jungle's
+    // excludeAnnotations split (monkey.jungle excludes `bench`; bench.jungle
+    // excludes `nowrist` instead). The `nowrist` halves are empty bodies, so
+    // a normal build contains no Toybox.Sensor reference at all — which is
+    // the point, because every instance function of that module is documented
+    // to crash a data field. Read WristProbe.mc's header before touching any
+    // of this; it carries the citation and the experiment.
+    //
+    // THE NAME `nowrist` IS NOT ARBITRARY — do not "tidy" it to `release`.
+    // `:release` is RESERVED: "Code blocks decorated with this annotation
+    // will not be included in debug builds at compile time" (SDK 9.2.0
+    // doc/docs/Monkey_C/Annotations.html). That collision was measured here
+    // on 2026-09-14 and it is a nasty one, because monkeyc's own -r flag
+    // hides it: the shipped `-r` build compiled clean while every debug build
+    // (no -r, and therefore every simulator run and every unit-test run) died
+    // with "Undefined symbol ':_wristStart'". A build flag that decides
+    // whether the project compiles is exactly the kind of thing that gets
+    // discovered at the worst moment. `:debug` and `:test` are reserved the
+    // same way; `bench` and `nowrist` are not.
+
+    (:bench)
+    hidden function _wristStart() as Void {
+        if (_wrist == null) {
+            _wrist = new WristProbe(self);
+        }
+        _wrist.start();
+    }
+
+    (:nowrist)
+    hidden function _wristStart() as Void {
+    }
+
+    (:bench)
+    hidden function _wristCompute() as Void {
+        if (_wrist != null) {
+            _wrist.writeAndReset();
+        }
+    }
+
+    (:nowrist)
+    hidden function _wristCompute() as Void {
+    }
+
+    (:bench)
+    hidden function _wristStop() as Void {
+        if (_wrist != null) {
+            _wrist.stop();
+        }
+    }
+
+    (:nowrist)
+    hidden function _wristStop() as Void {
     }
 
     // Idempotent, and called from BOTH the app lifecycle and compute().
@@ -99,18 +165,30 @@ class JumpFieldView extends WatchUi.DataField {
         if (!_linkStarted) {
             _linkStarted = true;
             _puckLink.start();
+            // Same clock, same reason: the field is genuinely live in an
+            // activity by the time this runs. No-op in a shipped build.
+            _wristStart();
         }
     }
 
     // ---- DataField overrides ----
 
-    // info (Activity.Info) is intentionally untouched -- our data comes from
-    // the puck over BLE, never from the activity/GPS/sensors Garmin already
-    // records. Called ~1 Hz regardless of which data screen is on-glass
-    // (see PuckLink.mc's header) -- this is the field's only clock.
+    // info (Activity.Info) was untouched until 2026-09-14: everything ON THE
+    // GLASS still comes from the puck over BLE and nothing here changes that.
+    // What `info` is now read for is the FIT only — the watch's own barometer,
+    // as a second instrument against the puck's height (docs/accuracy-plan.md).
+    // Called ~1 Hz regardless of which data screen is on-glass (see
+    // PuckLink.mc's header) -- this is the field's only clock.
     function compute(info) {
         _ensureLinkStarted();
         _puckLink.poll();
+
+        // Before any puck logic and outside its guards: the barometer is
+        // INDEPENDENT evidence, so it must keep recording through a session
+        // where the puck never connects at all — that session is exactly the
+        // one where a second opinion is worth most.
+        _recordBaro(info);
+        _wristCompute();  // no-op in a shipped build — see WristProbe.mc
 
         var feet = UnitsFmt.isFeet(_readUnitOverride());
 
@@ -348,6 +426,74 @@ class JumpFieldView extends WatchUi.DataField {
     }
 
     // ---------------------------------------------------------------- helpers
+
+    // The watch's own barometer into the FIT, once per compute() (1 Hz).
+    //
+    // WHY Activity.Info AND NOTHING ELSE. Three APIs could plausibly give a
+    // barometric reading, and two of them are unusable from a data field:
+    //
+    //  - Toybox.Sensor (getInfo / enableSensorEvents / getMaxSampleRate /
+    //    registerSensorDataListener / setEnabledSensors / enable- and
+    //    disableSensorType / unregisterSensorDataListener): EVERY instance
+    //    function of that module carries "Note: Will cause an app crash if
+    //    called from a data field app" in the installed SDK 9.2.0 reference
+    //    (doc/Toybox/Sensor.html — 9 of 9 functions; the phrase occurs in no
+    //    other module's page in the whole doc tree). Not called from here.
+    //  - Toybox.SensorHistory.getElevationHistory / getPressureHistory:
+    //    allowed, but the sample interval for elevation AND pressure is
+    //    120 s on both our devices (SDK Devices/epix2/simulator.json and
+    //    Devices/instinct3solar45mm/simulator.json, "sensorHistory"). A wing
+    //    jump lasts 1-4 s. One sample per two minutes is not evidence about
+    //    a jump; it is weather.
+    //  - Activity.Info, handed to compute() "once per second" by the
+    //    framework (SDK doc/Toybox/WatchUi/DataField.html overview). 1 Hz,
+    //    free, no permission, no listener to leak. That is this.
+    //
+    // rawAmbientPressure is preferred over ambientPressure on purpose: the
+    // SDK describes raw as "the temperature compensated information read
+    // directly from the internal sensor", while ambientPressure "is smoothed
+    // by a two-stage filter to reduce noise and instantaneous variation" —
+    // and an instantaneous variation is precisely the thing a 1-4 s flight
+    // is. altitude is logged alongside because it is free, but it is the
+    // WEAKEST of the three: the SDK says it is "derived from the most
+    // accurate source: Barometer or GPS", i.e. the activity profile can
+    // flatten it, and on the rider's 2026-09-14 file it did exactly that
+    // (2,877 records, one distinct value, -29.2 m).
+    //
+    // Bare catch, per this file's header note: Connect IQ raises errors that
+    // are not Lang.Exception, and no FIT nicety may ever kill the field.
+    hidden function _recordBaro(info) as Void {
+        if (_fitOut == null || info == null) {
+            return;
+        }
+        var altM = null;
+        var pa = null;
+        try {
+            // .toFloat() everywhere: Field.setData "throws
+            // UnexpectedTypeException if the input type does not match the
+            // type specified in createField()" (SDK
+            // doc/Toybox/FitContributor/Field.html), and these fields are
+            // DATA_TYPE_FLOAT. The SDK types say Float already; this costs
+            // nothing and removes the only way a good reading turns into a
+            // silently-skipped column.
+            if (info has :altitude && info.altitude != null) {
+                altM = info.altitude.toFloat();
+                _baroSrc = _baroSrc | BARO_SRC_ALT;
+            }
+            if (info has :rawAmbientPressure && info.rawAmbientPressure != null) {
+                pa = info.rawAmbientPressure.toFloat();
+                _baroSrc = _baroSrc | BARO_SRC_RAW_PA;
+            } else if (info has :ambientPressure && info.ambientPressure != null) {
+                pa = info.ambientPressure.toFloat();
+                _baroSrc = _baroSrc | BARO_SRC_FILT_PA;
+            }
+            _fitOut.recordBaro(altM, pa);
+            _fitOut.updateBaroSrc(_baroSrc);
+        } catch (ex) {
+            // Leave _baroSrc as it stands: whatever it already recorded is
+            // still true, and a zeroed mask would claim nothing ever answered.
+        }
+    }
 
     hidden function _uiState() as Number {
         var s = _puckLink.state();

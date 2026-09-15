@@ -1,0 +1,47 @@
+<?xml version="1.0"?>
+<!--
+  Jump Height data field — BENCH MANIFEST. NEVER SUBMIT A BUILD MADE WITH IT.
+
+  Used only by bench.jungle, which overrides project.manifest to point here.
+  It exists for exactly one reason, discovered by the compiler on 2026-09-14:
+
+      ERROR: epix2: source/WristProbe.mc:109,12:
+             Permission 'Sensor' required for '$.Toybox.Sensor'.
+
+  Toybox.Sensor needs a THIRD manifest permission. docs/watch.md's store
+  section lists the app's permissions as "exactly two" — BluetoothLowEnergy
+  and FitContributor — and those two are what Garmin reviewed and approved on
+  2026-08-25. Adding Sensor to the shipped manifest would change the approved
+  permission set and the listing's privacy copy, on top of the documented
+  crash (see source/WristProbe.mc's header). So the extra permission lives
+  here, on a build that only ever reaches the Epix on the desk.
+
+  DIVERGENCE FROM manifest.xml, deliberately kept to a minimum — the app id,
+  entry point and type are IDENTICAL so a bench build installs over the same
+  app identity and writes developer fields under the same identity. Only two
+  things differ: epix2 is the sole product (the Instinct cannot be sideloaded
+  at all — docs/watch.md's store section), and Sensor is added. If anything
+  in manifest.xml's identity ever changes, change it here in the same commit
+  (CLAUDE.md §4).
+-->
+<iq:manifest version="3" xmlns:iq="http://www.garmin.com/xml/connectiq">
+    <iq:application entry="JumpFieldApp" id="873B577243574E27AB454C3FF165E7B4"
+                     name="@Strings.AppName" type="datafield" minSdkVersion="3.1.0"
+                     version="1.0.1"
+                     launcherIcon="@Drawables.LauncherIcon">
+        <iq:products>
+            <!-- Bench only. The Instinct 3 deletes sideloaded .prg files on
+                 USB disconnect, so there is no way to run this on it. -->
+            <iq:product id="epix2"/>
+        </iq:products>
+        <iq:permissions>
+            <iq:uses-permission id="BluetoothLowEnergy"/>
+            <iq:uses-permission id="FitContributor"/>
+            <!-- THE WHOLE POINT OF THIS FILE. Not in manifest.xml. -->
+            <iq:uses-permission id="Sensor"/>
+        </iq:permissions>
+        <iq:languages>
+            <iq:language>eng</iq:language>
+        </iq:languages>
+    </iq:application>
+</iq:manifest>

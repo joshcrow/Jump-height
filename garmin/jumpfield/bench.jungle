@@ -1,0 +1,38 @@
+# bench.jungle — the Epix dev-bench build. NEVER SUBMIT A BUILD MADE WITH IT.
+#
+#     export PATH="/opt/homebrew/opt/openjdk/bin:$PATH"
+#     "$SDK/bin/monkeyc" -f bench.jungle -o bin/JumpField-bench.prg \
+#         -y ~/.garmin-ciq/developer_key.der -d epix2 -r -w --build-stats 0
+#
+# STANDALONE, not an overlay on monkey.jungle. The two files each set
+# `project.manifest`, and a second jungle may not change it — measured
+# 2026-09-14: "ERROR: bench.jungle:22: Attempting to reset project property
+# 'manifest'." So this repeats monkey.jungle's two paths verbatim; if either
+# changes there, change it here in the same commit (CLAUDE.md §4).
+#
+# WHAT THIS BUILD IS FOR. It flips monkey.jungle's annotation split so that
+# (:bench) code compiles in and (:nowrist) code drops out. The single thing
+# that enables is source/WristProbe.mc, which calls
+# Sensor.registerSensorDataListener(). SDK 9.2.0's own reference says that
+# call "will cause an app crash if called from a data field app"
+# (doc/Toybox/Sensor.html — the note is on all nine of that module's instance
+# functions and appears in no other module page). Nobody in this repo has
+# measured whether it is true, and the rider's build must not be where it
+# gets measured. WristProbe.mc's header has the experiment and what each
+# outcome means.
+#
+# It also needs a third manifest permission that the shipped, store-approved
+# manifest deliberately does not carry — the compiler said so on 2026-09-14,
+# "Permission 'Sensor' required for '$.Toybox.Sensor'". Hence the separate
+# manifest below.
+project.manifest = manifest-bench.xml
+
+base.sourcePath = source;tests
+base.resourcePath = resources
+
+# `nowrist`, NOT `release`. `:release` is a reserved Monkey C annotation —
+# "Code blocks decorated with this annotation will not be included in debug
+# builds at compile time" (SDK doc/docs/Monkey_C/Annotations.html) — so using
+# it here made every non-`-r` build fail with "Undefined symbol
+# ':_wristStart'" while the `-r` build compiled clean. Measured 2026-09-14.
+base.excludeAnnotations = nowrist
