@@ -31,7 +31,7 @@ it just never reaches the Instinct.)
 
 **Artifact:** `garmin/jumpfield/bin/JumpField.iq` — **89,471 bytes, built
 2026-09-15 12:45, 4 of 4 device variants clean**, `manifest.xml`
-`version="1.0.2"`. **1.0.2 IS BUILT AND NOT YET SUBMITTED** (see "1.0.2",
+`version="1.0.2"`. **1.0.2 IS BUILT AND UPLOADED 2026-09-15 13:00, pending the store's approval (banner: up to 2 h)** (see "1.0.2",
 below): nothing has been uploaded to the portal, so the version live on the
 store and on the rider's watch is still 1.0.1. The previous artifact was
 81,775 bytes, built 2026-09-15 11:01, `version="1.0.1"`.
@@ -39,9 +39,12 @@ store and on the rider's watch is still 1.0.1. The previous artifact was
 **1.0.1 was PUBLISHED 2026-09-15** — uploaded through the portal's
 "Upload New Version" as version 1.0.1; the store page read *Latest Release
 September 15, 2026 · Version 1.0.1 (Internal: 2) · Status: Approved* within
-about 20 minutes of the upload, **with no review pass**: an update to an
-already-approved app goes live on the "Upload and publish" click, before the
-Step 2 details form is even submitted. (The 2026-08-24 build, 79,136 bytes,
+about 20 minutes of the upload. **Correction, same day:** the 1.0.2 upload
+(13:00) showed the app page's own banner — *"Version update pending. Changes
+will not be visible until the approval is complete. This process could take
+up to 2 hours."* — so an update to an approved app IS reviewed, just fast
+(the 1.0.1 banner was simply missed); the "Upload and publish" click alone
+queues it, before the Step 2 details form is submitted. (The 2026-08-24 build, 79,136 bytes,
 was the initial 1.0.0 release, approved 2026-08-25 after ~18 h.) Gitignored,
 so file size + mtime is the only handle on which build is on disk. **Rebuild
 immediately before submitting, and after any change under
@@ -99,7 +102,7 @@ editable on update, so the baro fields are named in the Description instead.
 Activity types Windsurfing and Kiteboarding were tagged on this update (the
 initial listing had none; Garmin's Wing Foil profile records as windsurfing).
 
-**1.0.2 (built 2026-09-15, NOT YET SUBMITTED).** Built clean, 4 of 4 device
+**1.0.2 (built 2026-09-15 12:50, uploaded 13:00 as version 1.0.2, approval pending).** Built clean, 4 of 4 device
 variants, 73 of 73 unit tests green in the simulator — and **nothing has been
 uploaded to the portal**, so the store and the rider's watch are still on
 1.0.1. Deliberate: 1.0.1 has never run on a watch either (it was published the
