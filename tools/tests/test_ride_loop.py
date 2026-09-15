@@ -841,6 +841,38 @@ class TestCorpus(_RideLoopTestBase):
         self.assertNotIn("Surfr", line)
         self.assertNotIn("score:", line)
 
+    def test_a_fake_device_bundle_is_marked_synthetic_and_never_counted(self):
+        # 2026-09-15: data/sessions/20260913-012409-UNKN came from
+        # tools/fake_device.py (device.log `INFO src=fakedev0`), carried 4
+        # round-number jumps (best 5.00 m) and sat in corpus.md as a ride.
+        sess = self.sessions_dir / "20260913-012409-UNKN"
+        sess.mkdir(parents=True)
+        (sess / "session.json").write_text(json.dumps(session_json()))
+        (sess / "jumps.csv").write_text(jumps_csv(0.47, 1.27, 2.83, 5.0))
+        (sess / "device.log").write_text(
+            "INFO src=fakedev0 fw=0.4.3 sample_hz=200 log_hz=50 ble=1\n"
+            "PARAMS airtime_offset_s=0.0192\n")
+        self.assertEqual(ride_loop.synthetic_source(sess), "fakedev0")
+        line = ride_loop.corpus_line(sess)
+        self.assertIn("SYNTHETIC", line)
+        self.assertIn("fakedev0", line)
+        self.assertNotIn("puck jumps", line)
+        self.assertNotIn("5.00 m", line)
+
+    def test_real_firmware_src_is_not_synthetic(self):
+        sess = self.sessions_dir / "20260914-210637-E2C4"
+        sess.mkdir(parents=True)
+        (sess / "session.json").write_text(json.dumps(session_json()))
+        (sess / "jumps.csv").write_text(jumps_csv(1.11))
+        (sess / "device.log").write_text("INFO src=c5eea285 fw=0.4.3 sample_hz=200 log_hz=100\n")
+        self.assertIsNone(ride_loop.synthetic_source(sess))
+        self.assertIn("1 puck jumps, best 1.11 m", ride_loop.corpus_line(sess))
+
+    def test_no_device_log_is_not_synthetic(self):
+        sess = self.sessions_dir / "20260914-104207-E2C4"
+        sess.mkdir(parents=True)
+        self.assertIsNone(ride_loop.synthetic_source(sess))
+
     def test_a_half_written_session_says_so_instead_of_reporting_zero_jumps(self):
         # An ingest that died between mkdir and jumps.csv leaves a directory
         # that looks, to the old line, exactly like a ride on which nothing

@@ -69,3 +69,4 @@ data/nick-sessions/
 
 # The Google OAuth client for JumpHeight Sync. Lives on the build Mac and in the built app, never in this public repo (GitHub push protection agrees). Shape: google-client.example.json
 tools/puckd/assets/google-client.json
+data/quarantine/

@@ -715,6 +715,26 @@ def read_score_summary(session_dir: Path) -> "Optional[str]":
     return "scored, no findings flagged"
 
 
+_SYNTHETIC_SRC_PREFIX = "fakedev"   # tools/fake_device.py BUILD_SRC = "fakedev0"
+
+
+def synthetic_source(session_dir: Path) -> "Optional[str]":
+    """The bench fake's build id if this session came from tools/fake_device.py,
+    else None. The fake announces itself in the INFO line the daemon copies
+    into device.log (`INFO src=fakedev0 ...`); real firmware puts a git hash
+    there. Measured 2026-09-15: data/sessions/20260913-012409-UNKN was such a
+    bundle -- 4 jumps at takeoff_s 5.000/12.000/20.000/30.000, best 5.00 m --
+    and it sat in data/corpus.md as a ride for two days. A synthetic session
+    in an ACCURACY corpus is a manufactured measurement (CLAUDE.md rule 3)."""
+    try:
+        head = (session_dir / "device.log").read_text(encoding="utf-8",
+                                                      errors="replace")[:4096]
+    except OSError:
+        return None
+    m = re.search(r"\bsrc=(" + _SYNTHETIC_SRC_PREFIX + r"\S*)", head)
+    return m.group(1) if m else None
+
+
 def corpus_line(session_dir: Path) -> str:
     try:
         session_json = json.loads((session_dir / "session.json").read_text())
@@ -722,6 +742,10 @@ def corpus_line(session_dir: Path) -> str:
         session_json = {}
     when = _session_when(session_dir)
     puck4 = _session_puck4(session_dir, session_json)
+    fake = synthetic_source(session_dir)
+    if fake is not None:
+        return (f"{when}  {puck4}  SYNTHETIC — src={fake} is tools/fake_device.py, "
+                "a bench artifact, not a ride; excluded from every count")
     if not (session_dir / "jumps.csv").is_file():
         # read_session_jumps() answers an unreadable jumps.csv with (0, 0.0),
         # which is the right shape for the notification total and the wrong
@@ -930,6 +954,11 @@ def _run_cycle(cfg: Config, report: CycleReport) -> None:
         sess = run_ingest(cfg, zip_path)
         if sess is None:
             report.errors.append(f"ingest failed: {zip_path.name}")
+            continue
+        fake = synthetic_source(sess)
+        if fake is not None:
+            log(cfg, f"{sess.name}: src={fake} is the bench fake device — "
+                     "listed as SYNTHETIC in corpus.md, not scored, not counted")
             continue
         report.sessions.append(sess)
 
