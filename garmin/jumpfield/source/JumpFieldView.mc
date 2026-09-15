@@ -53,6 +53,14 @@ class JumpFieldView extends WatchUi.DataField {
     const BARO_SRC_FILT_PA = 2;  // Activity.Info.ambientPressure (fallback)
     const BARO_SRC_ALT = 4;      // Activity.Info.altitude
 
+    // Application.Storage key carrying the Err.mc code across runs (ends up
+    // in the SESSION field prev_err). Storage is per-app isolated and
+    // available since API Level 2.4.0 (SDK doc/Toybox/Application/
+    // Storage.html), under manifest.xml's 3.1.0 floor. A STRING key, not a
+    // Symbol: "Symbols can change from build to build and are not to be used
+    // for Keys or Values" (same page).
+    const STORE_ERR_KEY = "jhErr";
+
     // Geometry constants and math live in Layout.mc (pure, unit-tested —
     // see LayoutTest.mc). This class draws; Layout computes.
 
@@ -65,6 +73,27 @@ class JumpFieldView extends WatchUi.DataField {
     hidden var _baroSrc = 0;     // sticky BARO_SRC_* bitmask for the session
     hidden var _wrist = null;    // WristProbe, bench builds only — WristProbe.mc
 
+    // ---- health block (FIT ids 9-13, 1.0.2) ----
+    //
+    // prev_err: the Err.mc code the PREVIOUS run of this app ended with,
+    // read from Application.Storage in initialize(). A run that dies takes
+    // its err_code with it — the FIT it was writing is closed by the system
+    // without another tick — so the only way that code reaches a human is
+    // the next activity's file.
+    hidden var _prevErr = 0;
+    // What is currently IN the object store, so the store is written only
+    // when it actually changes. -1 is "unknown", which forces exactly one
+    // write on the first compute() tick — and that first write is the
+    // "cleared after it is written" step: it replaces the previous run's
+    // code with this run's (0, unless something has already been caught).
+    // Steady state after that is ZERO writes per tick. Only a write that
+    // SUCCEEDED advances it — see _recordHealth().
+    hidden var _errStored = -1;
+    // One-shot: set the first time Storage.setValue throws, and never
+    // cleared. It is what stops a failing store from being retried every
+    // tick now that _errStored no longer lies about having been written.
+    hidden var _errStoreDown = false;
+
     function initialize() {
         DataField.initialize();
         _model = new Model.State();
@@ -75,12 +104,60 @@ class JumpFieldView extends WatchUi.DataField {
         // units metadata is fixed at createField() time); a mid-session
         // system-unit change is an accepted, ignored edge case (UnitsFmt.mc).
         var feet = UnitsFmt.isFeet(_readUnitOverride());
+
+        // Read BEFORE FitOut is built, so that a FitOut constructor throw
+        // (Err.E_FIT_INIT, below) does not cost us the previous run's code
+        // as well as this one's.
+        _prevErr = _readPrevErr();
+
         try {
-            _fitOut = new FitOut(self, UnitsFmt.unitLabel(feet));
+            _fitOut = new FitOut(self, UnitsFmt.unitLabel(feet), _model);
         } catch (ex) {
             _fitOut = null;  // FIT enrichment is a nicety (US4); the live
                               // glance (US1-US3) must not depend on it
+            _model.noteErr(Err.E_FIT_INIT);
         }
+    }
+
+    // ---- per-activity session semantics (1.0.2) ----
+    //
+    // Both callbacks are DataField overrides, documented since API Level
+    // 1.3.0 (SDK 9.2.0 doc/Toybox/WatchUi/DataField.html — onTimerStart
+    // "The activity timer has started... If the activity timer is running
+    // when the app is loaded, this event will run immediately after
+    // startup"; onTimerReset "The current activity has ended"), and both
+    // list instinct3solar45mm and epix2 in their Supported Devices tables.
+    // manifest.xml's minSdkVersion is 3.1.0, so 1.3.0 is well under the
+    // floor — no `has` guard is needed or honest here.
+    //
+    // WHY: measured on the rider's own files. On 2026-09-12 the saved
+    // activity's best_jump was 11.131889343261719 ft, bit-identical to
+    // 09-10's, because the puck reports its stored session best until it is
+    // cleared and the watch faithfully wrote it into a different day's ride
+    // (docs/garmin-corpus-2026-09-15.md, finding 2). The wrist's "jumps"
+    // and "session best" now describe THIS activity.
+    function onTimerStart() as Void {
+        // FIRST start of an ACTIVITY only. A mid-ride stop/start (the rider
+        // pausing at the beach and restarting) fires this again, and
+        // re-baselining there would silently reset the ride's jump count to
+        // zero. activityStarted() is true only BETWEEN beginActivity and
+        // endActivity, so it answers exactly that question: a resume is a
+        // no-op, and the first start after onTimerReset — "the current
+        // activity has ended", SDK 9.2.0 doc/Toybox/WatchUi/DataField.html —
+        // re-baselines for the new activity. No third flag is needed; one
+        // more would be a second sentinel for the same fact, which is the
+        // defect this pair was split to remove.
+        if (!_model.activityStarted()) {
+            _model.beginActivity();
+        }
+    }
+
+    function onTimerReset() as Void {
+        // Does NOT revert to the puck's raw session — Model.State keeps this
+        // activity's baseline, maxima and frozen count, so a compute() tick
+        // landing between the reset and the save writes THIS activity's
+        // numbers and not a stale puck best. See Model.endActivity().
+        _model.endActivity();
     }
 
     // ---- lifecycle, wired from JumpFieldApp.onStart()/onStop() ----
@@ -202,11 +279,18 @@ class JumpFieldView extends WatchUi.DataField {
         // Two lines turn "a restart permanently zeroes the summary" into "a
         // restart keeps the last good summary until the puck reseeds".
         if (_fitOut != null && _model.hasData()) {
+            // THIS ACTIVITY's numbers, not the puck's stored session — see
+            // onTimerStart() above and Model.State's activity* accessors.
             _fitOut.updateSession(
-                _model.jumpCount(),
-                UnitsFmt.heightValue(_model.sessionBestM(), feet),
-                _model.bestAirtimeS());
+                _model.activityJumps(),
+                UnitsFmt.heightValue(_model.activityBestM(), feet),
+                _model.activityBestAirtimeS());
         }
+
+        // Outside the hasData() guard, like the barometer and for the same
+        // reason: the activity where the puck never connects at all is
+        // precisely the one whose health record we most need.
+        _recordHealth();
 
         if (_model.consumeNewJump()) {
             if (_fitOut != null) {
@@ -272,7 +356,7 @@ class JumpFieldView extends WatchUi.DataField {
         // first Epix render did). The header is secondary information — it
         // deliberately starts a tier below the status line so the glanceable
         // thing on the glass is the state, not the puck's name.
-        var countText = _model.jumpCount().toString() + " jumps";
+        var countText = _model.activityJumps().toString() + " jumps";
         // Corruption tally, P1 "show its own health": every line the gates
         // dropped, on the glass. The whole integrity design rests on "a
         // rejected line is dropped and counted, never rendered" — this is
@@ -343,7 +427,7 @@ class JumpFieldView extends WatchUi.DataField {
 
         if (uiState == UI_CONNECTED || uiState == UI_RECONNECTING) {
             var footerY = (top + span * Layout.FOOTER_Y_FRAC).toNumber();
-            var footer = "best " + UnitsFmt.formatHeight(_model.sessionBestM(), feet)
+            var footer = "best " + UnitsFmt.formatHeight(_model.activityBestM(), feet)
                 + " . air " + UnitsFmt.formatAirtime(_model.lastAirtimeS());
             var footFont = _fitFont(dc, footer,
                 _safeHalfWidth(w, h, footerY, insets) * 2 - 8, _fontLadder(_secondaryFont(h)));
@@ -391,9 +475,9 @@ class JumpFieldView extends WatchUi.DataField {
 
         dc.setColor(fg, bg);
         if (uiState == UI_CONNECTED || uiState == UI_RECONNECTING) {
-            _drawVC(dc, rLeft, rowY, labelFont, "^" + UnitsFmt.formatHeight(_model.sessionBestM(), feet),
+            _drawVC(dc, rLeft, rowY, labelFont, "^" + UnitsFmt.formatHeight(_model.activityBestM(), feet),
                 Graphics.TEXT_JUSTIFY_LEFT, fg);
-            _drawVC(dc, midX, rowY, labelFont, "n" + _model.jumpCount().toString(),
+            _drawVC(dc, midX, rowY, labelFont, "n" + _model.activityJumps().toString(),
                 Graphics.TEXT_JUSTIFY_CENTER, fg);
         } else {
             var subText = _subText(uiState);
@@ -417,7 +501,7 @@ class JumpFieldView extends WatchUi.DataField {
             text = "--";
         } else {
             text = UnitsFmt.formatHeight(_model.lastHeightM(), feet) + "^"
-                + UnitsFmt.formatHeight(_model.sessionBestM(), feet);
+                + UnitsFmt.formatHeight(_model.activityBestM(), feet);
         }
         var fonts = [Graphics.FONT_SMALL, Graphics.FONT_XTINY];
         var font = _fitFont(dc, text, right - left - 14, fonts);
@@ -490,6 +574,7 @@ class JumpFieldView extends WatchUi.DataField {
             _fitOut.recordBaro(altM, pa);
             _fitOut.updateBaroSrc(_baroSrc);
         } catch (ex) {
+            _model.noteErr(Err.E_FIT_BARO);
             // Leave _baroSrc as it stands: whatever it already recorded is
             // still true, and a zeroed mask would claim nothing ever answered.
         }
@@ -740,6 +825,7 @@ class JumpFieldView extends WatchUi.DataField {
         try {
             return getObscurityFlags();
         } catch (ex) {
+            _model.noteErr(Err.E_OBSCURITY);
             return 0;
         }
     }
@@ -769,6 +855,7 @@ class JumpFieldView extends WatchUi.DataField {
                 enabled = v;
             }
         } catch (ex) {
+            _model.noteErr(Err.E_PROP_VIBE);
             enabled = true;  // default from properties.xml is true; a read
                               // failure shouldn't silently disable the nudge
         }
@@ -781,6 +868,7 @@ class JumpFieldView extends WatchUi.DataField {
         try {
             Attention.vibrate([ new Attention.VibeProfile(50, 200) ]);
         } catch (ex) {
+            _model.noteErr(Err.E_VIBRATE);
             // Forbidden on this device/app-type combo -- exactly the silent
             // degrade spec §9.3 calls for; the invert-flash remains the nudge.
         }
@@ -793,6 +881,7 @@ class JumpFieldView extends WatchUi.DataField {
                 return v;
             }
         } catch (ex) {
+            _model.noteErr(Err.E_PROP_PUCKNAME);
         }
         return "JumpHeight";  // properties.xml's own default, repeated here so
                               // a read failure still leaves the field usable
@@ -806,7 +895,96 @@ class JumpFieldView extends WatchUi.DataField {
                 return v;
             }
         } catch (ex) {
+            _model.noteErr(Err.E_PROP_UNIT);
         }
         return UnitsFmt.UNIT_AUTO;
+    }
+
+    // ---- the health block (FIT ids 9-13, 1.0.2) ----
+
+    // The object store, read once in initialize(). An absent key is 0, not
+    // an error: the very first run of a freshly installed app has no
+    // previous run. A THROW is an error and gets its own code, because
+    // "prev_err is 0" and "we could not find out what prev_err was" are
+    // different facts and the file must not confuse them.
+    hidden function _readPrevErr() as Number {
+        try {
+            var v = Application.Storage.getValue(STORE_ERR_KEY);
+            if (v != null) {
+                return v.toNumber();
+            }
+        } catch (ex) {
+            _model.noteErr(Err.E_STORE_READ);
+        }
+        return 0;
+    }
+
+    // Once per compute() tick. Bare catch, per this file's header note.
+    //
+    // System.getSystemStats() allocates one Stats object per call, which is
+    // a per-tick allocation and therefore a deliberate exception to spec
+    // §5.6's "no per-callback allocations in steady state". There is no
+    // other way to read usedMemory (SDK doc/Toybox/System/Stats.html:
+    // "usedMemory as Lang.Number — The memory used by the application in
+    // bytes", API Level 1.0.0, no device restriction), and one small object
+    // per second is the price of knowing whether the 32,768 B Instinct
+    // budget was the thing that killed the field mid-ride.
+    hidden function _recordHealth() as Void {
+        if (_fitOut != null) {
+            try {
+                // No null check: Stats.usedMemory is typed `Lang.Number`,
+                // not `Lang.Number or Null` — the same page types
+                // solarIntensity as `or Null`, so the distinction is the
+                // SDK's own and not an assumption. A null here would throw
+                // in recordHealth() and be caught as E_HEALTH, which is the
+                // correct report anyway.
+                var used = System.getSystemStats().usedMemory;
+                // Milliseconds -> seconds, floored, and never negative:
+                // System.getTimer() is a wrapping free-running counter, so a
+                // wrap during a ride would otherwise produce a huge negative
+                // that a UINT16 field would render as nonsense.
+                var sinceS = 65535;
+                var ms = _puckLink.msSinceLastLine();
+                if (ms != null && ms >= 0) {
+                    sinceS = ms / 1000;
+                }
+                _fitOut.recordHealth(used, _puckLink.state(), sinceS,
+                                     _model.errCode());
+                _fitOut.updatePrevErr(_prevErr);
+            } catch (ex) {
+                _model.noteErr(Err.E_HEALTH);
+            }
+        }
+
+        // The object store, written ONLY when the code changes — never per
+        // tick. In a healthy activity that is exactly one write, on the
+        // first tick (_errStored starts at -1), and that write is also the
+        // "clear the previous run's value after it has been written" step.
+        //
+        // _errStored is advanced only AFTER a SUCCESSFUL write (adversarial
+        // review, 2026-09-15). Advancing it before the attempt made a failed
+        // write indistinguishable from a good one: the store kept the OLD
+        // value while this field claimed the new one, nothing ever retried,
+        // and the next run's prev_err silently belonged to two runs ago —
+        // a wrong diagnostic wearing the look of a right one, in the one
+        // channel that reaches this repo at all (CLAUDE.md §2.3).
+        //
+        // The retry loop is suppressed by a separate one-shot flag instead:
+        // the FIRST throw disables the store for the rest of the run. Still
+        // bounded (worst case 24 writes, one per distinct new maximum across
+        // the 23 codes, and at most one failing write ever), and the failure
+        // itself is reported — E_STORE_WRITE lands in THIS activity's
+        // err_code, so a reader of the next file is told that its prev_err
+        // may be stale rather than having to guess.
+        var e = _model.errCode();
+        if (e != _errStored && !_errStoreDown) {
+            try {
+                Application.Storage.setValue(STORE_ERR_KEY, e);
+                _errStored = e;
+            } catch (ex) {
+                _errStoreDown = true;
+                _model.noteErr(Err.E_STORE_WRITE);
+            }
+        }
     }
 }

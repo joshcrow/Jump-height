@@ -29,9 +29,14 @@ only route onto the rider's watch.** (The MTP procedure, `tools/mtp_send` +
 OpenMTP fallback, still works for the Epix dev bench, proven 2026-08-10 —
 it just never reaches the Instinct.)
 
-**Artifact:** `garmin/jumpfield/bin/JumpField.iq` — **81,775 bytes, built
-2026-09-15 11:01, 4 of 4 device variants clean**, `manifest.xml`
-`version="1.0.1"`. **PUBLISHED 2026-09-15** — uploaded through the portal's
+**Artifact:** `garmin/jumpfield/bin/JumpField.iq` — **89,471 bytes, built
+2026-09-15 12:45, 4 of 4 device variants clean**, `manifest.xml`
+`version="1.0.2"`. **1.0.2 IS BUILT AND NOT YET SUBMITTED** (see "1.0.2",
+below): nothing has been uploaded to the portal, so the version live on the
+store and on the rider's watch is still 1.0.1. The previous artifact was
+81,775 bytes, built 2026-09-15 11:01, `version="1.0.1"`.
+
+**1.0.1 was PUBLISHED 2026-09-15** — uploaded through the portal's
 "Upload New Version" as version 1.0.1; the store page read *Latest Release
 September 15, 2026 · Version 1.0.1 (Internal: 2) · Status: Approved* within
 about 20 minutes of the upload, **with no review pass**: an update to an
@@ -93,6 +98,90 @@ sentences in step 3 were entered once at the initial filing and are not
 editable on update, so the baro fields are named in the Description instead.
 Activity types Windsurfing and Kiteboarding were tagged on this update (the
 initial listing had none; Garmin's Wing Foil profile records as windsurfing).
+
+**1.0.2 (built 2026-09-15, NOT YET SUBMITTED).** Built clean, 4 of 4 device
+variants, 73 of 73 unit tests green in the simulator — and **nothing has been
+uploaded to the portal**, so the store and the rider's watch are still on
+1.0.1. Deliberate: 1.0.1 has never run on a watch either (it was published the
+same morning and no activity has been saved with it), so submitting 1.0.2 on
+top would stack two unproven builds and make the next FIT file impossible to
+attribute. The desk sequence below settles 1.0.1 first.
+
+What changed, for whoever files it:
+
+- **Five new FIT developer fields**, the health block, ids 9-13:
+  `mem_used`, `link_state`, `since_puck_s`, `err_code` (RECORD) and
+  `prev_err` (SESSION). Full table and meanings under "FIT developer fields".
+  They exist because on 2026-09-14 this app stopped writing developer fields
+  41 % of the way into the rider's ride and never resumed — 1,688 of 2,877
+  records carry none — and the file says nothing about why
+  (`docs/garmin-corpus-2026-09-15.md`, finding 3). The watch's own CIQ log
+  never leaves the watch, so the FIT is the only diagnostic channel there is.
+- **`jumps` / `best_jump` / `best_airtime` now describe THIS ACTIVITY**, not
+  the puck's stored session — see "Per-activity session semantics", below.
+  This is the one change visible **on the glass**: the jump count and best
+  shown on the wrist are this ride's, so a rider who has not cleared the puck
+  no longer sees Tuesday's best on Thursday.
+- **No new permission.** Still exactly two (`BluetoothLowEnergy`,
+  `FitContributor`). `Application.Storage`, used to carry `prev_err` between
+  runs, needs none — and the portal's update form has no per-permission text
+  anyway (measured 2026-09-14), so steps 2-4 below stand unaltered again.
+- **Listing text that should change:** step 3's FitContributor sentence, and
+  the Description, currently say jump count / best height / best airtime /
+  barometric altitude and pressure. Add that the file also carries the app's
+  own health record. Say explicitly, wherever the count and best are
+  described, that they are **per activity**.
+- **Memory:** 15,462 B of the Instinct's 32,768 (+2,195 B over 1.0.1).
+- **PER-RECORD PAYLOAD GOES 12 B → 18 B, and the first saved activity is
+  testing that as well as the fields.** 1.0.1 wrote `jump_height` +
+  `baro_alt_m` + `baro_pa` (4+4+4) into each RECORD; the health block adds
+  `mem_used` + `link_state` + `since_puck_s` + `err_code` (2+1+2+1). The
+  failure being diagnosed is the 09-14 ride where the RECORD developer slot
+  vanished 41 % in and never came back, **cause unknown** — so if that cause
+  has anything to do with per-record developer budget, this version moves
+  50 % further in its direction and the diagnostics die in the event they
+  were added to explain. The design hedges (`prev_err` is SESSION-scope and
+  survives a run that dies), and the risk cannot be measured here: it needs
+  one write-and-inspect on a real device, the same outstanding test as the
+  32 B ceiling itself. **If the next FIT drops the developer fields EARLIER
+  than 41 %, this paragraph is what makes that result interpretable.**
+- **Adversarially reviewed 2026-09-15, and four things changed as a result**
+  (the review itself is not kept — its content is in this file):
+  **(a)** `onTimerReset` no longer reverts to the puck's raw session. The
+  first draft cleared one flag that also meant "no activity has ever
+  started", so a reset put the un-cleared, possibly days-old best back on
+  the glass and into any SESSION write that followed — the 09-12 bug, inside
+  the version written to kill it — and the test covering it asserted the raw
+  values as expected and passed. Two flags now: `_actEverStarted` (never
+  cleared, the only thing that selects the pre-1.0.2 fallback) and
+  `_actStarted` (inside an activity). **(b)** A failed `Storage.setValue` no
+  longer looks like a successful one: `_errStored` advances only after a
+  write that returned, and a separate one-shot `_errStoreDown` suppresses
+  the retry, so a stale `prev_err` is always accompanied by `err_code = 22`.
+  **(c)** `err_code`'s scope is stated as per **run of the app**, which is
+  what the code does — three places said "activity" and nothing cleared it
+  at an activity boundary. **(d)** `FitOut.mc` no longer claims "room for
+  one more float in each": the 32 B sentence has two readings and under the
+  aggregate one there is room for nothing (see "Documented limits").
+  **One review item was NOT taken:** it asked for a third flag,
+  `_needsRebaseline`, set by `endActivity()` and read by `onTimerStart()`.
+  `activityStarted()` already answers exactly that question — it is true
+  only between `beginActivity` and `endActivity` — so a third flag would be
+  a second sentinel for one fact, which is the defect this pair was split to
+  remove. `onTimerStart` *"is called when the activity timer goes from a
+  stopped state to a started state"* and `onTimerReset` when *"the current
+  activity has ended"* (SDK 9.2.0 `doc/Toybox/WatchUi/DataField.html`), so
+  the two callbacks bracket an activity exactly and one boolean tracks it.
+- **WHEN THIS IS COMMITTED, STAGE `source/Err.mc` BY NAME.** It is a NEW
+  file, it is compiled into the shipped artifact (every `Err.E_*` reference
+  resolves there — the build fails without it), and it is the declared
+  source of truth for a table that a permanently-saved FIT file's meaning
+  depends on. Until it is committed that table exists in exactly one working
+  directory. Stage explicit paths, never `git add -A` (MEMORY: that has
+  swept unreviewed agent edits into a commit twice) — `BUILD.md` in
+  particular carries an unrelated edit and should be decided separately, by
+  name. CLAUDE.md §4: an identifier without a lookup entry is a
+  rediscovery waiting to happen, and an uncommitted lookup table is worse.
 
 1. **Account** — sign in at developer.garmin.com with any Garmin account
    (free); accept the developer agreement. **Upload an App** — Type: Data
@@ -202,11 +291,26 @@ evening recovers on the weekend; everything before it doesn't):
    or absent = the watch gave us nothing and `baro_pa`'s absence is a
    finding, not a gap. Then check `baro_alt_m` has more than one distinct
    value — one constant value is the −29.2 m failure repeating under a new
-   name.
+   name. **Once 1.0.2 is on a watch, this same run also reads the health
+   block**: `err_code` (and `prev_err`) first — a nonzero code names what was
+   caught, and the table under "FIT developer fields" says what it was — then
+   `link_state` against `since_puck_s`, then `mem_used`'s trend across the
+   activity. If the developer channel vanishes mid-file again, the last
+   records before it stops are now the diagnosis.
 7. Hand him the rider brief in person; walk the reboot ritual once, aloud.
 8. Stretch: new activity after the first — does the jump count restart
-   (`onTimerReset` on real silicon)? (Do not sideload a new build or flash
-   the OG the same evening; no third BLE central during the two-watch test.)
+   (`onTimerReset` on real silicon)? **On 1.0.1 that is a question; on 1.0.2
+   it is an assertion under test** — the count and best are baselined at
+   `onTimerStart` and must read 0 at the start of the second activity even
+   with an uncleared puck, then count only the new ride's jumps. Also worth
+   doing on 1.0.2: stop and restart the timer mid-activity and confirm the
+   count does NOT reset (only the first start baselines), and — after
+   pressing reset and before starting the next activity — that the glass
+   still shows the ride just saved, NOT the puck's older session best. That
+   last check is the one the 2026-09-15 review's headline finding was about;
+   it is fixed and unit-tested, but only silicon delivers the callbacks.
+   (Do not sideload a new build or flash the OG the same evening; no third
+   BLE central during the two-watch test.)
 
 ## Protocol and BLE architecture
 
@@ -235,20 +339,35 @@ Four field states: SEARCHING (hollow dot, `--`), CONNECTED (solid, live),
 RECONNECTING (hollow, dimmed retained values), NO BLE (✕). A new jump
 inverts the last-jump number for ~5 s. Scan backoff: 5 s → 15 s cap, reset
 to the 5 s floor only on a confirmed LIVE. **Memory:** static footprint
-measured **13,267 B** (`monkeyc --build-stats 0`, 2026-09-14: Data foreground
-3,143 + Code foreground 10,124, **identical on both devices**), up from
-12,579 B before the baro fields landed and from the 12,417 B recorded here
-earlier. No per-line leak over ~1,200 simulated lines. **RETRACTED:** an
-earlier "124 KB vs 32 KB" fear was `.prg` file size, not runtime memory.
+measured **15,462 B** (`monkeyc --build-stats 0`, 2026-09-15: Data foreground
+3,589 + Code foreground 11,873, **identical on both devices**), up **+2,195 B**
+from 1.0.1's 13,267 B — that is the whole cost of the health block and the
+per-activity session semantics. Before that: 12,579 B before the baro fields
+landed, 12,417 B recorded here earlier. No per-line leak over ~1,200 simulated
+lines (`MemoryProbeTest`, still green: 320 B of growth at peak, 0 B over two
+further 300-line blocks). **RETRACTED:** an earlier "124 KB vs 32 KB" fear was
+`.prg` file size, not runtime memory.
 
 **The 32,768 B budget is the INSTINCT's, and only the Instinct's** —
 `Devices/instinct3solar45mm/compiler.json` gives `datafield` a `memoryLimit`
 of 32768; `Devices/epix2/compiler.json` gives it **262144**, 8× more. Both
 devices compile to the same footprint, so the Instinct is always the binding
 constraint and the Epix bench can never surface an over-budget build. Current
-headroom on the Instinct: **19,501 B, 40 % used.** (`Total PRG Size` is a
-different number and is not the budget: 19,148 B Instinct / 25,836 B Epix for
-the same 13,267 B of memory.)
+headroom on the Instinct: **17,306 B, 47 % used.** (`Total PRG Size` is a
+different number and is not the budget: 21,404 B Instinct / 28,092 B Epix for
+the same 15,462 B of memory. The `bench.jungle` build, which adds WristProbe,
+is 16,339 B and ships to nobody.)
+
+Since 1.0.2 the app also **reports this number about itself**, once per FIT
+record, as `mem_used` (field 9). The static figure above is what the compiler
+can see; `mem_used` is what the interpreter actually holds at run time, which
+is the number that matters if the field ever dies mid-ride for want of memory.
+The two are not comparable. `MemoryProbeTest`'s own
+`System.getSystemStats()` reads **56,040 B** in the simulator on
+`instinct3solar45mm` — above the 32,768 datafield limit, because a unit-test
+build is a test app and is not held to that limit. So read `mem_used` against
+**its own trend within one activity** and against a real device, never against
+15,462 or against a simulator figure.
 
 **`traceraw` (added 2026-09-07)** — a command outside the watch's own
 protocol, for the rider sync page and `jump sync`/`ingest`, not the Garmin
@@ -264,23 +383,53 @@ page and `jump ingest` share: `sim/trace_codec.py`.
 
 ## FIT developer fields
 
-| id | name | scope | type | units | source | when written |
+| id | name | scope | type | units | meaning / source | when written |
 |---|---|---|---|---|---|---|
-| 0 | `jump_height` | RECORD | float32 | `ft`/`m` | puck `JUMP` line | sparse, per jump |
-| 1 | `jumps` | SESSION | uint16 | `count` | puck | every tick |
-| 2 | `best_jump` | SESSION | float32 | `ft`/`m` | puck | every tick |
-| 3 | `best_airtime` | SESSION | float32 | `s` | watch running max | every tick |
+| 0 | `jump_height` | RECORD | float32 | `ft`/`m` | the last `JUMP`'s height, off the puck | sparse, per jump |
+| 1 | `jumps` | SESSION | uint16 | `count` | **jumps in THIS ACTIVITY** (1.0.2; was the puck's stored session) | every tick |
+| 2 | `best_jump` | SESSION | float32 | `ft`/`m` | **best height in THIS ACTIVITY** (1.0.2; was the puck's stored session) | every tick |
+| 3 | `best_airtime` | SESSION | float32 | `s` | **best airtime in THIS ACTIVITY** (1.0.2), watch-side running max | every tick |
 | 4 | `baro_alt_m` | RECORD | float32 | `m` | `Activity.Info.altitude` | every tick, when non-null |
 | 5 | `baro_pa` | RECORD | float32 | `Pa` | `Activity.Info.rawAmbientPressure` | every tick, when non-null |
-| 6 | `baro_src` | SESSION | uint16 | `bitmask` | which of the above answered | every tick |
+| 6 | `baro_src` | SESSION | uint16 | `bitmask` | which of the above answered: `1` raw Pa, `2` filtered Pa, `4` altitude; sticky OR | every tick |
 | 7, 8 | *reserved* | — | — | `g` | `wrist_amin_g` / `wrist_amax_g`, **not shipped** | — |
+| 9 | `mem_used` | RECORD | uint16 | `B` | `System.getSystemStats().usedMemory`, saturating at 65535 | every tick |
+| 10 | `link_state` | RECORD | uint8 | `enum` | `PuckLink.state()` verbatim — see the table below | every tick |
+| 11 | `since_puck_s` | RECORD | uint16 | `s` | seconds since the last complete line off the puck, saturating at 65535 (= also "never") | every tick |
+| 12 | `err_code` | RECORD | uint8 | `code` | sticky MAX error class caught in this **run of the app**, `0` = none — see the table below | every tick |
+| 13 | `prev_err` | SESSION | uint8 | `code` | the `err_code` the PREVIOUS run of the app ended with | every tick |
 
-`FitOut.mc` writes them; ids and scopes are fixed — do not renumber without
-checking whether a real saved activity already used the old id. Fields 0-3 are
+Ids 9-13 are the **health block**, added 2026-09-15 in 1.0.2. `FitOut.mc`
+writes all twelve; ids and scopes are fixed — do not renumber without
+checking whether a real saved activity already used the old id. Ids 7 and 8
+stay reserved even though nothing has ever written them. Fields 0-3 are
 written in the **rider's display unit** (ft or m) with a matching FIT units
 string — Garmin Connect does not convert developer fields; the device's own
 CSVs remain canonical. Fields 4-6 are SI and unit-setting-independent: they
-are instrument output, not a display. Its
+are instrument output, not a display. Fields 9-13 are integers and carry no
+unit ambiguity at all.
+
+**Documented limits, from the SDK and not from memory.** `createField`'s
+`:count` docs (`doc/Toybox/ActivityRecording/Session.html`) state: *"Apps are
+limited to 256 total bytes per message / **Data fields are limited to 32
+bytes per message** / Messages larger than the limit will result in a 'New
+Field out of memory for FIT data' error."* We are a data field, so 32 B per
+message type is the ceiling — and 1.0.2 sits at **RECORD 18 B**
+(4+4+4+2+1+2+1) and **SESSION 13 B** (2+4+4+2+1). **How much room that
+leaves depends on which reading of that sentence is right, and the SDK does
+not say:** per message TYPE it is 18/32 and 13/32, 14 B and 19 B spare;
+**aggregate** across the data field's developer payload it is 18 + 13 =
+**31 of 32 — room for nothing more, of any type.** Assume the aggregate
+reading until a real device says otherwise. The quoted sentence is also
+**borrowed**: it lives on the `ActivityRecording.Session` page, while this
+app calls `WatchUi.DataField.createField`, whose own documentation states no
+limit at all — a second reason to treat the number as provisional. SDK 9.2.0
+documents **no limit on the number of developer fields** an app may create,
+**no developer-data-index cap**, and **no range for `fieldId`** — grepped
+the whole doc tree, the byte budget is the only stated constraint.
+That 32 B figure is still the **PROVISIONAL** one flagged below: quoted from
+the installed SDK's local docs, absent from Garmin's live docs, never
+corroborated by a write-and-inspect test on a real device. Its
 `DEVELOPER_DATA_ID` constant is **not wired to anything** —
 `createField(name, fieldId, type, options)` takes no UUID argument; Connect
 IQ ties developer fields to the app's manifest identity automatically. Kept
@@ -297,6 +446,203 @@ independently corroborated; don't architect against the exact number until
 one write-and-inspect test settles it. `best_airtime` also cannot be
 reseeded on reconnect: `STATS` carries `stored_best_m` but no
 stored-best-airtime key — found by parsing a FIT file, filed, not fixed.
+(Since 1.0.2 that matters less: `best_airtime` is this activity's watch-side
+maximum by design, so there is nothing on the wire it *should* be reseeded
+from.)
+
+### `link_state` (field 10) — the BLE state machine, verbatim
+
+`PuckLink.state()` is written through unchanged rather than folded into the
+four on-glass UI states, because the three connect-attempt states are exactly
+where a stuck link parks itself (F-12) and the UI collapses all of them into
+"finding puck".
+
+| value | `PuckLink.STATE_*` | meaning |
+|---|---|---|
+| 0 | `IDLE` | profile not registered yet, or `stop()` has run |
+| 1 | `SCANNING` | scanning, or waiting out the 5 s → 15 s backoff |
+| 2 | `PAIRING` | `pairDevice()` issued, awaiting `onConnectedStateChanged` |
+| 3 | `DISCOVERING` | connected, looking up service/characteristics |
+| 4 | `SUBSCRIBING` | CCCD write issued, awaiting `onDescriptorWrite` |
+| 5 | `LIVE` | subscribed; notifications flowing |
+| 6 | `DEAD` | BLE unavailable on this device/app type — the ✕ on the glass |
+
+Read it with `since_puck_s`: `link_state=5` while `since_puck_s` climbs is a
+puck that has gone quiet with the connection still up, which nothing in the
+FIT could say before.
+
+### `err_code` / `prev_err` (fields 12, 13) — why the app was hurting
+
+The watch's own crash log (`GARMIN/APPS/LOGS/CIQ_LOG.YML`) never reaches
+Garmin Connect, so the only diagnostics that get to this repo are what the app
+writes into the rider's own FIT. Every catch in this codebase is a deliberate
+bare `catch (ex)` — the rule that keeps the field alive on silicon — and a
+bare catch throws the evidence away. These codes are the evidence. **The
+source of truth is `garmin/jumpfield/source/Err.mc`; this table is its copy
+(CLAUDE.md §4 — change one, change both, in the same commit).** No new catches
+were added to manufacture codes; every code below labels a catch that already
+existed, except the two this change itself introduced (the health write and
+the object-store access), both of which really can throw.
+
+`err_code` is a **MAXIMUM, not a log**: `15` means "class 15 happened and
+nothing worse did"; milder classes may also have fired and are not recoverable
+from the number. `0` means nothing was caught.
+
+**Its scope is the RUN OF THE APP, not the activity** — stated exactly,
+because the first 1.0.2 draft said "activity" in three places while the code
+cleared it in none. Nothing in `beginActivity()`/`endActivity()` touches it,
+and that is deliberate: this version overrides `onTimerReset` precisely
+because one app instance **can** span two activities, and a failure in the
+first is still a fact about the field writing the second. So a code in a
+file means "somewhere in the app run that produced this file, that class was
+caught" — possibly before this activity's timer ever started. `prev_err`
+carries the same number one run further.
+
+| code | name | what threw |
+|---|---|---|
+| 0 | — | nothing was caught in this run |
+| 1 | `E_PROP_PUCKNAME` | `Properties.getValue("puckName")` |
+| 2 | `E_PROP_UNIT` | `Properties.getValue("unitOverride")` |
+| 3 | `E_PROP_VIBE` | `Properties.getValue("vibrateOnJump")` |
+| 4 | `E_VIBRATE` | `Attention.vibrate()` |
+| 5 | `E_OBSCURITY` | `getObscurityFlags()` |
+| 6 | `E_BLE_NAME` | `Ble.Device.getName()` — header puck id goes blank |
+| 7 | `E_BLE_SCAN_OFF` | `setScanState(OFF)` while scheduling a rescan |
+| 8 | `E_BLE_STOP` | `setScanState(OFF)` in `stop()` |
+| 9 | `E_BLE_UNPAIR` | `unpairDevice()` abandoning a stalled connect (F-12) |
+| 10 | `E_BLE_STATS_WRITE` | the one `stats\n` write — no reseed this connect |
+| 11 | `E_BLE_SCAN_ON` | `setScanState(SCANNING)` — no scan is running |
+| 12 | `E_BLE_CONNECT` | `pairDevice()` |
+| 13 | `E_BLE_SUBSCRIBE` | the CCCD write — notifications never enabled |
+| 14 | `E_BLE_REGISTER` | `setDelegate`/`registerProfile` — link goes DEAD |
+| 15 | `E_DECODE` | `convertEncodedString()` on a chunk — the 2026-08-11 killer |
+| 16 | `E_PARSE` | `LineReader.feed` / `parseKV` / `Model.onLine` |
+| 17 | `E_FIT_BARO` | `recordBaro()`/`updateBaroSrc()` during a tick |
+| 18 | `E_FIT_BARO_FIELDS` | `createField()` refused a baro field (ids 4-6) |
+| 19 | `E_FIT_HEALTH_FIELDS` | `createField()` refused a health field (ids 9-13) |
+| 20 | `E_FIT_INIT` | the whole `FitOut` constructor — **no developer fields at all** |
+| 21 | `E_STORE_READ` | `Storage.getValue` at startup — `prev_err` unknown |
+| 22 | `E_STORE_WRITE` | `Storage.setValue` — the next run cannot be told |
+| 23 | `E_HEALTH` | the health write itself (`getSystemStats`, or a `setData`) |
+
+**Codes 19 and 20 can never appear in `err_code` in the file they happened
+in** — there is no field left to write them to. They reach us only as
+`prev_err` in the NEXT activity, which is the entire reason `prev_err` exists.
+`prev_err` rides in `Application.Storage` under the key `jhErr` (a String key,
+not a Symbol: *"Symbols can change from build to build and are not to be used
+for Keys or Values"*, `doc/Toybox/Application/Storage.html`). It is read once
+in `initialize()` and the store is written **only when the code changes** —
+in a healthy activity that is exactly one write, on the first `compute()`
+tick, and that write is also what clears the previous run's value. Never
+per tick.
+
+**A failed write is never mistaken for a good one** (fixed after the
+2026-09-15 review). `_errStored` — "what is currently in the store" —
+advances only *after* `Storage.setValue` returns; a throw instead sets a
+separate one-shot `_errStoreDown`, which is what stops a per-tick retry
+loop. Advancing it before the attempt, as the first draft did, left the
+store holding the OLD value while the field claimed the new one, so nothing
+ever retried and the **next** run's `prev_err` silently belonged to *two*
+runs ago — a wrong diagnostic wearing the look of a right one, in the only
+channel that reaches this repo (CLAUDE.md §2.3). A stale `prev_err` is now
+always accompanied by `err_code` **22** (`E_STORE_WRITE`) in the file where
+the write failed. Worst case is still bounded: at most one failing write per
+run, and at most 24 successful ones (one per distinct new maximum across the
+23 codes).
+
+### Per-activity session semantics (1.0.2) — `jumps`, `best_jump`, `best_airtime`
+
+**The failure this fixes was measured, not imagined.** On 2026-09-12 the
+rider's saved activity carried `best_jump = 11.131889343261719 ft` —
+bit-identical to the 09-10 ride's — because the puck reports its stored
+session best until somebody clears it, and the watch wrote that faithfully
+into a different day's file (`docs/garmin-corpus-2026-09-15.md`, finding 2).
+The wrist showed a two-day-old best all session.
+
+**The rule.** At `DataField.onTimerStart` the model takes a **baseline** of
+the puck's session counters; `jumps` is then `raw − baseline`, and
+`best_jump` / `best_airtime` are **watch-side running maxima over the JUMP
+lines that arrived after the timer started** — not subtractions, because a
+maximum cannot be undone by arithmetic, and not seeded from `session_best_m`,
+because a maximum from before the timer started is not this activity's. The
+raw puck-session values are untouched and still reachable
+(`Model.jumpCount()` / `sessionBestM()` / `bestAirtimeS()`); every corruption
+gate and every monotonic guard runs on them exactly as before.
+
+Both callbacks are documented DataField overrides since **API Level 1.3.0**
+(`doc/Toybox/WatchUi/DataField.html` — `onTimerStart` *"The activity timer has
+started... If the activity timer is running when the app is loaded, this event
+will run immediately after startup"*; `onTimerReset` *"The current activity has
+ended"*), and both list `Instinct® 3 Solar 45mm / 50mm` and `epix™ (Gen 2)` in
+their Supported Devices tables. `manifest.xml`'s `minSdkVersion` is 3.1.0, so
+1.3.0 is well under the floor.
+
+The details, each of which is a decision:
+
+- **Only the FIRST `onTimerStart` OF AN ACTIVITY baselines.** A mid-ride
+  stop/start fires it again; re-baselining there would silently reset the
+  ride's count to zero. The gate is `activityStarted()`, true only *between*
+  `beginActivity` and `endActivity`, so a resume is a no-op and the first
+  start after a reset baselines the new activity.
+- **`onTimerReset` does NOT revert to the puck's raw session.** The baseline
+  and both maxima are retained and the count is frozen at what it was, so
+  the just-ended activity's numbers stay correct — and stay still — until
+  the next start. A jump landing in the gap between the reset and the next
+  start belongs to neither activity and grows neither (the raw puck view
+  keeps tracking the wire throughout). **This was a real defect in the first
+  1.0.2 draft**: one flag carried both "this activity has ended" and "no
+  activity has ever started", so a reset dropped the glass back to the
+  puck's un-cleared best and any `compute()` tick landing before the save
+  would have written it into the SESSION fields — the exact 09-12 failure,
+  restored. Two flags now, and `activityEverStarted()` is the only one that
+  selects the raw fallback.
+- **Puck not connected at timer start → the baseline ARMS** and is taken from
+  the first line that arrives (in practice the `STATS` that PuckLink's one
+  `stats` write brings back on connect). A JUMP that beats it to the wire
+  takes the baseline at `n-1`, so a real jump is never swallowed.
+- **Cost of arming, stated plainly:** a jump landing between timer start and
+  the first puck connect is baselined away on the wrist. The puck's own stored
+  record still has it.
+- **A puck that reboots mid-activity cannot drive the count negative.** The
+  raw counter is monotonic (the F-11 guards refuse any decrease), so
+  `raw − baseline` cannot go below zero, and `activityJumps()` clamps at 0
+  regardless. The inherited F-11 behaviour is unchanged and worth restating:
+  after a reboot the wrist **holds** its count rather than dropping, and does
+  not advance again until the puck's own `n` passes the pre-reboot maximum.
+  The activity's best height and best airtime are watch-side maxima and a
+  reboot cannot touch them at all.
+- **No `onTimerStart` ever delivered → the pre-1.0.2 behaviour**, i.e. the raw
+  puck-session values. A device that does not deliver the callback degrades to
+  the old build, not to zeros. This is the **only** condition that reaches
+  that fallback.
+- **Before the first start of all, the glass shows the raw puck values and
+  then snaps to zero.** Same rule, seen by the rider: with the field live,
+  the timer not yet started and the puck connected, there has been no
+  `onTimerStart` yet, so the count and best are the puck's — and the moment
+  the rider presses start they become this activity's, which reads as a
+  number jumping to 0. By design, not a defect, and worth knowing before
+  someone reports it as one.
+- **KNOWN AND UNFIXED:** a mid-activity restart of the data field (OOM, an
+  uncaught error, a watch reboot) rebuilds the model, re-baselines against the
+  puck's current count, and this activity's tally restarts at 0 — which then
+  reaches the saved FIT. `docs/glue-and-forget.md` §3b names the fix (persist
+  the baseline in `Application.Storage`) and also names why it is not done
+  here: doing it safely needs **session identity**, so a baseline left behind
+  by a dead run is not silently applied to the next, unrelated activity. Open
+  work. The `hasData()` guard in `compute()` still stops the *pre*-reseed zero
+  from reaching the file; it cannot stop the post-reseed one.
+
+Unit tests for all of the above: `tests/ModelTest.mc`, the
+`testActivity_*` (9) and `testErr_*` (4) blocks — including
+`testActivity_endActivityKeepsThisActivitysNumbers`, which exists because
+its predecessor asserted the *wrong* values and passed, and
+`testActivity_jumpsAfterTheResetDoNotGrowTheEndedActivity`. What is **not**
+unit-tested is anything inside `JumpFieldView` — the `onTimerStart` /
+`onTimerReset` wiring, and the object-store write and its `_errStoreDown`
+one-shot — because that class needs `WatchUi` and `Application.Storage` and
+is therefore not constructible in a `ModelTest`-style test. Those four paths
+are read-verified only, and the first saved activity is what exercises
+them.
 
 ### The watch's own barometer — fields 4-6, added 2026-09-14, NOT yet on a watch
 
@@ -382,6 +728,19 @@ with real blast radius (`sim/score.py`, `tools/ride_loop.py` and
 `tools/tests/test_fitread.py` all consume it) and was left out of this
 change on purpose.
 
+**The 1.0.2 health block reads back exactly the same way, and the same half
+is missing.** `fitread.py`'s developer-field census keys off
+`(dev_data_index, def_num)` for every `DevField` in every frame
+(`:200-211`), so `mem_used`, `link_state`, `since_puck_s`, `err_code` and
+`prev_err` appear in the printed summary and in `fit-summary.json` with
+their non-null counts and units, with no change to the tool — verified by
+reading the code, not by running it against a file that does not exist yet.
+The RECORD-scope four are **not** in `fit-records.csv` for the same
+hard-coded-column reason as the baro fields, so "plot `err_code` against the
+record timeline" still needs a one-off script. That is acceptable for a
+diagnostic that is read once when something has gone wrong, and it is the
+same follow-up.
+
 ### The wrist accelerometer — asked for, NOT shipped, and here is why
 
 The task that added the baro fields also asked for `wrist_amin_g` /
@@ -416,7 +775,13 @@ splash is the failure mode this codebase has already been bitten by twice
 from the shipped build: `WristProbe`, `onSensorData` and `SensorDataListener`
 appear **0 times** in the shipped `.prg.debug.xml` symbol table, and the
 strings `wrist_amin_g` / `wrist_amax_g` are **not present in the shipped
-`.prg` bytes** while all seven shipped field names are.
+`.prg` bytes** while every shipped field name is. Re-checked on the 1.0.2
+build (2026-09-15, `bin/JumpField-instinct.prg`, 21,404 B): all **twelve**
+shipped names present — `jump_height`, `jumps`, `best_jump`, `best_airtime`,
+`baro_alt_m`, `baro_pa`, `baro_src`, `mem_used`, `link_state`,
+`since_puck_s`, `err_code`, `prev_err` — plus the `jhErr` object-store key;
+both wrist names still absent. The two absences are only meaningful because
+the twelve presences prove the search works.
 
 **To settle it, on the Epix bench only** (a crash there costs an afternoon; on
 the water it costs a season):

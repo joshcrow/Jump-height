@@ -15,6 +15,14 @@
 // for Ns" readout, not required by spec §4.2's fixed sub-text strings, but
 // cheap to keep). JumpFieldView combines both signals to pick one of the
 // four spec §4.2 states — Model never needs to know PuckLink's state names.
+//
+// 1.0.2 (2026-09-15) added two things that are session state by the same
+// definition and so live here rather than in a new global: the per-ACTIVITY
+// view of the puck's counters (activityJumps/activityBestM/
+// activityBestAirtimeS, baselined at DataField.onTimerStart) and the sticky
+// error code every bare catch in the app reports into (noteErr/errCode, see
+// Err.mc). Both are pure state with no hardware dependency, so both are unit
+// -tested in tests/ModelTest.mc exactly like everything else here.
 
 using Toybox.System;
 import Toybox.Lang;
@@ -106,6 +114,77 @@ module Model {
                                                // gate; a nonzero value means the
                                                // link is delivering damaged data
 
+        // ---- THIS ACTIVITY, as opposed to the puck's stored session -------
+        //
+        // Added 2026-09-15, and the reason is a measured wrong number on the
+        // rider's wrist. On 09-12 the saved activity's session field
+        // best_jump was 11.131889343261719 ft — BIT-IDENTICAL to 09-10's —
+        // because the puck reports its stored session best until somebody
+        // clears it, and the fields above faithfully mirrored the puck
+        // (docs/garmin-corpus-2026-09-15.md, finding 2). A rider who has not
+        // cleared the puck since Tuesday sees Tuesday's best on Thursday's
+        // ride and it is written into Thursday's FIT.
+        //
+        // The fix is NOT to change what the wire means. _jumpCount /
+        // _sessionBestM / _bestAirtimeS above still hold exactly what the
+        // puck says about its own session, unchanged, gates and monotonic
+        // guards intact — every corruption test still exercises them. What
+        // is added is a second, narrower view taken RELATIVE TO TIMER START.
+        //
+        // Count is a subtraction (the puck's counter is the only count there
+        // is, and it is monotonic here by construction). Best height and
+        // best airtime are NOT subtractions — a maximum cannot be undone by
+        // arithmetic — so they are watch-side running maxima over the JUMP
+        // lines that arrived after the timer started. That also means they
+        // never inherit a stale puck best in the first place, which is the
+        // 09-12 failure at its root.
+        hidden var _baseJumps as Number;      // puck's raw count at timer start
+        hidden var _actBestM as Float;        // max height seen since then
+        hidden var _actBestAirtimeS as Float; // max airtime seen since then
+
+        // TWO booleans, not one, and the difference is a fixed bug (adversarial
+        // review, 2026-09-15). A single flag had to carry two unrelated facts —
+        // "this device has never delivered onTimerStart, so degrade to the
+        // pre-1.0.2 build" and "this activity has ended" — and onTimerReset
+        // therefore dropped the field back to the puck's raw, un-cleared
+        // session: the exact 09-12 symptom this version exists to kill,
+        // restored on the glass and reachable by any compute() tick that lands
+        // after the reset.
+        hidden var _actEverStarted as Boolean; // onTimerStart has fired at least
+                                               // ONCE in this run of the app.
+                                               // NEVER cleared. False is the only
+                                               // thing that falls back to the raw
+                                               // puck-session values, so a device
+                                               // that never delivers the callback
+                                               // degrades to the old build rather
+                                               // than to zeros
+        hidden var _actStarted as Boolean;     // currently INSIDE an activity:
+                                               // set by beginActivity, cleared by
+                                               // endActivity. Governs whether a
+                                               // new onTimerStart re-baselines
+                                               // (it is a fresh activity) or is a
+                                               // mid-ride stop/start (it is not)
+        hidden var _endJumps as Number;        // activityJumps() frozen at
+                                               // endActivity, so the just-ended
+                                               // activity's count stays correct
+                                               // even if the puck keeps counting
+                                               // between the reset and the next
+                                               // start
+        hidden var _baselineArmed as Boolean; // timer started with no puck data
+                                               // yet; the first line that arrives
+                                               // supplies the baseline
+
+        // Sticky MAX of the error classes caught anywhere in the app during
+        // this RUN of it (Err.mc — the scope is per run, not per activity,
+        // and nothing here clears it at an activity boundary; see that
+        // file's SCOPE note). Lives here because Model.State is the one object
+        // every other part already holds a reference to — PuckLink is
+        // constructed with it, JumpFieldView owns it, FitOut is handed it —
+        // so no new global, no module-level function called from a nested
+        // class (the exact shape that threw `System Error: Failed invoking
+        // <symbol>` on silicon; see this file's inline-kv note above).
+        hidden var _errCode as Number;
+
         function initialize() {
             _lastHeightM = 0.0;
             _lastAirtimeS = 0.0;
@@ -120,6 +199,122 @@ module Model {
             _puckCharging = false;
             _flashUntilMs = 0;
             _newJumpPending = false;
+            _baseJumps = 0;
+            _actBestM = 0.0;
+            _actBestAirtimeS = 0.0;
+            _actEverStarted = false;
+            _actStarted = false;
+            _endJumps = 0;
+            _baselineArmed = false;
+            _errCode = 0;
+        }
+
+        // ---- error sink (Err.mc) ------------------------------------------
+
+        // Sticky max. Called from inside bare catch blocks, so it must not be
+        // able to throw: one comparison, one assignment, no allocation.
+        function noteErr(code as Number) as Void {
+            if (code > _errCode) { _errCode = code; }
+        }
+
+        function errCode() as Number { return _errCode; }
+
+        // ---- per-activity session (DataField.onTimerStart/onTimerReset) ----
+
+        // The activity timer went from stopped to started. Take the baseline
+        // now if the puck is already talking; otherwise ARM, and the first
+        // line to arrive supplies it (PuckLink writes `stats` once per
+        // connect, so in practice that is a STATS).
+        //
+        // Called only for the FIRST start of an ACTIVITY — a stop/start in
+        // the middle of a ride must NOT re-baseline the count to zero. The
+        // caller uses activityStarted(), which is true only between
+        // beginActivity and endActivity, so a resume is a no-op and the
+        // first start after a reset re-baselines. onTimerReset ("the current
+        // activity has ended", SDK doc/Toybox/WatchUi/DataField.html) is the
+        // only thing that re-arms it.
+        function beginActivity() as Void {
+            _actEverStarted = true;
+            _actStarted = true;
+            _actBestM = 0.0;
+            _actBestAirtimeS = 0.0;
+            _endJumps = 0;
+            if (hasData()) {
+                _baseJumps = _jumpCount;
+                _baselineArmed = false;
+            } else {
+                _baseJumps = 0;
+                _baselineArmed = true;
+            }
+        }
+
+        // The activity ended. It does NOT drop back to the raw puck-session
+        // view — that fallback exists only for a device that has never
+        // delivered onTimerStart at all (_actEverStarted). Dropping back here
+        // would put the puck's un-cleared, possibly days-old best back on the
+        // glass, and into the SESSION fields of any compute() tick that lands
+        // between the reset and the save.
+        //
+        // The baseline and both maxima are RETAINED, and the count is frozen
+        // at what it was, so the just-ended activity's numbers stay correct
+        // and stay still — a jump landed in the gap before the next start
+        // belongs to neither activity, and must not creep into the one that
+        // is over.
+        function endActivity() as Void {
+            _endJumps = activityJumps();
+            _actStarted = false;
+            _baselineArmed = false;
+        }
+
+        // True only INSIDE an activity. Not "has an activity ever started" —
+        // see the two flags' declarations.
+        function activityStarted() as Boolean { return _actStarted; }
+
+        // True once onTimerStart has ever fired in this run. Exposed for the
+        // tests, and because "which fallback am I in" is a question a reader
+        // of this class will ask.
+        function activityEverStarted() as Boolean { return _actEverStarted; }
+
+        // Jumps in THIS activity. Clamped at zero: the raw count is already
+        // monotonic (the F-11 guards in _applyJump/_applyStats refuse any
+        // decrease), so a puck that reboots mid-activity and comes back
+        // reporting session_jumps=0 cannot drive this negative — it cannot
+        // move the raw count at all. The clamp is belt-and-braces for the one
+        // case the guards do not cover: a baseline taken from a HIGHER count
+        // than we later hold, which no code path produces today.
+        function activityJumps() as Number {
+            if (!_actEverStarted) { return _jumpCount; }   // pre-1.0.2 fallback
+            if (!_actStarted) { return _endJumps; }        // frozen at reset
+            var n = _jumpCount - _baseJumps;
+            return (n > 0) ? n : 0;
+        }
+
+        // KNOWN, UNFIXED, AND DELIBERATELY NOT PAPERED OVER: a mid-activity
+        // restart of the data field (OOM, an uncaught error, a watch reboot)
+        // builds a fresh State, re-baselines against the puck's current
+        // count, and this activity's jump tally restarts at 0 — which is
+        // then written into the saved FIT. docs/glue-and-forget.md §3b
+        // names the fix (persist the baseline in Application.Storage) and
+        // also names why it is not done here: doing it safely needs SESSION
+        // IDENTITY, so that a baseline left behind by a dead run is not
+        // silently applied to the next, unrelated activity. That is open
+        // work, not something to guess at inside this change. The
+        // hasData() guard in JumpFieldView.compute() still stops the
+        // pre-reseed zero from reaching the file; it cannot stop the
+        // post-reseed one.
+
+        // Best height / airtime in THIS activity, in metres and seconds.
+        // Falls back to the whole-puck-session value ONLY when no timer-start
+        // callback has ever arrived, so the old behaviour is still reachable
+        // and nothing is lost on a device that does not deliver the event —
+        // and, critically, an activity that has ENDED keeps its own maxima
+        // rather than reverting to the puck's stale session best.
+        function activityBestM() as Float {
+            return _actEverStarted ? _actBestM : _sessionBestM;
+        }
+
+        function activityBestAirtimeS() as Float {
+            return _actEverStarted ? _actBestAirtimeS : _bestAirtimeS;
         }
 
         // Consume one parsed line. Unknown tags (READY, STATE, INFO, PARAMS,
@@ -259,6 +454,29 @@ module Model {
             // adopt HIGHER totals, which is why this is > and not "ignore".
             if (b != null && b > _sessionBestM) { _sessionBestM = b; }
             if (n != null && n > _jumpCount) { _jumpCount = n; }
+            // THIS ACTIVITY. A JUMP line that arrives now is a jump that
+            // happened now, so it counts even if the baseline was still
+            // armed: consume the arm at n-1 so this jump reads as the
+            // activity's first, rather than being swallowed by a baseline
+            // taken after the fact. (In practice STATS wins the race —
+            // PuckLink writes `stats` on subscribe — but "in practice" is
+            // not a guarantee and this costs two lines.)
+            if (_baselineArmed) {
+                _baselineArmed = false;
+                _baseJumps = (_jumpCount > 0) ? _jumpCount - 1 : 0;
+            }
+            // Running maxima, not subtractions — see the field declarations.
+            // Fed only from values that already cleared the corruption gate
+            // above, so the same physical bounds and the same wire invariant
+            // protect them. Gated on _actStarted, which matches the frozen
+            // count in activityJumps(): a jump that lands after onTimerReset
+            // belongs to no activity and must not grow the finished one's
+            // best. (In the never-started case the accessors return the raw
+            // puck values, so nothing reads these anyway.)
+            if (_actStarted) {
+                if (_lastHeightM > _actBestM) { _actBestM = _lastHeightM; }
+                if (_lastAirtimeS > _actBestAirtimeS) { _actBestAirtimeS = _lastAirtimeS; }
+            }
             var now = System.getTimer();
             _lastUpdateMs = now;
             _flashUntilMs = now + Model.FLASH_MS;  // fully qualified even though
@@ -330,6 +548,23 @@ module Model {
             var b = _toFloat(kv.get("session_best_m"));
             if (n != null && n > _jumpCount) { _jumpCount = n; }
             if (b != null && b > _sessionBestM) { _sessionBestM = b; }
+            // THIS ACTIVITY: the armed baseline is taken here, from the
+            // reseed the puck sends on every connect. Everything the puck
+            // counted BEFORE this moment belongs to a previous ride — which
+            // is exactly the 09-12 failure, where a two-day-old best was
+            // written into a fresh activity's session field. Note what is
+            // NOT taken: session_best_m never seeds _actBestM. A maximum
+            // from before the timer started is not this activity's maximum,
+            // and no arithmetic can separate the two.
+            //
+            // Cost, stated plainly: a jump that lands between timer start
+            // and the first puck connect is baselined away on the wrist. The
+            // puck's own stored record still has it, and a rider who starts
+            // the watch before waking the board loses nothing.
+            if (_baselineArmed) {
+                _baselineArmed = false;
+                _baseJumps = _jumpCount;
+            }
             // Best-airtime reseed (adder key, firmware >= 2026-08-18). Found by
             // parsing the M2 activity FIT: best_jump reconciled to the stored
             // best while best_airtime stayed at the live-seen max, because

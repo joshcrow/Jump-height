@@ -111,6 +111,16 @@ class PuckLink extends Ble.BleDelegate {
     hidden var _resumeScanAtMs as Number;   // System.getTimer() deadline; 0 = none
     hidden var _connectDeadlineMs as Number;  // same clock; 0 = not connecting
 
+    // System.getTimer() at the moment the last COMPLETE line was reassembled
+    // off the wire; null until the first one. Feeds the since_puck_s FIT
+    // health field (1.0.2) — "when did this watch last hear anything at all
+    // from the puck", which is a different and blunter question than
+    // Model.hasData() ("has it ever") or state() ("does the radio think it
+    // is connected"). A link that is LIVE while this climbs is a puck that
+    // has gone quiet with the connection still up, and nothing in the FIT
+    // could say that before.
+    hidden var _lastLineMs;
+
     // model: Model.State to feed parsed lines into. puckName: the
     // resources/settings puckName property value (name-match fallback).
     function initialize(model, puckName as String) {
@@ -122,6 +132,7 @@ class PuckLink extends Ble.BleDelegate {
         _backoffMs = BACKOFF_MIN_MS;
         _resumeScanAtMs = 0;
         _connectDeadlineMs = 0;
+        _lastLineMs = null;
         _device = null;
         _txChar = null;
         _rxChar = null;
@@ -151,6 +162,7 @@ class PuckLink extends Ble.BleDelegate {
         try {
             n = _device.getName();
         } catch (e) {
+            _model.noteErr(Err.E_BLE_NAME);
             return "";
         }
         if (n == null) { return ""; }
@@ -163,6 +175,15 @@ class PuckLink extends Ble.BleDelegate {
 
     function state() as Number {
         return _state;
+    }
+
+    // Milliseconds since the last complete line arrived from the puck, or
+    // null if none ever has. System.getTimer() is a free-running millisecond
+    // counter that wraps, so a negative answer is possible across a wrap and
+    // the caller saturates rather than trusting the sign.
+    function msSinceLastLine() {
+        if (_lastLineMs == null) { return null; }
+        return System.getTimer() - _lastLineMs;
     }
 
     // Called once from JumpFieldApp.onStart() (spec 5.4/9 -- BLE "pairing
@@ -187,6 +208,7 @@ class PuckLink extends Ble.BleDelegate {
             // _state stays IDLE until onProfileRegister() confirms success --
             // scanning only starts from a confirmed-good profile.
         } catch (ex) {
+            _model.noteErr(Err.E_BLE_REGISTER);
             _state = STATE_DEAD;
         }
     }
@@ -197,6 +219,7 @@ class PuckLink extends Ble.BleDelegate {
             Ble.setScanState(Ble.SCAN_STATE_OFF);
         } catch (ex) {
             // nothing to do -- we're stopping anyway
+            _model.noteErr(Err.E_BLE_STOP);
         }
         _connectDeadlineMs = 0;
         _state = STATE_IDLE;
@@ -246,6 +269,7 @@ class PuckLink extends Ble.BleDelegate {
                 Ble.unpairDevice(_device);
             } catch (ex) {
                 // already gone / never paired -- rescanning regardless
+                _model.noteErr(Err.E_BLE_UNPAIR);
             }
             _device = null;
         }
@@ -345,6 +369,7 @@ class PuckLink extends Ble.BleDelegate {
         try {
             Ble.setScanState(Ble.SCAN_STATE_SCANNING);
         } catch (ex) {
+            _model.noteErr(Err.E_BLE_SCAN_ON);
             _scheduleRescan();
         }
     }
@@ -361,6 +386,7 @@ class PuckLink extends Ble.BleDelegate {
             Ble.setScanState(Ble.SCAN_STATE_OFF);
         } catch (ex) {
             // already off / never on -- fine
+            _model.noteErr(Err.E_BLE_SCAN_OFF);
         }
         _resumeScanAtMs = System.getTimer() + _backoffMs;
         if (_backoffMs < BACKOFF_MAX_MS) {
@@ -404,6 +430,7 @@ class PuckLink extends Ble.BleDelegate {
             }
             // else: wait for onConnectedStateChanged()
         } catch (ex) {
+            _model.noteErr(Err.E_BLE_CONNECT);
             _scheduleRescan();
         }
     }
@@ -443,6 +470,7 @@ class PuckLink extends Ble.BleDelegate {
             cccd.requestWrite(CCCD_ENABLE);
             // wait for onDescriptorWrite()
         } catch (ex) {
+            _model.noteErr(Err.E_BLE_SUBSCRIBE);
             _scheduleRescan();
         }
     }
@@ -459,6 +487,7 @@ class PuckLink extends Ble.BleDelegate {
         } catch (ex) {
             // Worst case STATS doesn't reseed until the next reconnect --
             // jumps still show live either way.
+            _model.noteErr(Err.E_BLE_STATS_WRITE);
         }
     }
 
@@ -488,6 +517,7 @@ class PuckLink extends Ble.BleDelegate {
                 :toRepresentation => StringUtil.REPRESENTATION_STRING_PLAIN_TEXT
             });
         } catch (ex) {
+            _model.noteErr(Err.E_DECODE);
             return;  // an undecodable chunk -- drop it; the next chunk still
                      // resyncs cleanly on the next '\n'
         }
@@ -500,10 +530,19 @@ class PuckLink extends Ble.BleDelegate {
         // one line, and the reader resyncs on the next '\n'.
         try {
             var lines = _reader.feed(text);
+            if (lines.size() > 0) {
+                // Stamped on the LINE, not on the chunk: a half-line of
+                // bytes is not the puck saying anything yet. Set before the
+                // parse loop so a line that throws downstream still counts
+                // as "we heard from the puck" -- since_puck_s measures the
+                // radio, err_code measures what happened to the bytes.
+                _lastLineMs = System.getTimer();
+            }
             for (var i = 0; i < lines.size(); i += 1) {
                 _model.onLine(Protocol.parseKV(lines[i]));
             }
         } catch (ex) {
+            _model.noteErr(Err.E_PARSE);
             return;
         }
     }

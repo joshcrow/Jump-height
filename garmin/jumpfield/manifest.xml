@@ -20,15 +20,28 @@
       [0-9]+\.[0-9]+\.[0-9]+(\.[0-9a-zA-Z_]+)? — this project just never set
       one. So 1.0.0 is RETROACTIVE, not historical: it names the build Garmin
       approved on 2026-08-25, which carried no version attribute at all. 1.0.1
-      is this build: three new FIT developer fields (baro_alt_m, baro_pa,
-      baro_src), nothing removed, no change to the glass, no change to the
-      approved permission set. Bump the patch level on any change under
-      source/, and remember the STORE's own version field is entered on the
-      developer portal at upload — this attribute does not set it.
+      was the 2026-09-14 build: three new FIT developer fields (baro_alt_m,
+      baro_pa, baro_src), nothing removed, no change to the glass, no change
+      to the approved permission set.
+
+      1.0.2 is THIS build (2026-09-15): five more FIT developer fields, the
+      health block (mem_used, link_state, since_puck_s, err_code, prev_err —
+      ids 9-13), and a change to what the three EXISTING session fields
+      MEAN — jumps/best_jump/best_airtime now describe this activity rather
+      than the puck's stored session, baselined at DataField.onTimerStart.
+      Still nothing removed, still no change to the permission set. It does
+      change what is on the glass, in one narrow sense worth saying out loud
+      for the listing: the jump count and the best shown on the wrist are
+      now this ride's, so a rider who has not cleared the puck no longer
+      sees Tuesday's best on Thursday.
+
+      Bump the patch level on any change under source/, and remember the
+      STORE's own version field is entered on the developer portal at
+      upload — this attribute does not set it.
     -->
     <iq:application entry="JumpFieldApp" id="873B577243574E27AB454C3FF165E7B4"
                      name="@Strings.AppName" type="datafield" minSdkVersion="3.1.0"
-                     version="1.0.1"
+                     version="1.0.2"
                      launcherIcon="@Drawables.LauncherIcon">
         <!--
           Instinct 3 Solar only for M0-M4 (spec §5.1: "Instinct correctness
