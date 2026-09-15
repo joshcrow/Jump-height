@@ -5,6 +5,9 @@
   "blocks": 611,
   "sha256": "45dda1f7f49b0c9fb55c58446bf462581aa0b37be9aec66c7c08ae332c1ef6bd",
   "family": "0xADA52840",
+  "dfu_file": "jumpheight-c5eea285.zip",
+  "dfu_bytes": 157102,
+  "dfu_sha256": "a5cdd54711430167e506b8056efd4f0ad0335b4b595bdaadb35f3a23ef9eafd1",
   "built_utc": "2026-09-15T04:02:15Z",
   "replaces": [
     "5c80a436",

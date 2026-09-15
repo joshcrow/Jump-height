@@ -862,7 +862,19 @@ by itself after 6 min 40 s; the night before it was still wedged after
 66 min, so self-recovery cannot be relied on. The bootloader's serial port
 is live throughout and speaks Nordic serial DFU, which is the unattended
 way out; the 1200-baud touch cannot reach it (by design, main.cpp:1309).
-`flash.py` now reads idProduct to say WHICH failure it is.
+`flash.py` reads idProduct to say WHICH failure it is, and when the
+board is in its bootloader with no disk it falls back to Nordic serial DFU
+(adafruit-nrfutil, vendored in the app as the `nordicsemi` module;
+`web/firmware/latest.json` carries `dfu_file`/`dfu_sha256`, sha256-gated
+like the .uf2; success is ONLY the literal `Device programmed.` line, then
+the normal port-return and `info` check). Measured on the bench 2026-09-15:
+the faithful wedge (no disk for the full 30 s) recovered by serial DFU in
+10.6 s, `src=c5eea285` after. Unmeasured: whether serial DFU survives the
+kernel's actual MODE SENSE retry loop (the fallback was exercised by
+blinding flash() to the disk, which did not reproduce the kernel state);
+one DFU attempt started mid-mount died at packet 23 and exited 0 (the
+marker rule caught it); after that pair the board sat in its bootloader
+12 min before a manual write recovered it (n=1).
 
 **Not yet measured, in the order they cost:** the real Puck (board was
 unplugged all night — rehearse `python3 -m puckd once <port>` first, then

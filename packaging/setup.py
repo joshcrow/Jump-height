@@ -176,6 +176,10 @@ OPTIONS = {
             # garminconnect's source, so modulegraph finds them from here;
             # the four below are the roots it cannot reach on its own.
             "garminconnect",
+            "nordicsemi",     # adafruit-nrfutil as a module: the serial-DFU fallback for a wedged bootloader
+            "click",
+            "ecdsa",
+            "six",
             "curl_cffi",
             "_cffi_backend",
             "ua_generator",

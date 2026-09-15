@@ -25,6 +25,7 @@ from __future__ import annotations
 import errno
 import hashlib
 import http.server
+import os
 import json
 import socket
 import sys
@@ -38,6 +39,24 @@ REPO = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO / "tools"))
 
 from puckd import flash  # noqa: E402
+
+# A net under every test in this file: flash.py's default log sink is
+# PUCKD_HOME/daemon.log (flash._default_log), the file Josh reads over the
+# phone. A test that forgets to inject `log=` would otherwise append to the
+# REAL one — which happened once while these seams were being written.
+_LOG_SANDBOX = None
+
+
+def setUpModule():  # noqa: N802 -- unittest's own spelling
+    global _LOG_SANDBOX
+    _LOG_SANDBOX = tempfile.TemporaryDirectory()
+    os.environ["PUCKD_HOME"] = _LOG_SANDBOX.name
+
+
+def tearDownModule():  # noqa: N802
+    os.environ.pop("PUCKD_HOME", None)
+    if _LOG_SANDBOX is not None:
+        _LOG_SANDBOX.cleanup()
 
 
 # --------------------------------------------------------------------------
@@ -507,6 +526,13 @@ class TestFlashSequence(unittest.TestCase):
             now=clock.now,
             volume_wait_s=5.0,
             poll_interval_s=1.0,
+            # Injected, or this unit test shells out to the real `ioreg`
+            # and appends a line to the real PUCKD_HOME/daemon.log — which
+            # it did, once, before these seams existed.
+            ioreg_fn=lambda: "",
+            log=lambda msg: None,
+            run_dfu=lambda argv, t: (_ for _ in ()).throw(
+                AssertionError("no DFU without an identified bootloader")),
         )
         self.assertFalse(result.ok)
         self.assertEqual(result.stage_reached, flash.STAGE_VOLUME_WAIT)
@@ -877,3 +903,541 @@ class ReplacesGate(unittest.TestCase):
     def test_a_manifest_without_replaces_keeps_the_old_rule(self):
         self.assertTrue(flash.needs_update("anything", {"src": "c5eea285"}))
         self.assertFalse(flash.needs_update("c5eea285", {"src": "c5eea285"}))
+
+
+# ==========================================================================
+# THE POST-`uf2` "SILENT PUCK" (docs/STATUS.md, 2026-09-15) and the
+# serial-DFU fallback out of it.
+#
+# The two ioreg fixtures below are REAL captures from the bench Puck on
+# 2026-09-15, trimmed to the XIAO's own device block: one with the app
+# running, one with the bootloader. Note what is IDENTICAL in them -- the
+# product string, the locationID, and kUSBSerialNumberString. Only
+# idProduct differs (32837 = 0x8045 app, 69 = 0x0045 bootloader). That is
+# the whole finding, and a fabricated fixture would have hidden it.
+# ==========================================================================
+
+_IOREG_HEAD = """+-o Root  <class IORegistryEntry, id 0x100000100, retain 20>
+  +-o AppleT6000USBXHCI@01000000  <class AppleT6000USBXHCI, id 0x10001a1f0, registered, matched, active, busy 0, retain 41>
+      {
+        "idProduct" = 33267
+        "USB Product Name" = "USB3.1 Hub"
+      }
+"""
+
+_IOREG_XIAO_APP = """    +-o XIAO nRF52840 Sense@00100000  <class IOUSBHostDevice, id 0x10001b583, registered, matched, active, busy 0 (258 ms), retain 31>
+        {
+          "sessionID" = 6159595498528
+          "idProduct" = 32837
+          "USB Product Name" = "XIAO nRF52840 Sense"
+          "locationID" = 1048576
+          "kUSBSerialNumberString" = "2513620E30AE413D"
+          "idVendor" = 10374
+        }
+"""
+
+_IOREG_XIAO_BOOTLOADER = """    +-o XIAO nRF52840 Sense@00100000  <class IOUSBHostDevice, id 0x10001abca, registered, matched, active, busy 0 (2300 ms), retain 37>
+        {
+          "sessionID" = 6151661472547
+          "idProduct" = 69
+          "USB Product Name" = "XIAO nRF52840 Sense"
+          "locationID" = 1048576
+          "kUSBSerialNumberString" = "2513620E30AE413D"
+          "idVendor" = 10374
+        }
+"""
+
+# A SECOND board, at another USB location -- CLAUDE.md §1's "three boards
+# can advertise at once", the collision that has already flashed one wrong
+# board. locationID 0x14200000 -> /dev/cu.usbmodem142<NN>.
+_IOREG_XIAO_SECOND_APP = """    +-o XIAO nRF52840 Sense@14200000  <class IOUSBHostDevice, id 0x10001c001, registered, matched, active, busy 0 (240 ms), retain 31>
+        {
+          "sessionID" = 7159595498528
+          "idProduct" = 32837
+          "USB Product Name" = "XIAO nRF52840 Sense"
+          "locationID" = 337641472
+          "kUSBSerialNumberString" = "9999999999999999"
+          "idVendor" = 10374
+        }
+"""
+
+
+class TestUsbProductId(unittest.TestCase):
+    """idProduct is the ONLY thing that separates a puck sitting in its
+    bootloader from a puck that ignored `uf2` -- same port name, same USB
+    serial, same product string."""
+
+    def test_app_reads_0x8045(self):
+        text = _IOREG_HEAD + _IOREG_XIAO_APP
+        self.assertEqual(
+            flash.usb_product_id("/dev/cu.usbmodem101", ioreg_fn=lambda: text),
+            flash.PID_APP)
+        self.assertEqual(flash.PID_APP, 0x8045)
+
+    def test_bootloader_reads_0x0045(self):
+        text = _IOREG_HEAD + _IOREG_XIAO_BOOTLOADER
+        self.assertEqual(
+            flash.usb_product_id("/dev/cu.usbmodem101", ioreg_fn=lambda: text),
+            flash.PID_BOOTLOADER)
+        self.assertEqual(flash.PID_BOOTLOADER, 0x0045)
+
+    def test_no_xiao_on_usb_is_none(self):
+        self.assertIsNone(
+            flash.usb_product_id("/dev/cu.usbmodem101",
+                                 ioreg_fn=lambda: _IOREG_HEAD))
+
+    def test_unreadable_ioreg_is_none_not_a_raise(self):
+        self.assertIsNone(
+            flash.usb_product_id("/dev/cu.usbmodem101", ioreg_fn=lambda: ""))
+
+    def test_the_port_picks_between_two_boards(self):
+        """One board in its bootloader at 0x00100000, another running the
+        app at 0x14200000: the answer must be the board whose port we were
+        given, not whichever ioreg printed first."""
+        text = _IOREG_HEAD + _IOREG_XIAO_BOOTLOADER + _IOREG_XIAO_SECOND_APP
+        self.assertEqual(
+            flash.usb_product_id("/dev/cu.usbmodem101", ioreg_fn=lambda: text),
+            flash.PID_BOOTLOADER)
+        self.assertEqual(
+            flash.usb_product_id("/dev/cu.usbmodem14201", ioreg_fn=lambda: text),
+            flash.PID_APP)
+
+    def test_two_disagreeing_boards_and_no_port_match_is_none(self):
+        """Never guess between boards. None here means "could not tell",
+        which flash() reports as such -- it does NOT mean 0x0045, and so it
+        can never start a serial DFU into an unidentified board."""
+        text = _IOREG_HEAD + _IOREG_XIAO_BOOTLOADER + _IOREG_XIAO_SECOND_APP
+        self.assertIsNone(
+            flash.usb_product_id("/dev/cu.usbmodem9999", ioreg_fn=lambda: text))
+
+    def test_two_agreeing_boards_and_no_port_match_still_answers(self):
+        text = _IOREG_HEAD + _IOREG_XIAO_APP + _IOREG_XIAO_SECOND_APP
+        self.assertEqual(
+            flash.usb_product_id("/dev/cu.usbmodem9999", ioreg_fn=lambda: text),
+            flash.PID_APP)
+
+    def test_port_prefix_from_location_id(self):
+        """Measured: locationID 0x00100000 -> /dev/cu.usbmodem101."""
+        self.assertEqual(flash._port_prefix_for_location("00100000"),
+                          "/dev/cu.usbmodem1")
+        self.assertEqual(flash._port_prefix_for_location("14200000"),
+                          "/dev/cu.usbmodem142")
+        self.assertTrue("/dev/cu.usbmodem101".startswith(
+            flash._port_prefix_for_location("00100000")))
+
+    def test_the_real_ioreg_default_is_not_used_when_injected(self):
+        """A unit test must never shell out. If ioreg_fn is honoured, a
+        fixture that names no XIAO answers None even on a bench where a
+        real puck is plugged in."""
+        self.assertIsNone(flash.usb_product_id("/dev/cu.usbmodem101",
+                                                ioreg_fn=lambda: "nothing here"))
+
+
+# A manifest that also publishes the serial-DFU package.
+DFU_MANIFEST_EXTRA = {
+    "dfu_file": "jumpheight-54c6826d.zip",
+    "dfu_bytes": 157102,
+    "dfu_sha256": "0" * 64,   # replaced per-test with the real hash
+}
+
+
+class _DfuHarness(unittest.TestCase):
+    """Shared wiring for the fallback: the volume NEVER appears, so every
+    test here goes down the stage-4b path (or is refused before it)."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmpdir.name)
+        self.addCleanup(self._tmpdir.cleanup)
+        self.uf2 = _make_uf2(self.tmp)
+        self.zip_bytes = b"PK\x03\x04 not really a zip, but a real sha256" * 40
+        self.zip_name = "jumpheight-54c6826d.zip"
+        self.zip_sha = hashlib.sha256(self.zip_bytes).hexdigest()
+        self.manifest = dict(REAL_MANIFEST,
+                             sha256=_sha256_of(self.uf2),
+                             dfu_file=self.zip_name,
+                             dfu_bytes=len(self.zip_bytes),
+                             dfu_sha256=self.zip_sha)
+        self.port = "/dev/cu.usbmodem101"
+        self.logs = []
+        self.dfu_runs = []
+
+    def _ioreg(self, pid_block):
+        return lambda: _IOREG_HEAD + pid_block
+
+    def _run_dfu(self, output, code=0):
+        def runner(argv, timeout_s):
+            self.dfu_runs.append((list(argv), timeout_s))
+            return code, output
+        return runner
+
+    def _cache_the_zip(self):
+        (self.tmp / self.zip_name).write_bytes(self.zip_bytes)
+
+    def _flash(self, **overrides):
+        calls = []
+        clock = _FakeClock()
+        kwargs = dict(
+            device_factory=_device_factory(
+                {self.port: {"info": [
+                    f"INFO src={self.manifest['src']} fw=0.5.0 sample_hz=50"]}},
+                calls),
+            scan_ports=lambda: [self.port],
+            volume_exists=lambda: False,
+            list_disks=lambda: "",
+            mount_volume=lambda: None,
+            copy_file=lambda src, dst: self.fail(
+                "the copy stage must not run when no volume appeared"),
+            sleep=clock.sleep,
+            now=clock.now,
+            volume_wait_s=5.0,
+            poll_interval_s=1.0,
+            ioreg_fn=self._ioreg(_IOREG_XIAO_BOOTLOADER),
+            dfu_cache_dir=self.tmp,
+            site_url="http://127.0.0.1:1",
+            fetch_fn=lambda site, name, dest: self.fail(
+                "unexpected fetch of " + name),
+            run_dfu=self._run_dfu("nothing useful"),
+            nrfutil_path="/fake/adafruit-nrfutil",
+            log=self.logs.append,
+        )
+        kwargs.update(overrides)
+        return flash.flash(self.port, self.uf2, self.manifest, **kwargs), calls
+
+
+class TestVolumeWaitNamesTheFailure(_DfuHarness):
+    """Part 1: three faults that looked identical now say which they are."""
+
+    def test_app_still_running_says_it_did_not_enter_update_mode(self):
+        result, _ = self._flash(
+            ioreg_fn=self._ioreg(_IOREG_XIAO_APP),
+            run_dfu=lambda argv, t: self.fail("no DFU from the app state"))
+        self.assertFalse(result.ok)
+        self.assertEqual(result.stage_reached, flash.STAGE_VOLUME_WAIT)
+        self.assertIn("the puck did not enter update mode", result.error)
+        self.assertIn("0x8045", result.error)
+        self.assertTrue(any("did not enter update mode" in line
+                            for line in self.logs), self.logs)
+
+    def test_bootloader_says_this_mac_made_no_disk(self):
+        self._cache_the_zip()
+        result, _ = self._flash(
+            run_dfu=self._run_dfu("Failed to upgrade target. Error is: nope"))
+        self.assertFalse(result.ok)
+        self.assertIn("the puck is in update mode but this Mac made no disk",
+                       result.error)
+        self.assertIn("0x0045", result.error)
+        self.assertTrue(any("made no disk" in line for line in self.logs),
+                        self.logs)
+
+    def test_nothing_on_usb_says_puck_not_found(self):
+        result, _ = self._flash(
+            ioreg_fn=lambda: _IOREG_HEAD,
+            run_dfu=lambda argv, t: self.fail("no DFU into an unknown board"))
+        self.assertFalse(result.ok)
+        self.assertEqual(result.stage_reached, flash.STAGE_VOLUME_WAIT)
+        self.assertIn("puck not found on USB", result.error)
+        self.assertIn("none", result.error)
+
+    def test_an_ioreg_that_raises_is_a_finding_not_a_crash(self):
+        def boom(_port):
+            raise OSError("ioreg exploded")
+        result, _ = self._flash(
+            usb_product_id_fn=boom,
+            run_dfu=lambda argv, t: self.fail("no DFU without an identity"))
+        self.assertFalse(result.ok)
+        self.assertEqual(result.stage_reached, flash.STAGE_VOLUME_WAIT)
+        self.assertIn("puck not found on USB", result.error)
+        self.assertTrue(any("could not read idProduct" in line
+                            for line in self.logs), self.logs)
+
+    def test_the_timeout_sentence_survives(self):
+        """The new diagnosis is added to the old message, not instead of
+        it: a reader still learns the volume never appeared and how long
+        flash() waited."""
+        result, _ = self._flash(
+            ioreg_fn=self._ioreg(_IOREG_XIAO_APP),
+            run_dfu=lambda argv, t: self.fail("no DFU"))
+        self.assertIn("/Volumes/XIAO-SENSE never appeared within 5s",
+                       result.error)
+
+
+class TestSerialDfuFallback(_DfuHarness):
+    """Part 2: the way out of the wedge."""
+
+    def test_marker_line_carries_on_to_port_wait_and_info(self):
+        self._cache_the_zip()
+        result, calls = self._flash(
+            run_dfu=self._run_dfu(
+                "########\nActivating new firmware\nDevice programmed.\n"))
+        self.assertTrue(result.ok, result.error)
+        self.assertEqual(result.stage_reached, flash.STAGE_DONE)
+        self.assertEqual(result.src_after, self.manifest["src"])
+        # It really did run the uploader, and really did read info back.
+        self.assertEqual(len(self.dfu_runs), 1)
+        self.assertIn(("command", self.port, "info", flash._INFO_TIMEOUT_S),
+                       calls)
+
+    def test_the_exact_command_line(self):
+        """--singlebank, 115200, and NO --touch: the board is already in
+        DFU, PlatformIO's own uploader passes no touch for this board, and
+        the 1200-baud touch was measured doing nothing to this bootloader."""
+        self._cache_the_zip()
+        self._flash(run_dfu=self._run_dfu("Device programmed."))
+        argv, timeout_s = self.dfu_runs[0]
+        self.assertEqual(argv[:3], ["/fake/adafruit-nrfutil", "dfu", "serial"])
+        self.assertIn("--package", argv)
+        self.assertEqual(argv[argv.index("--package") + 1],
+                          str(self.tmp / self.zip_name))
+        self.assertEqual(argv[argv.index("--port") + 1], self.port)
+        self.assertEqual(argv[argv.index("-b") + 1], "115200")
+        self.assertIn("--singlebank", argv)
+        self.assertNotIn("--touch", argv)
+        self.assertEqual(timeout_s, 180.0)
+
+    def test_rc_zero_without_the_marker_is_a_failure(self):
+        """bench-playbook.md:150-152. Measured again 2026-09-15: a serial
+        DFU that died at packet 23 with "No data received on serial port"
+        still exited 0. The return code is not the verdict."""
+        self._cache_the_zip()
+        result, _ = self._flash(
+            run_dfu=self._run_dfu(
+                "#######################\n"
+                "Failed to upgrade target. Error is: No data received on "
+                "serial port. Not able to proceed.\n", code=0))
+        self.assertFalse(result.ok)
+        self.assertEqual(result.stage_reached, flash.STAGE_DFU_SERIAL)
+        self.assertIn("No data received", result.error)
+        self.assertIn("Device programmed.", result.error)
+
+    def test_a_marker_in_a_timeout_message_is_not_invented(self):
+        self._cache_the_zip()
+        result, _ = self._flash(
+            run_dfu=self._run_dfu(
+                "adafruit-nrfutil did not finish within 180s", code=124))
+        self.assertFalse(result.ok)
+        self.assertEqual(result.stage_reached, flash.STAGE_DFU_SERIAL)
+        self.assertIn("did not finish", result.error)
+
+    def test_a_programmed_board_that_never_answers_is_still_a_failure(self):
+        """MEASURED ON THE BENCH 2026-09-15: `Device programmed.` and the
+        puck stayed in its bootloader. Programmed is not "came back", and
+        only stage 6 may say ok=True."""
+        self._cache_the_zip()
+
+        def scan_ports():
+            # The bootloader's CDC node is there for the upload; nothing
+            # comes back after it.
+            return [] if self.dfu_runs else [self.port]
+
+        result, _ = self._flash(
+            run_dfu=self._run_dfu("Device programmed."),
+            scan_ports=scan_ports,
+            port_wait_s=5.0)
+        self.assertEqual(len(self.dfu_runs), 1, "the upload must have run")
+        self.assertFalse(result.ok)
+        self.assertEqual(result.stage_reached, flash.STAGE_PORT_WAIT)
+
+    def test_the_fallback_waits_for_the_bootloader_cdc_node(self):
+        """MEASURED 2026-09-15: idProduct flipped to 0x0045 at 0.68 s and
+        /dev/cu.usbmodem101 only came back at 0.91 s. A fallback fired at
+        0.68 s died on "could not open port … [Errno 2]" — our impatience
+        reading as "serial DFU does not work on this Mac"."""
+        self._cache_the_zip()
+        appearances = {"n": 0}
+
+        def scan_ports():
+            appearances["n"] += 1
+            return [self.port] if appearances["n"] > 3 else []
+
+        result, _ = self._flash(run_dfu=self._run_dfu("Device programmed."),
+                                 scan_ports=scan_ports)
+        self.assertTrue(result.ok, result.error)
+        self.assertEqual(len(self.dfu_runs), 1)
+
+    def test_a_node_that_never_comes_back_does_not_upload_into_nothing(self):
+        self._cache_the_zip()
+        result, _ = self._flash(
+            scan_ports=lambda: [],
+            run_dfu=lambda argv, t: self.fail("no port, no upload"))
+        self.assertFalse(result.ok)
+        self.assertEqual(result.stage_reached, flash.STAGE_VOLUME_WAIT)
+        self.assertTrue(any("never came back as a bootloader port" in l
+                            for l in self.logs), self.logs)
+
+    def test_the_zip_is_fetched_when_it_is_not_cached(self):
+        fetched = []
+
+        def fetch(site, name, dest):
+            fetched.append((site, name, Path(dest)))
+            p = Path(dest) / name
+            p.write_bytes(self.zip_bytes)
+            return p
+
+        result, _ = self._flash(fetch_fn=fetch,
+                                 run_dfu=self._run_dfu("Device programmed."))
+        self.assertTrue(result.ok, result.error)
+        self.assertEqual(fetched,
+                          [("http://127.0.0.1:1", self.zip_name, self.tmp)])
+
+    def test_a_cached_zip_is_not_fetched_again(self):
+        self._cache_the_zip()
+        result, _ = self._flash(run_dfu=self._run_dfu("Device programmed."))
+        self.assertTrue(result.ok, result.error)   # fetch_fn would self.fail()
+
+
+class TestSerialDfuIsGated(_DfuHarness):
+    """G2's sha256 clause, applied to the second image."""
+
+    def test_a_zip_whose_sha256_is_wrong_never_runs_and_is_discarded(self):
+        self._cache_the_zip()
+        bad = dict(self.manifest, dfu_sha256="f" * 64)
+        calls = []
+        clock = _FakeClock()
+        result = flash.flash(
+            self.port, self.uf2, bad,
+            device_factory=_device_factory({}, calls),
+            scan_ports=lambda: [],
+            volume_exists=lambda: False,
+            list_disks=lambda: "",
+            mount_volume=lambda: None,
+            copy_file=lambda s, d: self.fail("no copy"),
+            sleep=clock.sleep, now=clock.now,
+            volume_wait_s=5.0, poll_interval_s=1.0,
+            ioreg_fn=self._ioreg(_IOREG_XIAO_BOOTLOADER),
+            dfu_cache_dir=self.tmp,
+            site_url="http://127.0.0.1:1",
+            fetch_fn=lambda site, name, dest: self.fail("no fetch"),
+            run_dfu=lambda argv, t: self.fail("must not upload an unverified zip"),
+            nrfutil_path="/fake/adafruit-nrfutil",
+            log=self.logs.append,
+        )
+        self.assertFalse(result.ok)
+        self.assertEqual(result.stage_reached, flash.STAGE_VOLUME_WAIT)
+        self.assertTrue(any("refusing the serial-DFU fallback (G2)" in line
+                            for line in self.logs), self.logs)
+        self.assertFalse((self.tmp / self.zip_name).exists(),
+                          "a zip that failed the gate must not stay cached")
+
+    def test_a_manifest_without_dfu_file_skips_quietly(self):
+        plain = dict(REAL_MANIFEST, sha256=_sha256_of(self.uf2))
+        calls = []
+        clock = _FakeClock()
+        result = flash.flash(
+            self.port, self.uf2, plain,
+            device_factory=_device_factory({}, calls),
+            scan_ports=lambda: [],
+            volume_exists=lambda: False,
+            list_disks=lambda: "",
+            mount_volume=lambda: None,
+            copy_file=lambda s, d: self.fail("no copy"),
+            sleep=clock.sleep, now=clock.now,
+            volume_wait_s=5.0, poll_interval_s=1.0,
+            ioreg_fn=self._ioreg(_IOREG_XIAO_BOOTLOADER),
+            dfu_cache_dir=self.tmp,
+            fetch_fn=lambda site, name, dest: self.fail("no fetch"),
+            run_dfu=lambda argv, t: self.fail("nothing to upload"),
+            log=self.logs.append,
+        )
+        self.assertFalse(result.ok)
+        self.assertEqual(result.stage_reached, flash.STAGE_VOLUME_WAIT)
+        self.assertIn("this Mac made no disk", result.error)
+        self.assertEqual(
+            [l for l in self.logs if "no dfu_file" in l or "names no dfu_file" in l],
+            ["flash: manifest names no dfu_file — no serial-DFU fallback to try"])
+
+    def test_a_manifest_without_dfu_sha256_refuses(self):
+        self._cache_the_zip()
+        no_hash = dict(self.manifest)
+        no_hash.pop("dfu_sha256")
+        got = flash.dfu_package(no_hash, self.tmp, "http://x",
+                                 lambda *a: self.fail("no fetch"),
+                                 self.logs.append)
+        self.assertIsNone(got)
+        self.assertTrue(any("no dfu_sha256" in l for l in self.logs), self.logs)
+
+    def test_a_dfu_file_that_is_not_a_bare_zip_name_is_refused(self):
+        for bad_name in ("../secrets.zip", "/etc/passwd", "firmware.uf2",
+                          "a/b.zip"):
+            logs = []
+            got = flash.dfu_package(dict(self.manifest, dfu_file=bad_name),
+                                     self.tmp, "http://x",
+                                     lambda *a: self.fail("no fetch"),
+                                     logs.append)
+            self.assertIsNone(got, bad_name)
+
+    def test_an_unfetchable_zip_leaves_the_volume_wait_verdict(self):
+        result, _ = self._flash(
+            fetch_fn=lambda site, name, dest: None,
+            run_dfu=lambda argv, t: self.fail("nothing to upload"))
+        self.assertFalse(result.ok)
+        self.assertEqual(result.stage_reached, flash.STAGE_VOLUME_WAIT)
+        self.assertTrue(any("could not fetch" in l for l in self.logs), self.logs)
+
+
+class TestSerialDfuHelper(unittest.TestCase):
+    """serial_dfu() on its own."""
+
+    def test_missing_nrfutil_is_reported_not_raised(self):
+        """A Mac with no adafruit-nrfutil (Nick's, today) must get a log
+        line and a FlashResult, never a traceback — and must not try to
+        run anything."""
+        with patch.object(flash, "_default_nrfutil_argv0", return_value=None):
+            ok, detail = flash.serial_dfu(
+                "/dev/cu.usbmodem101", "/tmp/x.zip",
+                run_dfu=lambda argv, t: self.fail("must not run anything"))
+        self.assertFalse(ok)
+        self.assertIn("not installed on this Mac", detail)
+
+    def test_default_runner_reports_a_missing_binary(self):
+        code, out = flash._default_run_dfu(
+            ["/definitely/not/here/adafruit-nrfutil", "dfu"], 5.0)
+        self.assertEqual(code, 127)
+        self.assertIn("could not run", out)
+
+    def test_marker_anywhere_in_the_output_counts(self):
+        ok, detail = flash.serial_dfu(
+            "/dev/cu.usbmodem101", "/tmp/x.zip",
+            nrfutil_path="/fake/nrfutil",
+            run_dfu=lambda argv, t: (0, "noise\nDevice programmed.\nmore noise"))
+        self.assertTrue(ok)
+        self.assertIn("Device programmed.", detail)
+
+
+class TestSiteUrlMatchesTheDaemon(unittest.TestCase):
+    """CLAUDE.md §4: an identifier without a lookup entry is a rediscovery
+    waiting to happen. flash.py restates four of daemon.py's/garmin.py's
+    constants because it cannot import them (daemon imports flash). This
+    test is the lookup entry: edit one side alone and it fails here."""
+
+    def test_the_constants_agree(self):
+        try:
+            from puckd import daemon, garmin
+        except Exception as exc:  # pragma: no cover - optional dependency
+            self.skipTest(f"daemon/garmin not importable here: {exc!r}")
+        self.assertEqual(flash.DEFAULT_SITE_URL, daemon.DEFAULT_SITE_URL)
+        self.assertEqual(flash.SITE_URL_ENV, daemon.SITE_URL_ENV)
+        self.assertEqual(flash._LOG_FILENAME, daemon.LOG_FILENAME)
+        self.assertEqual(flash._DEFAULT_HOME, garmin.DEFAULT_HOME)
+        self.assertEqual(flash._PUCKD_HOME_ENV, garmin.PUCKD_HOME_ENV)
+        self.assertEqual(flash.puckd_home(), garmin.puckd_home())
+
+
+class InvokedAsAModuleInsideTheBundle(unittest.TestCase):
+    """The shipped app has no adafruit-nrfutil script; the nordicsemi package
+    is vendored and run with the bundle's own interpreter."""
+
+    def test_module_form_when_nordicsemi_imports(self):
+        import sys
+        argv0 = flash._default_nrfutil_argv0()
+        self.assertIsNotNone(argv0)
+        self.assertEqual(argv0[:1], [sys.executable])
+        self.assertEqual(argv0[1:], ["-m", "nordicsemi"])
+
+    def test_serial_dfu_builds_argv_from_the_module_form(self):
+        seen = {}
+        def run(argv, t):
+            seen["argv"] = argv; return 0, "Device programmed."
+        ok, _ = flash.serial_dfu("/dev/cu.usbmodemX", "/tmp/pkg.zip", run_dfu=run)
+        self.assertTrue(ok)
+        self.assertEqual(seen["argv"][1:5], ["-m", "nordicsemi", "dfu", "serial"])
