@@ -25,7 +25,7 @@ another document. Docs are the thing under suspicion.
 | Why did my BLE reading change between calls? | **Three boards can advertise.** Unpinned tools answer from whichever replies first. Always `--name`. | `tools/blepin.py` |
 | Can I trust a "dead board" verdict? | **No — four have been wrong.** Nothing was ever damaged. Establish the board's *configuration* first. | `docs/xiao-hardware-truth.md` |
 | **Where is the OG?** | **At Nick's, from 2026-09-07.** Synced (two SHA-256-identical copies), `clear`ed, calibration intact, battery full, before it left. Reset button pressed before it left (owner, 2026-09-08) — so `session_jumps` starts at 0 for the loan; not machine-verified, Nick's first watch count confirms it. Nick has no admin path: `mount`, `clear`, `dfu` all need a laptop. | this session, 2026-09-07 |
-| What firmware is on the OG? | **`src=5c80a436`** — matched the tree at the 2026-09-07 live read (`jump sync`: "device is running THIS source tree"). **The tree has since moved** (this merge: `traceraw`, the sync page, `jump ingest`; `build.gen.h` now `ae67dc8d`) and the OG has **NOT** been reflashed — every client falls back to CSV `trace`, by design. Confirm with `stats`; never infer from a commit date or a hash in a doc. | live read, 2026-09-07 |
+| What firmware is on the OG? | **`src=5c80a436`** — matched the tree at the 2026-09-07 live read (`jump sync`: "device is running THIS source tree"). **The tree has since moved** (`traceraw`, the sync page, `jump ingest`, then F-36/F-29, then 100 Hz logging; `build.gen.h` is now **`c5eea285`**) and the OG has **NOT** been reflashed — every client falls back to CSV `trace`, by design. Confirm with `stats`; never infer from a commit date or a hash in a doc. **`web/firmware/latest.json` publishes `c5eea285` (100 Hz logging), so JumpHeight Sync flashes the OG to it at the rider's next plug-in** — see the 09-15 section below. | live read, 2026-09-07; manifest written 2026-09-14 |
 | Are the OG's heights trustworthy today? | **Bench-calibrated, yes** — drop ritual re-run 2026-08-24: 8 drops from 101.6 cm, bias −19 ms ±9, `airtime_offset_s=0.0192`, `off_src=device`, survived a reflash. `height_scale` remains defaults *by design* until the on-water video calibration. | live read, below |
 | How does the app reach the rider's watch? | **Connect IQ store, and it is APPROVED (2026-08-25).** Install from the Connect IQ phone app; sideloading is impossible on the Instinct 3. | `docs/watch.md` |
 | How does the rider get the data to me? | **A sync page → a zip → `./tools/jump ingest`. Two ways in: the USB cable in Chrome on his Intel MacBook (recommended) or Bluetooth from his phone** — `manifest.json`'s `transfer.transport` records which one ran (`"usb"` or `"ble"`). No repo, no toolchain, no bench needed for the normal flow (an emergency remote-guided CLI session is the documented fallback if the page ever fails, DECISION #42). This is NOT the retired browser app coming back — it is a one-way export surface, like `tools/jump`, not a user interface; the watch remains the product's only UI. Built 2026-09-07, **not yet run on real hardware** — see the dated section below. **Deployed 2026-09-09 14:09 UTC and verified in a real Chrome load — footer `page version 2026-09-09b` (Remote diagnostics, below). Never yet connected to a real port.** The FIT export + a text line is the channel that already works (8 zips, August). | `docs/rider-sync.md`, `web/sync/`, DECISION #42 |
@@ -106,6 +106,83 @@ Ordered by what blocks what.
    µA-meter decision. Only the store package moved.
 5. **Glue vs removable** — undecided, and the answer deletes or keeps an entire
    era of work.
+
+## The watch's barometer into the FIT — built 2026-09-14, NOT on a watch
+
+The rider's first full session (`data/sessions/20260914-210637-E2C4/
+garmin.fit`) carries **no independent height evidence at all**: 2,877
+records, `enhanced_altitude` on every one of them with **exactly one distinct
+value, −29.2 m** (re-read here with `tools/fitread.py` + `fitdecode`). The
+Windsurf profile never updated the channel. Our `jump_height` is on 1,189 of
+those records (485 non-null), so the puck is unchallenged in its own file.
+
+Three new FIT developer fields now write the watch's own barometer under our
+developer identity, where a profile setting cannot flatten it:
+`baro_alt_m` (RECORD, m), `baro_pa` (RECORD, Pa, from
+`Activity.Info.rawAmbientPressure` — the unfiltered sensor read) and
+`baro_src` (SESSION, bitmask, which API actually answered). Source:
+`Activity.Info`, handed to `compute()` at 1 Hz, which is the FIT record
+ceiling. Cost **+613 B** for the fields (12,579 → 13,192) and **+75 B** more
+for the excluded wrist probe's stubs, **13,267 B** of the Instinct's 32,768
+(`monkeyc --build-stats 0`, both devices identical; the 32,768 limit is the
+Instinct's alone — the Epix datafield limit is 262,144, so the Epix bench can
+never surface an over-budget build). Built to
+`garmin/jumpfield/bin/JumpField.iq`, 81,730 B (2026-09-14 22:39), 4/4 variants, `version=1.0.1`
+— **not submitted.** Detail and citations: `docs/watch.md`, "FIT developer
+fields". Also measured: **the `.iq` is not a reproducible build** — two
+back-to-back builds of an unchanged tree gave 81,728 B and 81,698 B with
+different hashes, so its size cannot identify a source tree (the per-device
+`--build-stats` number can).
+
+**The wrist accelerometer was asked for and is NOT shipped.** Every one of
+the nine instance functions of `Toybox.Sensor` is documented "Will cause an
+app crash if called from a data field app" (SDK 9.2.0
+`doc/Toybox/Sensor.html`; the phrase occurs in no other module page), and the
+compiler additionally demands a third manifest permission the approved
+listing does not have. The probe exists written-and-excluded
+(`source/WristProbe.mc`, `(:bench)`, built only by `bench.jungle`) so one
+Epix sideload can settle it; proof it is out of the shipped build is that
+`WristProbe`/`onSensorData` appear 0× in the shipped symbol table and
+`wrist_amin_g`/`wrist_amax_g` are absent from the shipped `.prg` bytes.
+
+**Two settings on the rider's watch decide whether any of this is worth
+having**, and neither is confirmed set: **Data Recording = Every Second**
+(the 09-14 file's record gaps are 1-8 s, averaging 2.08 s — Smart Recording;
+a whole 1-4 s flight can fall between two samples) and **elevation recording
+enabled**. Menu paths are UNVERIFIED for Instinct 3 fw 15.18 — no manual in
+this repo.
+
+**A build-system trap, now fixed, worth not re-learning:** `:release` is a
+reserved Monkey C annotation ("will not be included in **debug** builds",
+SDK `doc/docs/Monkey_C/Annotations.html`). Using it as the ship-side build
+flag made the `-r` store build compile clean while **every debug and
+unit-test build failed**. The annotation is `(:nowrist)` now.
+
+## Trace logging at 100 Hz — firmware batch 1, `src=c5eea285`, 2026-09-15
+
+Why the rider's evening trace read "25.9 Hz": 648,706 of its 648,807 gaps
+are exactly 0.020 s (50.0 Hz); the puck logs only while the motion gate is
+open (`main.cpp:1900-1906`), and 48 % of the 417 min was idle. Not a rate
+loss. The sensor samples at 200 Hz and logged every 4th sample.
+
+The change, and nothing else in this batch: `firmware.log_hz` 50 → **100**
+(`LOG_DECIMATE` 4 → 2). Measured on the host build of the same source
+(`pio run -e host`, scripted IMU holding the gate open, `trace` read back):
+2,001 rows in 20.00 s, **100.0 Hz, median gap 0.0100 s**; `info` reports
+`log_hz=100 src=c5eea285`. The literature wants ≥100 Hz (prior-art brief);
+200 Hz was built and measured first (`0304ab97`) and rejected: the 2 MiB
+trace region holds **5.21 h** at 50 Hz (measured from the OG's full region
+of 2026-09-07: 937,644 samples, 15,917,153 B), **1.36 h** at 200 Hz — less
+than one of the rider's sessions — and **~2.7 h** at 100 Hz.
+
+`web/firmware/latest.json` publishes `c5eea285` with a `replaces` list
+(`5c80a436`, `ae67dc8d`, `54c6826d`): the app now flashes only a puck on
+one of those. Measured 2026-09-14 on the bench: the old "src != latest"
+rule downgraded a puck running a newer dev build. NOT yet on silicon: the
+bench Puck went silent after `uf2` (the same host-side USB wedge as the
+night before) and needs a replug; the OG gets it at the rider's next
+plug-in once his app is past 1.0.2 (whose flash leg crashes on a decode
+bug fixed in 1.0.3).
 
 ## Open findings
 
@@ -785,6 +862,23 @@ has been installed nowhere.
 
 Stated plainly so an absence is never mistaken for a pass:
 
+- **No 200 Hz sample has ever been written to real flash.** `src=0304ab97` is
+  on the Puck and reports `log_hz=200`, but the Puck sits still, so its motion
+  gate never opened and `trace_bytes` has read 0 since the flash. The
+  200.0000 Hz reading is the real `main.cpp` on the host seam; the **1.36 h**
+  capacity is a model anchored to a measured 50 Hz fill, not a filled region.
+  One shake of a puck with a laptop attached settles both.
+- **`tools/puckd/flash.py`'s UF2 leg is 1 success against 3 failures on this
+  Mac** — 2026-09-13 22:04 (unattended), 2026-09-14 22:48 (by hand), 2026-09-14
+  23:01 (unattended). Every failure is identical: the bootloader enumerates
+  (PID `0x0045`, `nRF UF2` mass-storage interface bound to
+  `IOBlockStorageDriver`), macOS makes no block device, `/Volumes/XIAO-SENSE`
+  never appears, `flash()` times out at `stage=volume_wait` **and the board is
+  left in DFU**. Whether the cause is this Mac, this cable, this macOS build or
+  the module is **not established** — and it is the leg Nick's unattended
+  update runs. Recovery here was a serial DFU upload of the same image; his
+  only recovery is a double-tap he has to be told about. **The plan's P4
+  silicon rehearsal must be recorded as intermittent, not as passing.**
 - The detector has seen water once (2026-09-06) **on a chest, with no jump in
   it.** No jump has ever been measured on water; every height number is
   bench or simulator, and the vest-mount phantom rate does not transfer to
@@ -815,6 +909,14 @@ Stated plainly so an absence is never mistaken for a pass:
   signal.
 - The Instinct has never rendered a jump. All watch evidence is Epix. **No
   evidence the field is even installed on Nick's Instinct** (open gate 1a).
+- **The barometer fields have never run on any watch.** Nobody has confirmed
+  `Activity.Info.rawAmbientPressure` returns non-null inside a Wing Foil
+  activity on an Instinct 3, and the −29.2 m constant altitude in the 09-14
+  file is a live reason to doubt `altitude` specifically. `baro_src` in the
+  first saved activity settles it in one `tools/fitread.py` run.
+- **Whether `Sensor.registerSensorDataListener` actually crashes a data
+  field is DOCUMENTED, not measured.** One Epix sideload of the
+  `bench.jungle` build answers it; nothing in this repo has run it.
 - **The enclosure has never been bucket-tested, floated loaded, or
   BLE-range-checked closed** — every repo hit for "bucket" is an instruction,
   none is a record (`DECISIONS.md` #9, `session-card.md:48`). The 09-06 water

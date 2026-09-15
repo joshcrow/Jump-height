@@ -1,10 +1,15 @@
 {
-  "src": "54c6826d",
-  "file": "jumpheight-54c6826d.uf2",
+  "src": "c5eea285",
+  "file": "jumpheight-c5eea285.uf2",
   "bytes": 312832,
   "blocks": 611,
-  "sha256": "7457a1325fe8de21d2575745fd5fe79fa64d1d94eb904a482bed597de4905517",
+  "sha256": "45dda1f7f49b0c9fb55c58446bf462581aa0b37be9aec66c7c08ae332c1ef6bd",
   "family": "0xADA52840",
-  "built_utc": "2026-09-11",
-  "note": "Flashed and verified on JumpHeight-8673 before publishing."
+  "built_utc": "2026-09-15T04:02:15Z",
+  "replaces": [
+    "5c80a436",
+    "ae67dc8d",
+    "54c6826d"
+  ],
+  "note": "Firmware batch 1: trace logging at 100 Hz (was 50; the sensor samples at 200). Doubles the resolution the offline models get; the 2 MB trace region now holds ~2.7 h of moving time instead of 5.2 h, still more than a session. Nothing else changed. `replaces` lists the builds this one may be flashed over; a puck on any other build (a bench or dev build) is left alone."
 }

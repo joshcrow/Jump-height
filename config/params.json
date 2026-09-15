@@ -14,7 +14,7 @@
   },
   "firmware": {
     "sample_hz": 200,
-    "log_hz": 50,
+    "log_hz": 100,
     "motion_thresh_g": 0.12,
     "idle_timeout_s": 20,
     "trace_max_bytes": 2000000,

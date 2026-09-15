@@ -16,7 +16,7 @@
 
 // --- firmware ---
 #define JH_SAMPLE_HZ 200
-#define JH_LOG_HZ 50
+#define JH_LOG_HZ 100
 #define JH_MOTION_THRESH_G 0.12f
 #define JH_IDLE_TIMEOUT_S 20
 #define JH_TRACE_MAX_BYTES 2000000

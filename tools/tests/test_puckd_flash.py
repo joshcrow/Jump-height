@@ -857,3 +857,23 @@ class DiskutilOutputIsDecodedAsUtf8(unittest.TestCase):
         with patch.object(flash.subprocess, "run", return_value=fake):
             out = flash._default_list_disks()
         self.assertIn("JumpHeight Sync", out)
+
+
+class ReplacesGate(unittest.TestCase):
+    """A manifest that names the builds it replaces never flashes over any
+    other build (a bench puck on a newer dev build was downgraded by the old
+    src != latest.src rule, 2026-09-14)."""
+
+    def test_listed_old_build_is_updated(self):
+        m = {"src": "c5eea285", "replaces": ["5c80a436", "54c6826d"]}
+        self.assertTrue(flash.needs_update("5c80a436", m))
+        self.assertTrue(flash.needs_update("54c6826d", m))
+
+    def test_unlisted_build_is_left_alone(self):
+        m = {"src": "c5eea285", "replaces": ["5c80a436", "54c6826d"]}
+        self.assertFalse(flash.needs_update("0304ab97", m), "a dev build newer than the site")
+        self.assertFalse(flash.needs_update("c5eea285", m), "already current")
+
+    def test_a_manifest_without_replaces_keeps_the_old_rule(self):
+        self.assertTrue(flash.needs_update("anything", {"src": "c5eea285"}))
+        self.assertFalse(flash.needs_update("c5eea285", {"src": "c5eea285"}))

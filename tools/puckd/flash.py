@@ -184,7 +184,17 @@ def needs_update(puck_src: "str | None", manifest: "dict | None") -> bool:
     """
     if manifest is None or not puck_src:
         return False
-    return puck_src != manifest.get("src")
+    if puck_src == manifest.get("src"):
+        return False
+    # `replaces`: the builds this one may be flashed over. Measured 2026-09-14
+    # on the bench: "src != latest.src" alone DOWNGRADED a puck running a
+    # newer dev build to the site's older one and left it in its bootloader.
+    # A manifest that names what it replaces protects every puck on any
+    # other build; a manifest without the key keeps the old rule.
+    replaces = manifest.get("replaces")
+    if isinstance(replaces, list):
+        return puck_src in replaces
+    return True
 
 
 def _default_list_disks() -> str:
