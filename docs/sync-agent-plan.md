@@ -25,6 +25,7 @@ does not have), each a redraw of the arrow, never a badge:
     idle       arrow               puck attached, up to date
     working    arrow over a line   a job is running; the panel names the phase in words
     attention  arrow over a dot       Nick needs to do one thing; reserved ruthlessly
+The app updates itself in the background, never mid-job: with no puck attached, or once an attached one has sat idle (no job of its own) for 180 s -- so a puck left in overnight still gets it, and the restart's own next job is where the firmware flash leg runs.
 Click it:
     Puck 86% · charging            (or: No puck · Reading the puck… · Uploading… · Emptying the puck… · Updating the puck…)
     Last ride Tue 4:52 pm · 12 jumps

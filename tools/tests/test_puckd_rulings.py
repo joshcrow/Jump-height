@@ -10,8 +10,12 @@
      waited a day.
   5. Garmin is nagged only if he ever signed in.
   6. The site URL defaults to the live page.
-  7. The app updates itself silently -- but only on a tick with no puck
-     attached, because `launchctl kickstart -k` kills the process.
+  7. The app updates itself silently -- on a tick with no puck attached, OR
+     one where the attached puck has sat idle (no job of its own) for
+     SELFUPDATE_IDLE_S, because `launchctl kickstart -k` kills the process.
+     The rider was told to leave the puck plugged in overnight; the restart
+     that follows sees it as a fresh port, so that plug-in's own job carries
+     the firmware flash leg too.
 
 SPDX-License-Identifier: MIT
 """
@@ -376,17 +380,26 @@ class _StubReport:
 
 class TheAppUpdatesItselfOnlyWhenIdle(_DaemonTestBase):
     """7. The app replaces itself silently -- but `launchctl kickstart -k`
-    kills this process, so the check runs ONLY on a tick with no puck
-    attached and no job running. A restart mid-sync is G3 broken from the
-    app's own side, and the rider is 300 miles away when it happens."""
+    kills this process, so the check runs ONLY on a tick with no job that
+    could still be touching the puck: no puck attached at all, OR the
+    CURRENT attachment sitting idle -- no job of its own -- for
+    SELFUPDATE_IDLE_S. A restart mid-sync is G3 broken from the app's own
+    side, and the rider is 300 miles away when it happens; he was also told
+    to leave the puck plugged in overnight, so "no puck at all" is not a
+    condition this app can rely on ever coming true again on its own."""
 
-    def _drive(self, su, ports, *, interval=6 * 3600.0, ticks=None):
+    def _drive(self, su, ports, *, interval=6 * 3600.0, ticks=None, idle_s=None,
+               job=None):
         """Run the loop over a scripted list of find_port() answers, with a
         clock that advances one POLL_INTERVAL_S per tick unless a port
-        answer is the string "+interval" (which jumps the clock instead)."""
+        answer is "+interval" (jumps the clock by the selfupdate interval,
+        returning no puck) or "+idle" (jumps the clock by SELFUPDATE_IDLE_S
+        -- or `idle_s` if given -- while returning the LAST real port: the
+        puck stays attached and sits idle, the overnight case)."""
         clock = [1000.0]
         answers = list(ports)
         seen = []
+        last_real_port = [None]
 
         def now():
             return clock[0]
@@ -397,14 +410,27 @@ class TheAppUpdatesItselfOnlyWhenIdle(_DaemonTestBase):
             if got == "+interval":
                 clock[0] += interval + 1.0
                 return None
+            if got == "+idle":
+                clock[0] += (daemon.SELFUPDATE_IDLE_S if idle_s is None else idle_s) + 1.0
+                return last_real_port[0]
             clock[0] += daemon.POLL_INTERVAL_S
+            if got:
+                last_real_port[0] = got
             return got
 
         cfg = self.make_cfg(selfupdate_module=su, selfupdate_interval_s=interval,
                             now=now, site_url="https://site.invalid")
-        with patch.object(daemon, "run_job_cycle", lambda port, c: _StubReport()), \
+        with patch.object(daemon, "run_job_cycle",
+                          job if job is not None else (lambda port, c: _StubReport())), \
              patch.object(daemon, "publish_log", lambda *a, **k: True), \
-             patch.object(daemon, "_run_garmin", lambda c: None):
+             patch.object(daemon, "_run_garmin", lambda c: None), \
+             patch.object(daemon, "poll_attached", lambda *a, **k: {}):
+            # poll_attached is patched too: a "+idle" jump of 180 s+ also
+            # clears the 60 s stats-poll gate, and the real poll_attached()
+            # opens the (nonexistent, in this test) serial port -- which
+            # would raise and get swallowed by run_forever()'s own outer
+            # handler, silently skipping the very selfupdate check this
+            # helper exists to drive.
             daemon.run_forever(cfg, find_port=find_port,
                                max_iterations=ticks if ticks is not None else len(answers))
         return cfg
@@ -425,13 +451,64 @@ class TheAppUpdatesItselfOnlyWhenIdle(_DaemonTestBase):
         self._drive(su, [None, "+interval"])
         self.assertEqual(len(su.manifest_calls), 2)
 
-    def test_a_puck_on_the_bench_defers_the_check_entirely(self):
+    def test_attached_and_recent_job_is_deferred(self):
         su = _FakeSelfupdate()
-        # Tick 1: a puck arrives (a job runs). Tick 2: still attached.
+        # Tick 1: a puck arrives (a job runs, stamping last_job_finished).
+        # Tick 2: still attached, only POLL_INTERVAL_S later -- nowhere near
+        # SELFUPDATE_IDLE_S. "Never restart mid-sync": the check does not
+        # even fetch a manifest.
         self._drive(su, ["/dev/cu.usbmodemFAKE", "/dev/cu.usbmodemFAKE"])
-        self.assertEqual(su.manifest_calls, [],
-                         "never restart mid-sync: the check does not even fetch")
+        self.assertEqual(su.manifest_calls, [])
         self.assertEqual(su.apply_calls, [])
+
+    def test_mid_job_is_impossible_even_when_the_interval_is_already_due(self):
+        """"Mid-job" isn't a state run_forever() can be caught in -- the tick
+        runs synchronously, so a job called earlier in the SAME tick has
+        always already returned by the time the selfupdate check is reached.
+        This test isolates the ONE guard actually standing between "a job
+        just ran this tick" and an update landing on top of it:
+        SELFUPDATE_IDLE_S. The outer six-hour interval is already due from
+        tick zero (see run_forever()'s "deliberately in the past" comment),
+        so the only thing left to defer this is the idle-time clause of
+        `puck_idle_long_enough` in run_forever() -- verified by hand: with
+        the `now - session.last_job_finished >= SELFUPDATE_IDLE_S` clause
+        dropped, this test failed (su.manifest_calls ==
+        ['https://site.invalid']); restored, and it passes again."""
+        su = _FakeSelfupdate()
+        self._drive(su, ["/dev/cu.usbmodemFAKE"])
+        self.assertEqual(su.manifest_calls, [],
+                         "a job that finished on THIS tick must never be read as idle")
+
+    def test_attached_and_idle_long_enough_runs_the_check(self):
+        su = _FakeSelfupdate()
+        # Tick 1: a puck arrives (a job runs). Tick 2: still attached, but
+        # SELFUPDATE_IDLE_S has now passed since that job finished -- the
+        # overnight case: the puck never left, so this is the only way the
+        # check ever runs again.
+        self._drive(su, ["/dev/cu.usbmodemFAKE", "+idle"])
+        self.assertEqual(len(su.manifest_calls), 1,
+                         "idle time, not absence, must be enough to open the check")
+
+    def test_a_job_that_RAISED_still_counts_as_finished(self):
+        """run_job_cycle() can raise: _run_job_cycle()'s opening
+        serial_job.read_stats() sits outside every try in that function, so
+        an unplug right there comes straight out to run_forever()'s own
+        outer handler (the same OSError path measured on 2026-09-13). If
+        last_job_finished were stamped only on the success path it would
+        stay None for the rest of that attachment, and `None` is never idle
+        enough -- a puck left plugged in after one failed job would defer
+        the app's own update for as long as it stayed plugged in, which is
+        exactly the state (something has gone wrong, 300 miles away) where
+        a fix most needs to arrive. Verified by hand: with the stamp moved
+        back out of its `finally`, this test fails (manifest_calls == [])."""
+        su = _FakeSelfupdate()
+
+        def raising_job(port, c):
+            raise OSError("cable pulled between find_port() and read_stats()")
+
+        self._drive(su, ["/dev/cu.usbmodemFAKE", "+idle"], job=raising_job)
+        self.assertEqual(len(su.manifest_calls), 1,
+                         "a failed job is still a job that is over")
 
     def test_the_deferred_check_happens_as_soon_as_the_puck_is_unplugged(self):
         su = _FakeSelfupdate()

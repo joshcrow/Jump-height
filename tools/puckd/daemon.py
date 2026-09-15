@@ -77,10 +77,19 @@ GARMIN_INTERVAL_S = 6 * 3600.0           # spec line 57: "every job and every 6 
 # The APP's own update check. Same 6 h cadence as the Garmin leg -- there is
 # nothing urgent about it, and the one thing that MUST be true is that it
 # never lands mid-sync: `launchctl kickstart -k` kills this process, so a
-# check while a puck is attached is G3 ("never leave the puck half-written")
-# broken from the other end. run_forever() therefore only calls it on a tick
-# where no port is attached and no job is running.
+# check while a job could still be touching the puck is G3 ("never leave the
+# puck half-written") broken from the other end. run_forever() therefore
+# only calls it on a tick with no puck attached at all, OR one where the
+# CURRENT attachment has gone idle -- no job of its own -- for
+# SELFUPDATE_IDLE_S (see run_forever() and AttachmentSession.last_job_finished).
 SELFUPDATE_INTERVAL_S = 6 * 3600.0
+# The rider was told to leave the puck plugged in overnight -- "no puck at
+# all" would then never come true again, and the app would never update
+# itself. 180 s sits comfortably past both a real job's own length (device
+# opens, an upload, an occasional flash) and the 60 s stats poll, so once
+# this much time has passed since the attachment's own last job, it can only
+# be read as "sitting there, idle", never as "a job just ended".
+SELFUPDATE_IDLE_S = 180.0
 CHARGED_BATT_PCT_MIN = 95                # spec item 10
 
 # spec lines 49/58's own paths, verbatim (upload.upload() prefixes "gdrive:").
@@ -792,7 +801,16 @@ def _run_garmin(cfg: DaemonConfig) -> None:
 class AttachmentSession:
     """Per-plug-in tracking for step 10 -- reset by run_forever() every time
     the port disappears and a new one appears, so "fires exactly once" is
-    "once per attachment", never once ever."""
+    "once per attachment", never once ever.
+
+    last_job_finished is a second use of the same per-attachment lifetime:
+    run_forever() stamps it (with cfg.now(), taken after run_job_cycle()
+    RETURNS OR RAISES -- in a `finally` -- not before, since a job can take
+    real seconds) every time it runs a job on this port, and the app's own
+    self-update check reads it back
+    to tell "this attachment just did something" from "this attachment has
+    been sitting here, idle, for a while" -- the overnight-plugged-in case
+    SELFUPDATE_IDLE_S exists for."""
 
     port: str
     prev_chg: "Optional[int]" = None
@@ -801,6 +819,7 @@ class AttachmentSession:
     last_puck_pct: "Optional[int]" = None
     last_puck_charging: bool = False
     last_stats: "Optional[dict]" = None
+    last_job_finished: "Optional[float]" = None
 
 
 def poll_attached(port_path: str, cfg: DaemonConfig, session: AttachmentSession) -> dict:
@@ -979,7 +998,30 @@ def run_forever(
                 current_port = port
                 session = AttachmentSession(port=port, last_stats_poll=now)
                 session_ref[0] = session
-                report = run_job_cycle(port, cfg)
+                try:
+                    report = run_job_cycle(port, cfg)
+                finally:
+                    # Stamped with a FRESH cfg.now(), not the `now` captured
+                    # before find_port() ran above: run_job_cycle() can take
+                    # real seconds (device opens, an upload, a flash), and
+                    # understating how long it ran would understate the idle
+                    # time the selfupdate check below relies on -- the wrong
+                    # direction for a G3 guard to be sloppy in.
+                    #
+                    # In a `finally` because run_job_cycle() CAN raise: its
+                    # opening serial_job.read_stats() (_run_job_cycle()'s
+                    # first line) sits outside every try in that function, so
+                    # an unplug right there puts an OSError straight through
+                    # here to the outer handler below. Stamping only on the
+                    # success path left last_job_finished None for the life
+                    # of that attachment, and "None" is never idle enough --
+                    # a puck left plugged in after one failed job would defer
+                    # the app's own update for as long as it stayed plugged
+                    # in, which is precisely the state (something went wrong,
+                    # 300 miles away) where a fix most needs to arrive.
+                    # Nothing is touching the puck once this line runs
+                    # either way, which is all the guard below needs to mean.
+                    session.last_job_finished = cfg.now()
                 if report.pulled and report.uploaded and report.verified:
                     _record_ride(cfg, report.jumps or 0, report.bundle_path)
                 if on_cycle is not None:
@@ -1012,15 +1054,46 @@ def run_forever(
                 last_spool = now
                 retry_spool(cfg)
                 publish_log(cfg, None, session.last_stats if session else None)
-            # The app's own update, LAST in the tick and only when the bench
-            # is clear: `port is None and current_port is None` means no puck
-            # is attached and no job ran on this tick, so a successful apply()
-            # -- which ends this process via launchctl kickstart -k -- cannot
-            # interrupt a sync (G3). The clock is only advanced when the check
-            # actually runs, so a puck left plugged in all day defers the
-            # check rather than silently skipping six hours of them.
-            if (port is None and current_port is None
-                    and now - last_selfupdate >= cfg.selfupdate_interval_s):
+            # The app's own update, LAST in the tick. A successful apply()
+            # ends this process via `launchctl kickstart -k`, so it may never
+            # land while a job could still be touching the puck (G3, from the
+            # app's own side). `port is None and current_port is None` is the
+            # original rule -- nothing attached, nothing running -- but the
+            # rider was told to leave the puck plugged in overnight, so that
+            # alone would defer the app's own update for as long as it sits
+            # there. It is also allowed once the CURRENT attachment has gone
+            # idle -- no job of its own -- for SELFUPDATE_IDLE_S:
+            #   * `session` is non-None exactly when a puck is attached (see
+            #     the if/elif/elif chain above: every branch that sets
+            #     current_port to a port also creates a session in the same
+            #     breath, and the one that clears it clears both together).
+            #   * last_job_finished is stamped in that same branch's own
+            #     `finally`, so it is set whether that job returned or
+            #     raised. It is still tested for None below rather than
+            #     assumed: an invariant this check would fail OPEN on is
+            #     not one to take on trust.
+            #   * There is no thread to race here either way: run_forever()
+            #     advances one tick at a time, so any job called earlier in
+            #     THIS SAME tick has already returned by the time this line
+            #     runs. "Mid-job" is not a state this check can ever observe
+            #     itself in -- the guard above is what "idle" has to mean
+            #     instead, not a lock against concurrency that doesn't exist.
+            # On restart, launchd's kickstart makes the still-attached puck
+            # look like a brand-new port, so the very next tick runs it a
+            # full job cycle -- where the firmware leg lives -- so one
+            # overnight plug-in ends up carrying both the app update and the
+            # firmware flash. last_selfupdate only moves when the check
+            # actually runs, so a long day either idle-attached or with no
+            # puck at all defers it rather than silently skipping checks.
+            puck_idle_long_enough = (
+                session is not None
+                and session.last_job_finished is not None
+                and now - session.last_job_finished >= SELFUPDATE_IDLE_S
+            )
+            if (
+                (port is None and current_port is None or puck_idle_long_enough)
+                and now - last_selfupdate >= cfg.selfupdate_interval_s
+            ):
                 last_selfupdate = now
                 _maybe_selfupdate(cfg)
         except Exception as exc:  # noqa: BLE001 -- THE LAST LINE OF DEFENCE.

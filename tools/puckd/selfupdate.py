@@ -38,9 +38,13 @@ version was found able to leave /Applications with no app at all — reused
 here rather than re-derived, because the failure it prevents is worse from
 a daemon: there is no Finder window open to notice.
 
-G3 (docs/sync-agent-plan.md's gates) is the caller's half: daemon.py only
-ever calls apply() when no puck is attached and no job is running, because
-`launchctl kickstart -k` kills this process outright.
+G3 (docs/sync-agent-plan.md's gates) is the caller's half: `launchctl
+kickstart -k` kills this process outright, so daemon.py only ever calls
+apply() on a tick where no job could still be touching the puck — no puck
+attached at all, OR one whose CURRENT attachment has had no job of its own
+for daemon.SELFUPDATE_IDLE_S (180 s; the rider was told to leave the puck
+plugged in overnight, so "no puck attached" is not a condition that comes
+true on its own any more). See daemon.run_forever()'s `puck_idle_long_enough`.
 """
 
 from __future__ import annotations
