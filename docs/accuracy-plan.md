@@ -20,12 +20,16 @@ the first full real session contradicts:
 - The trace is 50.0 Hz. "26 Hz" was rows divided by elapsed time across 38
   sleep gaps: the puck logs only while moving.
 - No Surfr-length flight exists in the evening trace: the lowest MEAN load over
-  any 3.0 s window, anywhere in 417 min, is 0.947 g; over 1.0 s it is 0.577 g.
+  any 3.0 s window is 0.947 g inside the 103-min session window and 0.944 g
+  anywhere in the 417-min trace (independently recomputed 2026-09-15); over
+  1.0 s it is 0.577 g.
   A gate cannot find an interval that is not there. The two Surfr rows we have
   (6.3 ft / 3.07 s and 5.7 ft / 3.39 s) match puck candidates of 0.84 s and
   0.80 s at mean loads of 0.68 g and 0.78 g, 28 s apart as Surfr's are 29 s
-  apart. Either Surfr's airtime is not the puck's airtime, or the puck's mount
-  does not unload the way the rider does. Video decides; nothing else can.
+  apart -- suggestive, not established: with two rows, about one chance in
+  six that the pairing is coincidence (review 2026-09-15). Either Surfr's
+  airtime is not the puck's airtime, or the puck's mount does not unload the
+  way the rider does. Video decides; nothing else can.
 - The morning bundle was not a session (see corpus).
 - The earlier "gate 0.50 g finds 25 with 3.3 s airtimes" was the stock state
   machine spanning from a single low sample to a landing spike; the time

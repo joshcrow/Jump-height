@@ -606,3 +606,146 @@ def test_main_all_mode_handles_a_session_with_no_derivable_window(tmp_path, monk
     doc = json.loads((broken / "wind.json").read_text())
     assert "error" in doc
     assert (sessions_dir / "20260906-000000-TEST" / "wind.json").exists()
+
+
+# --------------------------------------------------------------------------
+# adversarial review 2026-09-15
+
+
+def test_multi_boot_trace_is_a_finding_not_an_inverted_window(tmp_path):
+    """trace.csv is a flash ring buffer: after a power cycle the LAST row's
+    `t` can be an earlier uptime than the first row's.
+
+    MEASURED on data/sessions/20260914-104207-E2C4 (no garmin.fit, so this
+    is the path that runs): first t=76,608.848 s, last t=12.652 s. Taken at
+    face value that is a window starting 2026-09-15T11:58:44Z and ENDING
+    2026-09-14T14:42:07Z — inverted, a day out, and previously returned
+    ok=True. Every hour filter downstream then matches nothing and the only
+    symptom is "no hourly row fell inside the requested window".
+    """
+    d = _write_session(
+        tmp_path,
+        session={"trace_epoch_utc": "2026-09-14T14:41:55.281Z"},
+        trace_rows=[(76608.848, 1.0), (287859.980, 1.0), (0.031, 1.0),
+                    (12.652, 1.0)],
+    )
+    w = c.derive_window(d)
+    assert not w.ok
+    assert w.start_utc is None and w.end_utc is None
+    assert "backwards" in w.error and "multi-boot" in w.error
+
+    doc = c.gather_conditions(d, fetch=make_fake_fetch())
+    assert doc["window"] is None
+    assert "backwards" in doc["error"]
+    assert doc["sources"] == {}
+
+
+def test_open_meteo_response_not_in_utc_is_refused_not_relabelled():
+    """Both fetchers send timezone=UTC and then parse naive `hourly.time`
+    with `.replace(tzinfo=UTC)`. That stamp is an assertion; if the response
+    ever comes back local, every hour in wind.json is silently shifted.
+
+    MEASURED live 2026-09-15 against archive-api.open-meteo.com:
+    utc_offset_seconds=0, timezone "GMT" — so the guard normally passes.
+    """
+    local = json.loads(WEATHER_FIXTURE)
+    local["utc_offset_seconds"] = -14400
+    local["timezone"] = "America/New_York"
+    got = c.fetch_open_meteo_weather(
+        35.9, -75.66,
+        dt.datetime(2026, 9, 14, 19, tzinfo=UTC),
+        dt.datetime(2026, 9, 14, 22, tzinfo=UTC),
+        fetch=lambda url: json.dumps(local).encode())
+    assert got["ok"] is False
+    assert "utc_offset_seconds=-14400" in got["error"]
+    assert "hours" not in got
+
+    marine = json.loads(MARINE_FIXTURE_NONNULL)
+    marine["utc_offset_seconds"] = 3600
+    got_m = c.fetch_open_meteo_marine(
+        35.9, -75.66,
+        dt.datetime(2026, 9, 14, 19, tzinfo=UTC),
+        dt.datetime(2026, 9, 14, 22, tzinfo=UTC),
+        fetch=lambda url: json.dumps(marine).encode())
+    assert got_m["ok"] is False
+    assert "NOT in UTC" in got_m["error"]
+
+
+def test_open_meteo_utc_response_still_passes_the_guard():
+    """The guard must not reject the real thing: the live archive answers
+    with utc_offset_seconds=0, and an older response omits the key."""
+    for extra in ({}, {"utc_offset_seconds": 0, "timezone": "GMT"}):
+        payload = json.loads(WEATHER_FIXTURE)
+        payload.update(extra)
+        got = c.fetch_open_meteo_weather(
+            35.9, -75.66,
+            dt.datetime(2026, 9, 14, 19, tzinfo=UTC),
+            dt.datetime(2026, 9, 14, 22, tzinfo=UTC),
+            fetch=lambda url: json.dumps(payload).encode())
+        assert got["ok"] is True
+        assert [h["time_utc"] for h in got["hours"]][0] == \
+            "2026-09-14T19:00:00+00:00"
+
+
+def test_garmin_window_uses_min_max_not_file_order(tmp_path, monkeypatch):
+    """A FIT need not be in time order — fitread counts "record timestamp(s)
+    go backwards" for exactly that reason. Reading stamped[0]/stamped[-1]
+    would hand back an inverted window from a file fitread had already
+    flagged, and those warnings were being dropped."""
+    import fitread
+
+    def fake_scan(blob, label):
+        def rec(mins):
+            return {"timestamp": dt.datetime(2026, 9, 14, 20, mins, tzinfo=UTC),
+                    "position_lat": None, "position_long": None}
+        return {"stamped": [rec(30), rec(10), rec(50), rec(20)],
+                "records": [], "warnings": ["2 record timestamp(s) go backwards; "
+                                             "windows assume file order"]}
+
+    monkeypatch.setattr(fitread, "read_fit_bytes", lambda p: (b"", "fake"))
+    monkeypatch.setattr(fitread, "scan", fake_scan)
+    d = _write_session(tmp_path, garmin_fit=True)
+    w = c.derive_window(d)
+    assert w.ok
+    assert w.start_utc == dt.datetime(2026, 9, 14, 20, 10, tzinfo=UTC)
+    assert w.end_utc == dt.datetime(2026, 9, 14, 20, 50, tzinfo=UTC)
+    assert any("go backwards" in n for n in w.notes), w.notes
+
+
+def test_ndbc_station_table_matches_noaa(tmp_path):
+    """Verified 2026-09-15 against NOAA's own
+    https://www.ndbc.noaa.gov/data/stations/station_table.txt:
+      orin7 35.796 N 75.548 W | dukn7 36.184 N 75.746 W | hcgn7 35.209 N 75.704 W
+    An identifier without a correct lookup entry is a rediscovery waiting to
+    happen (CLAUDE.md section 4)."""
+    assert c.NDBC_STATIONS["ORIN7"]["lat"] == 35.796
+    assert c.NDBC_STATIONS["ORIN7"]["lon"] == -75.548
+    assert c.NDBC_STATIONS["DUKN7"]["lat"] == 36.184
+    assert c.NDBC_STATIONS["DUKN7"]["lon"] == -75.746
+    assert c.NDBC_STATIONS["HCGN7"]["lat"] == 35.209
+    assert c.NDBC_STATIONS["HCGN7"]["lon"] == -75.704
+    # The evening session's centroid, from its own wind.json window block.
+    st = c.nearest_ndbc_station(35.911153956699785, -75.65974420437419)
+    assert st["id"] == "ORIN7"
+    assert st["distance_km"] == pytest.approx(16.29, abs=0.05)
+
+
+def test_ndbc_columns_match_a_real_realtime2_file():
+    """The live ORIN7 layout, fetched 2026-09-15: 19 whitespace columns,
+    WDIR=5, WSPD=6, GST=7, PRES=12, ATMP=13. PTDY ("+2.0") sits at 17 and
+    must not be mistaken for a temperature."""
+    text = (
+        "#YY  MM DD hh mm WDIR WSPD GST  WVHT   DPD   APD MWD   PRES  ATMP  WTMP  DEWP  VIS PTDY  TIDE\n"
+        "#yr  mo dy hr mn degT m/s  m/s     m   sec   sec degT   hPa  degC  degC  degC  nmi  hPa    ft\n"
+        "2026 09 15 12 00  60  6.2  8.2    MM    MM    MM  MM 1025.1  23.3  24.7    MM   MM +2.0    MM\n"
+        "2026 09 15 11 48  60  6.2  8.2    MM    MM    MM  MM 1024.9    MM  24.8    MM   MM   MM    MM\n"
+    )
+    rows = c.parse_ndbc_realtime2(
+        text, dt.datetime(2026, 9, 15, 11, tzinfo=UTC),
+        dt.datetime(2026, 9, 15, 13, tzinfo=UTC))
+    assert [r["time_utc"] for r in rows] == ["2026-09-15T11:48:00+00:00",
+                                              "2026-09-15T12:00:00+00:00"]
+    assert rows[1] == {"time_utc": "2026-09-15T12:00:00+00:00", "wdir": 60.0,
+                       "wspd_ms": 6.2, "gst_ms": 8.2, "atmp_c": 23.3}
+    assert rows[0]["atmp_c"] is None      # "MM", never 0.0 and never +2.0
+    assert c.ms_to_kn(6.2) == pytest.approx(12.052, abs=0.001)

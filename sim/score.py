@@ -728,7 +728,19 @@ def find_candidates(times: Sequence[float], mag: Sequence[float],
             takeoff_s=times[i], land_s=times[land], airtime_s=airtime,
             band_s=band_s, mean_load_g=sum(seg) / len(seg), min_load_g=min(seg),
             pop_g=pop, spike_g=mag[land]))
-        i = max(last_low + 1, i + 1)
+        # Resume PAST the landing spike, not at last_low + 1. Restarting
+        # inside the flight lets a band that was cut short by an excursion
+        # re-open before `land` and reach the SAME landing sample, emitting
+        # one jump as two — the very double-count band_tol_s exists to
+        # prevent (see test_band_tolerance_survives_a_single_stray_sample).
+        # MEASURED on data/sessions/20260914-210637-E2C4 at the scorecard's
+        # own chosen operating point (band 0.7 g, pop 1.2 g, spike 2.5 g,
+        # min air 0.4 s): candidates at t=10743.627 and t=10744.347 shared
+        # the landing sample t=10745.367, so the "32 candidates = Surfr's
+        # 32" that fixed the operating point was 31 events plus a duplicate.
+        # 20 of the 90 sweep grid points carried at least one such pair, up
+        # to 15 of them at band_g=0.8.
+        i = max(land + 1, i + 1)
     return out
 
 
@@ -923,7 +935,16 @@ def solve_offset(surfr_takeoff_s: Sequence[float],
     """
     if not surfr_takeoff_s or not candidate_takeoff_s:
         return None
-    cands = sorted(candidate_takeoff_s)
+    # (takeoff, ORIGINAL index) so a match can be reported by position.
+    # Looking the index back up by float VALUE — `{t: i for i, t in
+    # enumerate(...)}` — silently collapses two candidates that share a
+    # takeoff time and returns None for the loser, which renders as "NO
+    # CANDIDATE within the pairing window" for a row that did in fact match.
+    # data/sessions/20260914-210637-E2C4/trace.csv does carry a repeated
+    # timestamp (t=9902.002), so equal takeoffs are not hypothetical.
+    order = sorted(range(len(candidate_takeoff_s)),
+                   key=lambda i: candidate_takeoff_s[i])
+    cands = [candidate_takeoff_s[i] for i in order]
 
     def nearest(x: float) -> tuple[Optional[int], float]:
         lo, hi = 0, len(cands)
@@ -952,7 +973,6 @@ def solve_offset(surfr_takeoff_s: Sequence[float],
 
     resid: list[Optional[float]] = []
     idx: list[Optional[int]] = []
-    order = {t: i for i, t in enumerate(candidate_takeoff_s)}
     for s in surfr_takeoff_s:
         i, _ = nearest(s + off)
         if i is None:
@@ -960,7 +980,7 @@ def solve_offset(surfr_takeoff_s: Sequence[float],
             idx.append(None)
         else:
             resid.append(cands[i] - (s + off))
-            idx.append(order.get(cands[i]))
+            idx.append(order[i])
     return OffsetFit(offset_s=off, residuals_s=resid, matched_idx=idx,
                      searched_s=search_s, n_rows=len(surfr_takeoff_s))
 
@@ -1104,6 +1124,30 @@ def _fmt_list(xs: Iterable[float], fmt: str = "{:.2f}") -> str:
     return ", ".join(fmt.format(x) for x in xs) if xs else "-"
 
 
+def _surfr_top_airtimes(surfr: Optional[dict]) -> str:
+    """THIS session's reported Surfr airtimes, never another session's.
+
+    The literal "3.8 / 3.4 / 3.1 s for the 2026-09-14 evening" used to be
+    baked into this line and into section 5, so the 2026-09-14 MORNING card
+    — a multi-boot ring buffer with 0 transcribed rows and no Surfr airtime
+    at all — printed the evening's three numbers as though they were its
+    own. A hard-coded figure in a card whose header promises "every number
+    below is measured from the files in this directory" is the exact defect
+    CLAUDE.md section 2.6 names.
+    """
+    if not surfr:
+        return "no surfr.json"
+    airs = sorted((float(r["airtime_s"]) for r in (surfr.get("rows") or [])
+                   if r.get("airtime_s") is not None), reverse=True)
+    if airs:
+        return (f"top three of {len(airs)} transcribed row(s): "
+                f"{_fmt_list(airs[:3], '{:.2f}')} s")
+    mx = surfr.get("max_airtime_s")
+    if mx is not None:
+        return f"only a session maximum was transcribed: {mx} s"
+    return "no airtime transcribed for this session"
+
+
 def render_scorecard(s: SessionScore) -> str:
     a = s.alignment
     L: list[str] = []
@@ -1177,8 +1221,8 @@ def render_scorecard(s: SessionScore) -> str:
         f"{_fmt_list(cb[:3])} |")
     if s.surfr:
         add(f"| **Surfr (reference)** | **{s.surfr.get('jumps_total', '?')}** | "
-            f"**{s.surfr.get('max_airtime_s', '?')} s** | (top three reported: "
-            f"3.8 / 3.4 / 3.1 s for the 2026-09-14 evening) |")
+            f"**{s.surfr.get('max_airtime_s', '?')} s** | "
+            f"{_surfr_top_airtimes(s.surfr)} |")
     add("")
 
     add("### Sweep")
@@ -1247,12 +1291,23 @@ def render_scorecard(s: SessionScore) -> str:
         f"With one session and {n_rows} row(s) that budget is zero: nothing below "
         f"is a fitted calibration, and no height_scale or airtime_offset may be "
         f"derived from this file.")
-    add("- **A fitted offset over 2 rows is not a fitted offset.** Two points can "
-        "be slid onto two of several hundred candidates at many offsets; the "
-        "residuals say the alignment is self-consistent, not that the pairing is "
-        "right. The offset becomes a measurement at roughly 5+ rows, or "
-        "immediately with one rider lap press per jump "
-        "(`tools/fitread.py` already reads `lap_trigger=manual`).")
+    # The row count here used to be the literal "2" — so the morning card,
+    # with ZERO transcribed rows and an offset solver that never ran, still
+    # asserted "a fitted offset over 2 rows". Say what this session has.
+    if s.fit is not None:
+        add(f"- **A fitted offset over {s.fit.n_rows} row(s) is not a fitted "
+            f"offset.** {s.fit.n_rows} point(s) can be slid onto "
+            f"{len(s.candidates)} candidate(s) at many offsets; the residuals "
+            "say the alignment is self-consistent, not that the pairing is "
+            "right. The offset becomes a measurement at roughly 5+ rows, or "
+            "immediately with one rider lap press per jump "
+            "(`tools/fitread.py` already reads `lap_trigger=manual`).")
+    else:
+        add("- **No offset was fitted.** The solver did not run for this "
+            "session, so nothing below rests on a Surfr-to-candidate pairing. "
+            "The offset becomes a measurement at roughly 5+ transcribed rows, "
+            "or immediately with one rider lap press per jump "
+            "(`tools/fitread.py` already reads `lap_trigger=manual`).")
     add("- **A matching count is not matching jumps.** The sweep row chosen above "
         "was chosen BECAUSE its count is near Surfr's. Without per-jump truth "
         "that is circular; it fixes the operating point, it does not validate it.")
@@ -1262,14 +1317,30 @@ def render_scorecard(s: SessionScore) -> str:
     if s.low_load:
         got3 = s.low_load.get(3.0)
         if got3 is not None:
-            add(f"- **The airtime disagreement is not a threshold problem.** The "
-                f"lowest mean load over ANY contiguous 3.0 s window in the scored "
-                f"data is {got3[0]:.3f} g. No value of `band_g` produces a 3 s "
-                f"low-load flight, so Surfr's 3.8 / 3.4 / 3.1 s cannot be "
-                f"reproduced by retuning this generator. Either Surfr's airtime "
-                f"measures something other than an unloaded interval, or the puck "
-                f"did not record the flight the way the model assumes. That is the "
-                f"next measurement, and video is what settles it.")
+            # NAME THE SCOPE. This figure is computed over the SCORED window,
+            # not the whole file, and the two differ: measured on
+            # data/sessions/20260914-210637-E2C4, 0.947 g over the 103-minute
+            # Surfr/Garmin union and 0.944 g over all 417 minutes. Saying
+            # "in the scored data" without saying what that was is how the
+            # 103-minute number gets quoted as a 417-minute one.
+            scope = s.window_note.split(" — ")[0].split(";")[0].strip()
+            line = (f"- **The airtime disagreement is not a threshold problem.** "
+                    f"The lowest mean load over ANY contiguous 3.0 s window in "
+                    f"the scored data ({scope}) is {got3[0]:.3f} g. No value of "
+                    f"`band_g` produces a 3 s low-load flight")
+            if s.surfr and (s.surfr.get("rows") or s.surfr.get("max_airtime_s")):
+                line += (f", so this session's reported Surfr airtimes "
+                         f"({_surfr_top_airtimes(s.surfr)}) cannot be reproduced "
+                         f"by retuning this generator. Either Surfr's airtime "
+                         f"measures something other than an unloaded interval, or "
+                         f"the puck did not record the flight the way the model "
+                         f"assumes. That is the next measurement, and video is "
+                         f"what settles it.")
+            else:
+                line += (". No Surfr airtime was transcribed for this session, "
+                         "so there is nothing here to reproduce or contradict — "
+                         "the figure stands on its own.")
+            add(line)
     if not s.alignment.garmin.present:
         add(f"- **No Garmin file** ({s.alignment.garmin.reason}): no approach "
             f"speeds, and the epoch check did not run.")

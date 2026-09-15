@@ -216,13 +216,22 @@ def load_garmin_window(sess: Path) -> tuple[Optional[dict], str]:
             lats.append(lat * fitread.SEMICIRCLE_TO_DEG)
             lons.append(lon * fitread.SEMICIRCLE_TO_DEG)
 
+    # MIN/MAX, not first/last. `fitread.integrity_warnings()` already counts
+    # "record timestamp(s) go backwards" precisely because a FIT need not be
+    # in time order, and sim/score.py's load_garmin() sorts before taking its
+    # ends for the same reason. Reading stamped[0]/stamped[-1] in FILE order
+    # would hand back an inverted or truncated window from a file fitread had
+    # already flagged — and fitread's warnings were being dropped on the
+    # floor here, so nothing would have said so (CLAUDE.md rule 3).
+    stamps = [r["timestamp"].astimezone(UTC) for r in stamped]
     data = {
-        "start_utc": stamped[0]["timestamp"].astimezone(UTC),
-        "end_utc": stamped[-1]["timestamp"].astimezone(UTC),
+        "start_utc": min(stamps),
+        "end_utc": max(stamps),
         "record_count": len(stamped),
         "position_count": len(lats),
         "lat": (sum(lats) / len(lats)) if lats else None,
         "lon": (sum(lons) / len(lons)) if lons else None,
+        "fit_warnings": list(scanned.get("warnings") or []),
     }
     return data, "garmin.fit"
 
@@ -233,6 +242,8 @@ def derive_window(sess: Path) -> Window:
     g, g_reason = load_garmin_window(sess)
     if g is not None:
         notes = []
+        for w in g.get("fit_warnings") or []:
+            notes.append(f"garmin.fit: {w}")
         if g["position_count"] == 0:
             notes.append(
                 "garmin.fit carries no positioned record — no centroid; "
@@ -265,6 +276,23 @@ def derive_window(sess: Path) -> Window:
     if tr is None:
         return Window(ok=False, error="no trace.csv (or it has no data rows) — cannot derive a time window")
     t0, t1 = tr
+    if t1 <= t0:
+        # MULTI-BOOT RING BUFFER. trace.csv survives a power cycle, so the
+        # last row's `t` can be an EARLIER uptime than the first row's, and
+        # `trace_epoch_utc` pins only the boot that was running at sync
+        # (sim/score.py's Timebase, and its FINDING — MULTI-BOOT TRACE).
+        # MEASURED on data/sessions/20260914-104207-E2C4: first t=76,608.8 s,
+        # last t=12.7 s, which this used to hand back as a window starting
+        # 2026-09-15T11:58:44Z and ENDING 2026-09-14T14:42:07Z — inverted,
+        # a day out, and flagged ok. Every hour filter downstream would then
+        # match nothing and report only "no hourly row fell inside the
+        # requested window": a wrong reading wearing a routine face
+        # (CLAUDE.md rule 3).
+        return Window(ok=False, error=(
+            f"trace.csv's t runs backwards (first {t0:.3f} s, last {t1:.3f} s) — "
+            f"a multi-boot ring buffer, so `trace_epoch_utc` cannot place it on "
+            f"the wall clock; no time window derived ({g_reason}). "
+            f"`./tools/jump score` reports this as FINDING — MULTI-BOOT TRACE."))
     return Window(
         ok=True,
         start_utc=epoch + dt.timedelta(seconds=t0),
@@ -345,6 +373,30 @@ def _build_url(base: str, params: dict) -> str:
     return base + "?" + urllib.parse.urlencode(params)
 
 
+def utc_offset_finding(data: dict) -> Optional[str]:
+    """None when the response really is in UTC; a finding string otherwise.
+
+    Both Open-Meteo calls send `timezone=UTC` and then parse the naive
+    `hourly.time` strings with `.replace(tzinfo=UTC)`. That stamp is an
+    ASSERTION, not a reading: if the response ever comes back in a local
+    zone, every hour written into wind.json is shifted by that offset and
+    nothing anywhere says so — a wrong hour wearing a right one's face
+    (CLAUDE.md rule 3). The response carries the answer in
+    `utc_offset_seconds`, so check it instead of assuming.
+
+    MEASURED live 2026-09-15 against archive-api.open-meteo.com:
+    `utc_offset_seconds: 0, timezone: "GMT", timezone_abbreviation: "GMT"`,
+    times like "2026-09-14T19:00" — so today the assumption holds, and this
+    is the guard that says so out loud if it stops holding.
+    """
+    off = data.get("utc_offset_seconds")
+    if off in (None, 0):
+        return None
+    return (f"FINDING: the response is NOT in UTC — utc_offset_seconds="
+            f"{off} (timezone {data.get('timezone')!r}). Its hourly times "
+            f"cannot be read as UTC, so no hour is reported from this source.")
+
+
 def fetch_open_meteo_weather(lat: float, lon: float, lo: dt.datetime, hi: dt.datetime,
                               fetch: Fetch = default_fetch) -> dict:
     """Hourly wind_speed_10m/wind_gusts_10m/wind_direction_10m/temperature_2m/
@@ -373,6 +425,11 @@ def fetch_open_meteo_weather(lat: float, lon: float, lo: dt.datetime, hi: dt.dat
     except Exception as exc:  # noqa: BLE001
         result["ok"] = False
         result["error"] = f"bad JSON from open-meteo weather: {exc}"
+        return result
+    tz_finding = utc_offset_finding(data)
+    if tz_finding:
+        result["ok"] = False
+        result["error"] = tz_finding
         return result
     hourly = data.get("hourly")
     if not hourly:
@@ -447,6 +504,11 @@ def fetch_open_meteo_marine(lat: float, lon: float, lo: dt.datetime, hi: dt.date
     except Exception as exc:  # noqa: BLE001
         result["ok"] = False
         result["error"] = f"bad JSON from open-meteo marine: {exc}"
+        return result
+    tz_finding = utc_offset_finding(data)
+    if tz_finding:
+        result["ok"] = False
+        result["error"] = tz_finding
         return result
     hourly = data.get("hourly")
     if not hourly:

@@ -108,6 +108,26 @@ def _rclone_bin() -> str:
     raise RcloneNotFound(f"no rclone binary: set {RCLONE_ENV} or put rclone on PATH")
 
 
+def rclone_missing_reason() -> "Optional[str]":
+    """None when a runnable rclone exists; otherwise WHY there is none.
+
+    Every rclone caller below turns a missing binary into the same False /
+    None that a disconnected remote produces, which is how eight hours of
+    "gdrive-ro not ready ... `rclone config reconnect`" got logged for a
+    fault that was neither (see _run_cycle). This is the one place that can
+    tell the two apart, and it answers before any call is attempted."""
+    explicit = os.environ.get(RCLONE_ENV)
+    if explicit:
+        if os.path.isfile(explicit) and os.access(explicit, os.X_OK):
+            return None
+        return (f"{RCLONE_ENV}={explicit!r} is not a runnable file "
+                f"(exists={os.path.exists(explicit)})")
+    if shutil.which("rclone"):
+        return None
+    return (f"{RCLONE_ENV} is unset and no `rclone` is on PATH "
+            f"(PATH={os.environ.get('PATH', '')!r})")
+
+
 def _rclone(args: "list[str]", timeout: float) -> subprocess.CompletedProcess:
     """Run rclone with args. Raises RcloneNotFound / subprocess.TimeoutExpired
     / OSError — all three are "a reading that did not happen" (CLAUDE.md rule
@@ -708,10 +728,17 @@ def corpus_line(session_dir: Path) -> str:
         # thing to print here: "0 puck jumps, best 0.00 m" in an ACCURACY
         # corpus is a manufactured measurement, indistinguishable from a real
         # ride on which nothing was detected (CLAUDE.md rule 3; tools/refit.py
-        # keeps the same distinction -- "never a manufactured zero"). A
-        # session dir with no jumps.csv is a half-written ingest, and that is
-        # what the line has to say.
-        parts = ["no jumps.csv — ingest did not finish"]
+        # keeps the same distinction -- "never a manufactured zero").
+        #
+        # WHAT it says has to be measured too. "ingest did not finish" is a
+        # CAUSE, and it is only supportable for a directory that came from an
+        # ingest at all — a session.json is what an ingested bundle leaves
+        # behind. data/sessions/ also holds bench artifacts that were never
+        # ingests (jitter-check/ and walk-overnight/ hold no jumps.csv and no
+        # session.json), and diagnosing those as a failed ingest is a verdict
+        # without a measurement (CLAUDE.md rule 2 / 2.6).
+        parts = ["no jumps.csv — ingest did not finish" if session_json
+                 else "no jumps.csv and no session.json — not an ingested session"]
     else:
         count, best = read_session_jumps(session_dir)
         parts = [f"{count} puck jumps, best {best:.2f} m"]
@@ -816,15 +843,52 @@ def run_cycle(cfg: Config) -> CycleReport:
     failure anywhere becomes a logged line and a report.errors entry, not
     an unhandled exception reaching launchd."""
     report = CycleReport()
+    # One pass at a time. Measured 2026-09-15: a manual --once and a launchd
+    # run overlapped; the seen-ledger is a read-modify-write and an ingest
+    # is not idempotent, so the second pass must yield, not race.
+    lock_path = Path(cfg.data_dir) / ".ride_loop.lock"
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_fh = open(lock_path, "w")
+        import fcntl
+        fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        log(cfg, "another ride_loop pass is running -- this one yields")
+        report.errors.append("another pass running")
+        return report
     try:
         _run_cycle(cfg, report)
     except Exception as exc:  # noqa: BLE001 -- CLAUDE.md: never raise out of the loop
         log(cfg, f"run_cycle raised: {exc!r}")
         report.errors.append(repr(exc))
+    try:
+        lock_fh.close()
+    except OSError:
+        pass
     return report
 
 
 def _run_cycle(cfg: Config, report: CycleReport) -> None:
+    # "No rclone binary" and "the remote is not connected" are different
+    # faults with different fixes, and remote_authorized() swallows the first
+    # into the second's answer (False). MEASURED 2026-09-15: the LaunchAgent
+    # installed at 04:05 UTC carried no EnvironmentVariables, launchd's PATH
+    # is /usr/bin:/bin:/usr/sbin:/sbin, rclone lives in /opt/homebrew/bin —
+    # so every ten-minute cycle from 04:05 to 11:57 UTC logged "gdrive-ro not
+    # ready ... `rclone config reconnect`" (data/ride_loop.log) while a shell
+    # run listed all three folders fine. Eight hours of a log line naming
+    # three causes, none of which was the actual one. Name it.
+    missing = rclone_missing_reason()
+    if missing is not None:
+        log(cfg, f"NO RCLONE BINARY: {missing}. This is NOT a {cfg.ro_remote} "
+                 f"authorization problem — nothing was asked of Drive at all. "
+                 f"Under launchd, PATH is whatever the plist sets; "
+                 f"packaging/com.jumpheight.rideloop.plist sets both "
+                 f"{RCLONE_ENV} and a PATH containing /opt/homebrew/bin, so a "
+                 f"stale installed plist is the first thing to check "
+                 f"(re-run --install). Skipping this cycle.")
+        report.errors.append("no rclone binary")
+        return
     ok, listings = check_prerequisites(cfg)
     if not ok:
         log(cfg, f"{cfg.ro_remote} not ready (not configured, or configured "

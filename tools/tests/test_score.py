@@ -205,14 +205,22 @@ def test_noise_around_a_real_hop_still_finds_exactly_one():
 
 
 def test_band_tolerance_survives_a_single_stray_sample():
-    """One noisy sample poking above the band must not cut a flight in two —
-    the reason CandidateParams carries band_tol_s at all.
+    """One noisy sample poking above the band must not truncate the measured
+    flight — the reason CandidateParams carries band_tol_s at all.
 
-    The harm of zero tolerance is DOUBLE-COUNTING, not silence: both halves
-    still reach the same landing spike inside spike_window_s, so one jump is
-    reported as two. That is worse than a miss for a count being compared
-    against Surfr's 32, which is why this asserts the split explicitly rather
-    than just asserting the tolerant case works.
+    REVISED 2026-09-15. This used to assert `len(split) == 2`: with zero
+    tolerance both halves reached the same landing spike and one jump was
+    reported as TWO candidates. That double-count was a defect of
+    find_candidates, not a property of band_tol_s — the scan resumed inside
+    the flight after emitting — and it reached the real data (two candidates
+    sharing the spike at t=10745.367 in the evening trace, inside the count
+    that chose the scorecard's operating point). The generator now resumes
+    past the landing sample, so ONE landing spike yields at most ONE
+    candidate whatever the tolerance.
+
+    What band_tol_s still buys is the measurement: without it, `band_s` — how
+    much of the flight was genuinely unloaded, the number the whole scorecard
+    turns on — is truncated at the stray sample.
     """
     times, mag = ballistic_hop(1.0)
     mag[len(mag) // 2] = 0.9  # above a 0.6 g band, for exactly one sample
@@ -222,11 +230,15 @@ def test_band_tolerance_survives_a_single_stray_sample():
                                           min_air_s=0.4))
     assert len(tol) == 1
     assert tol[0].airtime_s == pytest.approx(1.0, abs=3 * DT)
+    assert tol[0].band_s == pytest.approx(1.0, abs=3 * DT)
 
     split = score.find_candidates(
         times, mag, score.CandidateParams(band_g=0.6, band_tol_s=0.0,
                                           min_air_s=0.4))
-    assert len(split) == 2, "one stray sample must split the flight in two"
+    assert len(split) == 1, "one landing spike is at most one candidate"
+    assert split[0].airtime_s == pytest.approx(1.0, abs=3 * DT)
+    assert split[0].band_s == pytest.approx(0.5, abs=0.05), \
+        "zero tolerance truncates the measured band at the stray sample"
 
 
 # ------------------------------------------------------ the low-load reachability probe
@@ -542,3 +554,121 @@ def test_best_row_for_count_breaks_ties_toward_the_tighter_setting():
 
 def test_best_row_for_count_handles_an_empty_sweep():
     assert score.best_row_for_count([], 32) is None
+
+
+# ------------------------------------------- adversarial review 2026-09-15
+
+
+def test_two_bands_sharing_one_landing_spike_are_one_candidate():
+    """One jump must not be counted twice.
+
+    A band cut short by an above-band excursion longer than band_tol_s used
+    to leave the scan resuming at last_low + 1, i.e. INSIDE the flight, so
+    the remainder re-opened a second band that reached the SAME landing
+    sample. MEASURED on data/sessions/20260914-210637-E2C4 at the scorecard's
+    own chosen operating point (band 0.7 g, pop 1.2 g, spike 2.5 g, min air
+    0.4 s): candidates at t=10743.627 and t=10744.347 both landed on the
+    spike at t=10745.367, so the "32 candidates, exactly Surfr's 32" that
+    chose the operating point was 31 events plus a duplicate. 20 of the 90
+    sweep grid points carried at least one such pair.
+    """
+    times, mag = _samples([
+        (2.0, 1.0),          # riding
+        (2 * DT, 2.2),       # pop
+        (0.6, 0.30),         # band, part one
+        (0.20, 0.95),        # excursion well past band_tol_s (0.10 s)
+        (0.6, 0.30),         # band, part two — same flight, same landing
+        (2 * DT, 3.4),       # ONE landing spike
+        (2.0, 1.0),
+    ])
+    cp = score.CandidateParams(band_g=0.6, pop_g=1.5, spike_g=2.5,
+                               min_air_s=0.4, band_tol_s=0.10)
+    cands = score.find_candidates(times, mag, cp)
+    assert len(cands) == 1, [(c.takeoff_s, c.land_s) for c in cands]
+    assert len({c.land_s for c in cands}) == len(cands)
+
+
+def test_candidates_never_overlap_in_time():
+    """No candidate may start before the previous one has landed."""
+    nt, nm = riding_noise(10.0, t0=100.0)
+    a_t, a_m = _samples([(2 * DT, 2.2), (0.5, 0.3), (0.15, 0.95), (0.5, 0.3),
+                         (2 * DT, 3.4)], t0=nt[-1] + DT)
+    b_t, b_m = riding_noise(10.0, t0=a_t[-1] + DT, seed=3)
+    times, mag = nt + a_t + b_t, nm + a_m + b_m
+    cands = score.find_candidates(
+        times, mag, score.CandidateParams(band_g=0.6, min_air_s=0.4))
+    for prev, nxt in zip(cands, cands[1:]):
+        assert nxt.takeoff_s >= prev.land_s, (prev.takeoff_s, prev.land_s,
+                                              nxt.takeoff_s)
+
+
+def test_offset_solver_reports_the_right_index_for_equal_takeoffs():
+    """Two candidates at the SAME takeoff time must not collapse.
+
+    matched_idx used to be recovered with `{takeoff: i}`, a dict keyed on a
+    float, so a repeated takeoff kept only the last index and the row that
+    matched the other one rendered as "NO CANDIDATE within the pairing
+    window". The real evening trace repeats a timestamp (t=9902.002), so
+    equal candidate takeoffs are reachable, not hypothetical.
+    """
+    cand = [100.0, 250.0, 250.0, 430.0]
+    surfr = [t - 5.0 for t in (100.0, 430.0)]
+    fit = score.solve_offset(surfr, cand, search_s=60.0)
+    assert fit.offset_s == pytest.approx(5.0, abs=0.25)
+    assert all(i is not None for i in fit.matched_idx), fit.matched_idx
+    for i, s in zip(fit.matched_idx, surfr):
+        assert cand[i] == pytest.approx(s + fit.offset_s, abs=0.5)
+
+
+def _scored(tmp_path, surfr):
+    return score.score_session(_write_session(
+        tmp_path,
+        session={"trace_epoch_utc": "2026-09-14T18:07:29.427Z",
+                 "manifest": {"tz_offset_min": -240}},
+        surfr=surfr))
+
+
+def test_scorecard_never_prints_another_sessions_surfr_airtimes(tmp_path):
+    """The card's header promises every number is measured from THIS
+    directory. "3.8 / 3.4 / 3.1 s for the 2026-09-14 evening" was a literal,
+    so the 2026-09-14 MORNING card — 0 transcribed rows, no Surfr airtime —
+    printed the evening's three numbers twice as if they were its own."""
+    card = score.render_scorecard(_scored(
+        tmp_path, {"jumps_total": 12, "rows": []}))
+    assert "3.8 / 3.4 / 3.1" not in card
+    assert "2026-09-14 evening" not in card
+
+    own = score.render_scorecard(_scored(tmp_path, {
+        "jumps_total": 3, "max_airtime_s": 2.2,
+        "session_start_local": "2026-09-14T14:07", "duration_s": 600,
+        "rows": [{"n": 1, "airtime_s": 2.20, "t_into_session": "0:20"},
+                 {"n": 2, "airtime_s": 1.10, "t_into_session": "0:40"}]}))
+    assert "2.20, 1.10" in own
+
+
+def test_scorecard_does_not_claim_a_fit_that_never_ran(tmp_path):
+    """"A fitted offset over 2 rows is not a fitted offset" was printed with
+    a hard-coded 2 even when 0 rows were transcribed and the solver never
+    ran — an assertion about a measurement that did not happen."""
+    s = _scored(tmp_path, {"jumps_total": 12, "rows": []})
+    assert s.fit is None
+    card = score.render_scorecard(s)
+    assert "over 2 rows" not in card
+    assert "No offset was fitted" in card
+    assert "0 transcribed Surfr row(s)" in card
+
+
+def test_scorecard_names_the_scope_of_the_three_second_claim(tmp_path):
+    """The 3 s minimum-mean-load figure is computed over the SCORED window,
+    not the whole trace, and the two differ: measured on
+    data/sessions/20260914-210637-E2C4, 0.947 g over the 103-minute
+    Surfr/Garmin union and 0.944 g over all 417 minutes. The card must say
+    which one it means."""
+    s = _scored(tmp_path, {"jumps_total": 3, "max_airtime_s": 2.2,
+                           "session_start_local": "2026-09-14T14:07",
+                           "duration_s": 600, "rows": []})
+    card = score.render_scorecard(s)
+    assert "lowest mean load over ANY contiguous 3.0 s window" in card
+    scope = s.window_note.split(" — ")[0].split(";")[0].strip()
+    assert f"({scope})" in card
+    assert "session window" in scope or "whole trace" in scope

@@ -1056,10 +1056,6 @@ class TestInstall(_RideLoopTestBase):
         self.assertFalse(ok)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class ThePlistFindsRclone(unittest.TestCase):
     """launchd's default PATH is /usr/bin:/bin:/usr/sbin:/sbin; rclone lives
     in /opt/homebrew/bin. Measured 2026-09-15: every launchd run logged
@@ -1072,3 +1068,118 @@ class ThePlistFindsRclone(unittest.TestCase):
         env = d.get("EnvironmentVariables", {})
         self.assertEqual(env.get("RIDE_LOOP_RCLONE"), "/opt/homebrew/bin/rclone")
         self.assertIn("/opt/homebrew/bin", env.get("PATH", ""), "launchd_default_path lacks homebrew")
+
+
+# ---------------------------------------- adversarial review 2026-09-15
+
+class NoRcloneBinaryIsNotAnAuthorizationProblem(_RideLoopTestBase):
+    """MEASURED 2026-09-15 on this Mac. The LaunchAgent installed at
+    04:05 UTC carried no EnvironmentVariables; launchd's default PATH is
+    /usr/bin:/bin:/usr/sbin:/sbin and rclone lives in /opt/homebrew/bin. So
+    every ten-minute cycle from 04:05 to 11:57 UTC wrote, to
+    data/ride_loop.log and to the plist's StandardErrorPath:
+
+        gdrive-ro not ready (not configured, or configured but not connected
+        — `rclone config reconnect`, or the share is gone: nothing listed at
+        all)
+
+    while a shell run of the same three lsjson calls listed every folder.
+    Eight hours of a line naming three causes, none of which was the real
+    one — because remote_authorized() catches RcloneNotFound and answers
+    False, the same answer a disconnected remote gives. The binary being
+    absent has to say so."""
+
+    def test_missing_binary_is_named_and_not_blamed_on_the_remote(self):
+        empty = self.tmp / "empty_path"
+        empty.mkdir()
+        cfg = self.make_cfg()
+        env = dict(os.environ)
+        env.pop("RIDE_LOOP_RCLONE", None)
+        env["PATH"] = str(empty)
+        with patch.dict(os.environ, env, clear=True):
+            self.assertIsNotNone(ride_loop.rclone_missing_reason())
+            report = ride_loop.run_cycle(cfg)
+        text = cfg.log_path.read_text()
+        self.assertIn("NO RCLONE BINARY", text)
+        self.assertNotIn("config reconnect", text)
+        self.assertIn("no rclone binary", report.errors)
+        self.assertFalse(report.ready)
+        self.assertEqual(self.notifications, [])
+
+    def test_an_env_override_pointing_at_nothing_is_also_named(self):
+        cfg = self.make_cfg()
+        with patch.dict(os.environ, {"RIDE_LOOP_RCLONE": str(self.tmp / "nope")}):
+            self.assertIn("not a runnable file", ride_loop.rclone_missing_reason())
+            report = ride_loop.run_cycle(cfg)
+        self.assertIn("NO RCLONE BINARY", cfg.log_path.read_text())
+        self.assertIn("no rclone binary", report.errors)
+
+    def test_a_real_binary_leaves_the_remote_gate_in_charge(self):
+        """The guard must not shadow the case it is not about: with rclone
+        present and the remote unconfigured, the message is still the
+        remote's."""
+        cfg = self.make_cfg()
+        self.assertIsNone(ride_loop.rclone_missing_reason())
+        with patch.dict(os.environ, {"FAKE_RCLONE_REMOTES": "gdrive"}):
+            report = ride_loop.run_cycle(cfg)
+        text = cfg.log_path.read_text()
+        self.assertNotIn("NO RCLONE BINARY", text)
+        self.assertIn("not ready", text)
+        self.assertFalse(report.ready)
+
+
+class CorpusStatesOnlyWhatItMeasured(_RideLoopTestBase):
+    def test_a_bench_dir_is_not_diagnosed_as_a_failed_ingest(self):
+        """data/sessions/ also holds bench artifacts that were never ingests
+        — jitter-check/ and walk-overnight/ carry no jumps.csv AND no
+        session.json. "ingest did not finish" is a CAUSE, and asserting it
+        for a directory that no ingest ever wrote is a verdict without a
+        measurement (CLAUDE.md rule 2)."""
+        bench = self.sessions_dir / "walk-overnight"
+        bench.mkdir(parents=True)
+        (bench / "pull-a").mkdir()
+        line = ride_loop.corpus_line(bench)
+        self.assertIn("not an ingested session", line)
+        self.assertNotIn("ingest did not finish", line)
+        self.assertNotIn("0 puck jumps", line)
+
+    def test_a_half_written_ingest_still_says_ingest_did_not_finish(self):
+        """The other half of the same distinction: session.json present and
+        jumps.csv missing IS an ingest that died part-way."""
+        sess = self.sessions_dir / "20260914-210600-E2C4"
+        sess.mkdir(parents=True)
+        (sess / "session.json").write_text(json.dumps(session_json()))
+        line = ride_loop.corpus_line(sess)
+        self.assertIn("ingest did not finish", line)
+        self.assertNotIn("0 puck jumps", line)
+
+
+class OnePassAtATime(_RideLoopTestBase):
+    """Measured 2026-09-15: a manual --once and a launchd pass overlapped."""
+
+    def test_a_second_pass_yields_while_the_first_holds_the_lock(self):
+        import fcntl
+        cfg = self.make_cfg()
+        lock = Path(cfg.data_dir) / ".ride_loop.lock"
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        holder = open(lock, "w")
+        fcntl.flock(holder.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            report = ride_loop.run_cycle(cfg)
+        finally:
+            holder.close()
+        self.assertIn("another pass running", report.errors)
+        self.assertIn("yields", cfg.log_path.read_text())
+
+    def test_the_lock_is_released_after_a_pass(self):
+        import fcntl
+        with patch.dict(os.environ, {"FAKE_RCLONE_REMOTES": "gdrive"}):
+            ride_loop.run_cycle(self.make_cfg())
+        lock = Path(self.make_cfg().data_dir) / ".ride_loop.lock"
+        fh = open(lock, "w")
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)   # would raise if still held
+        fh.close()
+
+
+if __name__ == "__main__":
+    unittest.main()
