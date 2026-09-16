@@ -20,7 +20,7 @@ table is a rediscovery waiting to happen.**
 |---|---|---|---|---|---|
 | **"OG"** — original Sense (a.k.a. "the mule") | **`JumpHeight-E2C4`** | `185D88EE…` (bootloader `EB2503CC…`) | `7ACE98D972CB56F8` | **YES — pigtail SOLDERED. The only board with a cell.** | **THE product board.** *2026-08-20 snapshot (kept for the record):* running `src=ef37e568` (older build, still lacks the `clear()` watchdog fix), 3810 mV / 42 %, 23.8 h continuous uptime, drop calibration measured on this board. **UPDATED 2026-08-23 (STATUS.md, current authority):** now running `src=e83f6395` (reflashed, selftest PASS, `dcdc=1`), `vbat_mv=4088 batt_pct=92`. **The drop calibration is GONE** — `CAL … source=defaults`, not the measured value; heights are NOT trustworthy until the drop ritual is re-run. Confirm build and CAL source with `stats`/`info` before any water-test claim, never assume from this table. |
 | **"The spare"** — 3rd Sense *(registry formerly titled this row "Board #3"; that ordinal now collides with "the third board" = the Puck/8673, and identity confusion has cost four wrong verdicts — so the ordinal is retired; this board is THE SPARE, full stop)* | **`JumpHeight-45ED`** | `14E6E6F1…` | `11641737F0ECA0D6` | **NO — no pigtail, USB only.** | Bench board. Running `src=54b2e904`. Healthy sensor (`accel 1.021 g / noise 0.0025 g`). **Its `vbat_mv` / `batt_pct` are a FLOATING divider and mean nothing** — seen reading 3742 mV/23 % and 4133 mV/97 % minutes apart. Never log a battery figure from it. |
-| **"Puck"** — 2nd Sense (2026-08-12) | **`JumpHeight-8673`** | `B96D14EA…` | `2513620E30AE413D` | **NO** — USB only | **REASSESSED 2026-08-20: HEALTHY.** Flashed `src=15b2d468`, selftest 6/6 (accel 1.050 g, noise 0.0045 g, flash 2093056B_free). The fourth "dead board" verdict in this project to prove wrong. Role: Era-2 development board (standby/System-OFF/OTA-abort work — never the OG). |
+| **"Puck"** — 2nd Sense (2026-08-12) | **`JumpHeight-8673`** | `B96D14EA…` | `2513620E30AE413D` | **NO** — USB only | **REASSESSED 2026-08-20: HEALTHY.** Flashed `src=15b2d468`, selftest 6/6 (accel 1.050 g, noise 0.0045 g, flash 2093056B_free). The fourth "dead board" verdict in this project to prove wrong. Role: Era-2 development board (standby/System-OFF/OTA-abort work — never the OG). **2026-09-15 update:** now runs research USB recorder `9c9289b69af5b76a` (no BLE/product detector); UID unchanged. Two live captures passed acquisition checks; clock scale remains uncalibrated. [Measured results](../research/usb_recorder/BENCH_RESULTS.md). |
 | ~~"Mule"~~ | — | — | — | — | Retired name: the "mule" and the "OG" are the SAME board (row 1). Calling the product board sacrificial is how it nearly got treated as disposable. |
 | **"The clone"** — planned second OG-spec board for the rider *(placeholder row, 2026-09-07)* | **unknown** | **unknown** | **unknown** | **YES, planned** — built to the OG's spec, pigtail soldered like row 1 | **Not built.** No name, address or serial exists until it is first flashed — filling this row **in that same commit** is the §1b rule this table exists to enforce, not a follow-up. Once it exists, its first BLE sync will hand us its name for free: the sync page (`web/sync/`) shows the connected puck's advertised name on Connect, and the bundle it produces is named `jumpheight-<PUCK4>-...zip` — the 4-char suffix is right there in the filename Josh receives. |
 
@@ -112,6 +112,55 @@ after first flash is expected, not a swap.
 - Two boards on USB ⇒ **always** `--upload-port` explicitly.
 - Two boards advertising `JumpHeight` ⇒ **always** `OTADFU_ADDR=` pin.
 - After any flash, re-enumerate ports by serial number, never assume.
+
+## Research recorder lookup and restoration — 2026-09-15
+
+**Current installed application:** `JumpHeight-8673`, USB serial
+`2513620E30AE413D`, research build **`9c9289b69af5b76a`**. It responds to
+`JH6 INFO`, not the product protocol; it has no product detector or BLE service.
+Use `research/usb_recorder/capture.py`. It is USB-only; battery fields are not
+measurements. The OG (`E2C4`) remains at the rider's house and is outside this work.
+
+**Prepared but NOT installed:** research build `53aac69c2b7e37a8`, with continuous
+captures up to 1,200 s, clock-register readbacks and die-temperature telemetry.
+The old recorder acknowledged `dfu` but returned to its application before a
+bootloader was observed, including after the competing Sync app was stopped.
+**No upload occurred.** Physical double-tap reset is
+needed before trying the prepared update; the owner is available in the morning.
+A normal unplug/replug is separately required for the clock power-cycle test.
+
+**Product rollback:** `web/firmware/jumpheight-c5eea285.zip`, application only,
+SHA-256:
+
+```text
+a5cdd54711430167e506b8056efd4f0ad0335b4b595bdaadb35f3a23ef9eafd1
+```
+
+From the repo root, the fixed-target helper verifies this exact package and
+board. Default mode is read-only; the second command performs restoration:
+
+```sh
+python3 research/usb_recorder/restore_product.py
+python3 research/usb_recorder/restore_product.py --restore
+```
+
+If software bootloader entry fails, stop. Double-tap the reset button on **8673**
+while USB-connected, then rerun the restoration command after its bootloader
+appears. The helper requires the same serial number, VID `2886`, bootloader PID
+`0045`; it makes one application-only serial DFU attempt, never a 1200-baud touch.
+Success requires both the uploader's `Device programmed.` marker and a fresh
+product `info` response identifying `JumpHeight-8673` and `src=c5eea285`.
+It never sends `clear` or `format`; no NVS calibration write is part of this
+procedure. Do not infer restoration from an ACK, upload exit code, or port name.
+
+The helper's read-only preflight was exercised on 8673. Its hardware restoration
+path is not yet exercised; refusal and verification paths have software tests.
+**The local Sync launch agent is paused for research** after a concurrent serial
+owner was observed following a corrupted capture. Keep it stopped while this board
+runs the research recorder; the clock-study report gives the resume command.
+Original deployment evidence and the
+prepared-update failure are under `research/usb_recorder/captures/`; see the
+[clock study](../research/usb_recorder/TIMEBASE_STUDY.md) for current gates.
 
 ## 1c. Flashing doctrine — measured, 2026-08-20 (n=9 in one evening)
 

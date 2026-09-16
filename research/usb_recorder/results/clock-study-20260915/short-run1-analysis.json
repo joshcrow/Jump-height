@@ -1,0 +1,1103 @@
+{
+  "schema": "jh6.clock_analysis.v1",
+  "research_only": true,
+  "timebase_calibrated": false,
+  "capture": "/Users/joshcrow/Jump-height/research/usb_recorder/captures/clock-study-20260915/short-run1",
+  "raw_sha256": "f8de928a942cca478a162c7f41d9497470ab9e4a8255ef13c99c028546a698c4",
+  "input_files": {
+    "raw.bin": {
+      "bytes": 264790,
+      "sha256": "f8de928a942cca478a162c7f41d9497470ab9e4a8255ef13c99c028546a698c4"
+    },
+    "raw.csv": {
+      "bytes": 359483,
+      "sha256": "c00b3ef59b64848239be244aeac593e2d00e4331594450f55e7c2e83e8b8c7d4"
+    },
+    "host_receive.csv": {
+      "bytes": 1139431,
+      "sha256": "2c19db850d55438cf53fb2478b15d95dec39e6cd9a3d721878b7f2dcbbb157dd"
+    },
+    "manifest.json": {
+      "bytes": 5109,
+      "sha256": "a866977f7c47a2ba8f999d7e7377d03effb8945b0a7c713680c7ade222536622"
+    },
+    "status.json": {
+      "bytes": 3,
+      "sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570"
+    }
+  },
+  "analysis_script_sha256": "9d30acce2d83d38233b3fb0fb6d4832a10929a528a10ec4984c824c75f48bb82",
+  "metadata": {
+    "recorder": "jh6-usb-research",
+    "uid": "2513620E30AE413D",
+    "name": "JumpHeight-8673",
+    "build": "9c9289b69af5b76a",
+    "sensor_ok": true,
+    "sensor_error": "none",
+    "odr_hz": 208,
+    "accel_g_per_lsb": 0.000488,
+    "gyro_dps_per_lsb": 0.07,
+    "timestamp_tick_us": 25,
+    "timestamp_bits": 24,
+    "timestamp_mode": "fifo",
+    "mcu_timebase": "TIMER4_1MHz_service_time",
+    "duration_ms": 60000,
+    "fifo_words_per_sample": 9,
+    "discard_startup_samples": 1,
+    "rail_threshold_counts": 32760,
+    "gyro_lpf1": false,
+    "usb_only": true
+  },
+  "end": null,
+  "integrity_issues": [
+    "41 unframed bytes at offset 264631",
+    "CRC mismatch at 264672",
+    "34 unframed bytes at offset 264676",
+    "CRC mismatch at 264710",
+    "76 trailing bytes without frame header",
+    "capture must have exactly one META and one END",
+    "capture manifest failed acquisition integrity"
+  ],
+  "analysis_scope": {
+    "raw_decoded_sample_count": 6604,
+    "selected_sample_count": 6604,
+    "selection": "all_decoded_samples",
+    "timestamps_repaired": false
+  },
+  "invalid_clock_intervals": {
+    "fifo": [],
+    "mcu": []
+  },
+  "rates": {
+    "nominal_odr_hz": 208,
+    "nominal_tick_us": 25,
+    "sample_count": 6604,
+    "sample_intervals": 6603,
+    "fifo_nominal_span_s": 32.204950000000004,
+    "mcu_nominal_span_s": 31.34134,
+    "samples_per_fifo_nominal_second": 205.03059312310683,
+    "samples_per_mcu_nominal_second": 210.6802070364573,
+    "warning": "Rates are clock-relative observations, not declarations that either clock or the 208 Hz setting is exact.",
+    "host_selected_first_seq": 0,
+    "host_selected_last_seq": 6603,
+    "host_selected_sample_intervals": 6603,
+    "host_monotonic_span_s": 31.342701125,
+    "host_realtime_span_s": 31.342619000000003,
+    "samples_per_host_monotonic_second": 210.6710577900136,
+    "samples_per_host_realtime_second": 210.67160979750923
+  },
+  "fits": {
+    "mcu_seconds_per_nominal_fifo_second": {
+      "n": 6604,
+      "slope": 0.9731980318040953,
+      "intercept_s": -0.00043329789520285544,
+      "ppm_from_slope_one": -26801.968195904745,
+      "formal_iid_slope_se_ppm": 0.22931347948852684,
+      "formal_iid_se_warning": "Diagnostic only: correlated/buffered observations violate iid errors.",
+      "x_span_s": 32.204950000000004,
+      "y_span_s": 31.34134,
+      "endpoint_slope": 0.9731839360098369,
+      "residual_s": {
+        "n": 6604,
+        "min": -0.00040877562299179715,
+        "max": 0.0004579150598887777,
+        "mean": -1.0522136772070002e-15,
+        "median": -4.46175053792075e-06,
+        "p01": -0.0003560006050413733,
+        "p99": 0.00039469151062074335,
+        "sd": 0.0001732580458379977
+      },
+      "residual_lag1": 0.923695466737909,
+      "window_duration_x_s": 5.0,
+      "windows": [
+        {
+          "start_x_s": 0.0,
+          "n": 1026,
+          "slope": 0.9731349694936179,
+          "residual_rms_s": 0.0002701308738680883,
+          "mean_full_fit_residual_s": 0.0002450057249564837
+        },
+        {
+          "start_x_s": 5.0,
+          "n": 1025,
+          "slope": 0.9731747405747485,
+          "residual_rms_s": 0.00010315856872526677,
+          "mean_full_fit_residual_s": -7.806593447112103e-05
+        },
+        {
+          "start_x_s": 10.0,
+          "n": 1025,
+          "slope": 0.9731691989115683,
+          "residual_rms_s": 0.0002540574631166448,
+          "mean_full_fit_residual_s": -0.0002427550282599754
+        },
+        {
+          "start_x_s": 15.0,
+          "n": 1025,
+          "slope": 0.9732344376835865,
+          "residual_rms_s": 0.00012516377500381315,
+          "mean_full_fit_residual_s": -9.722632352646395e-05
+        },
+        {
+          "start_x_s": 20.0,
+          "n": 1025,
+          "slope": 0.9732199459529152,
+          "residual_rms_s": 7.316553366859495e-05,
+          "mean_full_fit_residual_s": 2.7849028377494833e-05
+        },
+        {
+          "start_x_s": 25.0,
+          "n": 1025,
+          "slope": 0.9732322907919613,
+          "residual_rms_s": 0.00012477322874278557,
+          "mean_full_fit_residual_s": 9.943222866956225e-05
+        }
+      ],
+      "window_slope_stats": {
+        "n": 6,
+        "min": 0.9731349694936179,
+        "max": 0.9732344376835865,
+        "mean": 0.9731942639013996,
+        "median": 0.9731973432638319,
+        "p01": 0.9731366809645154,
+        "p99": 0.9732343303390053,
+        "sd": 4.06073533833326e-05
+      },
+      "moving_block_bootstrap": {
+        "available": true,
+        "window_count": 6,
+        "block_length_windows": 3,
+        "repeats": 2000,
+        "estimand": "mean of full-window slopes, not full-record OLS slope",
+        "mean_slope": 0.9731942639013996,
+        "ci95_slope": [
+          0.9731701516400437,
+          0.9732288914761543
+        ],
+        "ci95_ppm_from_one": [
+          -26829.848359956275,
+          -26771.108523845676
+        ],
+        "assumption": "Approximate stationarity and dependence mostly shorter than resampled blocks; drift invalidates a universal CI."
+      },
+      "moving_block_bootstrap_longer_blocks": {
+        "available": false,
+        "reason": "need at least six full windows and two blocks"
+      },
+      "window_slope_change_first_to_last_ppm": 97.32129834338909,
+      "residual_trend_note": "Full OLS residual linear trend is zero by construction; inspect window means, slope changes and residual CSV.",
+      "observed_p01_p99_residual_span_as_endpoint_ppm": 23.30983639664451,
+      "observed_residual_span_warning": "Observed spread is not an upper bound on queued latency, drift or clock error.",
+      "conditional_endpoint_latency_envelope": {
+        "available": false,
+        "reason": "No justified bound on endpoint latency difference supplied; absolute slope uncertainty remains open."
+      },
+      "implied_tick_us_in_mcu_units": 24.32995079510238
+    },
+    "host_monotonic_seconds_per_nominal_fifo_second": {
+      "n": 6598,
+      "slope": 0.9732049248547527,
+      "intercept_s": -0.00027687637272677534,
+      "ppm_from_slope_one": -26795.07514524726,
+      "formal_iid_slope_se_ppm": 0.26655852118870865,
+      "formal_iid_se_warning": "Diagnostic only: correlated/buffered observations violate iid errors.",
+      "x_span_s": 32.204950000000004,
+      "y_span_s": 31.342701125,
+      "endpoint_slope": 0.9732262004753927,
+      "residual_s": {
+        "n": 6598,
+        "min": -0.0005386755113505615,
+        "max": 0.003460057918591275,
+        "mean": -1.674108062611173e-17,
+        "median": -6.1748116944038145e-06,
+        "p01": -0.0003845962935560898,
+        "p99": 0.0004180558939096764,
+        "sd": 0.00020124088366307426
+      },
+      "residual_lag1": 0.7576935931264034,
+      "window_duration_x_s": 5.0,
+      "windows": [
+        {
+          "start_x_s": 0.0,
+          "n": 1025,
+          "slope": 0.9731436944083738,
+          "residual_rms_s": 0.0003052980030394172,
+          "mean_full_fit_residual_s": 0.00023921272419715657
+        },
+        {
+          "start_x_s": 5.0,
+          "n": 1025,
+          "slope": 0.9731993328373436,
+          "residual_rms_s": 0.00010472749436282225,
+          "mean_full_fit_residual_s": -6.083555390859439e-05
+        },
+        {
+          "start_x_s": 10.0,
+          "n": 1025,
+          "slope": 0.9731752475082819,
+          "residual_rms_s": 0.0002694833048013998,
+          "mean_full_fit_residual_s": -0.00025126624163294
+        },
+        {
+          "start_x_s": 15.0,
+          "n": 1023,
+          "slope": 0.9732369094488322,
+          "residual_rms_s": 0.0002031193531366132,
+          "mean_full_fit_residual_s": -9.562280675538992e-05
+        },
+        {
+          "start_x_s": 20.0,
+          "n": 1025,
+          "slope": 0.9732251019439239,
+          "residual_rms_s": 8.457872544628336e-05,
+          "mean_full_fit_residual_s": 2.4329504797511927e-05
+        },
+        {
+          "start_x_s": 25.0,
+          "n": 1024,
+          "slope": 0.973254095360556,
+          "residual_rms_s": 0.00016002672002382793,
+          "mean_full_fit_residual_s": 9.685149803533716e-05
+        }
+      ],
+      "window_slope_stats": {
+        "n": 6,
+        "min": 0.9731436944083738,
+        "max": 0.973254095360556,
+        "mean": 0.9732057302512186,
+        "median": 0.9732122173906337,
+        "p01": 0.9731452720633692,
+        "p99": 0.9732532360649698,
+        "sd": 4.124356667896874e-05
+      },
+      "moving_block_bootstrap": {
+        "available": true,
+        "window_count": 6,
+        "block_length_windows": 3,
+        "repeats": 2000,
+        "estimand": "mean of full-window slopes, not full-record OLS slope",
+        "mean_slope": 0.9732057302512186,
+        "ci95_slope": [
+          0.9731858995600454,
+          0.9732387022511041
+        ],
+        "ci95_ppm_from_one": [
+          -26814.10043995458,
+          -26761.297748895908
+        ],
+        "assumption": "Approximate stationarity and dependence mostly shorter than resampled blocks; drift invalidates a universal CI."
+      },
+      "moving_block_bootstrap_longer_blocks": {
+        "available": false,
+        "reason": "need at least six full windows and two blocks"
+      },
+      "window_slope_change_first_to_last_ppm": 110.40095218217694,
+      "residual_trend_note": "Full OLS residual linear trend is zero by construction; inspect window means, slope changes and residual CSV.",
+      "observed_p01_p99_residual_span_as_endpoint_ppm": 24.92325519728384,
+      "observed_residual_span_warning": "Observed spread is not an upper bound on queued latency, drift or clock error.",
+      "conditional_endpoint_latency_envelope": {
+        "available": false,
+        "reason": "No justified bound on endpoint latency difference supplied; absolute slope uncertainty remains open."
+      },
+      "ntp_only_conditioned_slope_interval": [
+        0.9729087516994982,
+        0.9736211394212135
+      ],
+      "ntp_conditioning_warning": "Direct NTP server-to-monotonic anchor scenario: independent of realtime steps, but excludes serial/service delay drift, statistical fit variation and nonuniform monotonic clock drift. Requires rate stability between anchors and capture.",
+      "ntp_per_server_conditioned": [
+        {
+          "server": "time.apple.com",
+          "slope": 0.9732649455603558,
+          "scenario_slope_interval": [
+            0.9729087516994982,
+            0.9736211394212135
+          ],
+          "reference_factor_halfwidth_ppm_from_one": 366.00088199394474,
+          "scenario_halfwidth_ppm_of_slope": 365.9783109239716,
+          "anchors_enclose_selected_samples": true
+        },
+        {
+          "server": "time.cloudflare.com",
+          "slope": 0.9732023884762168,
+          "scenario_slope_interval": [
+            0.9729618956820795,
+            0.9734428812703542
+          ],
+          "reference_factor_halfwidth_ppm_from_one": 247.11423873361957,
+          "scenario_halfwidth_ppm_of_slope": 247.11488276743873,
+          "anchors_enclose_selected_samples": true
+        },
+        {
+          "server": "time.google.com",
+          "slope": 0.973218747246942,
+          "scenario_slope_interval": [
+            0.9730569273852332,
+            0.973380567108651
+          ],
+          "reference_factor_halfwidth_ppm_from_one": 166.2752186883941,
+          "scenario_halfwidth_ppm_of_slope": 166.27285712138712,
+          "anchors_enclose_selected_samples": true
+        }
+      ]
+    },
+    "host_realtime_seconds_per_nominal_fifo_second": {
+      "n": 6598,
+      "slope": 0.9732023690131898,
+      "intercept_s": -0.00027696355740580714,
+      "ppm_from_slope_one": -26797.630986810207,
+      "formal_iid_slope_se_ppm": 0.26652790410835714,
+      "formal_iid_se_warning": "Diagnostic only: correlated/buffered observations violate iid errors.",
+      "x_span_s": 32.204950000000004,
+      "y_span_s": 31.342619000000003,
+      "endpoint_slope": 0.9732236504015687,
+      "residual_s": {
+        "n": 6598,
+        "min": -0.0005390746896001275,
+        "max": 0.0034600475860919744,
+        "mean": 1.5765497172879076e-15,
+        "median": -6.027105012407219e-06,
+        "p01": -0.0003846547780987741,
+        "p99": 0.00041815322330371953,
+        "sd": 0.00020121776900788467
+      },
+      "residual_lag1": 0.7576358558004155,
+      "window_duration_x_s": 5.0,
+      "windows": [
+        {
+          "start_x_s": 0.0,
+          "n": 1025,
+          "slope": 0.9731411530534131,
+          "residual_rms_s": 0.00030525963236921835,
+          "mean_full_fit_residual_s": 0.0002391747639366477
+        },
+        {
+          "start_x_s": 5.0,
+          "n": 1025,
+          "slope": 0.9731967851554759,
+          "residual_rms_s": 0.00010471373028600905,
+          "mean_full_fit_residual_s": -6.084194841164005e-05
+        },
+        {
+          "start_x_s": 10.0,
+          "n": 1025,
+          "slope": 0.9731726929468154,
+          "residual_rms_s": 0.0002694708961118866,
+          "mean_full_fit_residual_s": -0.00025125044380015196
+        },
+        {
+          "start_x_s": 15.0,
+          "n": 1023,
+          "slope": 0.9732343573807104,
+          "residual_rms_s": 0.00020310752519400865,
+          "mean_full_fit_residual_s": -9.558040536871271e-05
+        },
+        {
+          "start_x_s": 20.0,
+          "n": 1025,
+          "slope": 0.9732225428348449,
+          "residual_rms_s": 8.45922150919988e-05,
+          "mean_full_fit_residual_s": 2.437794113030153e-05
+        },
+        {
+          "start_x_s": 25.0,
+          "n": 1024,
+          "slope": 0.9732514983425368,
+          "residual_rms_s": 0.00015999835730260166,
+          "mean_full_fit_residual_s": 9.683381995257909e-05
+        }
+      ],
+      "window_slope_stats": {
+        "n": 6,
+        "min": 0.9731411530534131,
+        "max": 0.9732514983425368,
+        "mean": 0.9732031716189661,
+        "median": 0.9732096639951604,
+        "p01": 0.9731427300480832,
+        "p99": 0.9732506412944455,
+        "sd": 4.122937495646667e-05
+      },
+      "moving_block_bootstrap": {
+        "available": true,
+        "window_count": 6,
+        "block_length_windows": 3,
+        "repeats": 2000,
+        "estimand": "mean of full-window slopes, not full-record OLS slope",
+        "mean_slope": 0.9732031716189661,
+        "ci95_slope": [
+          0.9731833446178549,
+          0.9732361328526974
+        ],
+        "ci95_ppm_from_one": [
+          -26816.65538214506,
+          -26763.86714730261
+        ],
+        "assumption": "Approximate stationarity and dependence mostly shorter than resampled blocks; drift invalidates a universal CI."
+      },
+      "moving_block_bootstrap_longer_blocks": {
+        "available": false,
+        "reason": "need at least six full windows and two blocks"
+      },
+      "window_slope_change_first_to_last_ppm": 110.34528912368114,
+      "residual_trend_note": "Full OLS residual linear trend is zero by construction; inspect window means, slope changes and residual CSV.",
+      "observed_p01_p99_residual_span_as_endpoint_ppm": 24.92809339565792,
+      "observed_residual_span_warning": "Observed spread is not an upper bound on queued latency, drift or clock error.",
+      "conditional_endpoint_latency_envelope": {
+        "available": false,
+        "reason": "No justified bound on endpoint latency difference supplied; absolute slope uncertainty remains open."
+      },
+      "ntp_only_conditioned_slope_interval": [
+        0.9729087461739256,
+        0.973621133891595
+      ],
+      "ntp_conditioning_warning": "External-reference scenario only: excludes serial/service delay drift, statistical fit variation and nonuniform clock drift; requires anchor-to-capture transfer assumption."
+    },
+    "host_monotonic_seconds_per_nominal_mcu_second": {
+      "n": 6598,
+      "slope": 1.000007081289755,
+      "intercept_s": 0.0001565059828187998,
+      "ppm_from_slope_one": 7.08128975501765,
+      "formal_iid_slope_se_ppm": 0.14101656324456593,
+      "formal_iid_se_warning": "Diagnostic only: correlated/buffered observations violate iid errors.",
+      "x_span_s": 31.34134,
+      "y_span_s": 31.342701125,
+      "endpoint_slope": 1.0000434290620632,
+      "residual_s": {
+        "n": 6598,
+        "min": -0.00017672554617575997,
+        "max": 0.0037029561218346885,
+        "mean": -2.1175159241908516e-15,
+        "median": -2.749401260437878e-06,
+        "p01": -0.00013814922511343753,
+        "p99": 0.00014246360381313432,
+        "sd": 0.00010360840647435373
+      },
+      "residual_lag1": 0.2939904540287955,
+      "window_duration_x_s": 5.0,
+      "windows": [
+        {
+          "start_x_s": 0.0,
+          "n": 1053,
+          "slope": 1.0000068524412369,
+          "residual_rms_s": 0.00014701050422242783,
+          "mean_full_fit_residual_s": -7.535741989917481e-06
+        },
+        {
+          "start_x_s": 5.0,
+          "n": 1053,
+          "slope": 1.0000179955147044,
+          "residual_rms_s": 6.647965223960237e-05,
+          "mean_full_fit_residual_s": 1.6924693798360952e-05
+        },
+        {
+          "start_x_s": 10.0,
+          "n": 1054,
+          "slope": 1.00001163907332,
+          "residual_rms_s": 0.00012753365754226178,
+          "mean_full_fit_residual_s": -1.2529546907268263e-06
+        },
+        {
+          "start_x_s": 15.0,
+          "n": 1051,
+          "slope": 1.0000095379757559,
+          "residual_rms_s": 0.00011795127674148812,
+          "mean_full_fit_residual_s": -3.9915976306147775e-06
+        },
+        {
+          "start_x_s": 20.0,
+          "n": 1053,
+          "slope": 1.000002122925505,
+          "residual_rms_s": 4.5365071763487416e-05,
+          "mean_full_fit_residual_s": -7.380990492601738e-06
+        },
+        {
+          "start_x_s": 25.0,
+          "n": 1053,
+          "slope": 1.0000158963417307,
+          "residual_rms_s": 8.682295273773959e-05,
+          "mean_full_fit_residual_s": 6.733813022239364e-07
+        }
+      ],
+      "window_slope_stats": {
+        "n": 6,
+        "min": 1.000002122925505,
+        "max": 1.0000179955147044,
+        "mean": 1.0000106740453754,
+        "median": 1.000010588524538,
+        "p01": 1.0000023594012915,
+        "p99": 1.0000178905560557,
+        "sd": 5.845075443529344e-06
+      },
+      "moving_block_bootstrap": {
+        "available": true,
+        "window_count": 6,
+        "block_length_windows": 3,
+        "repeats": 2000,
+        "estimand": "mean of full-window slopes, not full-record OLS slope",
+        "mean_slope": 1.0000106740453754,
+        "ci95_slope": [
+          1.0000080286138422,
+          1.0000135814325573
+        ],
+        "ci95_ppm_from_one": [
+          8.028613842192556,
+          13.581432557252526
+        ],
+        "assumption": "Approximate stationarity and dependence mostly shorter than resampled blocks; drift invalidates a universal CI."
+      },
+      "moving_block_bootstrap_longer_blocks": {
+        "available": false,
+        "reason": "need at least six full windows and two blocks"
+      },
+      "window_slope_change_first_to_last_ppm": 9.043900493832524,
+      "residual_trend_note": "Full OLS residual linear trend is zero by construction; inspect window means, slope changes and residual CSV.",
+      "observed_p01_p99_residual_span_as_endpoint_ppm": 8.953440692917786,
+      "observed_residual_span_warning": "Observed spread is not an upper bound on queued latency, drift or clock error.",
+      "conditional_endpoint_latency_envelope": {
+        "available": false,
+        "reason": "No justified bound on endpoint latency difference supplied; absolute slope uncertainty remains open."
+      },
+      "ntp_only_conditioned_slope_interval": [
+        0.9997027514975618,
+        1.0004347584450661
+      ],
+      "ntp_conditioning_warning": "Direct NTP server-to-monotonic anchor scenario: independent of realtime steps, but excludes serial/service delay drift, statistical fit variation and nonuniform monotonic clock drift. Requires rate stability between anchors and capture.",
+      "ntp_per_server_conditioned": [
+        {
+          "server": "time.apple.com",
+          "slope": 1.000068754971314,
+          "scenario_slope_interval": [
+            0.9997027514975618,
+            1.0004347584450661
+          ],
+          "reference_factor_halfwidth_ppm_from_one": 366.00088199394474,
+          "scenario_halfwidth_ppm_of_slope": 365.9783109239716,
+          "anchors_enclose_selected_samples": true
+        },
+        {
+          "server": "time.cloudflare.com",
+          "slope": 1.0000044750591124,
+          "scenario_slope_interval": [
+            0.9997573590704911,
+            1.0002515910477334
+          ],
+          "reference_factor_halfwidth_ppm_from_one": 247.11423873361957,
+          "scenario_halfwidth_ppm_of_slope": 247.11488276743873,
+          "anchors_enclose_selected_samples": true
+        },
+        {
+          "server": "time.google.com",
+          "slope": 1.0000212843519434,
+          "scenario_slope_interval": [
+            0.999855007955812,
+            1.0001875607480748
+          ],
+          "reference_factor_halfwidth_ppm_from_one": 166.2752186883941,
+          "scenario_halfwidth_ppm_of_slope": 166.27285712138712,
+          "anchors_enclose_selected_samples": true
+        }
+      ]
+    },
+    "host_realtime_seconds_per_nominal_mcu_second": {
+      "n": 6598,
+      "slope": 1.000004455060017,
+      "intercept_s": 0.00015641766084328879,
+      "ppm_from_slope_one": 4.455060016894663,
+      "formal_iid_slope_se_ppm": 0.1410151898158006,
+      "formal_iid_se_warning": "Diagnostic only: correlated/buffered observations violate iid errors.",
+      "x_span_s": 31.34134,
+      "y_span_s": 31.342619000000003,
+      "endpoint_slope": 1.0000408087210058,
+      "residual_s": {
+        "n": 6598,
+        "min": -0.0001765206345680781,
+        "max": 0.003702945151381698,
+        "mean": -5.426671456007059e-16,
+        "median": -2.7438379559541204e-06,
+        "p01": -0.00013796399458605447,
+        "p99": 0.00014198398921141483,
+        "sd": 0.00010360739738178683
+      },
+      "residual_lag1": 0.29396720610079974,
+      "window_duration_x_s": 5.0,
+      "windows": [
+        {
+          "start_x_s": 0.0,
+          "n": 1053,
+          "slope": 1.0000042410217904,
+          "residual_rms_s": 0.00014701201262141338,
+          "mean_full_fit_residual_s": -7.572000495351782e-06
+        },
+        {
+          "start_x_s": 5.0,
+          "n": 1053,
+          "slope": 1.0000153786738437,
+          "residual_rms_s": 6.646577111181186e-05,
+          "mean_full_fit_residual_s": 1.691920991540553e-05
+        },
+        {
+          "start_x_s": 10.0,
+          "n": 1054,
+          "slope": 1.0000090148143288,
+          "residual_rms_s": 0.00012753279434302373,
+          "mean_full_fit_residual_s": -1.2375274732996163e-06
+        },
+        {
+          "start_x_s": 15.0,
+          "n": 1051,
+          "slope": 1.0000069177047581,
+          "residual_rms_s": 0.00011796393558636811,
+          "mean_full_fit_residual_s": -3.943363526457128e-06
+        },
+        {
+          "start_x_s": 20.0,
+          "n": 1053,
+          "slope": 0.9999995025791727,
+          "residual_rms_s": 4.5360220769643526e-05,
+          "mean_full_fit_residual_s": -7.331907732576344e-06
+        },
+        {
+          "start_x_s": 25.0,
+          "n": 1053,
+          "slope": 1.0000132206902415,
+          "residual_rms_s": 8.681175830666789e-05,
+          "mean_full_fit_residual_s": 6.141806744908004e-07
+        }
+      ],
+      "window_slope_stats": {
+        "n": 6,
+        "min": 0.9999995025791727,
+        "max": 1.0000153786738437,
+        "mean": 1.0000080459140226,
+        "median": 1.0000079662595436,
+        "p01": 0.9999997395013036,
+        "p99": 1.0000152707746637,
+        "sd": 5.83481061754829e-06
+      },
+      "moving_block_bootstrap": {
+        "available": true,
+        "window_count": 6,
+        "block_length_windows": 3,
+        "repeats": 2000,
+        "estimand": "mean of full-window slopes, not full-record OLS slope",
+        "mean_slope": 1.0000080459140226,
+        "ci95_slope": [
+          1.000005399898244,
+          1.0000109467952918
+        ],
+        "ci95_ppm_from_one": [
+          5.3998982441072485,
+          10.946795291788547
+        ],
+        "assumption": "Approximate stationarity and dependence mostly shorter than resampled blocks; drift invalidates a universal CI."
+      },
+      "moving_block_bootstrap_longer_blocks": {
+        "available": false,
+        "reason": "need at least six full windows and two blocks"
+      },
+      "window_slope_change_first_to_last_ppm": 8.979668451036815,
+      "residual_trend_note": "Full OLS residual linear trend is zero by construction; inspect window means, slope changes and residual CSV.",
+      "observed_p01_p99_residual_span_as_endpoint_ppm": 8.932227651959659,
+      "observed_residual_span_warning": "Observed spread is not an upper bound on queued latency, drift or clock error.",
+      "conditional_endpoint_latency_envelope": {
+        "available": false,
+        "reason": "No justified bound on endpoint latency difference supplied; absolute slope uncertainty remains open."
+      },
+      "ntp_only_conditioned_slope_interval": [
+        0.9997027458197596,
+        1.0004347527631066
+      ],
+      "ntp_conditioning_warning": "External-reference scenario only: excludes serial/service delay drift, statistical fit variation and nonuniform clock drift; requires anchor-to-capture transfer assumption."
+    }
+  },
+  "host": {
+    "available": true,
+    "notes": [],
+    "read_count": 13223,
+    "sample_batches": 6598,
+    "first_selected_realtime_ns": 1789521838936244000,
+    "last_selected_realtime_ns": 1789521870278863000,
+    "empty_reads": 0,
+    "read_duration_s": {
+      "n": 13223,
+      "min": 2.125e-06,
+      "max": 0.016285375,
+      "mean": 0.0023512000327459734,
+      "median": 0.000132666,
+      "p01": 4.0420000000000004e-06,
+      "p99": 0.0048097087800000006,
+      "sd": 0.0023426691371563313
+    },
+    "realtime_minus_monotonic_change_s": -8.21249999987117e-05,
+    "realtime_minus_monotonic_change_ppm": -2.620227263476217,
+    "realtime_minus_monotonic_relative_s": {
+      "n": 6598,
+      "min": -8.958400000125266e-05,
+      "max": 3.329999999999306e-07,
+      "mean": -4.1229430433463064e-05,
+      "median": -4.1209000000819174e-05,
+      "p01": -8.154200000021206e-05,
+      "p99": -9.157399999898503e-07,
+      "sd": 2.376142356166412e-05
+    },
+    "backward_realtime_steps": 0,
+    "realtime_vs_monotonic_fit": {
+      "n": 6598,
+      "slope": 0.9999973737888573,
+      "intercept_s": -8.791093364379776e-08,
+      "ppm_from_slope_one": -2.6262111426644807,
+      "formal_iid_slope_se_ppm": 0.0005155785804684172,
+      "formal_iid_se_warning": "Diagnostic only: correlated/buffered observations violate iid errors.",
+      "x_span_s": 31.342701125,
+      "y_span_s": 31.342619000000003,
+      "endpoint_slope": 0.9999973797727365,
+      "residual_s": {
+        "n": 6598,
+        "min": -1.2170575671710537e-05,
+        "max": 6.001251335874258e-07,
+        "mean": 1.5787035297636884e-15,
+        "median": 6.524723428213974e-09,
+        "p01": -5.460048038585796e-07,
+        "p99": 5.280280674924143e-07,
+        "sd": 3.7881119904890524e-07
+      },
+      "residual_lag1": 0.018227729111257227
+    },
+    "nonuniform_realtime_relative_to_monotonic": false,
+    "nonuniform_realtime_threshold_note": "Flag when maximum absolute residual from a single realtime-versus-monotonic line exceeds 1 ms; an engineering diagnostic, not a traceable threshold.",
+    "pairing": "Last complete sample per read batch, using monotonic/realtime AFTER read; no repeated host observation for earlier buffered samples.",
+    "latency": "Host observations include sensor servicing, USB delivery, queued data and scheduling. A read bracket is not an acquisition-time bracket."
+  },
+  "interval_diagnostics": {
+    "fifo_wraps": 0,
+    "mcu_wraps": 0,
+    "raw_fifo_frame_count": 0,
+    "fifo_delta_ticks": {
+      "n": 6603,
+      "min": 194,
+      "max": 196,
+      "mean": 195.09283658942906,
+      "median": 195,
+      "p01": 195.0,
+      "p99": 196.0,
+      "sd": 0.2959105220526901
+    },
+    "mcu_delta_us": {
+      "n": 6603,
+      "min": 4582,
+      "max": 4779,
+      "mean": 4746.530364985612,
+      "median": 4773,
+      "p01": 4582.0,
+      "p99": 4778.0,
+      "sd": 67.12336174902306
+    },
+    "mcu_delta_us_per_fifo_delta_tick": {
+      "n": 6603,
+      "min": 23.377551020408163,
+      "max": 24.623711340206185,
+      "mean": 24.329651941272445,
+      "median": 24.476923076923075,
+      "p01": 23.397959183673468,
+      "p99": 24.502564102564104,
+      "sd": 0.3458689647465746
+    },
+    "fifo_words": {
+      "n": 6604,
+      "min": 9,
+      "max": 9,
+      "mean": 9.0,
+      "median": 9.0,
+      "p01": 9.0,
+      "p99": 9.0,
+      "sd": 0.0
+    },
+    "samples_with_more_than_nine_fifo_words": 0,
+    "fifo_interpretation": "Nine FIFO words are ONE complete six-axis-plus-timestamp record, not nine samples. fifo_words is occupancy before removing that record; >9 indicates backlog, not sample duplication."
+  },
+  "status": {
+    "count": 0,
+    "records": [],
+    "temperature_c": {
+      "n": 0
+    },
+    "hfclkstat_values": [],
+    "timer4_prescaler_values": [],
+    "timer4_bitmode_values": [],
+    "interpretation": "HFXO selected/running is configuration evidence, not measured crystal ppm accuracy. On-chip temperature is not independently calibrated ambient temperature."
+  },
+  "external_reference": {
+    "available": true,
+    "absolute_timebase_certified": false,
+    "interpretation": "NTP offsets are server-minus-host realtime. RTT/2 plus server-advertised root allowances is an unauthenticated uncertainty scenario, not a statistical confidence interval or guaranteed accuracy bound. Server agreement can share network/clock errors.",
+    "probes": [
+      {
+        "path": "/Users/joshcrow/Jump-height/research/usb_recorder/captures/clock-study-20260915/ntp-before-run1/probe.json",
+        "sha256": "5174bdd74a2fadf25da96de9623175b8eda20cde05c2238c243a1f26a7a8dbdb",
+        "valid_servers": {
+          "time.google.com": {
+            "server": "time.google.com",
+            "offset_s": 0.1279777885,
+            "delay_s": 0.014666999,
+            "uncertainty_s": 0.007426005908691406,
+            "realtime_midpoint_ns": 1.7895218075554094e+18,
+            "monotonic_midpoint_ns": 300048029325468.5,
+            "realtime_midpoint_twice_ns": 3579043615110819000,
+            "monotonic_midpoint_four_ns": 1200192117301874,
+            "host_clock_elapsed_disagreement_s": -1.04e-07,
+            "server_midpoint_twice_ns": 3579043615366774577
+          },
+          "time.cloudflare.com": {
+            "server": "time.cloudflare.com",
+            "offset_s": 0.132061902,
+            "delay_s": 0.017832978,
+            "uncertainty_s": 0.014859802241004944,
+            "realtime_midpoint_ns": 1.789521791655886e+18,
+            "monotonic_midpoint_ns": 300032129760228.5,
+            "realtime_midpoint_twice_ns": 3579043583311772000,
+            "monotonic_midpoint_four_ns": 1200128519040914,
+            "host_clock_elapsed_disagreement_s": 0.0,
+            "server_midpoint_twice_ns": 3579043583575895804
+          },
+          "time.apple.com": {
+            "server": "time.apple.com",
+            "offset_s": 0.1128764435,
+            "delay_s": 0.054883375,
+            "uncertainty_s": 0.027610487854003905,
+            "realtime_midpoint_ns": 1.789521791694657e+18,
+            "monotonic_midpoint_ns": 300032168531614.25,
+            "realtime_midpoint_twice_ns": 3579043583389314000,
+            "monotonic_midpoint_four_ns": 1200128674126457,
+            "host_clock_elapsed_disagreement_s": 6.46e-07,
+            "server_midpoint_twice_ns": 3579043583615066887
+          }
+        },
+        "query_count": 6,
+        "failed_queries": 0
+      },
+      {
+        "path": "/Users/joshcrow/Jump-height/research/usb_recorder/captures/clock-study-20260915/ntp-after-short-run1/probe.json",
+        "sha256": "4caac48574b58bd5480a633f62f50bd53d1376d88d98353403dd58a0e96eeac1",
+        "valid_servers": {
+          "time.google.com": {
+            "server": "time.google.com",
+            "offset_s": 0.1293752835,
+            "delay_s": 0.012542999,
+            "uncertainty_s": 0.006379264697753907,
+            "realtime_midpoint_ns": 1.7895218905818186e+18,
+            "monotonic_midpoint_ns": 300131055952739.5,
+            "realtime_midpoint_twice_ns": 3579043781163637000,
+            "monotonic_midpoint_four_ns": 1200524223810958,
+            "host_clock_elapsed_disagreement_s": -2.1e-08,
+            "server_midpoint_twice_ns": 3579043781422387567
+          },
+          "time.cloudflare.com": {
+            "server": "time.cloudflare.com",
+            "offset_s": 0.132063867,
+            "delay_s": 0.014641374,
+            "uncertainty_s": 0.013546302739822387,
+            "realtime_midpoint_ns": 1.7895219066068925e+18,
+            "monotonic_midpoint_ns": 300147081068281.0,
+            "realtime_midpoint_twice_ns": 3579043813213785000,
+            "monotonic_midpoint_four_ns": 1200588324273124,
+            "host_clock_elapsed_disagreement_s": -3.96e-07,
+            "server_midpoint_twice_ns": 3579043813477912734
+          },
+          "time.apple.com": {
+            "server": "time.apple.com",
+            "offset_s": 0.1202672495,
+            "delay_s": 0.028496165,
+            "uncertainty_s": 0.014462659221191406,
+            "realtime_midpoint_ns": 1.7895219066480325e+18,
+            "monotonic_midpoint_ns": 300147122208354.0,
+            "realtime_midpoint_twice_ns": 3579043813296065000,
+            "monotonic_midpoint_four_ns": 1200588488833416,
+            "host_clock_elapsed_disagreement_s": 2.92e-07,
+            "server_midpoint_twice_ns": 3579043813536599499
+          }
+        },
+        "query_count": 6,
+        "failed_queries": 0
+      }
+    ],
+    "per_server": [
+      {
+        "server": "time.apple.com",
+        "host_realtime_anchor_span_s": 114.9533755,
+        "host_monotonic_anchor_span_s": 114.95367673975001,
+        "server_anchor_span_s": 114.96076630600001,
+        "server_anchor_span_method": "Direct difference of NTP (t2+t3)/2 server midpoints; independent of host realtime steps.",
+        "direct_vs_offset_server_span_difference_s": 0.0,
+        "before": {
+          "server": "time.apple.com",
+          "offset_s": 0.1128764435,
+          "delay_s": 0.054883375,
+          "uncertainty_s": 0.027610487854003905,
+          "realtime_midpoint_ns": 1.789521791694657e+18,
+          "monotonic_midpoint_ns": 300032168531614.25,
+          "realtime_midpoint_twice_ns": 3579043583389314000,
+          "monotonic_midpoint_four_ns": 1200128674126457,
+          "host_clock_elapsed_disagreement_s": 6.46e-07,
+          "server_midpoint_twice_ns": 3579043583615066887
+        },
+        "after": {
+          "server": "time.apple.com",
+          "offset_s": 0.1202672495,
+          "delay_s": 0.028496165,
+          "uncertainty_s": 0.014462659221191406,
+          "realtime_midpoint_ns": 1.7895219066480325e+18,
+          "monotonic_midpoint_ns": 300147122208354.0,
+          "realtime_midpoint_twice_ns": 3579043813296065000,
+          "monotonic_midpoint_four_ns": 1200588488833416,
+          "host_clock_elapsed_disagreement_s": 2.92e-07,
+          "server_midpoint_twice_ns": 3579043813536599499
+        },
+        "offset_change_s": 0.007390806,
+        "endpoint_uncertainty_sum_s": 0.042073147075195313,
+        "external_seconds_per_host_realtime_second": 1.0000642939449829,
+        "host_realtime_correction_ppm": 64.29394498286278,
+        "conditional_uncertainty_halfwidth_ppm": 366.00184111335915,
+        "conditional_correction_interval": [
+          0.9996982921038695,
+          1.0004302957860962
+        ],
+        "external_seconds_per_host_monotonic_second": 1.0000616732448329,
+        "host_monotonic_correction_ppm": 61.67324483286052,
+        "conditional_monotonic_uncertainty_halfwidth_ppm": 366.00088199394474,
+        "conditional_monotonic_correction_interval": [
+          0.999695672362839,
+          1.0004276741268268
+        ],
+        "anchors_enclose_selected_samples": true
+      },
+      {
+        "server": "time.cloudflare.com",
+        "host_realtime_anchor_span_s": 114.9510065,
+        "host_monotonic_anchor_span_s": 114.95130805250001,
+        "server_anchor_span_s": 114.951008465,
+        "server_anchor_span_method": "Direct difference of NTP (t2+t3)/2 server midpoints; independent of host realtime steps.",
+        "direct_vs_offset_server_span_difference_s": 0.0,
+        "before": {
+          "server": "time.cloudflare.com",
+          "offset_s": 0.132061902,
+          "delay_s": 0.017832978,
+          "uncertainty_s": 0.014859802241004944,
+          "realtime_midpoint_ns": 1.789521791655886e+18,
+          "monotonic_midpoint_ns": 300032129760228.5,
+          "realtime_midpoint_twice_ns": 3579043583311772000,
+          "monotonic_midpoint_four_ns": 1200128519040914,
+          "host_clock_elapsed_disagreement_s": 0.0,
+          "server_midpoint_twice_ns": 3579043583575895804
+        },
+        "after": {
+          "server": "time.cloudflare.com",
+          "offset_s": 0.132063867,
+          "delay_s": 0.014641374,
+          "uncertainty_s": 0.013546302739822387,
+          "realtime_midpoint_ns": 1.7895219066068925e+18,
+          "monotonic_midpoint_ns": 300147081068281.0,
+          "realtime_midpoint_twice_ns": 3579043813213785000,
+          "monotonic_midpoint_four_ns": 1200588324273124,
+          "host_clock_elapsed_disagreement_s": -3.96e-07,
+          "server_midpoint_twice_ns": 3579043813477912734
+        },
+        "offset_change_s": 1.964999999992667e-06,
+        "endpoint_uncertainty_sum_s": 0.02840610498082733,
+        "external_seconds_per_host_realtime_second": 1.0000000170942391,
+        "host_realtime_correction_ppm": 0.017094239135317935,
+        "conditional_uncertainty_halfwidth_ppm": 247.11488699167964,
+        "conditional_correction_interval": [
+          0.9997529022072474,
+          1.0002471319812307
+        ],
+        "external_seconds_per_host_monotonic_second": 0.9999973937878126,
+        "host_monotonic_correction_ppm": -2.606212187394874,
+        "conditional_monotonic_uncertainty_halfwidth_ppm": 247.11423873361957,
+        "conditional_monotonic_correction_interval": [
+          0.999750279549079,
+          1.0002445080265463
+        ],
+        "anchors_enclose_selected_samples": true
+      },
+      {
+        "server": "time.google.com",
+        "host_realtime_anchor_span_s": 83.026409,
+        "host_monotonic_anchor_span_s": 83.02662727100001,
+        "server_anchor_span_s": 83.02780649500001,
+        "server_anchor_span_method": "Direct difference of NTP (t2+t3)/2 server midpoints; independent of host realtime steps.",
+        "direct_vs_offset_server_span_difference_s": 0.0,
+        "before": {
+          "server": "time.google.com",
+          "offset_s": 0.1279777885,
+          "delay_s": 0.014666999,
+          "uncertainty_s": 0.007426005908691406,
+          "realtime_midpoint_ns": 1.7895218075554094e+18,
+          "monotonic_midpoint_ns": 300048029325468.5,
+          "realtime_midpoint_twice_ns": 3579043615110819000,
+          "monotonic_midpoint_four_ns": 1200192117301874,
+          "host_clock_elapsed_disagreement_s": -1.04e-07,
+          "server_midpoint_twice_ns": 3579043615366774577
+        },
+        "after": {
+          "server": "time.google.com",
+          "offset_s": 0.1293752835,
+          "delay_s": 0.012542999,
+          "uncertainty_s": 0.006379264697753907,
+          "realtime_midpoint_ns": 1.7895218905818186e+18,
+          "monotonic_midpoint_ns": 300131055952739.5,
+          "realtime_midpoint_twice_ns": 3579043781163637000,
+          "monotonic_midpoint_four_ns": 1200524223810958,
+          "host_clock_elapsed_disagreement_s": -2.1e-08,
+          "server_midpoint_twice_ns": 3579043781422387567
+        },
+        "offset_change_s": 0.0013974949999999986,
+        "endpoint_uncertainty_sum_s": 0.013805270606445312,
+        "external_seconds_per_host_realtime_second": 1.0000168319335598,
+        "host_realtime_correction_ppm": 16.831933559835477,
+        "conditional_uncertainty_halfwidth_ppm": 166.275655815071,
+        "conditional_correction_interval": [
+          0.9998505562777448,
+          1.000183107589375
+        ],
+        "external_seconds_per_host_monotonic_second": 1.000014202961613,
+        "host_monotonic_correction_ppm": 14.20296161303014,
+        "conditional_monotonic_uncertainty_halfwidth_ppm": 166.2752186883941,
+        "conditional_monotonic_correction_interval": [
+          0.9998479277429246,
+          1.0001804781803014
+        ],
+        "anchors_enclose_selected_samples": true
+      }
+    ],
+    "selected_query_policy": "Minimum round-trip delay valid response per server per probe; servers are not pooled as independent statistical samples.",
+    "conditional_correction_union_interval": [
+      0.9996982921038695,
+      1.0004302957860962
+    ],
+    "conditional_monotonic_correction_union_interval": [
+      0.999695672362839,
+      1.0004276741268268
+    ],
+    "server_point_correction_spread_ppm": 64.27685074372746,
+    "server_scenario_intervals_overlap": true,
+    "server_monotonic_point_correction_spread_ppm": 64.27945702025539,
+    "server_monotonic_scenario_intervals_overlap": true,
+    "transfer_assumption": "Transfer assumption: the monotonic clock rate averaged between NTP anchors also applies to the enclosed capture. Before/after queries do not establish a uniform within-capture clock rate. Realtime steps are handled by direct server-to-monotonic anchors, not by treating realtime as uniform."
+  },
+  "gates": {
+    "binary_integrity": false,
+    "host_observations": true,
+    "long_capture_at_least_600_host_seconds": false,
+    "periodic_hfclk_temperature_status_observed": false,
+    "external_reference_observed": true,
+    "absolute_timebase_validation": false,
+    "physical_thermal_campaign": "not established by this analysis"
+  },
+  "interpretation": [
+    "No correction is applied. Slopes identify differences between clocks and event timestamps; none is assumed the true clock.",
+    "Independent confirmation on another run/power cycle is required before transferring a fitted correction.",
+    "N-1 adjacent sample intervals define sample rates; host rates use the selected endpoint sequence difference, not the number of read batches.",
+    "Command-to-END duration is not first-to-last sample duration. Legacy 4096-byte/250 ms reads introduce endpoint phase; two short host-span ratios cannot prove which oscillator is wrong.",
+    "Formal OLS standard errors exclude autocorrelation, changing USB latency, oscillator drift and host/reference systematic errors.",
+    "Absolute calibration requires an external reference and defensible latency/drift bounds. NTP blocked/unavailable is a missing measurement, not zero uncertainty."
+  ]
+}
