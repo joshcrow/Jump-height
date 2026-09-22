@@ -700,6 +700,34 @@ class TestGarminLeg(_DaemonTestBase):
         self.assertEqual(len(g.fetch_calls), 1)
         self.assertEqual(self.recorder.calls, [])
 
+    def test_a_fetch_that_retires_the_token_says_so_in_the_same_tick(self):
+        """garmin.py retires a refused token on its SECOND refusal, and that
+        happens INSIDE fetch_new(). Leaving the announcement to the next
+        tick's sign-in check was not a 6 h delay in practice: on the rider's
+        Mac the leg logged the same auth failure on 2026-09-15, 09-17, 09-21
+        and 09-22 and never once raised a notification (CLAUDE.md rule 3)."""
+        class _RetiresOnFetch(_FakeGarmin):
+            def fetch_new(self, since_iso, out_dir):
+                self.signed_in = False       # retired, inside this call
+                raise RuntimeError("GarminConnectAuthenticationError(...)")
+
+        cfg = self.make_cfg(garmin_module=_RetiresOnFetch())
+        daemon._run_garmin(cfg)
+        self.assertEqual(self.recorder.calls,
+                         [("Needs you: sign in to Garmin again",
+                           "Open Set up in the menu bar.")])
+
+    def test_a_fetch_failure_that_leaves_the_sign_in_alone_says_nothing(self):
+        """Garmin having a bad hour is not a reason to ask the rider for his
+        password and an MFA code. Only a sign-in that is actually gone."""
+        class _TransientBoom(_FakeGarmin):
+            def fetch_new(self, since_iso, out_dir):
+                raise RuntimeError("Max retries exceeded")
+
+        cfg = self.make_cfg(garmin_module=_TransientBoom())
+        daemon._run_garmin(cfg)
+        self.assertEqual(self.recorder.calls, [])
+
     def test_a_raising_garmin_module_never_reaches_the_caller(self):
         class _Boom:
             def is_signed_in(self):

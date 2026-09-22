@@ -308,10 +308,33 @@ def login(email: str, password: str, mfa_code: Optional[str] = None) -> LoginRes
     return LoginResult(ok=True, needs_mfa=False, error=None)
 
 
+def _rejected_token_file() -> Path:
+    """Where _retire_rejected_tokens() puts a token Garmin refused. One
+    definition, two readers (CLAUDE.md #4)."""
+    token = _token_file()
+    return token.with_name(token.name + ".rejected")
+
+
 def ever_signed_in() -> bool:
-    """A token file exists at all. The daemon nags about an EXPIRED
-    sign-in only; someone who pressed Skip at setup is never asked."""
-    return _token_file().exists()
+    """A token file exists at all, INCLUDING one we have retired. The daemon
+    nags about an EXPIRED sign-in only; someone who pressed Skip at setup is
+    never asked.
+
+    The retired file counts, and that is the whole point of this function
+    existing in two halves. _retire_rejected_tokens() renames the token away
+    so is_signed_in() starts answering False; if the rename ALSO erased the
+    evidence that he had ever signed in, daemon.py's "Skipped Garmin at
+    setup -> never nagged" branch would swallow the very notification the
+    retirement exists to raise, forever.
+
+    LATENT, and deliberately labelled as such: this is NOT what silenced the
+    rider's Mac between 2026-09-15 and 09-22. `garmin fetch failed` is
+    reachable only after is_signed_in() has answered True, and that line is
+    in his log on 09-15, 09-17, 09-21 and 09-22 -- so no retirement was ever
+    in force and this branch was never reached. Which path DID silence him
+    is UNDETERMINED; auth_strikes() exists so the next occurrence says so in
+    one line (CLAUDE.md rule 2)."""
+    return _token_file().exists() or _rejected_token_file().exists()
 
 
 def _jwt_exp(token: str) -> Optional[float]:
@@ -392,7 +415,7 @@ def _retire_rejected_tokens() -> None:
     rather than deleted, so the evidence survives for a post-mortem."""
     token = _token_file()
     try:
-        token.replace(token.with_name(token.name + ".rejected"))
+        token.replace(_rejected_token_file())
     except OSError as exc:
         print(f"garmin: could not retire rejected token: {exc}", file=sys.stderr)
 
@@ -405,6 +428,27 @@ def _strikes_file() -> Path:
     return _token_dir() / AUTH_STRIKES_FILENAME
 
 
+# The strike count also lives in the running process, because the file it
+# lives in is on a disk that has actually been full. MEASURED on the
+# rider's Mac 2026-09-14/15: `OSError(28, 'No space left on device')` on
+# every write. _record_auth_strike() swallows that (correctly -- a
+# telemetry write must not take the leg down), which left _auth_strikes()
+# reading 0 forever, every strike counting as the first, and the token
+# never reaching AUTH_STRIKES_TO_RETIRE. Whichever counter is higher wins;
+# the file is what survives a restart, this is what survives a full disk.
+# The strike count lives in ONE place, this file. An in-process fallback for
+# "the disk refused the write" was written on 2026-09-22 and removed the same
+# day, for two reasons. Its evidence was misread: every OSError(28) in the
+# rider's log is 2026-09-14 and comes from selfupdate unpacking a zip, never
+# from a strike write, and his disk now reports 8,061 MB free. And a
+# process-local counter sitting beside three SHARED files retires a
+# BRAND-NEW token on its first refusal -- measured: one unwritable strike
+# leaves the daemon's global at 1; a sign-in from the separate
+# `python -m puckd setup` process writes a fresh token and unlinks the strike
+# file but cannot clear another process's global; the daemon then scores
+# max(0, 1) + 1 = 2 against the new token and retires it, costing the rider
+# exactly the password and MFA code AUTH_STRIKES_TO_RETIRE exists to spare
+# him.
 def _auth_strikes() -> int:
     try:
         data = json.loads(_strikes_file().read_text())
@@ -412,6 +456,16 @@ def _auth_strikes() -> int:
         return 0
     n = data.get("strikes") if isinstance(data, dict) else None
     return n if isinstance(n, int) and not isinstance(n, bool) and n > 0 else 0
+
+
+def auth_strikes() -> int:
+    """The strike count, for the daemon's log. Garmin's refusal, the strike
+    that follows it and the retirement itself all print to stderr, which
+    launchd swallows and publish_log() never uploads -- so a login that
+    failed every 6 h from 2026-09-15 to 09-22 left seven days of `garmin
+    fetch failed` in daemon.log and no way to tell which of its causes was
+    the real one. One number ends that."""
+    return _auth_strikes()
 
 
 def _record_auth_strike() -> int:

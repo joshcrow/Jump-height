@@ -1162,6 +1162,114 @@ class TestVolumeWaitNamesTheFailure(_DfuHarness):
                        result.error)
 
 
+class TestRefusedCopyFallsBackToSerialDfu(_DfuHarness):
+    """The OTHER way to be stuck in a bootloader with nothing flashed.
+
+    MEASURED on the rider's Mac 2026-09-20 16:09: the disk appeared, the
+    copy was refused -- `[Errno 13] Permission denied:
+    '/Volumes/XIAO-SENSE/jumpheight-c5eea285.uf2'` -- after the
+    _COPY_SETTLE_S retry was exhausted, and 1.0.6 returned STAGE_COPY and
+    fired "needs you: check the puck". The puck stayed a USB drive for two
+    days. The bootloader's CDC node was live the whole time.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # The recovery ships DISABLED (flash.SERIAL_DFU_ON_REFUSED_COPY) until
+        # a bench reading exists -- see that constant. These tests are what
+        # makes turning it on a one-line change rather than a rewrite, so
+        # they enable it explicitly and put it back afterwards.
+        self._gate = flash.SERIAL_DFU_ON_REFUSED_COPY
+        flash.SERIAL_DFU_ON_REFUSED_COPY = True
+        self.addCleanup(setattr, flash, "SERIAL_DFU_ON_REFUSED_COPY", self._gate)
+
+    def test_the_gate_ships_off(self):
+        """If this ever fails, read SERIAL_DFU_ON_REFUSED_COPY's comment
+        before changing it: the reading it waits for is in docs/STATUS.md."""
+        self.assertFalse(self._gate,
+                         "the refused-copy fallback must ship disabled")
+
+    def test_with_the_gate_off_a_refused_copy_still_gives_up(self):
+        flash.SERIAL_DFU_ON_REFUSED_COPY = False
+        self._cache_the_zip()
+        result, _ = self._flash_refused(
+            run_dfu=lambda argv, t: self.fail("the gate is off"))
+        self.assertFalse(result.ok)
+        self.assertEqual(result.stage_reached, flash.STAGE_COPY)
+        self.assertIn("Permission denied", result.error)
+        self.assertEqual(self.dfu_runs, [])
+
+    def _refuse(self, errno_=13, msg="Permission denied"):
+        def copy_file(src, dst):
+            raise PermissionError(errno_, msg, dst)
+        return copy_file
+
+    def _flash_refused(self, **overrides):
+        kwargs = dict(volume_exists=lambda: True, copy_file=self._refuse())
+        kwargs.update(overrides)
+        return self._flash(**kwargs)
+
+    def test_a_refused_copy_recovers_over_serial_dfu(self):
+        self._cache_the_zip()
+        result, calls = self._flash_refused(
+            run_dfu=self._run_dfu("Device programmed."))
+        self.assertTrue(result.ok, result.error)
+        self.assertEqual(result.stage_reached, flash.STAGE_DONE)
+        self.assertEqual(result.src_after, self.manifest["src"])
+        self.assertEqual(len(self.dfu_runs), 1)
+        self.assertIn(("command", self.port, "info", flash._INFO_TIMEOUT_S),
+                      calls)
+
+    def test_the_refusal_is_logged_before_the_fallback_runs(self):
+        self._cache_the_zip()
+        self._flash_refused(run_dfu=self._run_dfu("Device programmed."))
+        joined = "\n".join(self.logs)
+        self.assertIn("Permission denied", joined)
+        self.assertIn("the disk refused the write", joined)
+
+    def test_an_app_mode_board_is_never_dfu_uploaded_into(self):
+        """CLAUDE.md #1. A refused copy is not a licence to upload into a
+        board we have not identified as sitting in its bootloader."""
+        self._cache_the_zip()
+        result, _ = self._flash_refused(
+            ioreg_fn=self._ioreg(_IOREG_XIAO_APP),
+            run_dfu=lambda argv, t: self.fail("no DFU from the app state"))
+        self.assertFalse(result.ok)
+        self.assertEqual(result.stage_reached, flash.STAGE_COPY)
+        self.assertIn("Permission denied", result.error)
+        self.assertEqual(self.dfu_runs, [])
+
+    def test_both_failures_survive_into_the_error_when_dfu_also_fails(self):
+        self._cache_the_zip()
+        result, _ = self._flash_refused(
+            run_dfu=self._run_dfu("Failed to upgrade target.", code=0))
+        self.assertFalse(result.ok)
+        self.assertEqual(result.stage_reached, flash.STAGE_DFU_SERIAL)
+        self.assertIn("Permission denied", result.error)
+        self.assertIn("serial DFU fallback", result.error)
+
+    def test_no_dfu_package_in_the_manifest_keeps_the_copy_verdict(self):
+        for k in ("dfu_file", "dfu_bytes", "dfu_sha256"):
+            self.manifest.pop(k, None)
+        result, _ = self._flash_refused(
+            run_dfu=lambda argv, t: self.fail("no package, no upload"))
+        self.assertFalse(result.ok)
+        self.assertEqual(result.stage_reached, flash.STAGE_COPY)
+        self.assertIn("Permission denied", result.error)
+
+    def test_device_not_configured_is_still_the_success_signature(self):
+        """A regression guard: ENODEV on the copy MEANS the board took the
+        image and rebooted. It must not be diverted into a DFU upload."""
+        self._cache_the_zip()
+        result, _ = self._flash_refused(
+            copy_file=self._refuse(errno_=6, msg="Device not configured"),
+            run_dfu=lambda argv, t: self.fail(
+                "ENODEV is success, not a reason to DFU"))
+        self.assertTrue(result.ok, result.error)
+        self.assertEqual(result.stage_reached, flash.STAGE_DONE)
+        self.assertEqual(self.dfu_runs, [])
+
+
 class TestSerialDfuFallback(_DfuHarness):
     """Part 2: the way out of the wedge."""
 

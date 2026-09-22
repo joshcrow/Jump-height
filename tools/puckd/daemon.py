@@ -729,6 +729,34 @@ def _run_job_cycle(port_path: str, cfg: DaemonConfig) -> JobCycleReport:
 
 # --------------------------------------------------------------- Garmin leg
 
+def _garmin_needs_you_if_signed_out(cfg: DaemonConfig) -> bool:
+    """Raise "sign in to Garmin again" when there is no usable sign-in left.
+
+    True means the caller has nothing to fetch with and should stop.
+
+    Three states, not two. A token that works -> False, and the flag is
+    re-armed so the NEXT expiry is announced. No token and none ever ->
+    True, silently: someone who pressed Skip at setup is never nagged
+    (docs/sync-agent-plan.md:52). A token that is gone or that we retired
+    -> True, and the notification fires once per expiry.
+
+    Called from two places on purpose: before the fetch, and again after a
+    fetch that raised. garmin.py retires a token on its SECOND consecutive
+    refusal, and that retirement happens INSIDE the fetch -- so the tick
+    that kills the token is the tick that must announce it."""
+    g = cfg.garmin_module
+    if g.is_signed_in():
+        cfg.runtime["garmin_needs_you_sent"] = False
+        return False
+    ever = getattr(g, "ever_signed_in", None)
+    if ever is not None and not ever():
+        return True
+    if not cfg.runtime.get("garmin_needs_you_sent"):
+        _fire_needs_you(cfg, NEEDS_YOU_GARMIN_LINE, NEEDS_YOU_GARMIN_ACTION)
+        cfg.runtime["garmin_needs_you_sent"] = True
+    return True
+
+
 def _run_garmin(cfg: DaemonConfig) -> None:
     """docs/sync-agent-plan.md:57-58: "on every job and every 6 h ... Never
     blocks the puck job." Every exception below is swallowed -- an
@@ -743,16 +771,8 @@ def _run_garmin(cfg: DaemonConfig) -> None:
     """
     try:
         g = cfg.garmin_module
-        if not g.is_signed_in():
-            # Skipped Garmin at setup -> never signed in -> never nagged.
-            ever = getattr(g, "ever_signed_in", None)
-            if ever is not None and not ever():
-                return
-            if not cfg.runtime.get("garmin_needs_you_sent"):
-                _fire_needs_you(cfg, NEEDS_YOU_GARMIN_LINE, NEEDS_YOU_GARMIN_ACTION)
-                cfg.runtime["garmin_needs_you_sent"] = True
+        if _garmin_needs_you_if_signed_out(cfg):
             return
-        cfg.runtime["garmin_needs_you_sent"] = False
 
         home = Path(cfg.home_dir)
         store = home / GARMIN_SEEN_FILENAME
@@ -770,6 +790,24 @@ def _run_garmin(cfg: DaemonConfig) -> None:
             downloaded = g.fetch_new(since_iso, out_dir)
         except Exception as exc:  # noqa: BLE001 -- unofficial API; see above
             _log(cfg, f"garmin fetch failed (the upload sweep still runs): {exc!r}")
+            # A fetch that failed BECAUSE this attempt retired the token
+            # must say so NOW. Waiting for the next tick's sign-in check
+            # was not a 6 h delay in practice: on the rider's Mac the leg
+            # logged this same line on 09-15, 09-17, 09-21 and 09-22 and
+            # never once raised a notification (CLAUDE.md rule 3).
+            # WHICH failure this was, in one line. garmin.py's refusal,
+            # strike and retirement all print to stderr; launchd swallows it
+            # and publish_log() does not upload it, which is why seven days
+            # of this on the rider's Mac could not be diagnosed at all.
+            strikes = getattr(g, "auth_strikes", None)
+            if strikes is not None:
+                try:
+                    _log(cfg, f"garmin: auth strikes "
+                              f"{strikes()}/{g.AUTH_STRIKES_TO_RETIRE}, "
+                              f"signed in: {g.is_signed_in()}")
+                except Exception:  # noqa: BLE001 -- telemetry, never the failure
+                    pass
+            _garmin_needs_you_if_signed_out(cfg)
         # Upload every FIT on disk that Drive has not confirmed, not just
         # the ones downloaded THIS tick. The download side dedupes on the
         # file already being there, so a FIT whose upload failed once (wifi

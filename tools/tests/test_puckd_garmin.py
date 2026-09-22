@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import base64
 import json
+import errno
 import os
 import shutil
 import sys
@@ -559,6 +560,39 @@ class TestFetchNew(PuckdGarminTestCase):
         self.assertFalse(garmin.is_signed_in())
         self.assertTrue(self.token_file().with_name(
             self.token_file().name + ".rejected").is_file())
+
+    def test_a_retired_token_still_proves_he_ever_signed_in(self):
+        """The retirement must not silence the notification it exists to
+        raise. MEASURED on the rider's Mac: Garmin auth failed 2026-09-15
+        and was still failing 2026-09-22 with not one needs-you line in
+        seven days, because ever_signed_in() read only the live file and
+        the retirement had renamed it away."""
+        api = self.mock_api()
+        api.login.side_effect = GarminConnectAuthenticationError("token rejected")
+        patcher, _ = self.patch_garmin_class(api)
+        for _ in range(garmin.AUTH_STRIKES_TO_RETIRE):
+            with patcher, self.assertRaises(GarminConnectAuthenticationError):
+                garmin.fetch_new("2026-09-01T00:00:00Z", str(self.out_dir))
+
+        self.assertFalse(garmin.is_signed_in())
+        self.assertTrue(garmin.ever_signed_in(),
+                        "a retired token is still evidence he signed in once")
+
+    def test_skipping_garmin_at_setup_is_still_never_a_sign_in(self):
+        self.token_file().unlink()      # this class writes one in setUp
+        self.assertFalse(garmin.is_signed_in())
+        self.assertFalse(garmin.ever_signed_in())
+
+    def test_auth_strikes_is_readable_from_outside_for_the_daemon_log(self):
+        """The strike count went to stderr, which launchd swallows. The
+        rider's Mac logged `garmin fetch failed` every 6 h for seven days
+        with no way to tell which cause it was."""
+        garmin._clear_auth_strikes()
+        self.assertEqual(garmin.auth_strikes(), 0)
+        garmin._record_auth_strike()
+        self.assertEqual(garmin.auth_strikes(), 1)
+        garmin._clear_auth_strikes()
+        self.assertEqual(garmin.auth_strikes(), 0)
 
     def test_a_transient_error_does_not_retire_the_token(self):
         api = self.mock_api()

@@ -878,6 +878,34 @@ one DFU attempt started mid-mount died at packet 23 and exited 0 (the
 marker rule caught it); after that pair the board sat in its bootloader
 12 min before a manual write recovered it (n=1).
 
+**A SECOND way into that bootloader, and why its recovery is OFF (2026-09-22).**
+The disk can also appear and then refuse the write. MEASURED on the rider's
+Mac 2026-09-20 16:09: `flash: ok=False stage=copy ... copy to
+/Volumes/XIAO-SENSE/jumpheight-c5eea285.uf2 failed: [Errno 13] Permission
+denied`, after the `_COPY_SETTLE_S` 10 s retry was exhausted, then `needs
+you: check the puck`. The puck stayed in its bootloader and recorded nothing
+for two days; entering the bootloader does not erase the application, so a
+replug returns it. `flash.py` can now route that failure into the same
+serial DFU, but **`SERIAL_DFU_ON_REFUSED_COPY = False` ships it disabled**:
+that caller always has the volume still mounted, and the only reading this
+project has of a DFU started mid-mount is the packet-23 failure directly
+above, which needed a manual write — worse for the rider than the give-up it
+would replace. **To turn it on:** reproduce a refused copy on a bench board
+(8673 or 45ED, never the OG), run the fallback 5+ times, record it here.
+The code and its 8 tests exist so that is a one-line change.
+
+**`garmin_tokens.json.rejected`** is load-bearing, and was in no document
+until now. `garmin.py` renames a token Garmin itself refuses (second
+consecutive refusal) to that name rather than deleting it: `is_signed_in()`
+then answers False so the rider is asked to sign in again, while
+`ever_signed_in()` counts the `.rejected` file so he is still recognised as
+someone who HAD signed in — without that second half the retirement
+silences its own notification. `daemon.log` now also carries `garmin: auth
+strikes N/2, signed in: X` after any failed fetch; before 2026-09-22 the
+strike, the retirement and its failure all went to stderr, which launchd
+swallows, so seven days of `garmin fetch failed` on the rider's Mac
+(2026-09-15 to 09-22) could not be attributed to a cause and still cannot.
+
 **Not yet measured, in the order they cost:** the real Puck (board was
 unplugged all night — rehearse `python3 -m puckd once <port>` first, then
 the flash leg with an old image); `clear_puck`'s `tracecheck` after a real

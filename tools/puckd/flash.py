@@ -208,6 +208,18 @@ class FlashResult:
 # also FlashResult.stage_reached's vocabulary, so a caller (or a human
 # reading a "Needs you" log) can tell exactly how far a failed attempt got.
 _COPY_SETTLE_S = 10.0
+
+# Serial DFU as a way out of a REFUSED COPY (the disk appeared, the write was
+# denied). OFF until somebody measures it: the board is still serving that
+# mounted volume, and the only reading this project has of a DFU started
+# mid-mount is the one in docs/STATUS.md that died at packet 23 and needed a
+# manual write -- worse for the rider than the give-up it would replace, on
+# the only board with a battery, 300 miles away. The no-disk caller is
+# unaffected and stays on: there is no volume in that case, and its wedge
+# recovery is measured (10.6 s, bench, 2026-09-15).
+# TO TURN ON: reproduce a refused copy on a bench board, run the fallback
+# against it 5+ times, and record the outcome in docs/STATUS.md first.
+SERIAL_DFU_ON_REFUSED_COPY = False
 _POST_FLASH_SETTLE_S = 2.0   # how long a freshly mounted bootloader volume may refuse writes
 
 STAGE_SHA256 = "sha256"
@@ -805,17 +817,88 @@ def flash(
             break
         sleep(poll_interval_s)
         found = volume_exists()
+    def _read_pid() -> "int | None":
+        """idProduct, or None when we could not tell. A diagnosis must never
+        become the failure (this is called on a path that is already
+        failing), so every exception reads as "could not tell"."""
+        try:
+            return usb_product_id_fn(port_path)
+        except Exception as exc:  # noqa: BLE001
+            log(f"flash: could not read idProduct: {exc!r}")
+            return None
+
+    def _serial_dfu_recovery(pid: "int | None", why_here: str,
+                             fail_stage: str, fail_error: str
+                             ) -> "Optional[FlashResult]":
+        """The second way onto a board that is already in its bootloader.
+
+        None means RECOVERED -- the caller falls through to stages 5 and 6,
+        which remain the only thing allowed to say ok=True. A FlashResult
+        means give up and return exactly that.
+
+        ONLY from the bootloader. From 0x8045 there is nothing listening for
+        DFU; from "we could not tell" we would be uploading into a board we
+        have not identified, which is how the wrong board got flashed on
+        2026-08-12 (CLAUDE.md #1).
+
+        Two callers, because there are two ways to be stuck in a bootloader
+        with the app un-flashed: macOS never published the disk (the MODE
+        SENSE stall, ~1 in 9), and macOS published a disk it then refused to
+        let us write. MEASURED on the rider's Mac 2026-09-20 16:09: `copy to
+        /Volumes/XIAO-SENSE/jumpheight-c5eea285.uf2 failed: [Errno 13]
+        Permission denied` after the _COPY_SETTLE_S retry was exhausted,
+        then "needs you: check the puck" -- and the puck stayed in its
+        bootloader, recording nothing, for two days.
+
+        WHETHER SERIAL DFU WORKS WITH THE VOLUME STILL MOUNTED IS
+        UNMEASURED, and the one adjacent reading is a FAILURE:
+        docs/STATUS.md files it under "Unmeasured" and records that "one DFU
+        attempt started mid-mount died at packet 23 and exited 0 ... after
+        that pair the board sat in its bootloader 12 min before a manual
+        write recovered it (n=1)". The no-disk caller never has a volume
+        mounted; the refused-copy caller always does. That is why the
+        second caller is OFF by default -- see SERIAL_DFU_ON_REFUSED_COPY."""
+        if pid != PID_BOOTLOADER:
+            log(f"flash: no serial-DFU fallback -- USB idProduct "
+                f"{_fmt_pid(pid)} is not the bootloader's "
+                f"{_fmt_pid(PID_BOOTLOADER)}")
+            return FlashResult(False, None, fail_stage, fail_error)
+        package = dfu_package(manifest, Path(dfu_cache_dir), site_url,
+                              fetch_fn, log)
+        if package is None:
+            return FlashResult(False, None, fail_stage, fail_error)
+
+        # The bootloader's CDC node is not there the instant idProduct
+        # flips. MEASURED on the bench Puck 2026-09-15: idProduct became
+        # 0x0045 at 0.68 s and /dev/cu.usbmodem101 came back at 0.91 s, and
+        # a fallback that fired at 0.68 s died on "could not open port
+        # ... [Errno 2]" -- a real failure produced by our own impatience,
+        # which would have read as "the serial DFU does not work here".
+        node_deadline = now() + _DFU_PORT_WAIT_S
+        while port_path not in scan_ports():
+            if now() >= node_deadline:
+                log(f"flash: {port_path} never came back as a bootloader port "
+                    f"within {_DFU_PORT_WAIT_S:g}s -- no serial-DFU fallback")
+                return FlashResult(False, None, fail_stage, fail_error)
+            sleep(poll_interval_s)
+
+        log(f"flash: {why_here}, but the puck is in its bootloader -- "
+            f"serial DFU of {package.name} on {port_path}")
+        programmed, detail = serial_dfu(
+            port_path, package, run_dfu=run_dfu, nrfutil_path=nrfutil_path,
+            timeout_s=dfu_timeout_s)
+        log(f"flash: serial DFU: {detail}")
+        if not programmed:
+            return FlashResult(False, None, STAGE_DFU_SERIAL,
+                               f"{fail_error}; serial DFU fallback: {detail}")
+        return None
+
     if not found:
         # NAME THE FAILURE. Three faults have looked identical from here --
         # a puck that ignored `uf2`, a puck sitting in its bootloader whose
         # disk macOS never published, and a puck that is not on USB at all.
         # idProduct separates them in ~18 ms (docs/STATUS.md, 2026-09-15).
-        try:
-            pid = usb_product_id_fn(port_path)
-        except Exception as exc:  # noqa: BLE001 -- a diagnosis must never
-            # become the failure. An unreadable ioreg is "we could not tell".
-            log(f"flash: could not read idProduct: {exc!r}")
-            pid = None
+        pid = _read_pid()
         why = _why_no_volume(pid)
         if pid is None:
             # "could not tell" has two very different causes — nothing on
@@ -839,59 +922,41 @@ def flash(
             f"(USB idProduct {_fmt_pid(pid)})")
 
         # ---- Stage 4b: the serial-DFU fallback ------------------------
-        # ONLY from the bootloader. From 0x8045 there is nothing listening
-        # for DFU; from "we could not tell" we would be uploading into a
-        # board we have not identified, which is how the wrong board got
-        # flashed on 2026-08-12 (CLAUDE.md §1).
-        if pid != PID_BOOTLOADER:
-            return FlashResult(False, None, STAGE_VOLUME_WAIT, timeout_error)
-        package = dfu_package(manifest, Path(dfu_cache_dir), site_url,
-                               fetch_fn, log)
-        if package is None:
-            return FlashResult(False, None, STAGE_VOLUME_WAIT, timeout_error)
-
-        # The bootloader's CDC node is not there the instant idProduct
-        # flips. MEASURED on the bench Puck 2026-09-15: idProduct became
-        # 0x0045 at 0.68 s and /dev/cu.usbmodem101 came back at 0.91 s, and
-        # a fallback that fired at 0.68 s died on "could not open port
-        # ... [Errno 2]" — a real failure produced by our own impatience,
-        # which would have read as "the serial DFU does not work here".
-        # The production volume_wait (30 s) always covers this; the wait
-        # below is what makes the fallback independent of that.
-        node_deadline = now() + _DFU_PORT_WAIT_S
-        while port_path not in scan_ports():
-            if now() >= node_deadline:
-                log(f"flash: {port_path} never came back as a bootloader port "
-                    f"within {_DFU_PORT_WAIT_S:g}s — no serial-DFU fallback")
-                return FlashResult(False, None, STAGE_VOLUME_WAIT, timeout_error)
-            sleep(poll_interval_s)
-
-        log(f"flash: no disk, but the puck is in its bootloader — "
-            f"serial DFU of {package.name} on {port_path}")
-        programmed, detail = serial_dfu(
-            port_path, package, run_dfu=run_dfu, nrfutil_path=nrfutil_path,
-            timeout_s=dfu_timeout_s)
-        log(f"flash: serial DFU: {detail}")
-        if not programmed:
-            return FlashResult(
-                False, None, STAGE_DFU_SERIAL,
-                f"{timeout_error}; serial DFU fallback: {detail}")
+        gave_up = _serial_dfu_recovery(pid, "no disk", STAGE_VOLUME_WAIT,
+                                       timeout_error)
+        if gave_up is not None:
+            return gave_up
         # Programmed is not "came back". Stages 5 and 6 below are still the
         # only thing allowed to say ok=True.
     else:
         # ---- Stage 4: copy; a "Device not configured" error IS success --
         dest = str(volume_path / uf2_path.name)
+        copy_error = None
         try:
             copy_file(str(uf2_path), dest)
         except OSError as exc:
             if not _is_device_not_configured(exc):
-                return FlashResult(False, None, STAGE_COPY,
-                                    f"copy to {dest} failed: {exc}")
+                copy_error = f"copy to {dest} failed: {exc}"
             # THAT MESSAGE IS THE SUCCESS SIGNATURE
             # (docs/serial-parity-2026-09-09.md:338) — fall through.
-        except Exception as exc:
-            return FlashResult(False, None, STAGE_COPY,
-                                f"copy to {dest} failed: {exc}")
+        except Exception as exc:  # noqa: BLE001
+            copy_error = f"copy to {dest} failed: {exc}"
+        if copy_error is not None:
+            # The disk appeared and then refused the write. The board is
+            # still in its bootloader with nothing flashed into it, and
+            # returning here (what 1.0.6 did) leaves the puck a USB drive
+            # until a human power-cycles it. MEASURED on the rider's Mac
+            # 2026-09-20: two days out of service. The recovery below is
+            # written and tested but DISABLED -- see
+            # SERIAL_DFU_ON_REFUSED_COPY for the reading that has to happen
+            # before it is allowed near an unattended board.
+            log(f"flash: {copy_error}")
+            if not SERIAL_DFU_ON_REFUSED_COPY:
+                return FlashResult(False, None, STAGE_COPY, copy_error)
+            gave_up = _serial_dfu_recovery(_read_pid(), "the disk refused the write",
+                                           STAGE_COPY, copy_error)
+            if gave_up is not None:
+                return gave_up
 
     # ---- Stage 5: wait for a /dev/cu.usbmodem* port to return -------------
     # THE PUCK WE JUST FLASHED, not "a puck". macOS usually re-enumerates the
