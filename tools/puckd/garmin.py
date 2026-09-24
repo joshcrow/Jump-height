@@ -80,6 +80,22 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+# Before garminconnect -> curl_cffi is imported: curl_cffi chooses its CA
+# file ONCE, at import, and inside the app its only candidate would otherwise
+# be a temporary file macOS may clean (netctx.py's docstring). A sign-in that
+# failed on TLS was reported to the rider as "Garmin isn't accepting sign-ins"
+# (_login_error_copy maps GarminConnectConnectionError there), so a vanished
+# certificate file would have looked exactly like Garmin blocking him.
+try:
+    from puckd import netctx as _netctx
+except ImportError:                      # tests import this file bare
+    try:
+        import netctx as _netctx         # type: ignore[no-redef]
+    except ImportError:
+        _netctx = None
+if _netctx is not None:
+    _netctx.install_ca_bundle()
+
 import garminconnect
 from garminconnect import (
     GarminConnectAuthenticationError,

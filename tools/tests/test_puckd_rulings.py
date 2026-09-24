@@ -84,7 +84,12 @@ class _FakeFlash:
 
     def latest_manifest(self, site_url):
         self.latest_manifest_calls.append(site_url)
-        return None
+        # A well-formed manifest, not None: since 1.0.7 _maybe_flash() returns
+        # (and logs why) BEFORE needs_update() when the manifest is unreadable,
+        # and this test's point is that the puck's real src reaches
+        # needs_update(). A None here would test the unreachable-site path
+        # instead, which test_puckd_daemon.py covers directly.
+        return {"src": "cccccccc", "file": "jumpheight-cccccccc.uf2"}
 
     def needs_update(self, puck_src, manifest):
         self.needs_update_calls.append((puck_src, manifest))
@@ -654,6 +659,36 @@ class StatusJsonNamesTheRunningBuildNotTheOneOnDisk(_DaemonTestBase):
         self._drive_for(su)
         self.assertEqual(seen, ["1.0.0"],
                          "comparing against the disk would answer 'up to date' forever")
+
+    def _log_of(self, cfg):
+        f = Path(cfg.home_dir) / daemon.LOG_FILENAME
+        return f.read_text() if f.exists() else ""
+
+    def test_an_unreadable_update_manifest_says_why(self):
+        """Until 1.0.7 a manifest that could not be fetched said exactly what
+        "already up to date" says: nothing."""
+        class _Su(_FakeSelfupdate):
+            def last_manifest_error(self):
+                return "URLError(CERTIFICATE_VERIFY_FAILED)"
+        cfg = self._drive_for(_Su(latest=None))
+        self.assertIn("app update check: could not read the manifest "
+                      "(URLError(CERTIFICATE_VERIFY_FAILED))", self._log_of(cfg))
+
+    def test_an_install_whose_restart_failed_does_not_claim_the_update(self):
+        """MEASURED: the rider's log said "app updated to 1.0.5" on 09-15 and
+        09-17 while he ran 1.0.2 over an installed 1.0.5 for two days."""
+        class _Su(_FakeSelfupdate):
+            def apply(self, manifest, **kwargs):
+                return daemon.selfupdate.UpdateResult(
+                    True, "restart", "kickstart returned non-zero", manifest.get("version"))
+        cfg = self._drive_for(_Su(latest="1.0.1"))
+        log = self._log_of(cfg)
+        self.assertIn("app 1.0.1 installed; it runs from the next launch", log)
+        self.assertNotIn("app updated to 1.0.1", log)
+
+    def test_a_clean_install_still_says_updated(self):
+        cfg = self._drive_for(_FakeSelfupdate(latest="1.0.1"))
+        self.assertIn("app updated to 1.0.1", self._log_of(cfg))
 
     def _drive_for(self, su):
         cfg = self.make_cfg(selfupdate_module=su, site_url="https://site.invalid")

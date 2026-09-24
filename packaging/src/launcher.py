@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 
 
@@ -301,13 +302,68 @@ def _install_and_hand_off(resources: Path) -> bool:
     # second. If NONE of the three worked, say so by returning False and run
     # the daemon in this process -- an install that quietly started nothing
     # is the failure mode the rider cannot see and cannot report.
-    if run("bootstrap", domain, str(plist)).returncode == 0:
-        return True
-    if run("load", "-w", str(plist)).returncode == 0:
-        return True
-    if run("kickstart", "-k", f"{domain}/{LABEL}").returncode == 0:
-        return True
+    #
+    # A return code of 0 is NOT proof. MEASURED on macOS 26.5.1 (2026-09-24,
+    # update review): with the job already registered, `bootstrap` returns 5
+    # and `load -w` then prints "Load failed" and returns 0. Trusting that 0
+    # made this function report a handoff that started nothing; this Finder
+    # copy then exited and NOTHING ran the agent. So each spelling counts
+    # only once `launchctl print` shows the job with a pid.
+    tried = []
+    for name, args in (("bootstrap", (domain, str(plist))),
+                       ("load", ("-w", str(plist))),
+                       ("kickstart", ("-k", f"{domain}/{LABEL}"))):
+        proc = run(name, *args)
+        if proc.returncode == 0 and _wait_until_running(run, domain):
+            return True
+        tried.append((name, proc))
+    _record_handoff_failure(tried)
     return False
+
+
+# How long a spelling that returned 0 gets to show a running job. launchd
+# spawns a RunAtLoad job immediately; the pid appears in `launchctl print`
+# before our Python has even started, so this is generous.
+HANDOFF_CONFIRM_S = 10.0
+
+
+def _wait_until_running(run, domain: str) -> bool:
+    deadline = time.monotonic() + HANDOFF_CONFIRM_S
+    while True:
+        if _agent_is_running(run, domain):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.5)
+
+
+def _record_handoff_failure(tried) -> None:
+    """Write WHY launchd would not take the agent into the daemon's own log,
+    which is the one file the owner can read from the rider's Mac (the
+    daemon uploads it). Never raises.
+
+    Without this line the fallback above is invisible. MEASURED on the
+    rider's Mac 2026-09-15..17: every self-update restart failed with
+    "kickstart did not report success" -- the signature of an agent running
+    in-process, where kickstart has nothing to restart -- and nothing on his
+    Mac or in his log said the handoff had ever failed, let alone why."""
+    parts = []
+    for name, proc in tried:
+        err = getattr(proc, "stderr", b"") or b""
+        if isinstance(err, bytes):
+            err = err.decode("utf-8", "replace")
+        parts.append(f"{name} rc={proc.returncode} {err.strip()[:160]!r}")
+    try:
+        from datetime import datetime
+        home = _puckd_home()
+        home.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().astimezone().isoformat(timespec="seconds")
+        with open(home / "daemon.log", "a", encoding="utf-8") as f:
+            f.write(f"{stamp} launcher: launchd would not take the agent "
+                    f"({'; '.join(parts)}); running it inside the app -- an "
+                    f"app update reopens the app to take effect\n")
+    except OSError:
+        pass
 
 
 if __name__ == "__main__":

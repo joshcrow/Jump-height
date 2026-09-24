@@ -1549,3 +1549,15 @@ class InvokedAsAModuleInsideTheBundle(unittest.TestCase):
         ok, _ = flash.serial_dfu("/dev/cu.usbmodemX", "/tmp/pkg.zip", run_dfu=run)
         self.assertTrue(ok)
         self.assertEqual(seen["argv"][1:5], ["-m", "nordicsemi", "dfu", "serial"])
+
+
+class LatestManifestSaysWhyItFailed(unittest.TestCase):
+    """latest_manifest() keeps its contract (never raises, None on any
+    failure) and now also records which failure, for the daemon's log."""
+
+    def test_an_unreachable_site_records_the_error(self):
+        self.assertIsNone(flash.latest_manifest("http://127.0.0.1:1"))
+        why = flash.last_manifest_error()
+        self.assertIsNotNone(why)
+        self.assertIn("127.0.0.1:1", why)
+

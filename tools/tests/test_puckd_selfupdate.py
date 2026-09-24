@@ -605,3 +605,15 @@ class NotEnoughDisk(_ApplyHarness):
     def test_space_needed_is_four_zips(self):
         self.assertEqual(selfupdate._space_needed({"bytes": 10}), 40)
         self.assertEqual(selfupdate._space_needed({}), 480_000_000)
+
+
+class LatestManifestSaysWhyItFailed(unittest.TestCase):
+    """latest_manifest() keeps its contract (never raises, None on any
+    failure) and records which failure for the daemon's log."""
+
+    def test_an_unreachable_site_records_the_error(self):
+        self.assertIsNone(selfupdate.latest_manifest("http://127.0.0.1:1"))
+        why = selfupdate.last_manifest_error()
+        self.assertIsNotNone(why)
+        self.assertIn("127.0.0.1:1", why)
+

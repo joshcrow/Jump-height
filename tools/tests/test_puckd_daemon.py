@@ -571,6 +571,60 @@ class TestMaybeFlashGate(_DaemonTestBase):
         self.assertEqual(fetch_calls, [])  # never even reached for the uf2 file
         self.assertEqual(fake.flash_calls, [])
 
+    def _log_text(self):
+        f = self.home / daemon.LOG_FILENAME
+        return f.read_text() if f.exists() else ""
+
+    def test_an_unreadable_manifest_is_logged_with_its_reason(self):
+        """MEASURED on the rider's Mac 2026-09-23 and 09-24: the post-sync
+        firmware check ran twice and left nothing in daemon.log. Silent to
+        the RIDER (no notification for a network blip) is right; silent to
+        the owner's log is how a puck stayed on old firmware for days with
+        no way to say why."""
+        class _Why(_FakeFlashModule):
+            def last_manifest_error(self):
+                return "URLError(timed out)"
+        fake = _Why(manifest=None)
+        cfg = self.make_cfg(site_url="http://example.invalid", flash_module=fake)
+        self.assertEqual(daemon._maybe_flash("/dev/x", "aaaa", cfg), (False, None))
+        self.assertIn("could not read the manifest (URLError(timed out))", self._log_text())
+        self.assertEqual(self.recorder.calls, [])
+
+    def test_a_puck_that_reported_no_firmware_id_is_logged(self):
+        fake = _FakeFlashModule(manifest={"src": "bbbb", "file": "x.uf2"}, needs=True)
+        cfg = self.make_cfg(site_url="http://example.invalid", flash_module=fake)
+        self.assertEqual(daemon._maybe_flash("/dev/x", None, cfg), (False, None))
+        self.assertIn("did not report its firmware id", self._log_text())
+        self.assertEqual(fake.needs_update_calls, [])
+
+    def test_a_build_the_manifest_does_not_replace_is_logged_once_per_check(self):
+        fake = _FakeFlashModule(manifest={"src": "bbbb", "file": "x.uf2"}, needs=False)
+        cfg = self.make_cfg(site_url="http://example.invalid", flash_module=fake)
+        daemon._maybe_flash("/dev/x", "devbuild", cfg)
+        self.assertIn("puck is on devbuild, which bbbb does not replace", self._log_text())
+
+    def test_an_already_current_puck_says_nothing(self):
+        """The rider plugs in every night; "already current" is the normal
+        answer and one line per night of it would bury the ones that matter."""
+        fake = _FakeFlashModule(manifest={"src": "aaaa", "file": "x.uf2"}, needs=False)
+        cfg = self.make_cfg(site_url="http://example.invalid", flash_module=fake)
+        daemon._maybe_flash("/dev/x", "aaaa", cfg)
+        self.assertNotIn("firmware check", self._log_text())
+
+    def test_an_unreachable_uf2_is_logged_but_never_notified(self):
+        fake = _FakeFlashModule(manifest={"src": "bbbb", "file": "x.uf2"}, needs=True)
+        cfg = self.make_cfg(site_url="http://example.invalid", flash_module=fake,
+                            fetch_uf2_fn=lambda *a, **k: None)
+        daemon._maybe_flash("/dev/x", "aaaa", cfg)
+        self.assertIn("could not download x.uf2", self._log_text())
+        self.assertEqual(self.recorder.calls, [])
+
+    def test_the_default_uf2_fetcher_records_why_it_failed(self):
+        path = daemon._default_fetch_uf2("http://127.0.0.1:1", "x.uf2", self.tmp)
+        self.assertIsNone(path)
+        self.assertIsNotNone(daemon._LAST_FETCH_UF2_ERROR)
+        self.assertIn("127.0.0.1:1", daemon._LAST_FETCH_UF2_ERROR)
+
     def test_unreachable_uf2_download_skips_silently(self):
         fake = _FakeFlashModule(manifest={"src": "bbbb", "file": "x.uf2"}, needs=True)
         cfg = self.make_cfg(site_url="http://example.invalid", flash_module=fake,

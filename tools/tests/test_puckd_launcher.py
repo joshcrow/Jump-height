@@ -58,13 +58,26 @@ class _LaunchctlRecorder:
     answers with a scripted return code per SUBCOMMAND. `print` (the
     is-it-running probe) answers "not running" unless a test wraps it."""
 
-    def __init__(self, codes=None):
+    def __init__(self, codes=None, starts=("bootstrap", "load", "kickstart")):
         self.calls = []
         self.codes = codes or {}
+        # Which spellings, when they return 0, actually leave the job
+        # running. A spelling can return 0 and start nothing: measured on
+        # macOS 26.5.1, `load -w` does exactly that for a registered job.
+        self.starts = set(starts)
+        self.running = False
 
     def __call__(self, argv, **kwargs):
         self.calls.append(argv)
-        code = self.codes.get(argv[1], 0)
+        sub = argv[1]
+        code = self.codes.get(sub, 0)
+        if sub == "bootout":
+            self.running = False
+        if sub == "print":
+            out = b"\tpid = 4242\n\tstate = running\n" if self.running else b""
+            return subprocess.CompletedProcess(argv, code, out, b"")
+        if code == 0 and sub in self.starts:
+            self.running = True
         return subprocess.CompletedProcess(argv, code, b"", b"")
 
     def subcommands_all(self):
@@ -229,6 +242,57 @@ class TestHandoffFailure(LauncherTestCase):
                 launcher._install_and_hand_off(bundle / "Contents" / "Resources"))
         self.assertEqual(["bootout", "bootstrap", "load", "kickstart"],
                          recorder.subcommands)
+
+    def test_a_refused_handoff_says_why_in_the_daemon_log(self):
+        """The fallback used to be invisible: nothing recorded that the
+        rider's agent was running in-process, or why launchd refused it."""
+        bundle = _make_bundle(self.tmp / "Applications-real")
+        puckd_home = self.tmp / "puckd-home"
+        recorder = _LaunchctlRecorder(
+            codes={"bootstrap": 5, "load": 1, "kickstart": 3, "bootout": 3})
+        with patch("subprocess.run", recorder), \
+                patch.dict(os.environ, {"PUCKD_HOME": str(puckd_home)}):
+            self.assertFalse(
+                launcher._install_and_hand_off(bundle / "Contents" / "Resources"))
+        log = (puckd_home / "daemon.log").read_text()
+        self.assertIn("launcher: launchd would not take the agent", log)
+        self.assertIn("bootstrap rc=5", log)
+        self.assertIn("load rc=1", log)
+        self.assertIn("kickstart rc=3", log)
+
+    def test_a_successful_handoff_writes_nothing(self):
+        bundle = _make_bundle(self.tmp / "Applications-real")
+        puckd_home = self.tmp / "puckd-home"
+        with patch("subprocess.run", _LaunchctlRecorder()), \
+                patch.dict(os.environ, {"PUCKD_HOME": str(puckd_home)}):
+            self.assertTrue(
+                launcher._install_and_hand_off(bundle / "Contents" / "Resources"))
+        self.assertFalse((puckd_home / "daemon.log").exists())
+
+    def test_a_zero_that_started_nothing_is_not_a_handoff(self):
+        """bootstrap refuses (registered), load -w returns 0 and starts
+        nothing: the launcher must go on to kickstart, which does start it."""
+        bundle = _make_bundle(self.tmp / "Applications-real")
+        recorder = _LaunchctlRecorder(codes={"bootstrap": 5}, starts={"kickstart"})
+        with patch("subprocess.run", recorder), \
+                patch.object(launcher, "HANDOFF_CONFIRM_S", 0.0):
+            self.assertTrue(
+                launcher._install_and_hand_off(bundle / "Contents" / "Resources"))
+        self.assertEqual(["bootout", "bootstrap", "load", "kickstart"],
+                         recorder.subcommands)
+
+    def test_zeros_all_round_but_nothing_running_means_run_it_here(self):
+        """Every spelling says 0 and no job ever runs: this copy must run the
+        agent itself, not exit believing launchd has it."""
+        bundle = _make_bundle(self.tmp / "Applications-real")
+        puckd_home = self.tmp / "puckd-home"
+        recorder = _LaunchctlRecorder(starts=())
+        with patch("subprocess.run", recorder), \
+                patch.object(launcher, "HANDOFF_CONFIRM_S", 0.0), \
+                patch.dict(os.environ, {"PUCKD_HOME": str(puckd_home)}):
+            self.assertFalse(
+                launcher._install_and_hand_off(bundle / "Contents" / "Resources"))
+        self.assertIn("bootstrap rc=0", (puckd_home / "daemon.log").read_text())
 
     def test_an_already_registered_service_is_kickstarted_not_abandoned(self):
         """`bootstrap` returns EALREADY when a bootout did not take; the old

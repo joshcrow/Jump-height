@@ -220,6 +220,11 @@ def _record_ride(cfg: "DaemonConfig", jumps: int, bundle_path: "Path | str") -> 
 
 # ------------------------------------------------------------------ config
 
+# Why the last _default_fetch_uf2() returned None; diagnostic only. The same
+# pattern, and the same reason, as flash.last_manifest_error().
+_LAST_FETCH_UF2_ERROR: "Optional[str]" = None
+
+
 def _default_fetch_uf2(site_url: str, file_name: str, dest_dir: "Path | str") -> "Optional[Path]":
     """Download <site_url>/firmware/<file_name> -- the sibling path to
     flash.py's own _MANIFEST_PATH ("/firmware/latest.json", flash.py:71) --
@@ -229,15 +234,19 @@ def _default_fetch_uf2(site_url: str, file_name: str, dest_dir: "Path | str") ->
     manifest -- a firmware update is maintenance, not urgent, and must
     never turn a network blip into a needs_you (only touching the DEVICE
     and not coming back does that -- G4)."""
+    global _LAST_FETCH_UF2_ERROR
+    _LAST_FETCH_UF2_ERROR = None
     url = site_url.rstrip("/") + "/firmware/" + file_name
     try:
         from puckd import netctx
         with urllib.request.urlopen(url, timeout=60.0, context=netctx.ssl_context()) as resp:
             status = getattr(resp, "status", None) or resp.getcode()
             if status != 200:
+                _LAST_FETCH_UF2_ERROR = f"HTTP {status} from {url}"
                 return None
             data = resp.read()
-    except (urllib.error.URLError, OSError, ValueError, TimeoutError):
+    except (urllib.error.URLError, OSError, ValueError, TimeoutError) as exc:
+        _LAST_FETCH_UF2_ERROR = f"{url}: {exc!r}"
         return None
     dest = Path(dest_dir)
     dest.mkdir(parents=True, exist_ok=True)
@@ -578,14 +587,36 @@ def _maybe_flash(
     """
     if not cfg.site_url:
         return False, None
+    # Every exit below that is NOT "the puck is already current" now says
+    # why, in the log the owner reads. Until 1.0.7 all of them were silent,
+    # and on 2026-09-23 and 09-24 the rider's post-sync check ran twice and
+    # left nothing: the puck stayed on 50 Hz logging with no way to tell
+    # which of these returns had fired (CLAUDE.md rule 3).
     manifest = cfg.flash_module.latest_manifest(cfg.site_url)
+    if manifest is None:
+        why = getattr(cfg.flash_module, "last_manifest_error", lambda: None)()
+        _log(cfg, f"firmware check: could not read the manifest"
+                  + (f" ({why})" if why else ""))
+        return False, None
+    if not puck_src:
+        _log(cfg, "firmware check: the puck did not report its firmware id")
+        return False, None
     if not cfg.flash_module.needs_update(puck_src, manifest):
+        if puck_src != manifest.get("src"):
+            # A build the manifest does not replace: a bench or dev build,
+            # left alone on purpose. Worth one line; "already current" is not.
+            _log(cfg, f"firmware check: puck is on {puck_src}, which "
+                      f"{manifest.get('src')} does not replace; leaving it alone")
         return False, None
     uf2_path = cfg.fetch_uf2_fn(
         cfg.site_url, manifest["file"], Path(cfg.home_dir) / FIRMWARE_CACHE_DIRNAME
     )
     if uf2_path is None:
+        why = _LAST_FETCH_UF2_ERROR if cfg.fetch_uf2_fn is _default_fetch_uf2 else None
+        _log(cfg, f"firmware check: could not download {manifest['file']}"
+                  + (f" ({why})" if why else ""))
         return False, None
+    _log(cfg, f"firmware check: updating the puck from {puck_src} to {manifest.get('src')}")
     cfg.on_phase("updating")
     result = cfg.flash_module.flash(
         port_path, uf2_path, manifest, device_factory=cfg.device_factory
@@ -953,6 +984,15 @@ def _maybe_selfupdate(cfg: DaemonConfig) -> "Optional[object]":
         # disagreement and answers it with a restart, not a re-download.
         current = getattr(su, "running_version", su.current_version)()
         manifest = su.latest_manifest(cfg.site_url)
+        if manifest is None:
+            # At most once per SELFUPDATE_INTERVAL_S (6 h). Until 1.0.7 this
+            # was the same silence as "already up to date" -- so an agent
+            # that could not reach the site for any reason simply never
+            # updated, and nothing on the rider's Mac said so.
+            why = getattr(su, "last_manifest_error", lambda: None)()
+            _log(cfg, "app update check: could not read the manifest"
+                      + (f" ({why})" if why else ""))
+            return None
         if not su.needs_update(current, manifest):
             return None
         version = manifest.get("version")
@@ -963,7 +1003,14 @@ def _maybe_selfupdate(cfg: DaemonConfig) -> "Optional[object]":
             download_dir=Path(cfg.home_dir) / UPDATES_CACHE_DIRNAME,
             log=lambda msg: _log(cfg, msg),
         )
-        if getattr(result, "ok", False):
+        if getattr(result, "ok", False) and getattr(result, "error", None):
+            # The bundle is in place but the restart did not happen, so THIS
+            # process is still the old code. "app updated to X" said the
+            # opposite, and the rider's log carried it on 2026-09-15 and
+            # 09-17 while he ran 1.0.2 over an installed 1.0.5 for two days.
+            _log(cfg, f"app {version} installed; it runs from the next launch "
+                      f"(restart failed: {getattr(result, 'error', None)})")
+        elif getattr(result, "ok", False):
             # Reached only when kickstart did NOT replace this process --
             # either it failed, or a test injected a fake. Either way the
             # new bundle IS in place; say so, since the next launch is what
@@ -1227,7 +1274,15 @@ def main() -> None:
     a daemon thread behind it. The first launch (no Drive remote yet) opens
     the setup window by itself; "Set up…" in the menu opens it again."""
     cfg = build_config()
-    _log(cfg, f"agent started: site={cfg.site_url} home={cfg.home_dir}")
+    # HOW we are running, in the log the owner can read. The self-updater's
+    # `launchctl kickstart -k` can only restart a launchd-owned process; an
+    # in-process agent (packaging/src/launcher.py's fallback when launchd
+    # would not take the job) keeps running the old code until it is
+    # reopened. Before 1.0.7 nothing recorded which one the rider had, so
+    # two days of updates that installed and never took effect
+    # (2026-09-15..17) could not be explained from his log.
+    mode = "launchd" if "--launchd" in sys.argv[1:] else "in-process"
+    _log(cfg, f"agent started ({mode}): site={cfg.site_url} home={cfg.home_dir}")
     win = _onboarding()
     app = menubar.make_app(spool_dir=cfg.spool_dir, opener=menubar.default_opener,
                            on_setup=(win.show if win is not None else None))

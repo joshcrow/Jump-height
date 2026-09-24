@@ -236,6 +236,28 @@ STAGE_INFO = "info"
 STAGE_DONE = "done"
 
 
+# WHY the last latest_manifest() call returned None, or None if it
+# succeeded. Diagnostic only -- nothing decides anything on it -- read by
+# daemon.py's _maybe_flash() straight after the call on the same thread.
+# latest_manifest() stays "NEVER RAISES, None on any failure" (its contract,
+# and every test double's); this is what lets the daemon's log say WHICH
+# failure. MEASURED on the rider's Mac 2026-09-23 and 09-24: the post-sync
+# firmware check ran twice and left no trace at all, while the live manifest
+# and .uf2 were both reachable from here -- and from his log there was no way
+# to tell this fetch from the .uf2 download as the one that failed.
+_LAST_MANIFEST_ERROR: "str | None" = None
+
+
+def _manifest_fail(reason: str) -> None:
+    global _LAST_MANIFEST_ERROR
+    _LAST_MANIFEST_ERROR = reason
+    return None
+
+
+def last_manifest_error() -> "str | None":
+    return _LAST_MANIFEST_ERROR
+
+
 def latest_manifest(site_url: str) -> "dict | None":
     """Fetch <site_url>/firmware/latest.json (docs/sync-agent-plan.md:51).
 
@@ -255,25 +277,27 @@ def latest_manifest(site_url: str) -> "dict | None":
         with urllib.request.urlopen(url, timeout=_MANIFEST_TIMEOUT_S, context=netctx.ssl_context()) as resp:
             status = getattr(resp, "status", None) or resp.getcode()
             if status != 200:
-                return None
+                return _manifest_fail(f"HTTP {status} from {url}")
             body = resp.read()
-    except (urllib.error.URLError, OSError, ValueError, TimeoutError):
-        return None
+    except (urllib.error.URLError, OSError, ValueError, TimeoutError) as exc:
+        return _manifest_fail(f"{url}: {exc!r}")
 
     try:
         manifest = json.loads(body)
-    except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
-        return None
+    except (json.JSONDecodeError, UnicodeDecodeError, TypeError) as exc:
+        return _manifest_fail(f"not JSON: {exc!r}")
     if not isinstance(manifest, dict):
-        return None
+        return _manifest_fail("JSON is not an object")
 
     src = manifest.get("src")
     file_name = manifest.get("file")
     if not isinstance(src, str) or not _SRC_RE.match(src.strip()):
-        return None
+        return _manifest_fail(f"bad src {src!r}")
     if (not isinstance(file_name, str) or ".." in file_name
             or not _FILE_RE.match(file_name.strip())):
-        return None
+        return _manifest_fail(f"bad file {file_name!r}")
+    global _LAST_MANIFEST_ERROR
+    _LAST_MANIFEST_ERROR = None
     return manifest
 
 

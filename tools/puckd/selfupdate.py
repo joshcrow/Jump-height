@@ -209,6 +209,23 @@ def _compare(a: str, b: str) -> int:
 
 # ---------------------------------------------------------------- manifest
 
+# Why the last latest_manifest() returned None; None after a success.
+# Diagnostic only, read by daemon._maybe_selfupdate() straight after the call.
+# Before 1.0.7 a manifest that could not be fetched was indistinguishable, in
+# the rider's log, from "already up to date": both said nothing at all.
+_LAST_MANIFEST_ERROR: "Optional[str]" = None
+
+
+def _manifest_fail(reason: str) -> None:
+    global _LAST_MANIFEST_ERROR
+    _LAST_MANIFEST_ERROR = reason
+    return None
+
+
+def last_manifest_error() -> "Optional[str]":
+    return _LAST_MANIFEST_ERROR
+
+
 def latest_manifest(site_url: str) -> "dict | None":
     """Fetch <site_url>/app/latest.json.
 
@@ -229,24 +246,26 @@ def latest_manifest(site_url: str) -> "dict | None":
                                     context=netctx.ssl_context()) as resp:
             status = getattr(resp, "status", None) or resp.getcode()
             if status != 200:
-                return None
+                return _manifest_fail(f"HTTP {status} from {url}")
             body = resp.read()
-    except (urllib.error.URLError, OSError, ValueError, TimeoutError):
-        return None
+    except (urllib.error.URLError, OSError, ValueError, TimeoutError) as exc:
+        return _manifest_fail(f"{url}: {exc!r}")
 
     try:
         manifest = json.loads(body)
-    except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
-        return None
+    except (json.JSONDecodeError, UnicodeDecodeError, TypeError) as exc:
+        return _manifest_fail(f"not JSON: {exc!r}")
     if not isinstance(manifest, dict):
-        return None
+        return _manifest_fail("JSON is not an object")
 
     version = manifest.get("version")
     asset = manifest.get("url")
     if not isinstance(version, str) or not _VERSION_RE.match(version.strip()):
-        return None
+        return _manifest_fail("manifest failed its shape check")
     if not isinstance(asset, str) or not asset.startswith(RELEASE_URL_PREFIX):
-        return None
+        return _manifest_fail("manifest failed its shape check")
+    global _LAST_MANIFEST_ERROR
+    _LAST_MANIFEST_ERROR = None
     return manifest
 
 
