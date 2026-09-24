@@ -59,7 +59,18 @@ jobs:
           # infrastructure skip is a failure — skipping here would leave F-14's
           # refuse-on-ambiguity rule, the one guarding against flashing the
           # wrong board, unverified in CI while the suite stayed green.
-          pip install pytest pyserial platformio bleak playwright fitdecode garminconnect certifi
+          # adafruit-nrfutil (2026-09-24): provides the `nordicsemi` module the
+          # shipped app vendors and runs as `python -m nordicsemi` for the
+          # serial-DFU recovery (tools/puckd/flash.py _default_nrfutil_argv0).
+          # tools/tests/test_puckd_flash.py::InvokedAsAModuleInsideTheBundle
+          # asserts that form works; without the package on this runner both
+          # of its tests failed on EVERY push from 2026-09-15 (cd0fe70) to
+          # 2026-09-24 -- and because `pages` needs `test`, the rider's site
+          # never redeployed in those nine days: web/app/latest.json stayed at
+          # 1.0.5 (so no app on any Mac would update past it) and
+          # web/firmware/latest.json lacked the dfu_* fields the recovery
+          # needs. Installed, not skipped, per the policy below.
+          pip install pytest pyserial platformio bleak playwright fitdecode garminconnect certifi adafruit-nrfutil
 
       - name: Install Playwright's Chromium
         # tools/tests/test_web_sync.py drives the real web/sync/ page in a real
