@@ -311,6 +311,56 @@ Not yet established: whether this is purely voltage (likely — it mounted 89 mV
 higher) or something about the deep-discharge recovery specifically. One
 repeat at the next flat battery would settle it.
 
+## Field-measured 2026-09-23 — strong wind, 14 Surfr jumps, ZERO on the puck
+
+The most consequential water result this project has. **Vest mount** (rider
+confirmed 2026-09-24; board mounting hardware not yet arrived), Festival
+Park, Manteo NC (GPS centroid 35.9111, -75.6623). Wind: NDBC ORIN7 (16 km,
+MEASURED) 19-24 kn gusting to 33 kn NE; Open-Meteo model gusts to 44 kn.
+The 2026-09-14 session was 11-16 kn, also vest.
+
+| Instrument | Jumps | Best | Longest airtime |
+|---|---:|---:|---:|
+| Surfr (phone) | **14** | 11.9 ft (rider's PR) | 3.9 s |
+| Puck E2C4, `src=5c80a436`, 200 Hz live / 50 Hz trace | **0** live, 0 on replay | — | — |
+| Watch, Jump Height **1.0.0** (store has newer), Smart Recording | 0 (mirrors the puck) | — | — |
+
+Alignment is solid: watch 15:51:43-16:44:48 EDT, Surfr 15:51 for 54 min
+(98.3 % overlap), and the watch window lands entirely inside the puck's
+trace (`score.md`, section 1). **Why zero:** the lowest MEAN load over ANY
+window in the session was 0.545 g (1 s), 0.815 g (2 s), 0.910 g (3 s),
+0.942 g (3.8 s), and the longest dip below the 0.35 g free-fall gate lasted
+0.12 s. **On the torso there is no weightless interval anywhere near
+Surfr's airtimes**: during a wing jump the rider hangs from the wing and his
+torso feels roughly his weight throughout. Same-mount comparison with
+2026-09-14: brief sharp dips got shallower and shorter as the wind rose,
+longer partial unloading got longer, and impacts of 8 g or more doubled
+(12 in 100 min to 24 in 82 min; peak 23.9 g, likely past the 16 g per-axis
+rail).
+
+What the torso DOES show is a shape: a pop of 3-4 g, 0.7-1.5 s of partial
+unloading (mean 0.6-0.7 g), then a hard landing (up to 24 g). Loosening the
+gate finds 9 / 21 / 32 candidates at 0.5 / 0.6 / 0.7 g inside the watch
+window, saved as `data/sessions/20260924-083500-E2C4/candidates-gates-0.5-0.7.json`,
+roughly a dozen of them jump-shaped, in two bursts (16:02-16:18 and
+16:35-16:43 EDT). **They have not been matched to Surfr**: that needs
+Surfr's per-jump list with times, requested. Matching is by timestamp, so it
+is not circular; a filter chosen because it yields 14 would be.
+
+Physics check on Surfr's own numbers: 3.9 s airtime at g·T²/8 is 18.6 m
+ballistic; 11.9 ft (3.63 m) from 3.9 s implies about 80 % constant support
+if they are the same jump — the same ~0.8 pattern as 2026-09-14.
+
+**Consequence:** the free-fall detector cannot see wing jumps on a vest-mounted
+puck, and gets worse as conditions get better. No board-mounted water
+session exists yet; that, plus Surfr's per-jump list, are the next two
+measurements. Also measured this session: the post-sync firmware update
+check ran on 2026-09-23 and 09-24 and exited silently (live manifest and
+.uf2 verified reachable), so the puck is still on 50 Hz logging; the rider's
+watch app was never updated from 1.0.0; Garmin refused his sign-in
+("isn't accepting sign-ins right now" = 429/403/WAF before any password
+check); the FIT arrived by manual export.
+
 ## Field-measured 2026-08-29 — the pocket-carry protocol (49 h, one run)
 
 First real-motion exposure, deliberately bracketed by two toss-triplets:
