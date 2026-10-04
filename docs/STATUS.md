@@ -311,6 +311,32 @@ Not yet established: whether this is purely voltage (likely — it mounted 89 mV
 higher) or something about the deep-discharge recovery specifically. One
 repeat at the next flat battery would settle it.
 
+## Bench 2026-10-04 — the OG flashed to c5eea285 by hand, and its first gain reading
+
+The OG (JumpHeight-E2C4) was on Josh's bench for an hour. Sequence, all MEASURED:
+- Arrived flat (uptime 18 s at first read, 3301 mV / 4 %), on `src=5c80a436`, 2 stored
+  jumps and 12.7 MB of trace. Pulled through `serial_job.run_job` (verified), backed up to
+  `data/incoming/` and `gdrive:JumpHeight/bench-backups/` (sha256 identical, 00499cbf...),
+  ingested; then cleared. CAL before: `airtime_offset_s=0.0192 height_scale=1.000 source=device`.
+- `flash.flash()` sent `uf2` and the board **stayed in its app** (idProduct 0x8045 for 30 s).
+  A hand-sent `uf2` reached the bootloader once (0x0045) but the bootloader published no disk
+  and returned to the app within ~8 s; a second hand-sent `uf2` did nothing at all. Entry via
+  the `uf2` command is unreliable on 5c80a436 — consistent with `reboot_to_uf2()` discarding
+  the `sd_power_gpregret_set` return code (next firmware batch).
+- A **double-tap reset** held the bootloader (0x0045, XIAO-SENSE did mount this time) and
+  `flash.serial_dfu()` with the published `jumpheight-c5eea285.zip` returned `Device programmed.`
+- After: `src=c5eea285`, `log_hz=100`, name JumpHeight-E2C4, CAL byte-identical to before.
+  A hand shake recorded 2,976 rows at a **median spacing of 10.0 ms (100.0 Hz)**; peak 16.08 g
+  (the ±16 g rail).
+- Orientation check: 50 `selftest` reads over ~100 s while the rider-owner turned the board
+  through its faces (flips inferred from noise spikes, not independently observed): at-rest
+  magnitude **1.028-1.030 g throughout**. Spread between faces ~0.002 g; the error is a
+  near-uniform **+2.9 % gain**, not an offset. Magnitude traces are unaffected (normalised by
+  the boot-time rest reading); any trajectory reconstruction must correct it.
+- Josh's Mac self-updated 1.0.6 -> 1.0.7 under launchd on 2026-09-26 (`agent started
+  (launchd)`), the first end-to-end confirmation of the update path. The agent was booted out
+  for this bench session.
+
 ## Field-measured 2026-09-23 — strong wind, 14 Surfr jumps, ZERO on the puck
 
 The most consequential water result this project has. **Vest mount** (rider
