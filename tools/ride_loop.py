@@ -34,8 +34,19 @@ This script runs here, on the owner's Mac, under a launchd `StartInterval`
      (read via `tools/fitread.py`, not upload time) overlaps the session's
      trace window, then `./tools/jump score <session>` (docs/accuracy-plan.md's
      loop), tolerating its absence or failure — it is a live, separately-
-     built subcommand, not this script's to gate on.
-  4. regenerates `data/corpus.md`, uploads it plus any new `score.md` to a
+     built subcommand, not this script's to gate on. Before scoring, when
+     garmin.fit is attached and wind.json is absent, `tools/conditions.py`
+     fetches wind.json (network, tolerated). After scoring,
+     `./tools/jump candidates <session>` writes candidates.md/.csv
+     (sim/candidates_report.py), tolerated the same way.
+  3a. a staleness pass over EXISTING sessions: a Garmin fit cached this
+     cycle is attached to a session that still has none, and a session
+     whose surfr.json / garmin.fit / wind.json / mount.json is newer than
+     its candidates.md (or whose candidates.md came from an older
+     generator) is re-scored — at most five per cycle, oldest first. A
+     session with no candidates.md at all is not backfilled.
+  4. regenerates `data/corpus.md`, uploads it plus any new `score.md`,
+     `candidates.md` and `candidates.csv` to a
      SECOND, write-capable remote (`gdrive`, the owner's own app-created
      remote, `docs/STATUS.md`'s "Mac sync agent" `google-client.json`
      account) under `JumpHeight/reports/`.
@@ -92,6 +103,13 @@ _COPY_TIMEOUT_S = 900.0    # a full-region Garmin/ride zip is a few MB, not huge
                           # but a slow home connection is not this script's problem
 _INGEST_TIMEOUT_S = 300.0
 _SCORE_TIMEOUT_S = 600.0
+_CANDIDATES_TIMEOUT_S = 600.0
+_CONDITIONS_TIMEOUT_S = 120.0
+# Re-running score + candidates for sessions whose inputs changed after the
+# report was written is bounded per cycle; the rest wait for the next one.
+_MAX_STALE_PER_CYCLE = 5
+# The inputs whose arrival makes a session's candidates.md stale.
+_STALE_INPUTS = ("surfr.json", "garmin.fit", "wind.json", "mount.json")
 _FITREAD_TIMEOUT_S = 60.0
 _BOOT_RESET_DROP_S = 1.0        # a backward step in trace `t` larger than this is a reboot (sim/score.py uses the same 1 s)
 _MIN_FIT_ACTIVITY_S = 300.0     # shorter than this is a false start, not a ride (measured: a 0.7 s, 1-record windsurfing FIT on 2026-08-22)
@@ -209,6 +227,9 @@ class Config:
     # `ingest`/`score` without running the real detector/analysis stack.
     jump_argv: "list[str]" = field(default_factory=list)
     fitread_argv: "list[str]" = field(default_factory=list)
+    # tools/conditions.py as an argv prefix (writes <session>/wind.json from
+    # free, keyless sources; network-dependent, so tolerated like score).
+    conditions_argv: "list[str]" = field(default_factory=list)
 
     notifier: "Callable[[str, Optional[str]], None]" = None  # filled below
 
@@ -232,6 +253,7 @@ def default_config(repo_dir: "Optional[Path]" = None) -> Config:
         corpus_path=data_dir / "corpus.md",
         jump_argv=[sys.executable, str(repo_dir / "tools" / "jump")],
         fitread_argv=[sys.executable, str(repo_dir / "tools" / "fitread.py")],
+        conditions_argv=[sys.executable, str(repo_dir / "tools" / "conditions.py")],
         notifier=osascript_notify,
     )
 
@@ -499,6 +521,157 @@ def run_score(cfg: Config, session_dir: Path) -> "Optional[Path]":
             log(cfg, f"score[stderr]: {line}")
     md = session_dir / "score.md"
     return md if md.is_file() else None
+
+
+def run_candidates(cfg: Config, session_dir: Path) -> "list[Path]":
+    """`./tools/jump candidates <session>` (sim/candidates_report.py), run
+    after score and tolerated exactly like it: a nonzero exit (a surfr.json
+    that failed validation, a session with no usable trace) is logged with
+    its stderr and the cycle carries on. Returns whichever of candidates.md
+    / candidates.csv exist afterwards — absent files are simply not
+    uploaded, and the log line says why."""
+    try:
+        proc = subprocess.run(cfg.jump_argv + ["candidates", str(session_dir)],
+                              cwd=str(cfg.repo_dir), capture_output=True,
+                              text=True, timeout=_CANDIDATES_TIMEOUT_S)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        log(cfg, f"candidates raised for {session_dir.name}: {exc!r}")
+        proc = None
+    if proc is not None:
+        # The full markdown goes to the file; the log keeps the summary lines.
+        for line in (proc.stdout or "").splitlines():
+            if line.startswith(session_dir.name + ":") or line.startswith("wrote ") \
+                    or line.startswith("!!"):
+                log(cfg, f"candidates: {line}")
+        if proc.returncode != 0:
+            log(cfg, f"candidates exited {proc.returncode} for {session_dir.name} "
+                     "(tolerated — see candidates.md for any FINDING)")
+            for line in (proc.stderr or "").splitlines():
+                log(cfg, f"candidates[stderr]: {line}")
+    files = [p for p in (session_dir / "candidates.md", session_dir / "candidates.csv")
+             if p.is_file()]
+    if not files:
+        log(cfg, f"{session_dir.name}: no candidates.md written — a report that did "
+                 "not happen, not an empty one")
+    return files
+
+
+def run_conditions(cfg: Config, session_dir: Path) -> bool:
+    """`tools/conditions.py <session>` -> wind.json, only when garmin.fit is
+    there (it is where the position comes from) and wind.json is not.
+    Network-dependent and tolerated: a failure leaves wind.json absent, and
+    candidates.md then says `rel_wind` is absent because there is no
+    wind.json. NDBC's realtime files hold about 45 days, so this is worth
+    running at ingest time rather than later by hand."""
+    if not (session_dir / "garmin.fit").is_file() or (session_dir / "wind.json").exists():
+        return False
+    if not cfg.conditions_argv:
+        return False
+    try:
+        proc = subprocess.run(cfg.conditions_argv + [str(session_dir)],
+                              cwd=str(cfg.repo_dir), capture_output=True,
+                              text=True, timeout=_CONDITIONS_TIMEOUT_S)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        log(cfg, f"conditions raised for {session_dir.name}: {exc!r}")
+        return False
+    if proc.returncode != 0:
+        log(cfg, f"conditions exited {proc.returncode} for {session_dir.name} "
+                 "(tolerated — wind.json stays absent)")
+        for line in (proc.stderr or "").splitlines()[-5:]:
+            log(cfg, f"conditions[stderr]: {line}")
+    return (session_dir / "wind.json").is_file()
+
+
+_GEN_LINE_RE = re.compile(r"\bgen (\S+?),")
+
+
+def current_gen_version() -> "Optional[str]":
+    """sim/candgen.py's GEN_VERSION, read from the source so this script
+    does not import the analysis stack."""
+    try:
+        text = (REPO / "sim" / "candgen.py").read_text()
+    except OSError:
+        return None
+    m = re.search(r'^GEN_VERSION = "([^"]+)"', text, re.M)
+    return m.group(1) if m else None
+
+
+def stale_reason(session_dir: Path, gen_version: "Optional[str]") -> "Optional[str]":
+    """Why this session's candidates.md must be regenerated, or None.
+
+    Only a session that HAS a candidates.md can be stale: one ingested
+    before the generator existed is not backfilled automatically (run
+    `./tools/jump candidates` on it by hand) — otherwise the first cycle
+    after an update would re-run and re-upload the whole history."""
+    md = session_dir / "candidates.md"
+    try:
+        md_mtime = md.stat().st_mtime
+    except OSError:
+        return None
+    for name in _STALE_INPUTS:
+        try:
+            if (session_dir / name).stat().st_mtime > md_mtime:
+                return f"{name} is newer than candidates.md"
+        except OSError:
+            continue
+    if gen_version is not None:
+        try:
+            head = md.read_text(errors="replace")[:2000]
+        except OSError:
+            return None
+        m = _GEN_LINE_RE.search(head)
+        if m is None or m.group(1) != gen_version:
+            return (f"candidates.md was made by gen {m.group(1) if m else '?'}, "
+                    f"current is {gen_version}")
+    return None
+
+
+def refresh_stale_sessions(cfg: Config, report: "CycleReport",
+                           skip: "set[str]") -> "list[tuple[Path, str]]":
+    """The staleness pass (spec section 6.3): a FIT that arrived in a LATER
+    cycle than its bundle is attached now, and any session whose inputs
+    changed after its candidates.md was written is re-scored. At most
+    _MAX_STALE_PER_CYCLE sessions, oldest first; the rest are logged and
+    wait. Returns the (local file, remote name) uploads it produced."""
+    if not cfg.sessions_dir.is_dir():
+        return []
+    gen = current_gen_version()
+    todo: "list[tuple[Path, str]]" = []
+    for sess in sorted(d for d in cfg.sessions_dir.iterdir() if d.is_dir()):
+        if sess.name in skip or not (sess / "trace.csv").is_file():
+            continue
+        if synthetic_source(sess) is not None:
+            continue
+        why = None
+        if report.new_fits and not (sess / "garmin.fit").exists():
+            window = session_trace_window(sess)
+            if window is not None:
+                fit = pick_matching_fit(cfg, window, report.new_fits)
+                if fit is not None and install_garmin_fit(sess, fit):
+                    log(cfg, f"{sess.name}: late Garmin fit {fit.name} attached "
+                             "as garmin.fit")
+                    why = f"late Garmin fit {fit.name}"
+        if why is None:
+            why = stale_reason(sess, gen)
+        if why is not None:
+            todo.append((sess, why))
+    uploads: "list[tuple[Path, str]]" = []
+    for k, (sess, why) in enumerate(todo):
+        if k >= _MAX_STALE_PER_CYCLE:
+            log(cfg, f"{sess.name}: stale ({why}) — deferred, "
+                     f"{_MAX_STALE_PER_CYCLE} re-runs per cycle")
+            continue
+        log(cfg, f"{sess.name}: stale ({why}) — re-running score and candidates")
+        run_conditions(cfg, sess)
+        md = run_score(cfg, sess)
+        if md is not None:
+            report.score_mds.append(md)
+            uploads.append((md, f"{sess.name}-score.md"))
+        files = run_candidates(cfg, sess)
+        report.candidate_files += files
+        uploads += [(f, f"{sess.name}-{f.name}") for f in files]
+        report.refreshed.append(sess)
+    return uploads
 
 
 # ------------------------------------------------------------ Garmin match
@@ -954,6 +1127,8 @@ class CycleReport:
     new_fits: "list[Path]" = field(default_factory=list)
     sessions: "list[Path]" = field(default_factory=list)
     score_mds: "list[Path]" = field(default_factory=list)
+    candidate_files: "list[Path]" = field(default_factory=list)
+    refreshed: "list[Path]" = field(default_factory=list)
     log_changed: bool = False
     notified: "Optional[tuple[str, Optional[str]]]" = None
     errors: "list[str]" = field(default_factory=list)
@@ -1073,18 +1248,33 @@ def _run_cycle(cfg: Config, report: CycleReport) -> None:
             else:
                 log(cfg, f"{sess.name}: {fit.name} matched but could not be unzipped")
 
+        run_conditions(cfg, sess)
+
         score_md = run_score(cfg, sess)
         if score_md is not None:
             report.score_mds.append(score_md)
+        report.candidate_files += run_candidates(cfg, sess)
 
         n, best = read_session_jumps(sess)
         total_jumps += n
         best_height = max(best_height, best)
 
+    stale_uploads = []
+    try:
+        stale_uploads = refresh_stale_sessions(
+            cfg, report, {s.name for s in report.sessions})
+    except Exception as exc:  # noqa: BLE001 -- the staleness pass must not cost the cycle
+        log(cfg, f"staleness pass raised: {exc!r}")
+        report.errors.append(f"staleness pass: {exc!r}")
+
     write_corpus(cfg)
 
     upload_items = [(cfg.corpus_path, "corpus.md")]
-    upload_items += [(md, f"{md.parent.name}-score.md") for md in report.score_mds]
+    upload_items += [(md, f"{md.parent.name}-score.md") for md in report.score_mds
+                     if md.parent not in report.refreshed]
+    upload_items += [(f, f"{f.parent.name}-{f.name}") for f in report.candidate_files
+                     if f.parent not in report.refreshed]
+    upload_items += stale_uploads
     upload_reports(cfg, upload_items)
 
     if report.sessions:
@@ -1205,6 +1395,8 @@ def render_report(report: CycleReport) -> str:
         f"new Garmin fits cached: {len(report.new_fits)}",
         f"sessions ingested: {[s.name for s in report.sessions]}",
         f"score.md written: {[m.parent.name for m in report.score_mds]}",
+        f"candidates written: {sorted({f.parent.name for f in report.candidate_files})}",
+        f"stale sessions re-run: {[s.name for s in report.refreshed]}",
         f"rider log changed: {report.log_changed}",
     ]
     if report.notified:
