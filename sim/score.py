@@ -46,6 +46,7 @@ happen); `garmin.fit` may be absent and the whole command still runs.
 
 from __future__ import annotations
 
+import bisect
 import csv
 import datetime as dt
 import json
@@ -312,6 +313,11 @@ class GarminData:
     # (epoch_seconds, speed_ms, lat_deg, lon_deg), ascending by time
     samples: list[tuple[float, Optional[float], Optional[float], Optional[float]]] = \
         field(default_factory=list)
+    # (epoch_seconds, jump_height_ft) for every stamped record carrying the
+    # watch app's jump_height field, ascending. The watch mirrors the puck's
+    # own detections, so this is an ALIGNMENT check (sim/candctx.py), never
+    # truth.
+    jump_heights: list[tuple[float, float]] = field(default_factory=list)
 
     def speed_before(self, when: dt.datetime,
                      max_age_s: float = 30.0) -> Optional[float]:
@@ -359,8 +365,11 @@ def load_garmin(sess: Path) -> GarminData:
         return GarminData(present=False, reason=f"garmin.fit unreadable ({exc})")
 
     samples = []
+    jump_heights = []
     for rec in scanned["stamped"]:
         ts = rec["timestamp"].astimezone(UTC)
+        if rec.get("jump_height") is not None:
+            jump_heights.append((ts.timestamp(), float(rec["jump_height"])))
         lat = rec["position_lat"]
         lon = rec["position_long"]
         samples.append((
@@ -378,6 +387,7 @@ def load_garmin(sess: Path) -> GarminData:
         end_utc=dt.datetime.fromtimestamp(samples[-1][0], UTC),
         record_count=len(scanned["records"]),
         samples=samples,
+        jump_heights=sorted(jump_heights),
     )
 
 
@@ -780,6 +790,278 @@ def device_jump_coverage(jumps: Sequence[dict], times: Sequence[float],
     return "; ".join(bits)
 
 
+# ------------------------------------------------------- flight diagnostics
+#
+# Review section 10 item 1 (docs/accuracy-review-second-opinion-2026-09-15.md):
+# before any new generator is trusted, ask whether the DEVICE's own events
+# were flights at all. The firmware records, per stored jump, the median
+# in-flight load (`med_a_g`), median rotation (`med_w_dps`) and how many
+# samples it observed airborne (`n_air`). A true free fall has a median
+# load inside the firmware's own predicted 0-0.07 g band (main.cpp:351).
+
+FLIGHT_BAND_G = (0.0, 0.07)          # firmware/src/main.cpp:351
+AIR_CAP = 256                        # kAirCap, firmware/src/main.cpp:364
+# Trace samples this close to the reported landing are excluded from the
+# in-flight max. MEASURED on data/sessions/20260914-210637-E2C4: with no
+# guard, jump 2's in-window max is 2.46 g at +0.876 s — the landing ramp
+# itself, 5 ms before the 0.881 s landing. With any guard from 0.02 to
+# 0.10 s it is 2.24 g at +0.376 s: a mid-flight contact.
+LANDING_GUARD_S = 0.05
+# ASSUMED: about midway between 1 g and the 2.5 g landing threshold.
+LOADED_CONTACT_G = 1.5
+
+
+def load_device_jump_rows(sess: Path) -> tuple[list[dict], list[str]]:
+    """jumps.csv keyed by its own header: (rows, header columns).
+
+    `load_device_jumps` keeps the five positional columns every firmware
+    has written; this reads the newer per-flight columns (`med_a_g`,
+    `med_w_dps`, `n_air`) by NAME, so an older file without them reports
+    them absent instead of misreading a neighbour."""
+    p = sess / "jumps.csv"
+    if not p.exists():
+        return [], []
+    with open(p, newline="") as f:
+        lines = [ln for ln in f if ln.strip() and not ln.lstrip().startswith("#")]
+    if not lines:
+        return [], []
+    reader = csv.reader(lines)
+    header = [c.strip() for c in next(reader)]
+    rows = []
+    for parts in reader:
+        row = {}
+        for k, v in zip(header, parts):
+            v = v.strip()
+            try:
+                row[k] = float(v)
+            except ValueError:
+                row[k] = v
+        if isinstance(row.get("takeoff_s"), float):
+            rows.append(row)
+    return rows, header
+
+
+def _manifest_kv(sess_json: dict, prefix: str) -> dict:
+    """key=value pairs from the manifest's `<prefix> ...` info line."""
+    man = (sess_json or {}).get("manifest") or {}
+    for line in man.get("info_lines") or []:
+        if str(line).startswith(prefix + " "):
+            out = {}
+            for tok in str(line).split()[1:]:
+                if "=" in tok:
+                    k, v = tok.split("=", 1)
+                    out[k] = v
+            return out
+    return {}
+
+
+def _params_json_value(section: str, key: str) -> Optional[float]:
+    try:
+        d = json.loads((REPO / "config" / "params.json").read_text())
+        return float(d[section][key])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+@dataclass
+class FlightRow:
+    n: str
+    takeoff_s: float
+    airtime_raw_s: Optional[float]
+    med_a_g: Optional[float]
+    med_w_dps: Optional[float]
+    n_air: Optional[float]
+    n_air_pred: Optional[int]
+    n_air_ok: str                    # "yes" | "NO" | "truncated" | "absent"
+    max_inside_g: Optional[float]
+    max_inside_at_s: Optional[float]
+    above_gate: Optional[bool]
+    outside_band: Optional[bool]
+
+
+@dataclass
+class FlightDiagnostics:
+    rows: list[FlightRow]
+    not_in_trace: list[str]          # jumps.csv `n` values outside the trace
+    missing_cols: list[str]
+    confirm_s: float
+    confirm_src: str
+    sample_hz: float
+    sample_hz_src: str
+    gate_g: float
+    gate_src: str
+    trace_lo: float
+    trace_hi: float
+    file_rows: int = 0               # rows in jumps.csv; -1 when the file is absent
+
+    @property
+    def n(self) -> int:
+        return len(self.rows)
+
+    def counts(self) -> dict:
+        return {
+            "outside": sum(1 for r in self.rows if r.outside_band),
+            "above": sum(1 for r in self.rows if r.above_gate),
+            "reconcile": sum(1 for r in self.rows if r.n_air_ok in ("yes", "truncated")),
+            "contact": sum(1 for r in self.rows if r.max_inside_g is not None
+                           and r.max_inside_g >= LOADED_CONTACT_G),
+        }
+
+    def session_line(self) -> str:
+        if self.n == 0:
+            return ("FLIGHT DIAGNOSTICS: 0 device events in this trace — nothing "
+                    "to diagnose (this is not a pass)")
+        c = self.counts()
+        finding = c["above"] > 0 or c["reconcile"] < self.n
+        lo, hi = FLIGHT_BAND_G
+        line = (f"FLIGHT DIAGNOSTICS: {self.n} device events in this trace; "
+                f"{c['outside']} outside the firmware's {lo:g}–{hi:g} g in-flight "
+                f"band; {c['above']} with median in-flight load ABOVE the "
+                f"{self.gate_g:g} g free-fall gate; {c['reconcile']}/{self.n} "
+                f"n_air reconcile; {c['contact']} with a loaded contact (max inside "
+                f"≥ {LOADED_CONTACT_G:g} g) inside the reported airtime.")
+        if self.missing_cols:
+            line += (f" jumps.csv lacks {', '.join(self.missing_cols)}, so those "
+                     f"checks are absent, not passed.")
+        return ("FINDING — " + line) if finding else line
+
+
+def flight_diagnostics(sess: Path, times: Sequence[float], mag: Sequence[float],
+                       sess_json: Optional[dict] = None) -> FlightDiagnostics:
+    """Per device event: does it look like a free fall? `times`/`mag` are
+    the LAST boot's rows (the only ones whose t the jumps.csv takeoffs can
+    be compared with without guessing a boot)."""
+    sj = sess_json if sess_json is not None else load_session_json(sess)
+    rows, header = load_device_jump_rows(sess)
+    params = _manifest_kv(sj, "PARAMS")
+    info = _manifest_kv(sj, "INFO")
+
+    def pick(src: dict, key: str, section: str, label: str):
+        if key in src:
+            try:
+                return float(src[key]), f"manifest {label} line"
+            except ValueError:
+                pass
+        v = _params_json_value(section, key)
+        if v is not None:
+            return v, f"ASSUMED from config/params.json ({label} line absent)"
+        return float("nan"), "ABSENT"
+
+    confirm_s, confirm_src = pick(params, "freefall_confirm_s", "detector", "PARAMS")
+    sample_hz, hz_src = pick(info, "sample_hz", "firmware", "INFO")
+    gate_g, gate_src = pick(params, "freefall_enter_g", "detector", "PARAMS")
+
+    missing = [c for c in ("med_a_g", "med_w_dps", "n_air") if c not in header] \
+        if header else []
+    lo_t = min(times) if times else 0.0
+    hi_t = max(times) if times else 0.0
+    # Prefix max of t: a monotone key for bisect under sub-second jitter.
+    pmax: list[float] = []
+    m_ = float("-inf")
+    for v in times:
+        m_ = v if v > m_ else m_
+        pmax.append(m_)
+
+    out: list[FlightRow] = []
+    outside_trace: list[str] = []
+    band_lo, band_hi = FLIGHT_BAND_G
+    for r in rows:
+        n = r.get("n")
+        n_s = str(int(n)) if isinstance(n, float) else str(n)
+        tk = r["takeoff_s"]
+        if not times or not (lo_t <= tk <= hi_t):
+            outside_trace.append(n_s)
+            continue
+        air = r.get("airtime_raw_s") if isinstance(r.get("airtime_raw_s"), float) else None
+        med_a = r.get("med_a_g") if isinstance(r.get("med_a_g"), float) else None
+        med_w = r.get("med_w_dps") if isinstance(r.get("med_w_dps"), float) else None
+        n_air = r.get("n_air") if isinstance(r.get("n_air"), float) else None
+        pred = None
+        ok = "absent"
+        if air is not None and math.isfinite(confirm_s) and math.isfinite(sample_hz):
+            raw_pred = int(round((air - confirm_s) * sample_hz))
+            if raw_pred > AIR_CAP:
+                pred, ok = AIR_CAP, "truncated"
+            else:
+                pred = raw_pred
+                if n_air is not None:
+                    ok = "yes" if abs(n_air - pred) <= 1 else "NO"
+        mx = mx_at = None
+        if air is not None:
+            hi = tk + air - LANDING_GUARD_S
+            i = bisect.bisect_right(pmax, tk)
+            while i < len(times) and times[i] < hi + 1.0:
+                if tk < times[i] < hi and (mx is None or mag[i] > mx):
+                    mx, mx_at = mag[i], times[i] - tk
+                i += 1
+        out.append(FlightRow(
+            n=n_s, takeoff_s=tk, airtime_raw_s=air, med_a_g=med_a,
+            med_w_dps=med_w, n_air=n_air, n_air_pred=pred, n_air_ok=ok,
+            max_inside_g=mx, max_inside_at_s=mx_at,
+            above_gate=(med_a > gate_g) if med_a is not None else None,
+            outside_band=(not (band_lo <= med_a <= band_hi)) if med_a is not None else None))
+    return FlightDiagnostics(
+        rows=out, not_in_trace=outside_trace, missing_cols=missing,
+        confirm_s=confirm_s, confirm_src=confirm_src, sample_hz=sample_hz,
+        sample_hz_src=hz_src, gate_g=gate_g, gate_src=gate_src,
+        trace_lo=lo_t, trace_hi=hi_t,
+        file_rows=len(rows) if (sess / "jumps.csv").exists() else -1)
+
+
+def render_flight_section(fd: FlightDiagnostics, log_hz_label: str = "log_hz") -> list[str]:
+    L: list[str] = []
+    add = L.append
+    add("## 3a. Flight diagnostics — the device's own events")
+    add("")
+    add(f"- {fd.session_line()}")
+    add(f"- Scope: jumps.csv rows whose `takeoff_s` lies in the last boot's trace "
+        f"range t={fd.trace_lo:.1f}..{fd.trace_hi:.1f} s. "
+        + ("There is no jumps.csv." if fd.file_rows < 0 else
+           "jumps.csv holds no rows." if fd.file_rows == 0 else
+           f"Not in this trace: n = {', '.join(fd.not_in_trace)}."
+           if fd.not_in_trace else
+           f"All {fd.file_rows} jumps.csv row(s) are inside it."))
+    add(f"- `n_air_pred` = (airtime_raw_s − freefall_confirm_s) × sample_hz, capped "
+        f"at {AIR_CAP} (kAirCap). freefall_confirm_s = {fd.confirm_s:g} s "
+        f"({fd.confirm_src}); sample_hz = {fd.sample_hz:g} ({fd.sample_hz_src}). "
+        f"The firmware observes every sample it was already AIRBORNE before "
+        f"update(), landing sample included, and AIRBORNE starts "
+        f"freefall_confirm_s after the pinned takeoff.")
+    add(f"- free-fall gate {fd.gate_g:g} g ({fd.gate_src}); the firmware's own "
+        f"predicted in-flight band is {FLIGHT_BAND_G[0]:g}–{FLIGHT_BAND_G[1]:g} g "
+        f"(main.cpp:351).")
+    add(f"- `max inside` is the trace max over (takeoff, takeoff + airtime_raw − "
+        f"{LANDING_GUARD_S:g} s): trace at {log_hz_label}, so a LOWER bound — the "
+        f"200 Hz max can only be higher. The {LANDING_GUARD_S:g} s guard keeps the "
+        f"landing ramp out.")
+    for c in fd.missing_cols:
+        add(f"- `{c}`: absent (jumps.csv has no such column)")
+    add("")
+    if not fd.rows:
+        add("No device event lies in this trace, so there is nothing to diagnose. "
+            "This is not a pass.")
+        add("")
+        return L
+
+    def f(v, fmt):
+        return "absent" if v is None else fmt.format(v)
+
+    def yn(v):
+        return "absent" if v is None else ("YES" if v else "no")
+
+    add("| n | takeoff_s | airtime_raw_s | med_a_g | med_w_dps | n_air | n_air_pred | "
+        "n_air_ok | max inside | at +s | above gate | outside band |")
+    add("|---|---|---|---|---|---|---|---|---|---|---|---|")
+    for r in fd.rows:
+        add(f"| {r.n} | {r.takeoff_s:.3f} | {f(r.airtime_raw_s, '{:.3f}')} | "
+            f"{f(r.med_a_g, '{:.3f}')} | {f(r.med_w_dps, '{:.0f}')} | "
+            f"{f(r.n_air, '{:.0f}')} | {f(r.n_air_pred, '{}')} | {r.n_air_ok} | "
+            f"{f(r.max_inside_g, '{:.2f} g')} | {f(r.max_inside_at_s, '{:+.3f}')} | "
+            f"{yn(r.above_gate)} | {yn(r.outside_band)} |")
+    add("")
+    return L
+
+
 def run_stock_detector(times: Sequence[float], mag: Sequence[float],
                        params: Params | None = None) -> list:
     """The unmodified firmware-mirror detector, as a control. Never tuned here."""
@@ -1007,6 +1289,7 @@ class SessionScore:
     low_load: dict
     window_note: str
     device_jump_note: str
+    flight: Optional[FlightDiagnostics] = None
 
 
 def score_session(sess: Path, verbose: bool = False) -> Optional[SessionScore]:
@@ -1023,6 +1306,12 @@ def score_session(sess: Path, verbose: bool = False) -> Optional[SessionScore]:
     surfr = load_surfr(sess)
 
     n_rows_total = len(times)   # the whole file, before any boot restriction
+
+    # Flight diagnostics run on the LAST boot only: jumps.csv takeoffs are
+    # uptime of whichever boot recorded them, and only the last boot's t is
+    # anchored (see Timebase).
+    lb = a.timebase.last_boot_start_idx if a.timebase is not None else 0
+    flight = flight_diagnostics(sess, times[lb:], mag[lb:], sj)
     diffs = sorted(times[i + 1] - times[i] for i in range(len(times) - 1))
     median_dt = diffs[len(diffs) // 2] if diffs else None
     hz = (1.0 / median_dt) if median_dt else None
@@ -1116,7 +1405,8 @@ def score_session(sess: Path, verbose: bool = False) -> Optional[SessionScore]:
         stock_events=stock, stock_events_gate50=stock50, candidates=cands,
         chosen=chosen, sweep=rows, surfr=surfr, surfr_rows_utc=rows_utc,
         fit=fit, low_load=low_load, window_note=window_note,
-        device_jump_note=device_jump_coverage(djumps, times, sj))
+        device_jump_note=device_jump_coverage(djumps, times, sj),
+        flight=flight)
 
 
 def _fmt_list(xs: Iterable[float], fmt: str = "{:.2f}") -> str:
@@ -1166,6 +1456,8 @@ def render_scorecard(s: SessionScore) -> str:
         + (f", best height {max(j['height'] for j in s.device_jumps):.3f} m"
            if s.device_jumps else ""))
     add(f"- jumps.csv vs this trace: {s.device_jump_note}")
+    if s.flight is not None:
+        add(f"- {s.flight.session_line()} (section 3a)")
     if s.surfr:
         add(f"- surfr.json: {s.surfr.get('jumps_total', '?')} jumps, "
             f"best {s.surfr.get('best_height_ft', '?')} ft, "
@@ -1244,6 +1536,12 @@ def render_scorecard(s: SessionScore) -> str:
             f"{s.chosen.min_air_s:g} s, giving {len(s.candidates)}. "
             f"Matching a count is NOT evidence the same jumps were found.")
         add("")
+
+    if s.flight is not None:
+        log_hz = (((load_session_json(s.sess).get("manifest") or {}).get("log_hz"))
+                  or (round(s.sample_hz) if s.sample_hz else None))
+        L.extend(render_flight_section(
+            s.flight, f"{log_hz:g} Hz" if log_hz else "the trace's log rate"))
 
     add("## 4. Matched pairs")
     add("")

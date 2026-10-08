@@ -672,3 +672,102 @@ def test_scorecard_names_the_scope_of_the_three_second_claim(tmp_path):
     scope = s.window_note.split(" — ")[0].split(";")[0].strip()
     assert f"({scope})" in card
     assert "session window" in scope or "whole trace" in scope
+
+
+# ------------------------------------------- 3a. flight diagnostics (T-E1..4)
+#
+# Synthetic jumps.csv + trace; the expected numbers follow from the stated
+# formula n_air_pred = (airtime_raw_s - freefall_confirm_s) * sample_hz,
+# capped at 256 (kAirCap, firmware/src/main.cpp:364).
+
+FD_HEADER = "n,takeoff_s,airtime_raw_s,airtime_s,height_m,med_a_g,med_w_dps,med_acorr_g,n_air"
+FD_MANIFEST = {"info_lines": [
+    "INFO fw=0.4.3 sample_hz=200 log_hz=50",
+    "PARAMS freefall_confirm_s=0.08 freefall_enter_g=0.35 landing_threshold_g=2.5"]}
+
+
+def _fd_session(tmp_path, jumps_lines, trace_spec=None, manifest=FD_MANIFEST):
+    d = tmp_path / "fd"
+    d.mkdir(exist_ok=True)
+    times, mag = _samples(trace_spec or [(10.0, 1.0)], t0=100.0)
+    (d / "trace.csv").write_text(
+        "t,mag\n" + "".join(f"{t},{m}\n" for t, m in zip(times, mag)))
+    (d / "jumps.csv").write_text("\n".join(jumps_lines) + "\n")
+    sj = {"trace_epoch_utc": "2026-09-14T18:07:29.427Z"}
+    if manifest is not None:
+        sj["manifest"] = manifest
+    (d / "session.json").write_text(json.dumps(sj))
+    return d, times, mag
+
+
+def test_e1_n_air_prediction_formula_cap_and_truncation(tmp_path):
+    d, t, m = _fd_session(tmp_path, [
+        FD_HEADER,
+        "1,101.000,0.400,0.419,0.2,0.05,10,0.05,64",    # (0.40-0.08)*200 = 64: ok
+        "2,103.000,0.400,0.419,0.2,0.05,10,0.05,70",    # 6 off: NO
+        "3,105.000,2.000,2.019,4.9,0.05,10,0.05,256",   # 384 > 256: truncated
+    ])
+    fd = score.flight_diagnostics(d, t, m)
+    assert [r.n_air_pred for r in fd.rows] == [64, 64, 256]
+    assert [r.n_air_ok for r in fd.rows] == ["yes", "NO", "truncated"]
+    line = fd.session_line()
+    assert "2/3 n_air reconcile" in line and "FINDING" in line
+    assert fd.confirm_src == "manifest PARAMS line"
+
+
+def test_e1_absent_params_fall_back_to_params_json_and_say_assumed(tmp_path):
+    d, t, m = _fd_session(tmp_path, [FD_HEADER, "1,101.000,0.400,0.419,0.2,0.05,10,0.05,64"],
+                          manifest=None)
+    fd = score.flight_diagnostics(d, t, m)
+    assert fd.confirm_src.startswith("ASSUMED") and fd.sample_hz_src.startswith("ASSUMED")
+    assert fd.rows[0].n_air_pred == 64
+
+
+def test_e2_the_landing_guard_excludes_the_ramp_and_keeps_a_contact(tmp_path):
+    # takeoff 102.0, airtime 1.0: a 2.0 g contact at +0.50 s and a 3.0 g
+    # landing-ramp sample at +0.98 s (inside the 0.05 s guard)
+    spec = [(2.0, 1.0), (0.50, 0.1), (0.02, 2.0), (0.46, 0.1), (0.02, 3.0), (2.0, 1.0)]
+    d, t, m = _fd_session(tmp_path, [FD_HEADER, "1,102.000,1.000,1.019,1.2,0.10,10,0.10,184"],
+                          trace_spec=spec)
+    fd = score.flight_diagnostics(d, t, m)
+    r = fd.rows[0]
+    assert r.max_inside_g == pytest.approx(2.0)
+    assert r.max_inside_at_s == pytest.approx(0.50, abs=0.021)
+    assert "1 with a loaded contact" in fd.session_line()
+
+
+def test_e3_no_device_event_is_not_a_pass(tmp_path):
+    d, t, m = _fd_session(tmp_path, [FD_HEADER])
+    fd = score.flight_diagnostics(d, t, m)
+    line = fd.session_line()
+    assert "0 device events in this trace" in line and "this is not a pass" in line
+    assert "FINDING" not in line
+    s = score.score_session(d)
+    card = score.render_scorecard(s)
+    assert "## 3a. Flight diagnostics" in card
+    assert "jumps.csv holds no rows" in card
+
+
+def test_e3_events_outside_the_trace_are_named_not_diagnosed(tmp_path):
+    d, t, m = _fd_session(tmp_path, [FD_HEADER, "7,99999.000,0.400,0.419,0.2,0.05,10,0.05,64"])
+    fd = score.flight_diagnostics(d, t, m)
+    assert fd.n == 0 and fd.not_in_trace == ["7"]
+
+
+def test_e4_missing_flight_columns_print_absent(tmp_path):
+    d, t, m = _fd_session(tmp_path, ["n,takeoff_s,airtime_raw_s,airtime_s,height_m",
+                                     "1,101.000,0.400,0.419,0.2"])
+    fd = score.flight_diagnostics(d, t, m)
+    assert set(fd.missing_cols) == {"med_a_g", "med_w_dps", "n_air"}
+    text = "\n".join(score.render_flight_section(fd))
+    assert "`med_a_g`: absent (jumps.csv has no such column)" in text
+    assert fd.rows[0].n_air_ok == "absent"
+    assert fd.rows[0].above_gate is None
+
+
+def test_flight_line_flags_a_median_load_above_the_gate(tmp_path):
+    d, t, m = _fd_session(tmp_path, [FD_HEADER, "1,101.000,0.400,0.419,0.2,0.70,10,0.70,64"])
+    fd = score.flight_diagnostics(d, t, m)
+    line = fd.session_line()
+    assert line.startswith("FINDING") and "1 with median in-flight load ABOVE" in line
+    assert "1 outside the firmware's 0–0.07 g" in line
