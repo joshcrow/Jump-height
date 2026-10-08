@@ -186,6 +186,38 @@ night before) and needs a replug; the OG gets it at the rider's next
 plug-in once his app is past 1.0.2 (whose flash leg crashes on a decode
 bug fixed in 1.0.3).
 
+## Six-axis event capture — firmware batch 2, branch `overnight/fw-batch2`, 2026-10-08, NOT on any board
+
+Built and host-tested only; **nothing was flashed, opened or sent to a board.**
+Spec: the 2026-10-07 batch-2 spec (raw accel+gyro windows around plausible
+jumps, for board-mounted rides; the detector, its parameters, the
+calibration, STATS and the watch protocol are unchanged).
+
+- Store layout v2: trace region 2,027,520 → **1,499,136 B** (2.00 h of motion
+  at 100 Hz); a 528,384 B event region at the top of the chip. A v1 chip is
+  migrated in place at mount — jumps and trace byte-identical, checked
+  against a frozen copy of the shipped v1 store (`test_store_host.py`).
+  **Rolling back to a v1 build formats the chip** (`bench-playbook.md` §6).
+- Triggers: tier A ≥ 8 g, tier B ≥ 4 g, both paced; a detector JUMP forces a
+  window; every ≥ 2.5 g crossing gets a TRIG record. Thresholds come from
+  vest data only — retune from the first board session's `triggers.csv`.
+- New commands `events` / `evstat` / `evclear`; `info` adds `# boot_id=`.
+  `clear` does NOT erase events. `uf2`/`dfu` now arm, read GPREGRET back, and
+  answer ERR instead of resetting when it did not stick.
+- Mac side (needs app 1.0.8, not built): bundles gain `events.bin` +
+  `evstat.txt`; `evclear` only after a confirmed upload and a verified pull;
+  no firmware update while events remain. App 1.0.7 against a batch-2 puck:
+  verified, cleared, events kept (frozen-copy test).
+- MEASURED (host): `python3 -m pytest tools/tests -q` 1,357 passed, 16
+  skipped, 1 xfailed (main: 1,281 / 16 / 1). Device build with a local
+  arm64 gcc 12.3 (CI uses gcc 7.2, not runnable on this Mac without Rosetta):
+  `.bss` 25,488 → 49,232 B, `.text` 160,456 → 179,928 B.
+- UNMEASURED, bench gates before the OG: heap free with BLE up (`evstat
+  heap_free`), page-program time against the 5 ms pass (`max_page_write_us`,
+  `pages_over_slack`, `dup_polls`), the 528 KB mount scan on silicon, the
+  migration on a real v1 chip, `uf2` entry rate, H-WDT (bootloader returning
+  to the app after ~8 s), power on the OG.
+
 ## Open findings
 
 `docs/audit-2026-08-22.md` carries the detail. F-01…F-21 are closed.
