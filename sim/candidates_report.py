@@ -189,10 +189,14 @@ class SessionReport:
 
 
 def _region(c: candgen.Candidate, window) -> str:
-    if c.boot != "last":
-        return "earlier_boot"
+    # With no session window the whole trace is counted, every boot included
+    # (the scope line says so, `_count` counts so, and the per-hour rate uses
+    # every boot's logged minutes): one rule for section 1, the grid and the
+    # rate. The `boot` column still says which boot a candidate came from.
     if window is None:
         return "no_window"
+    if c.boot != "last":
+        return "earlier_boot"
     lo, hi = window
     if lo <= c.pop_t_s <= hi:
         return "session"
@@ -317,6 +321,10 @@ def _inputs(rep: SessionReport, sj: dict) -> None:
         add("surfr.json: ABSENT (no Surfr data for this session)")
     add(f"mount.json: {'present' if (s / 'mount.json').exists() else 'ABSENT'} "
         f"→ mount {rep.mount_display}")
+    for ln in rep.ctx.tz_lines:
+        add(ln)
+        if ln.startswith("FINDING"):
+            rep.findings.append(ln)
     # score.md's own alignment verdict, quoted rather than recomputed
     try:
         sm = (s / "score.md").read_text()
@@ -364,7 +372,7 @@ def _surfr(rep: SessionReport, sj: dict) -> None:
     surfr, err = surfr_match.load_surfr_strict(path)
     if err:
         rep.findings.append(err)
-        rep.surfr_note = err
+        rep.surfr_note = f"did not run: {err}"
         return
     if surfr is None:
         rep.surfr_note = "did not run: no surfr.json"
@@ -385,6 +393,12 @@ def _surfr(rep: SessionReport, sj: dict) -> None:
         cands.append(surfr_match.Cand(cid=r.cand_id, pop=c.pop_t_s, land=c.land_t_s,
                                       extra=extra))
     res = surfr_match.match(surfr, start_t, cands, rep.window)
+    if start_t is None:
+        # Say WHICH input is missing, not just that the start has no place.
+        res.reason = ("the Surfr start cannot be placed on the trace clock: "
+                      + ("session.json has no trace_epoch_utc"
+                         if rep.ctx.epoch_utc is None else
+                         "surfr.json has no session_start_local"))
     rep.match = res
     rep.findings += [f for f in res.findings if "FINDING" in f]
     by_id = {r.cand_id: r for r in rep.rows[PRESET_L]}
@@ -506,7 +520,9 @@ def render_md(rep: SessionReport) -> str:
     add("")
     nR = sum(1 for r in rep.rows[PRESET_R] if r.region in ("session", "no_window"))
     nL = sum(1 for r in rep.rows[PRESET_L] if r.region in ("session", "no_window"))
-    scope = "in the session window" if rep.window else "over the whole trace (no window)"
+    scope = ("in the session window" if rep.window else
+             "over the whole trace (no window"
+             + (f", all {rep.n_boots} boots summed" if rep.n_boots > 1 else "") + ")")
     per_h = (lambda n: f"{n / (rep.in_minutes / 60):.1f}/h"
              if rep.in_minutes else "n/a")
     add(f"- {PRESET_R}: **{nR}** {scope} ({per_h(nR)} of logged motion, "
@@ -678,9 +694,12 @@ def render_md(rep: SessionReport) -> str:
     add("## 5. Surfr")
     add("")
     if rep.match is None:
-        add(rep.surfr_note.capitalize() + ".")
+        note = rep.surfr_note[:1].upper() + rep.surfr_note[1:]
+        add(note if note.endswith(".") else note + ".")
         add("")
     else:
+        add(f"- {rep.ctx.tz_lines[0]}" if rep.ctx.tz_lines else
+            "- UTC offset: absent")
         def lbl(t):
             loc = rep.ctx.t_to_local(t)
             return loc.strftime("%H:%M:%S") if loc else f"t={t:.2f}"

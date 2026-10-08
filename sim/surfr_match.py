@@ -59,7 +59,7 @@ REPO = Path(__file__).resolve().parent.parent
 if str(REPO / "sim") not in sys.path:
     sys.path.insert(0, str(REPO / "sim"))
 
-from score import parse_t_into_session  # noqa: E402
+from score import parse_t_into_session, surfr_header_problems  # noqa: E402
 
 SCHEMA = "surfr-v1"
 TAU_S = 1.5              # ASSUMED: Surfr's 1 s display resolution + 0.5 s
@@ -111,6 +111,10 @@ def validate(surfr: dict) -> tuple[list[SurfrRow], list[str]]:
             findings.append(f"FINDING: surfr.json row #{k} is not an object — not placed")
             continue
         n = r.get("n", f"#{k}")
+        if isinstance(n, bool) or not isinstance(n, (int, float, str)):
+            findings.append(f"FINDING: surfr.json row #{k} has n={n!r}, not a "
+                            f"number — not placed")
+            continue
         if n in seen:
             findings.append(f"FINDING: surfr.json row n={n} appears more than once "
                             f"(rows #{seen[n]} and #{k})")
@@ -555,4 +559,11 @@ def load_surfr_strict(path: Path) -> tuple[Optional[dict], Optional[str]]:
         return None, f"FINDING: surfr.json is unreadable ({exc.__class__.__name__}: {exc})"
     if not isinstance(d, dict):
         return None, "FINDING: surfr.json is not a JSON object"
+    problems = surfr_header_problems(d)
+    if problems:
+        # A hand-typed header field of the wrong type (Surfr's "54m", "EDT")
+        # is named here, with a nonzero exit — never a traceback, and never
+        # an exit-0 "cannot be placed" that hides which field is wrong.
+        return None, ("FINDING: surfr.json is malformed — " + "; ".join(problems)
+                      + ". The matcher DID NOT RUN; fix the field by hand.")
     return d, None

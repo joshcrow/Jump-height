@@ -202,3 +202,116 @@ def test_jump_cli_registers_candidates(tmp_path):
                            str(d)], capture_output=True, text=True, timeout=120)
     assert proc.returncode == 0, proc.stderr
     assert (d / "candidates.md").is_file() and (d / "candidates.csv").is_file()
+
+
+# ------------------------------------------- review S2, S3, S6
+
+@pytest.mark.parametrize("field,value", [
+    ("duration_s", "54 min"), ("tz_offset_min", "EDT"),
+    ("session_start_local", "16:15"), ("jumps_total", "14 jumps")])
+def test_s2_a_mistyped_surfr_header_is_a_finding_in_both_reports(tmp_path, field, value):
+    import score
+    d = make_session(tmp_path, surfr=dict(SURFR, **{field: value}))
+    rc, _ = R.run_session(d)
+    md = (d / "candidates.md").read_text()
+    assert rc == 1
+    assert "FINDING: surfr.json is malformed" in md and field in md
+    assert "DID NOT RUN" in md
+    # sim/score.py reads the same file: a FINDING, never a traceback
+    assert score.main([str(d), "--no-write"]) == 0
+    card = score.render_scorecard(score.score_session(d))
+    assert "FINDING: surfr.json is malformed" in card and field in card
+
+
+def test_s2_a_list_n_is_a_finding_not_a_crash(tmp_path):
+    d = make_session(tmp_path, surfr=dict(SURFR, rows=[
+        {"n": [1], "t_into_session": "1:00"}, {"n": 2, "t_into_session": "1:30"}]))
+    rc, _ = R.run_session(d)
+    assert rc == 1
+    assert "has n=[1], not a number" in (d / "candidates.md").read_text()
+
+
+def test_s3_the_utc_offset_and_its_source_are_printed(tmp_path):
+    d = make_session(tmp_path, surfr=SURFR)
+    R.run_session(d)
+    md = (d / "candidates.md").read_text()
+    line = ("UTC offset for local times and Surfr placement: -240 min "
+            "(session.json manifest.tz_offset_min, the offset in force at SYNC)")
+    sec0 = md.split("## 1.")[0]
+    sec5 = md.split("## 5. Surfr")[1].split("## 6.")[0]
+    assert line in sec0 and line in sec5
+
+
+def test_s3_an_assumed_offset_placing_surfr_rows_is_a_finding(tmp_path):
+    d = make_session(tmp_path, surfr=SURFR)
+    sj = json.loads((d / "session.json").read_text())
+    del sj["manifest"]["tz_offset_min"]
+    (d / "session.json").write_text(json.dumps(sj))
+    rc, _ = R.run_session(d)
+    md = (d / "candidates.md").read_text()
+    assert rc == 1
+    assert "FINDING: the UTC offset that places the Surfr rows is ASSUMED (-240 min)" in md
+    # with no Surfr start to place, the assumption is printed but not a finding
+    d2 = make_session(tmp_path, name="nosurfr")
+    (d2 / "session.json").write_text(json.dumps(sj))
+    rc2, _ = R.run_session(d2)
+    md2 = (d2 / "candidates.md").read_text()
+    assert "ASSUMED -240 min" in md2 and "FINDING" not in md2 and rc2 == 0
+
+
+def test_s3_a_dst_change_between_ride_and_sync_is_a_finding(tmp_path):
+    d = make_session(tmp_path, surfr=SURFR)
+    sj = json.loads((d / "session.json").read_text())
+    sj["synced_at_utc"] = "2026-11-03T15:00:00Z"     # after the Nov 1 change
+    (d / "session.json").write_text(json.dumps(sj))
+    rc, _ = R.run_session(d)
+    md = (d / "candidates.md").read_text()
+    assert rc == 1
+    assert "FINDING: a US daylight-saving change (2026-11-01)" in md
+    sj["synced_at_utc"] = "2026-09-14T22:00:00Z"     # same day: no change between
+    (d / "session.json").write_text(json.dumps(sj))
+    R.run_session(d)
+    assert "daylight-saving" not in (d / "candidates.md").read_text()
+
+
+def test_s3_surfr_and_garmin_windows_an_hour_apart_are_a_finding():
+    import candctx
+    import datetime as dt
+    base = dict(epoch_utc=dt.datetime(2026, 9, 14, 18, tzinfo=dt.timezone.utc),
+                tz_offset_min=-240, tz_src="surfr.json tz_offset_min",
+                garmin_reason="", garmin_window=(1000.0, 4000.0))
+    ok = candctx.Context(**base, surfr_window=(813.0, 4021.0))   # Sep-14's -187 / +21
+    candctx._tz_checks(ok, {}, {}, None)
+    assert not any(ln.startswith("FINDING") for ln in ok.tz_lines)
+    assert "Surfr starts -187 s and ends +21 s" in "\n".join(ok.tz_lines)
+    off = candctx.Context(**base, surfr_window=(4600.0, 7600.0))  # +3600 s
+    candctx._tz_checks(off, {}, {}, None)
+    assert any(ln.startswith("FINDING: the Surfr window disagrees") for ln in off.tz_lines)
+
+
+def test_s6_no_window_and_two_boots_count_the_same_everywhere(tmp_path):
+    d = make_session(tmp_path, jumps_at=(100.0,))
+    t, m = _trace(50.0, (100.0,))
+    rows = list(zip(t, m)) + list(zip(t, m))          # boot 2 restarts t at 10 s
+    (d / "trace.csv").write_text("t,mag\n" + "".join(f"{a},{b}\n" for a, b in rows))
+    rep = R.analyse(d)
+    assert rep.n_boots == 2 and rep.window is None
+    md = R.render_md(rep)
+    assert "vest-R: **2** over the whole trace (no window, all 2 boots summed)" in md
+    grid_r = [n for p, n, _ in rep.grid if p == candgen.PRESETS["vest-R"]]
+    assert grid_r == [2]
+    assert "| 2 (R) |" in md or " 2 (R) " in md
+    with open(tmp_path / "x.csv", "w"):
+        pass
+    R.write_csv(rep, tmp_path / "x.csv")
+    with open(tmp_path / "x.csv", newline="") as f:
+        r_rows = [r for r in csv.DictReader(f) if r["preset"] == "vest-R"]
+    assert sorted(r["boot"] for r in r_rows) == ["earlier", "last"]
+    assert {r["region"] for r in r_rows} == {"no_window"}
+
+
+def test_s2_a_surfr_json_without_a_start_says_which_input_is_missing(tmp_path):
+    d = make_session(tmp_path, surfr={"jumps_total": 12, "rows": []})
+    R.run_session(d)
+    assert ("Did not run: the Surfr start cannot be placed on the trace clock: "
+            "surfr.json has no session_start_local.") in (d / "candidates.md").read_text()

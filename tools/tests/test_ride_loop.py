@@ -1472,6 +1472,7 @@ class StalenessPass(_RideLoopTestBase):
 
     def test_f2_a_fit_arriving_in_a_later_cycle_is_attached_and_rerun(self):
         sess = self._session("20260914-200000-E2C4")
+        ride_loop.record_ingested(self.make_cfg(), sess)
         self.put_ro_file("JumpHeight/log", "daemon.log", b"x\n")
         ride_loop.run_cycle(self.make_cfg())          # cycle 1: no FIT yet
         self.assertFalse((sess / "garmin.fit").exists())
@@ -1513,6 +1514,130 @@ class StalenessPass(_RideLoopTestBase):
         self.assertIn("gen cg-0", ride_loop.stale_reason(sess, "cg-1"))
         self.assertIsNone(ride_loop.stale_reason(sess, "cg-0"))
         self.assertEqual(ride_loop.current_gen_version(), "cg-1")
+
+
+class StaleReRunFailures(_RideLoopTestBase):
+    """Review B1: a re-run that fails must upload NOTHING old, and must not
+    be re-run (or hold one of the five slots) every cycle while its inputs
+    are unchanged. Review S7: a late FIT is written only into a session
+    ride_loop ingested itself."""
+
+    def setUp(self):
+        super().setUp()
+        self.calls = self.tmp / "calls.txt"
+        os.environ["FAKE_JUMP_CALLS"] = str(self.calls)
+        self.addCleanup(os.environ.pop, "FAKE_JUMP_CALLS", None)
+        self.reports_dir = self.rw_store / "JumpHeight" / "reports"
+        self.put_ro_file("JumpHeight/log", "daemon.log", b"x\n")
+
+    def _session(self, name, cand_plan, score_plan=None,
+                 epoch="2026-09-14T20:00:00Z"):
+        sess = self.sessions_dir / name
+        sess.mkdir(parents=True)
+        (sess / "trace.csv").write_text(trace_csv([(0.0, 1.0), (3600.0, 1.0)]))
+        (sess / "jumps.csv").write_text(jumps_csv(1.0))
+        (sess / "session.json").write_text(json.dumps(session_json(trace_epoch_utc=epoch)))
+        (sess / ".cand_plan.json").write_text(json.dumps(cand_plan))
+        if score_plan is not None:
+            (sess / ".score_plan.json").write_text(json.dumps(score_plan))
+        old = 1_700_000_000
+        for name_, body in (("candidates.md", CAND_MD), ("candidates.csv", "old\n"),
+                            ("score.md", "# old score.md\n")):
+            (sess / name_).write_text(body)
+            os.utime(sess / name_, (old, old))
+        (sess / "surfr.json").write_text("{}")          # newer: the session is stale
+        return sess
+
+    def _log(self):
+        return self.data_dir.joinpath("ride_loop.log").read_text()
+
+    def test_b1_a_failing_rerun_uploads_nothing_old_and_is_not_retried(self):
+        sess = self._session("20260914-200000-E2C4",
+                             {"md": None, "csv": None, "exit_code": 1,
+                              "stderr": "ValueError: could not convert string to float"},
+                             score_plan={"exit_code": 1})
+        r1 = ride_loop.run_cycle(self.make_cfg())
+        self.assertEqual([s.name for s in r1.refreshed], [sess.name])
+        uploaded = sorted(p.name for p in self.reports_dir.iterdir()) \
+            if self.reports_dir.is_dir() else []
+        self.assertEqual(uploaded, ["corpus.md"])      # no old score.md / candidates.*
+        self.assertEqual(r1.candidate_files, [])
+        self.assertEqual(r1.score_mds, [])
+        self.assertEqual((sess / "candidates.md").stat().st_mtime, 1_700_000_000)
+        log_text = self._log()
+        self.assertIn("candidates.md, candidates.csv NOT rewritten", log_text)
+        self.assertIn("score.md was NOT rewritten", log_text)
+        self.assertIn("stale re-run FAILED", log_text)
+        self.assertIn(f"stale re-run failed: {sess.name}", r1.errors)
+        n_calls = len(self.calls.read_text().split("\n"))
+
+        r2 = ride_loop.run_cycle(self.make_cfg())       # same inputs: not re-run
+        self.assertEqual(r2.refreshed, [])
+        self.assertEqual(len(self.calls.read_text().split("\n")), n_calls)
+        self.assertIn("re-run FAILED at", self._log())
+
+        (sess / "surfr.json").write_text('{"fixed": 1}')  # an input changed
+        (sess / ".cand_plan.json").write_text(json.dumps({"md": CAND_MD, "csv": "a\n"}))
+        r3 = ride_loop.run_cycle(self.make_cfg())
+        self.assertEqual([s.name for s in r3.refreshed], [sess.name])
+        self.assertTrue((self.reports_dir / f"{sess.name}-candidates.md").is_file())
+        self.assertNotIn(sess.name, json.loads(
+            (self.data_dir / "incoming" / "stale_failures.json").read_text()))
+
+    def test_b1_failed_sessions_do_not_block_newer_ones(self):
+        bad = [self._session(f"2026091{k}-120000-E2C4",
+                             {"md": None, "csv": None, "exit_code": 1}) for k in range(5)]
+        good = self._session("20260920-120000-E2C4", {"md": CAND_MD, "csv": "a\n"})
+        r1 = ride_loop.run_cycle(self.make_cfg())
+        self.assertEqual([s.name for s in r1.refreshed], [s.name for s in bad])
+        r2 = ride_loop.run_cycle(self.make_cfg())
+        self.assertEqual([s.name for s in r2.refreshed], [good.name])
+
+    def test_b1_only_the_files_a_run_rewrote_are_uploaded(self):
+        # candidates.md rewritten, candidates.csv not: only the md goes up.
+        sess = self._session("20260914-200000-E2C4",
+                             {"md": CAND_MD, "csv": None, "exit_code": 1})
+        r = ride_loop.run_cycle(self.make_cfg())
+        self.assertEqual([p.name for p in r.candidate_files], ["candidates.md"])
+        self.assertTrue((self.reports_dir / f"{sess.name}-candidates.md").is_file())
+        self.assertFalse((self.reports_dir / f"{sess.name}-candidates.csv").exists())
+        self.assertFalse((self.reports_dir / f"{sess.name}-score.md").exists())
+
+    def test_s7_a_late_fit_is_not_written_into_a_session_ride_loop_never_ingested(self):
+        sess = self._session("20260914-200000-E2C4", {"md": CAND_MD, "csv": "a\n"})
+        os.utime(sess / "candidates.md", None)          # current: not stale by inputs
+        os.utime(sess / "surfr.json", (1_600_000_000, 1_600_000_000))
+        self.put_fit_zip("777_activity.zip", "777",
+                         "2026-09-14T20:10:00Z", "2026-09-14T20:40:00Z")
+        r = ride_loop.run_cycle(self.make_cfg())
+        self.assertFalse((sess / "garmin.fit").exists())
+        self.assertEqual(r.refreshed, [])
+        self.assertIn("did not ingest this session — NOT attached", self._log())
+
+    def test_s7_an_ingested_bundle_is_recorded(self):
+        self.make_bundle_zip("ride1.zip", "sessA", jumps_csv(1.0),
+                             trace_csv([(0.0, 1.0)]), session_json())
+        ride_loop.run_cycle(self.make_cfg())
+        self.assertEqual(json.loads(
+            (self.data_dir / "incoming" / "ingested_sessions.json").read_text()),
+            ["sessA"])
+
+
+class ScoreSummaryKeepsEveryFinding(_RideLoopTestBase):
+    """Review S1: corpus.md quotes the first FINDING; a later one must still
+    show, as a count."""
+
+    def test_the_first_finding_is_quoted_and_the_rest_counted(self):
+        sess = self.sessions_dir / "s1"
+        sess.mkdir(parents=True)
+        (sess / "score.md").write_text(
+            "# score.md\n- FLIGHT DIAGNOSTICS: 11 device events (section 3a, flagged there)\n"
+            "## 1. Alignment\n- FINDING: garmin.fit absent. The trace-to-Garmin "
+            "alignment check DID NOT RUN\n- FINDING: no surfr.json\n"
+            "## 3a.\n- FINDING — FLIGHT DIAGNOSTICS: 11 device events\n")
+        got = ride_loop.read_score_summary(sess)
+        self.assertTrue(got.startswith("FINDING: garmin.fit absent"), got)
+        self.assertIn("(+2 more FINDING lines in score.md)", got)
 
 
 class ConditionsStep(_RideLoopTestBase):

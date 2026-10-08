@@ -250,14 +250,71 @@ def parse_iso_utc(s: str | None) -> Optional[dt.datetime]:
 FALLBACK_TZ_OFFSET_MIN = -240  # America/New_York, UTC-4, 2026-09-14
 
 
+def _is_number(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def surfr_header_problems(surfr) -> list[str]:
+    """Every header field of a hand-typed surfr.json that has the wrong TYPE,
+    named. surfr.json is transcribed by hand from a phone screen, where
+    Surfr shows a duration as "54m" and a zone as "EDT"; such a value used
+    to reach `float()`/`int()` here and crash the whole report with a
+    traceback instead of saying which field was wrong (CLAUDE.md rule 3)."""
+    if not isinstance(surfr, dict):
+        return ["surfr.json is not a JSON object"]
+    out: list[str] = []
+    dur = surfr.get("duration_s")
+    if dur is not None and not (_is_number(dur) and dur > 0):
+        out.append(f"duration_s {dur!r} is not a positive number of seconds "
+                   f"(Surfr shows e.g. \"54m\": type 3240)")
+    tz = surfr.get("tz_offset_min")
+    if tz is not None and not (_is_number(tz) and float(tz) == int(tz)
+                               and -900 <= tz <= 900):
+        out.append(f"tz_offset_min {tz!r} is not a whole number of minutes "
+                   f"(EDT is -240, EST is -300)")
+    local = surfr.get("session_start_local")
+    if local is not None:
+        ok = isinstance(local, str) and ("T" in local or " " in local.strip())
+        if ok:
+            try:
+                dt.datetime.fromisoformat(local.strip())
+            except ValueError:
+                ok = False
+        if not ok:
+            out.append(f"session_start_local {local!r} is not a local date AND "
+                       f"time like \"2026-09-14T16:15\"")
+    jt = surfr.get("jumps_total")
+    if jt is not None and not (_is_number(jt) and float(jt) == int(jt) and jt >= 0):
+        out.append(f"jumps_total {jt!r} is not a whole number")
+    rows = surfr.get("rows")
+    if rows is not None and not isinstance(rows, list):
+        out.append(f"rows is a {type(rows).__name__}, not a list")
+    return out
+
+
+def surfr_rows(surfr) -> list[dict]:
+    """The rows that are objects; malformed ones are named by the callers'
+    validation (sim/surfr_match.py), never silently used."""
+    rows = (surfr or {}).get("rows") if isinstance(surfr, dict) else None
+    return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+
+
 def surfr_tz_offset_min(sess_json: dict, surfr: dict) -> tuple[int, str]:
     """(offset_minutes, where it came from). Never guesses silently."""
+    note = ""
     if isinstance(surfr, dict) and surfr.get("tz_offset_min") is not None:
-        return int(surfr["tz_offset_min"]), "surfr.json tz_offset_min"
+        v = surfr["tz_offset_min"]
+        if _is_number(v) and float(v) == int(v):
+            return int(v), "surfr.json tz_offset_min"
+        note = f" (surfr.json tz_offset_min {v!r} is not a number — ignored)"
     man = (sess_json or {}).get("manifest") or {}
-    if man.get("tz_offset_min") is not None:
-        return int(man["tz_offset_min"]), "session.json manifest.tz_offset_min"
-    return FALLBACK_TZ_OFFSET_MIN, f"ASSUMED {FALLBACK_TZ_OFFSET_MIN} min (America/New_York)"
+    if _is_number(man.get("tz_offset_min")):
+        return (int(man["tz_offset_min"]),
+                "session.json manifest.tz_offset_min, the offset in force at SYNC"
+                + note)
+    return (FALLBACK_TZ_OFFSET_MIN,
+            f"ASSUMED {FALLBACK_TZ_OFFSET_MIN} min (America/New_York): neither "
+            f"surfr.json nor the manifest records one" + note)
 
 
 def surfr_window(sess_json: dict, surfr: dict | None):
@@ -265,18 +322,19 @@ def surfr_window(sess_json: dict, surfr: dict | None):
 
     `session_start_local` is shown to the MINUTE in the app, so this start is
     good to +-30 s at best and the whole point of the offset solver below is
-    that it must be fitted, not trusted.
+    that it must be fitted, not trusted. A surfr.json with a malformed header
+    field (`surfr_header_problems`) gives no window: the callers name the
+    problem instead of placing rows on a guessed clock.
     """
-    if not surfr:
+    if not surfr or not isinstance(surfr, dict):
         return None, None, None, None
     off_min, src = surfr_tz_offset_min(sess_json, surfr)
+    if surfr_header_problems(surfr):
+        return None, None, off_min, src
     local = surfr.get("session_start_local")
     if not local:
         return None, None, off_min, src
-    try:
-        naive = dt.datetime.fromisoformat(local)
-    except ValueError:
-        return None, None, off_min, src
+    naive = dt.datetime.fromisoformat(local.strip())
     start = naive.replace(tzinfo=dt.timezone(dt.timedelta(minutes=off_min))).astimezone(UTC)
     dur = surfr.get("duration_s")
     end = start + dt.timedelta(seconds=float(dur)) if dur else None
@@ -562,9 +620,16 @@ def align(sess: Path, times: Sequence[float]) -> Alignment:
                 f"independent evidence the epoch is right.")
 
     # --- Surfr
+    problems = surfr_header_problems(surfr) if surfr is not None else []
     if surfr is None:
         findings.append("FINDING: no surfr.json — no reference count, height or "
                         "airtime for this session. Nothing below is scored.")
+    elif problems:
+        findings.append(
+            "FINDING: surfr.json is malformed — " + "; ".join(problems) + ". "
+            "Surfr rows cannot be placed on the clock and the offset solver "
+            "DID NOT RUN. Fix the field by hand and the next ride_loop cycle "
+            "re-runs this report.")
     elif s_start is None:
         findings.append(
             "FINDING: surfr.json carries no usable `session_start_local`, so "
@@ -1307,6 +1372,8 @@ def score_session(sess: Path, verbose: bool = False) -> Optional[SessionScore]:
     djumps = load_device_jumps(sess)
     a = align(sess, times)
     surfr = load_surfr(sess)
+    if surfr is not None and not isinstance(surfr, dict):
+        surfr = {}             # named in section 1: "surfr.json is not a JSON object"
 
     n_rows_total = len(times)   # the whole file, before any boot restriction
 
@@ -1365,7 +1432,9 @@ def score_session(sess: Path, verbose: bool = False) -> Optional[SessionScore]:
     wt, wm = slice_window(times, mag, t_lo, t_hi)
 
     rows = sweep_table(wt, wm)
-    target = (surfr or {}).get("jumps_total")
+    target = (surfr or {}).get("jumps_total") if isinstance(surfr, dict) else None
+    if not (_is_number(target) and float(target) == int(target)):
+        target = None          # malformed: named in section 1 (surfr_header_problems)
     chosen_row = best_row_for_count(rows, int(target)) if target else None
     if chosen_row is not None:
         chosen = CandidateParams(band_g=chosen_row.band_g, pop_g=chosen_row.pop_g,
@@ -1391,7 +1460,7 @@ def score_session(sess: Path, verbose: bool = False) -> Optional[SessionScore]:
 
     # Surfr rows on the clock.
     rows_utc: list[tuple[dict, Optional[dt.datetime]]] = []
-    for r in (surfr or {}).get("rows") or []:
+    for r in surfr_rows(surfr):
         secs = parse_t_into_session(r.get("t_into_session"))
         when = (a.surfr_start + dt.timedelta(seconds=secs)) \
             if (a.surfr_start is not None and secs is not None) else None
@@ -1430,8 +1499,8 @@ def _surfr_top_airtimes(surfr: Optional[dict]) -> str:
     """
     if not surfr:
         return "no surfr.json"
-    airs = sorted((float(r["airtime_s"]) for r in (surfr.get("rows") or [])
-                   if r.get("airtime_s") is not None), reverse=True)
+    airs = sorted((float(r["airtime_s"]) for r in surfr_rows(surfr)
+                   if _is_number(r.get("airtime_s"))), reverse=True)
     if airs:
         return (f"top three of {len(airs)} transcribed row(s): "
                 f"{_fmt_list(airs[:3], '{:.2f}')} s")
@@ -1460,12 +1529,21 @@ def render_scorecard(s: SessionScore) -> str:
            if s.device_jumps else ""))
     add(f"- jumps.csv vs this trace: {s.device_jump_note}")
     if s.flight is not None:
-        add(f"- {s.flight.session_line()} (section 3a)")
+        # The header copy never carries the word FINDING: tools/ride_loop.py's
+        # corpus line quotes the FIRST FINDING in this file, and a flight
+        # finding up here used to hide section 1's alignment findings
+        # ("garmin.fit absent ... DID NOT RUN", ALIGNMENT FAILS, MULTI-BOOT).
+        # Section 3a carries the flagged copy.
+        fl = s.flight.session_line()
+        flagged = fl.startswith("FINDING — ")
+        if flagged:
+            fl = fl[len("FINDING — "):]
+        add(f"- {fl} (section 3a" + (", flagged there)" if flagged else ")"))
     if s.surfr:
         add(f"- surfr.json: {s.surfr.get('jumps_total', '?')} jumps, "
             f"best {s.surfr.get('best_height_ft', '?')} ft, "
             f"max airtime {s.surfr.get('max_airtime_s', '?')} s, "
-            f"{len(s.surfr.get('rows') or [])} row(s) transcribed")
+            f"{len(surfr_rows(s.surfr))} row(s) transcribed")
     else:
         add("- surfr.json: absent")
     add("")

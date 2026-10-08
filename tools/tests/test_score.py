@@ -774,3 +774,27 @@ def test_flight_line_flags_a_median_load_above_the_gate(tmp_path):
     line = fd.session_line()
     assert line.startswith("FINDING") and "1 with median in-flight load ABOVE" in line
     assert "1 outside the firmware's 0–0.07 g" in line
+
+
+def test_s1_the_header_flight_line_never_hides_section_1_findings(tmp_path):
+    # Review S1: no garmin.fit, a flagged flight line. corpus.md quotes the
+    # FIRST "FINDING" in score.md, which must be section 1's, not the flight
+    # line's header copy; section 3a keeps the flagged copy.
+    d, t, m = _fd_session(tmp_path, [FD_HEADER, "1,101.000,0.400,0.419,0.2,0.70,10,0.70,64"])
+    card = score.render_scorecard(score.score_session(d))
+    first = next(ln for ln in card.splitlines() if "FINDING" in ln)
+    assert "FLIGHT DIAGNOSTICS" not in first
+    assert first.index("FINDING") >= 0 and card.index(first) > card.index("## 1. Alignment")
+    head = card.split("## 1. Alignment")[0]
+    assert "FLIGHT DIAGNOSTICS: 1 device events" in head and "flagged there" in head
+    sec3a = card.split("## 3a.")[1]
+    assert "FINDING — FLIGHT DIAGNOSTICS" in sec3a
+    sys.path.insert(0, str(REPO / "tools"))
+    import ride_loop
+    (d / "score.md").write_text(card)
+    got = ride_loop.read_score_summary(d)
+    assert got.startswith(first.strip().lstrip("-").strip())
+    assert "FLIGHT DIAGNOSTICS" not in got.split(" (+")[0]
+    n_find = sum("FINDING" in ln for ln in card.splitlines())
+    assert got.endswith(f"(+{n_find - 1} more FINDING lines in score.md)")
+    assert "garmin.fit absent" in card.split("## 2.")[0]

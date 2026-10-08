@@ -40,11 +40,16 @@ This script runs here, on the owner's Mac, under a launchd `StartInterval`
      `./tools/jump candidates <session>` writes candidates.md/.csv
      (sim/candidates_report.py), tolerated the same way.
   3a. a staleness pass over EXISTING sessions: a Garmin fit cached this
-     cycle is attached to a session that still has none, and a session
+     cycle is attached to a session that still has none (only one this
+     script ingested itself — data/incoming/ingested_sessions.json; any
+     other is logged, not written), and a session
      whose surfr.json / garmin.fit / wind.json / mount.json is newer than
      its candidates.md (or whose candidates.md came from an older
      generator) is re-scored — at most five per cycle, oldest first. A
-     session with no candidates.md at all is not backfilled.
+     session with no candidates.md at all is not backfilled. Only files a
+     run actually rewrote are uploaded; a failed re-run is recorded in
+     data/incoming/stale_failures.json and not retried until its inputs
+     change.
   4. regenerates `data/corpus.md`, uploads it plus any new `score.md`,
      `candidates.md` and `candidates.csv` to a
      SECOND, write-capable remote (`gdrive`, the owner's own app-created
@@ -499,12 +504,36 @@ def run_ingest(cfg: Config, zip_path: Path) -> "Optional[Path]":
     return sess
 
 
+def _file_sig(path: Path) -> "Optional[tuple]":
+    """(mtime_ns, size, inode) of a file, None when absent."""
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size, st.st_ino)
+
+
+def _written_by_run(path: Path, before: "Optional[tuple]") -> bool:
+    """True only when `path` exists AND changed since `before` was taken —
+    i.e. THIS run wrote it. A report left over from an earlier run is not
+    this run's output, and uploading it under its normal name would pass a
+    failed re-run off as a fresh report (CLAUDE.md rule 3)."""
+    after = _file_sig(path)
+    return after is not None and after != before
+
+
 def run_score(cfg: Config, session_dir: Path) -> "Optional[Path]":
     """`./tools/jump score <session>`, tolerated on any nonzero exit — the
     task's own words: the subcommand may not exist yet (another agent is
     registering it concurrently) or may legitimately decline a session
     (no trace, no alignment). Either way this is not ride_loop's failure to
-    raise on; it is logged, and score.md simply stays absent."""
+    raise on; it is logged, and score.md simply stays absent.
+
+    Returns score.md only when THIS run wrote it: an older score.md that a
+    failed re-run left in place is logged and not returned, so it is never
+    uploaded as if it were fresh."""
+    md = session_dir / "score.md"
+    before = _file_sig(md)
     try:
         proc = subprocess.run(cfg.jump_argv + ["score", str(session_dir)],
                               cwd=str(cfg.repo_dir), capture_output=True,
@@ -519,8 +548,12 @@ def run_score(cfg: Config, session_dir: Path) -> "Optional[Path]":
                  "(tolerated — docs/accuracy-plan.md, not yet always available)")
         for line in (proc.stderr or "").splitlines():
             log(cfg, f"score[stderr]: {line}")
-    md = session_dir / "score.md"
-    return md if md.is_file() else None
+    if _written_by_run(md, before):
+        return md
+    if before is not None:
+        log(cfg, f"{session_dir.name}: score.md was NOT rewritten by this run — "
+                 "the old one stays on disk and is not uploaded")
+    return None
 
 
 def run_candidates(cfg: Config, session_dir: Path) -> "list[Path]":
@@ -528,8 +561,11 @@ def run_candidates(cfg: Config, session_dir: Path) -> "list[Path]":
     after score and tolerated exactly like it: a nonzero exit (a surfr.json
     that failed validation, a session with no usable trace) is logged with
     its stderr and the cycle carries on. Returns whichever of candidates.md
-    / candidates.csv exist afterwards — absent files are simply not
-    uploaded, and the log line says why."""
+    / candidates.csv THIS run wrote — a file left over from an earlier run
+    is not returned, so a failed re-run is never uploaded as a fresh report;
+    the log line says which."""
+    paths = (session_dir / "candidates.md", session_dir / "candidates.csv")
+    before = {p: _file_sig(p) for p in paths}
     try:
         proc = subprocess.run(cfg.jump_argv + ["candidates", str(session_dir)],
                               cwd=str(cfg.repo_dir), capture_output=True,
@@ -548,9 +584,12 @@ def run_candidates(cfg: Config, session_dir: Path) -> "list[Path]":
                      "(tolerated — see candidates.md for any FINDING)")
             for line in (proc.stderr or "").splitlines():
                 log(cfg, f"candidates[stderr]: {line}")
-    files = [p for p in (session_dir / "candidates.md", session_dir / "candidates.csv")
-             if p.is_file()]
-    if not files:
+    files = [p for p in paths if _written_by_run(p, before[p])]
+    stale = [p.name for p in paths if p not in files and before[p] is not None]
+    if stale:
+        log(cfg, f"{session_dir.name}: {', '.join(stale)} NOT rewritten by this run — "
+                 "the old file stays on disk and is not uploaded")
+    if not any(p.name == "candidates.md" for p in files):
         log(cfg, f"{session_dir.name}: no candidates.md written — a report that did "
                  "not happen, not an empty one")
     return files
@@ -626,16 +665,78 @@ def stale_reason(session_dir: Path, gen_version: "Optional[str]") -> "Optional[s
     return None
 
 
+# ------------------------------------------------- staleness-pass ledgers
+#
+# Two small JSON files beside seen.json. Both are bookkeeping for the
+# staleness pass, and both fail SAFE: unreadable reads as empty, which at
+# worst re-tries a failed session once or logs a FIT instead of attaching it.
+
+def _ingested_path(cfg: Config) -> Path:
+    return cfg.incoming_dir / "ingested_sessions.json"
+
+
+def _stale_failures_path(cfg: Config) -> Path:
+    return cfg.incoming_dir / "stale_failures.json"
+
+
+def _load_json(path: Path, default):
+    try:
+        got = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return default
+    return got if isinstance(got, type(default)) else default
+
+
+def _save_json(path: Path, value) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+
+
+def record_ingested(cfg: Config, session_dir: Path) -> None:
+    """Remember that THIS script ingested `session_dir`. Only such sessions
+    get a late Garmin FIT written into them automatically (review S7):
+    data/sessions/ also holds bench and hand-ingested sessions, some with
+    15-30 h trace windows that a cached FIT can overlap by accident."""
+    names = _load_json(_ingested_path(cfg), [])
+    if session_dir.name not in names:
+        names.append(session_dir.name)
+        _save_json(_ingested_path(cfg), sorted(names))
+
+
+def stale_fingerprint(session_dir: Path, gen_version: "Optional[str]") -> str:
+    """Everything a re-run reads that the staleness rule looks at: the
+    generator version, each input's (mtime, size), and candidates.md's. Two
+    equal fingerprints mean a re-run would see exactly what the last one saw."""
+    parts = [f"gen={gen_version}"]
+    for name in _STALE_INPUTS + ("candidates.md",):
+        sig = _file_sig(session_dir / name)
+        parts.append(f"{name}={sig[0]}:{sig[1]}" if sig else f"{name}=absent")
+    return ";".join(parts)
+
+
 def refresh_stale_sessions(cfg: Config, report: "CycleReport",
                            skip: "set[str]") -> "list[tuple[Path, str]]":
     """The staleness pass (spec section 6.3): a FIT that arrived in a LATER
     cycle than its bundle is attached now, and any session whose inputs
     changed after its candidates.md was written is re-scored. At most
     _MAX_STALE_PER_CYCLE sessions, oldest first; the rest are logged and
-    wait. Returns the (local file, remote name) uploads it produced."""
+    wait. Returns the (local file, remote name) uploads it produced.
+
+    A late FIT is WRITTEN only into a session this script ingested itself
+    (`record_ingested`); for any other session an overlapping FIT is logged,
+    not attached (review S7).
+
+    A re-run that does not rewrite candidates.md is a FAILURE: nothing old is
+    uploaded (run_score / run_candidates return only files this run wrote),
+    and the session's input fingerprint is recorded so the same failing
+    inputs are not re-run every cycle -- and cannot hold the five slots
+    ahead of newer sessions forever. Any change to an input (a corrected
+    surfr.json, a new garmin.fit) or a new GEN_VERSION retries it."""
     if not cfg.sessions_dir.is_dir():
         return []
     gen = current_gen_version()
+    ingested = set(_load_json(_ingested_path(cfg), []))
+    failures = _load_json(_stale_failures_path(cfg), {})
     todo: "list[tuple[Path, str]]" = []
     for sess in sorted(d for d in cfg.sessions_dir.iterdir() if d.is_dir()):
         if sess.name in skip or not (sess / "trace.csv").is_file():
@@ -647,15 +748,28 @@ def refresh_stale_sessions(cfg: Config, report: "CycleReport",
             window = session_trace_window(sess)
             if window is not None:
                 fit = pick_matching_fit(cfg, window, report.new_fits)
-                if fit is not None and install_garmin_fit(sess, fit):
+                if fit is not None and sess.name not in ingested:
+                    log(cfg, f"{sess.name}: Garmin fit {fit.name} overlaps its trace "
+                             "window, but ride_loop did not ingest this session — "
+                             "NOT attached (copy it in by hand if it is this ride's)")
+                elif fit is not None and install_garmin_fit(sess, fit):
                     log(cfg, f"{sess.name}: late Garmin fit {fit.name} attached "
                              "as garmin.fit")
                     why = f"late Garmin fit {fit.name}"
         if why is None:
             why = stale_reason(sess, gen)
-        if why is not None:
-            todo.append((sess, why))
+        if why is None:
+            continue
+        failed = failures.get(sess.name)
+        if isinstance(failed, dict) and \
+                failed.get("fingerprint") == stale_fingerprint(sess, gen):
+            log(cfg, f"{sess.name}: stale ({why}), but its re-run FAILED at "
+                     f"{failed.get('at', '?')} with these same inputs — not "
+                     "re-run until an input or the generator changes")
+            continue
+        todo.append((sess, why))
     uploads: "list[tuple[Path, str]]" = []
+    changed = False
     for k, (sess, why) in enumerate(todo):
         if k >= _MAX_STALE_PER_CYCLE:
             log(cfg, f"{sess.name}: stale ({why}) — deferred, "
@@ -671,6 +785,20 @@ def refresh_stale_sessions(cfg: Config, report: "CycleReport",
         report.candidate_files += files
         uploads += [(f, f"{sess.name}-{f.name}") for f in files]
         report.refreshed.append(sess)
+        if any(f.name == "candidates.md" for f in files):
+            changed |= failures.pop(sess.name, None) is not None
+        else:
+            failures[sess.name] = {
+                "fingerprint": stale_fingerprint(sess, gen),
+                "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "why": why}
+            changed = True
+            log(cfg, f"{sess.name}: stale re-run FAILED (candidates.md not "
+                     "rewritten) — nothing old uploaded; not retried until an "
+                     "input or the generator changes")
+            report.errors.append(f"stale re-run failed: {sess.name}")
+    if changed:
+        _save_json(_stale_failures_path(cfg), failures)
     return uploads
 
 
@@ -972,17 +1100,21 @@ def read_surfr_count(session_dir: Path) -> "Optional[int]":
 def read_score_summary(session_dir: Path) -> "Optional[str]":
     """The first line in score.md containing 'FINDING' — sim/score.py's own
     convention for a notable, non-routine line (a multi-boot ring buffer,
-    a failed alignment, a missing surfr.json — see its render_scorecard()).
-    A score.md with no FINDING line scored cleanly; that is worth a line
-    too, so it is not treated as absent."""
+    a failed alignment, a missing surfr.json — see its render_scorecard()) —
+    plus how many MORE such lines the file holds, so a second finding is
+    never invisible from the corpus. A score.md with no FINDING line scored
+    cleanly; that is worth a line too, so it is not treated as absent."""
     try:
         text = (session_dir / "score.md").read_text()
     except OSError:
         return None
-    for line in text.splitlines():
-        if "FINDING" in line:
-            return line.strip().lstrip("-").strip()
-    return "scored, no findings flagged"
+    found = [line.strip().lstrip("-").strip() for line in text.splitlines()
+             if "FINDING" in line]
+    if not found:
+        return "scored, no findings flagged"
+    more = len(found) - 1
+    return found[0] + (f" (+{more} more FINDING line{'s' if more > 1 else ''} "
+                       f"in score.md)" if more else "")
 
 
 _SYNTHETIC_SRC_PREFIX = "fakedev"   # tools/fake_device.py BUILD_SRC = "fakedev0"
@@ -1233,6 +1365,7 @@ def _run_cycle(cfg: Config, report: CycleReport) -> None:
                      "listed as SYNTHETIC in corpus.md, not scored, not counted")
             continue
         report.sessions.append(sess)
+        record_ingested(cfg, sess)
 
         window = session_trace_window(sess)
         if window is None:

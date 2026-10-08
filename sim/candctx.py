@@ -62,6 +62,14 @@ ALIGN_LAG_BAND_S = (0.0, 6.0)
 # ASSUMED: NDBC rows are minutes apart and Open-Meteo rows hourly; a wind
 # row further than this from the candidate is not its wind.
 WIND_MAX_AGE_S = 3600.0
+# The Surfr and Garmin windows are two recordings of one ride. MEASURED
+# disagreement on the two sessions that have both: Surfr starts -187 s /
+# ends +21 s relative to Garmin (2026-09-14 evening) and -43 s / +12 s
+# (2026-09-23), score.md section 1. A wrong UTC offset moves BOTH ends by a
+# whole hour (3600 s for a DST change between the ride and the sync). This
+# threshold sits between the two (ASSUMED): both ends disagreeing by more
+# than it is a FINDING, never a "not distinguishable from chance".
+SURFR_GARMIN_MAX_DISAGREE_S = 900.0
 
 
 def wrap180(x: float) -> float:
@@ -107,6 +115,10 @@ class Context:
     wind_src: str = ""
     wind_reason: str = ""
     device: list[tuple[str, float, Optional[float]]] = field(default_factory=list)
+    # The UTC offset is a measurement with a source, or an ASSUMPTION, and is
+    # printed as one (candidates.md sections 0 and 5). Lines here that say
+    # FINDING are copied into the report's findings.
+    tz_lines: list[str] = field(default_factory=list)
 
     def t_to_utc(self, t: float) -> Optional[dt.datetime]:
         return None if self.epoch_utc is None else self.epoch_utc + dt.timedelta(seconds=t)
@@ -192,13 +204,18 @@ def build_context(sess: Path, garmin: Optional[score.GarminData] = None) -> Cont
             ctx.jh_t.append(ts - e)
             ctx.jh_v.append(v)
         ctx.garmin_window = (g.start_utc.timestamp() - e, g.end_utc.timestamp() - e)
+    s0 = None
     if epoch is not None:
         s0, s1, _, _ = score.surfr_window(sj, surfr)
         if s0 is not None and s1 is not None:
             ctx.surfr_window = (ctx.utc_to_t(s0), ctx.utc_to_t(s1))
         else:
-            ctx.surfr_window_reason = ("no surfr.json" if surfr is None else
-                                       "surfr.json has no usable start/duration")
+            probs = score.surfr_header_problems(surfr) if surfr is not None else []
+            ctx.surfr_window_reason = (
+                "no surfr.json" if surfr is None else
+                "surfr.json malformed: " + "; ".join(probs) if probs else
+                "surfr.json has no usable start/duration")
+    _tz_checks(ctx, sj, surfr, s0)
     _load_wind(sess, ctx)
     rows, _ = score.load_device_jump_rows(sess)
     for r in rows:
@@ -207,6 +224,69 @@ def build_context(sess: Path, garmin: Optional[score.GarminData] = None) -> Cont
         air = r.get("airtime_raw_s") if isinstance(r.get("airtime_raw_s"), float) else None
         ctx.device.append((n_s, r["takeoff_s"], air))
     return ctx
+
+
+def us_dst_changes_utc(year: int) -> list[dt.datetime]:
+    """The two US daylight-saving changes of `year`, in UTC, to the hour for
+    US Eastern (2:00 local: 07:00 UTC in March, 06:00 UTC in November).
+    Second Sunday of March, first Sunday of November (15 USC 260a). Other US
+    zones change 1-6 h later the same day, which no check here is near."""
+    def nth_sunday(month: int, n: int) -> dt.date:
+        d = dt.date(year, month, 1)
+        d += dt.timedelta(days=(6 - d.weekday()) % 7)
+        return d + dt.timedelta(weeks=n - 1)
+    mar, nov = nth_sunday(3, 2), nth_sunday(11, 1)
+    return [dt.datetime(mar.year, mar.month, mar.day, 7, tzinfo=UTC),
+            dt.datetime(nov.year, nov.month, nov.day, 6, tzinfo=UTC)]
+
+
+def _tz_checks(ctx: Context, sj: dict, surfr, surfr_start_utc) -> None:
+    """Say which UTC offset places local times and Surfr rows, where it came
+    from, and raise a FINDING where it can be wrong without anything else
+    noticing:
+
+      * an ASSUMED offset when a Surfr start has to be placed with it;
+      * a manifest offset (the one in force at SYNC) with a US DST change
+        between the ride and the sync: off by exactly 60 min;
+      * Surfr and Garmin windows that disagree at BOTH ends by more than
+        SURFR_GARMIN_MAX_DISAGREE_S.
+
+    A 3600 s placement error is far outside the matcher's [-35, +65] s
+    prior, so without these the report would read "not distinguishable from
+    chance" — a wrong clock passing as an honest null."""
+    add = ctx.tz_lines.append
+    add(f"UTC offset for local times and Surfr placement: {ctx.tz_offset_min:+d} min "
+        f"({ctx.tz_src})")
+    has_start = surfr_start_utc is not None
+    if ctx.tz_src.startswith("ASSUMED") and has_start:
+        add(f"FINDING: the UTC offset that places the Surfr rows is ASSUMED "
+            f"({ctx.tz_offset_min:+d} min); add `tz_offset_min` to surfr.json. "
+            f"A wrong offset is a whole-hour error that the matcher reads as chance.")
+    synced = score.parse_iso_utc((sj or {}).get("synced_at_utc"))
+    ride = surfr_start_utc
+    if ride is None and ctx.epoch_utc is not None and ctx.garmin_window is not None:
+        ride = ctx.t_to_utc(ctx.garmin_window[0])
+    if "manifest" in ctx.tz_src and synced is not None and ride is not None:
+        lo, hi = sorted((ride, synced))
+        for ch in [c for y in range(lo.year, hi.year + 1) for c in us_dst_changes_utc(y)]:
+            if lo < ch <= hi:
+                add(f"FINDING: a US daylight-saving change ({ch:%Y-%m-%d}) lies between "
+                    f"the ride ({ride:%Y-%m-%d %H:%MZ}) and the sync "
+                    f"({synced:%Y-%m-%d %H:%MZ}); the manifest offset is the one in force "
+                    f"at SYNC, so local times and the Surfr placement may be 60 min "
+                    f"off. Add the ride's `tz_offset_min` to surfr.json.")
+                break
+    if ctx.surfr_window is not None and ctx.garmin_window is not None:
+        ds = ctx.surfr_window[0] - ctx.garmin_window[0]
+        de = ctx.surfr_window[1] - ctx.garmin_window[1]
+        add(f"Surfr vs Garmin window: Surfr starts {ds:+.0f} s and ends {de:+.0f} s "
+            f"relative to the Garmin activity")
+        if min(abs(ds), abs(de)) > SURFR_GARMIN_MAX_DISAGREE_S:
+            add(f"FINDING: the Surfr window disagrees with the Garmin window at "
+                f"BOTH ends by more than {SURFR_GARMIN_MAX_DISAGREE_S:g} s (start "
+                f"{ds:+.0f} s, end {de:+.0f} s). The UTC offset ({ctx.tz_offset_min:+d} "
+                f"min, {ctx.tz_src}) or the transcribed start is probably wrong; "
+                f"every Surfr placement below inherits it.")
 
 
 def session_window(ctx: Context) -> Optional[tuple[float, float]]:

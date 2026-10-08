@@ -239,3 +239,178 @@ def test_alignment_lag_is_measured_from_the_preceding_landing():
     c = _ctx(jh_t=[90.0], jh_v=[1.0], device=[("1", 100.0, 0.5)])
     assert candctx.alignment_lags(c)[0][2] < 0
     assert candctx.alignment_lags(_ctx()) is None
+
+
+# ------------------------------------------- p_slide, quantitatively (S5)
+#
+# T-C3/T-C5 only bound p_slide. These recompute it with an independent
+# reference — its own gap test, its own monotone-matching DP, its own
+# circular wrap — and require EXACT agreement, on candidate sets dense
+# enough that many slides TIE the observed statistic. A `>=` turned into
+# `>` (ties no longer count), or a slide that is not wrapped, changes p.
+
+def _ref_wrap(x, lo, W):
+    return lo + ((x - lo) % W)
+
+
+def _ref_slides(W):
+    return [float(d) for d in range(int(W) + 1)
+            if min(d, W - d) > M.SLIDE_MIN_SHIFT_S and d < W]
+
+
+def _ref_gap_p(t_into, start, cands, window, prior=M.PRIORS["unknown"],
+               tau=M.TAU_S, tol=M.GAP_TOL_S):
+    lo, hi = window
+    W = hi - lo
+    inwin = [c for c in cands if c.land >= lo and c.pop <= hi]
+
+    def near(x):
+        return [c for c in inwin if c.land >= x + prior[0] - tau
+                and c.pop <= x + prior[1] + tau]
+
+    def stat(pos):
+        n = 0
+        for k in range(len(pos) - 1):
+            gap = t_into[k + 1] - t_into[k]
+            A, B = near(pos[k]), near(pos[k + 1])
+            n += any(y is not x and y.pop > x.pop and abs(y.pop - x.pop - gap) <= tol
+                     for x in A for y in B)
+        return n
+
+    base = [start + t for t in t_into]
+    obs = stat(base)
+    slides = _ref_slides(W)
+    vals = [stat([_ref_wrap(b + d, lo, W) for b in base]) for d in slides]
+    return obs, sum(v >= obs for v in vals) / len(slides), vals
+
+
+def _ref_maxmatch(pos, cands, tau=M.TAU_S):
+    """Longest monotone row->candidate matching (an LCS DP), rows and
+    candidates both in time order."""
+    cs = sorted(cands, key=lambda c: c.pop)
+    pos = sorted(pos)
+    prev = [0] * (len(cs) + 1)
+    for s in pos:
+        cur = [0] * (len(cs) + 1)
+        for j, c in enumerate(cs, 1):
+            d = 0.0 if c.pop <= s <= c.land else min(abs(s - c.pop), abs(s - c.land))
+            cur[j] = max(prev[j], cur[j - 1], prev[j - 1] + (1 if d <= tau else 0))
+        prev = cur
+    return prev[-1]
+
+
+def _ref_fit_p(t_into, start, cands, window, prior=M.PRIORS["unknown"]):
+    lo, hi = window
+    W = hi - lo
+    inwin = [c for c in cands if c.land >= lo and c.pop <= hi]
+    base = [start + t for t in t_into]
+    step = M.DELTA_STEP_S
+    k_lo, k_hi = int(round(prior[0] / step)), int(round(prior[1] / step))
+    obs = max(_ref_maxmatch([b + (prior[0] + k * step) for b in base], inwin)
+              for k in range(k_hi - k_lo + 1))
+    N = int(round(W / step))
+    F = [_ref_maxmatch([_ref_wrap(b + k * step, lo, W) for b in base], inwin)
+         for k in range(N)]
+    slides = _ref_slides(W)
+    vals = []
+    for d in slides:
+        kd = int(round(d / step))
+        vals.append(max(F[k % N] for k in range(kd + k_lo, kd + k_hi + 1)))
+    return obs, sum(v >= obs for v in vals) / len(slides), vals
+
+
+def _dense(n, lo, hi, seed, length=1.7):
+    rnd = random.Random(seed)
+    return renumber([M.Cand(0, p, p + length)
+                     for p in (rnd.uniform(lo, hi) for _ in range(n))])
+
+
+def test_c5_gap_mode_p_slide_equals_an_independent_reference_with_ties():
+    window = (1000.0, 2600.0)
+    a = 1500.0
+    cands = _dense(120, 1005.0, 2595.0, seed=11) + [M.Cand(0, a, a + 1.7),
+                                                     M.Cand(0, a + 29.0, a + 30.7)]
+    cands = renumber(cands)
+    t_into = [a - 1000.0 - 41.0, a + 29.0 - 1000.0 - 41.0]
+    s = {"rows": [{"n": k + 1, "t_into_session": mmss(t)} for k, t in enumerate(t_into)]}
+    res = M.match(s, 1000.0, cands, window)
+    assert res.mode == "gap" and res.stat == 1
+    obs, p, vals = _ref_gap_p([round(t) for t in t_into], 1000.0, cands, window)
+    assert obs == 1
+    ties = sum(v == obs for v in vals)
+    assert 0 < ties < len(vals)              # the case `>` vs `>=` can see
+    assert res.n_slides == len(vals)
+    assert res.p_slide == pytest.approx(p, abs=1e-12)
+    assert 0.0 < res.p_slide < 1.0
+
+
+def test_c5_fit_mode_p_slide_equals_an_independent_reference_with_ties():
+    window = (1000.0, 1700.0)
+    planted = [1100.0 + 97.0 * k for k in range(5)]
+    cands = renumber(_dense(40, 1002.0, 1698.0, seed=5, length=0.8)
+                     + [M.Cand(0, p, p + 0.8) for p in planted])
+    s = surfr_for(planted, 20.0)
+    res = M.match(s, START, cands, window)
+    assert res.mode == "fit"
+    t_into = [M.parse_t_into_session(r["t_into_session"]) for r in s["rows"]]
+    obs, p, vals = _ref_fit_p(t_into, START, cands, window)
+    assert res.matched == obs
+    ties = sum(v == obs for v in vals)
+    assert 0 < ties < len(vals)
+    assert res.n_slides == len(vals)
+    assert res.p_slide == pytest.approx(p, abs=1e-12)
+    assert 0.0 < res.p_slide < 1.0
+
+
+def test_c4_an_offset_on_the_LOWER_prior_boundary_is_a_finding_too():
+    planted = [1500.0 + 610.0 * k for k in range(6)]
+    cands = renumber([M.Cand(0, p, p + 0.02) for p in planted])
+    res = M.match(surfr_for(planted, -36.0), START, cands, WINDOW)
+    assert res.delta_s == pytest.approx(-35.0)
+    assert any("prior boundary" in f and "FINDING" in f for f in res.findings)
+
+
+# ------------------------------------------- hand-typed surfr.json (S2)
+
+@pytest.mark.parametrize("field,value,word", [
+    ("duration_s", "54 min", "duration_s"),
+    ("duration_s", True, "duration_s"),
+    ("tz_offset_min", "EDT", "tz_offset_min"),
+    ("tz_offset_min", -240.5, "tz_offset_min"),
+    ("session_start_local", "16:15", "session_start_local"),
+    ("session_start_local", "2026-09-14", "session_start_local"),
+    ("session_start_local", 1615, "session_start_local"),
+    ("jumps_total", "fourteen", "jumps_total"),
+    ("rows", {"n": 1}, "rows"),
+])
+def test_s2_a_mistyped_header_field_is_a_named_finding(tmp_path, field, value, word):
+    d = {"session_start_local": "2026-09-14T16:15", "duration_s": 6180,
+         "tz_offset_min": -240, "jumps_total": 3, "rows": []}
+    d[field] = value
+    p = tmp_path / "surfr.json"
+    p.write_text(json.dumps(d))
+    got, err = M.load_surfr_strict(p)
+    assert got is None and err.startswith("FINDING") and word in err
+
+
+def test_s2_a_list_or_object_n_is_a_named_finding_not_a_crash():
+    rows, f = M.validate({"rows": [{"n": [1], "t_into_session": "1:00"},
+                                   {"n": {"a": 1}, "t_into_session": "2:00"},
+                                   {"n": 3, "t_into_session": "3:00"}]})
+    assert [r.n for r in rows] == [3]
+    assert sum("not a number" in x for x in f) == 2
+
+
+def test_s2_the_on_disk_shapes_have_no_header_problems():
+    import score
+    assert score.surfr_header_problems(
+        {"session_start_local": "2026-09-14T16:15", "duration_s": 6180,
+         "jumps_total": 32, "rows": []}) == []
+    assert score.surfr_header_problems({"jumps_total": 12, "rows": []}) == []
+
+
+def test_us_dst_changes_are_the_statutory_sundays():
+    assert [d.isoformat() for d in candctx.us_dst_changes_utc(2026)] == \
+        ["2026-03-08T07:00:00+00:00", "2026-11-01T06:00:00+00:00"]
+    assert [d.date().isoformat() for d in candctx.us_dst_changes_utc(2025)] == \
+        ["2025-03-09", "2025-11-02"]

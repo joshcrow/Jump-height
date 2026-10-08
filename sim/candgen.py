@@ -76,7 +76,7 @@ REPO = Path(__file__).resolve().parent.parent
 if str(REPO / "sim") not in sys.path:
     sys.path.insert(0, str(REPO / "sim"))
 
-from score import MAX_GAP_S, contiguous_segments  # noqa: E402
+from score import BOOT_RESET_S, MAX_GAP_S, contiguous_segments  # noqa: E402
 
 GEN_VERSION = "cg-1"
 
@@ -93,6 +93,23 @@ MIN_SEGMENT_SAMPLES = 10
 # Float slack on the smoothing half-width. Trace times are written to the
 # millisecond, so a 0.050 s difference arrives as 0.04999999 or 0.05000001.
 _SMOOTH_EPS_S = 1e-6
+
+
+def fixed_constants() -> dict:
+    """Every constant OUTSIDE CGParams that changes what `generate` emits,
+    including the two it borrows from sim/score.py (the 0.5 s gap cut and
+    the 1 s reboot step that define a segment). They are part of the
+    generator's definition, so tools/tests/test_candgen.py pins this dict
+    against GEN_VERSION exactly as it pins the CGParams defaults: changing
+    any of them — here or in score.py — fails that test unless GEN_VERSION
+    changes too, and a new GEN_VERSION is what makes tools/ride_loop.py
+    re-run every existing candidates.md. params_id stays the spec's hash of
+    {v, params}: within one GEN_VERSION these values cannot differ."""
+    return {"POP_LEAD_S": POP_LEAD_S, "LAND_LEAD_S": LAND_LEAD_S,
+            "LAND_PEAK_WIN_S": LAND_PEAK_WIN_S,
+            "MIN_SEGMENT_SAMPLES": MIN_SEGMENT_SAMPLES,
+            "SMOOTH_EPS_S": _SMOOTH_EPS_S, "MAX_GAP_S": MAX_GAP_S,
+            "BOOT_RESET_S": BOOT_RESET_S}
 
 
 @dataclass(frozen=True)

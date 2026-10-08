@@ -152,6 +152,32 @@ def test_a7_defaults_are_pinned_to_the_generator_version():
     assert C.PRESETS["vest-L"] == C.CGParams(unload_g=0.8, pop_g=1.5, land_g=2.5)
 
 
+FROZEN_FIXED = {
+    "POP_LEAD_S": 0.05, "LAND_LEAD_S": 0.05, "LAND_PEAK_WIN_S": 0.30,
+    "MIN_SEGMENT_SAMPLES": 10, "SMOOTH_EPS_S": 1e-6, "MAX_GAP_S": 0.5,
+    "BOOT_RESET_S": 1.0,
+}
+
+
+def test_a7_fixed_constants_are_pinned_to_the_generator_version():
+    # The constants outside CGParams shape the output too (review S4: moving
+    # POP_LEAD_S to 0.5 or LAND_PEAK_WIN_S to 0.10 used to fail no test, and
+    # ride_loop re-ran nothing). A change fails here unless GEN_VERSION moved.
+    if C.GEN_VERSION == "cg-1":
+        assert C.fixed_constants() == FROZEN_FIXED
+
+
+def test_a7_the_fixed_constants_are_the_ones_generate_reads():
+    # fixed_constants() must report the live values, not copies of them.
+    src = inspect.getsource(C)
+    for name in ("POP_LEAD_S", "LAND_LEAD_S", "LAND_PEAK_WIN_S", "MIN_SEGMENT_SAMPLES",
+                 "_SMOOTH_EPS_S", "MAX_GAP_S"):
+        assert src.count(name) >= 3, name     # defined/imported, used, reported
+    import score
+    assert C.fixed_constants()["MAX_GAP_S"] == score.MAX_GAP_S
+    assert C.fixed_constants()["BOOT_RESET_S"] == score.BOOT_RESET_S
+
+
 def test_a7_params_id_is_stable_and_changes_on_any_field():
     a = C.params_id(C.CGParams())
     assert a == C.params_id(C.CGParams()) and len(a) == 8
