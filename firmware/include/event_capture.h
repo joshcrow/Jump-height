@@ -481,7 +481,7 @@ class Capture {
 
   void finalizeSpan() {
     span_active_ = false;
-    const uint8_t dec = span_dec_ ? span_dec_ : DEC_REFUSED_BELOW_TIER;
+    const uint8_t dec = span_dec_ ? span_dec_ : (uint8_t)DEC_REFUSED_BELOW_TIER;
     if (dec == DEC_REFUSED_BUDGET_A || dec == DEC_REFUSED_BUDGET_B) ++refused_budget_;
     if (dec == DEC_REFUSED_FULL || dec == DEC_REFUSED_BUSY) ++refused_full_;
     TrigEntry te;

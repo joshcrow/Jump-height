@@ -26,7 +26,7 @@
 //   STAT key=value ...                     on Q and at EOF
 //
 // Build (done by the test):
-//   g++ -std=c++14 -Wall -Wextra -I firmware/include \
+//   g++ -std=c++14 -Wall -Wextra -I firmware/include
 //       firmware/test/event_capture_harness.cpp -o event_capture_harness
 //
 // SPDX-License-Identifier: MIT
