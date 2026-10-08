@@ -166,6 +166,9 @@
 
 #include "mock_flash.h"
 #include "platform/jh_store.h"
+#ifndef JH_STORE_V1_FIXTURE
+#include "event_format.h"
+#endif
 
 // F-10: name the append status so tests can assert on the REASON, not just on
 // a count that happens to stop growing.
@@ -300,6 +303,76 @@ void cmdReadRawAll() {
   std::printf("RAW_BYTES n=%lu\n", total);
 }
 
+#ifndef JH_STORE_V1_FIXTURE
+// A valid SAMPLES page, deterministic in (seed, i) — enough for the store,
+// which only ever checks magic + CRC.
+void makeEventPage(uint8_t* page, uint32_t seed, uint32_t i) {
+  jh_event::PageHeader h = jh_event::PageHeader();
+  h.type = jh_event::PAGE_SAMPLES;
+  h.count = jh_event::SAMPLES_PER_PAGE;
+  h.boot_id = seed;
+  h.event_id = 1;
+  h.page_seq = (uint16_t)i;
+  h.sample_seq = i * jh_event::SAMPLES_PER_PAGE;
+  h.t_first_us = (uint64_t)i * 80000u;
+  jh_event::begin_page(page, h);
+  for (uint32_t k = 0; k < jh_event::SAMPLES_PER_PAGE; ++k) {
+    int16_t v[6];
+    for (int a = 0; a < 6; ++a) v[a] = (int16_t)(seed * 31u + i * 7u + k * 3u + (uint32_t)a);
+    jh_event::put_sample(page, k, k ? 5000 : 0, v);
+  }
+  jh_event::seal(page);
+}
+
+const char* eventsStateName(jh_store::EventsState st) {
+  switch (st) {
+    case jh_store::EventsState::OK:                return "ok";
+    case jh_store::EventsState::STORE_DOWN:        return "store_down";
+    case jh_store::EventsState::MIGRATION_BLOCKED: return "migration_blocked";
+    case jh_store::EventsState::MIGRATION_FAILED:  return "migration_failed";
+    case jh_store::EventsState::UNSUPPORTED:       return "unsupported";
+  }
+  return "unknown";
+}
+
+void cmdEvWrite(std::istringstream& iss) {
+  unsigned long n = 0, seed = 1, start = 0;
+  iss >> n >> seed >> start;
+  uint8_t page[jh_event::PAGE_BYTES];
+  unsigned long ok = 0, failed = 0, refused = 0;
+  for (unsigned long i = 0; i < n; ++i) {
+    makeEventPage(page, (uint32_t)seed, (uint32_t)(start + i));
+    switch (jh_store::events_write_page(page)) {
+      case jh_store::EventsWrite::OK:      ++ok; break;
+      case jh_store::EventsWrite::FAILED:  ++failed; break;
+      case jh_store::EventsWrite::REFUSED: ++refused; break;
+    }
+  }
+  std::printf("EV_WRITE ok=%lu failed=%lu refused=%lu used=%u\n", ok, failed, refused,
+              jh_store::events_used_pages());
+}
+
+// The `events` export's whole payload, hex-encoded, plus its CRC-32 — read
+// in 228-byte chunks exactly as main.cpp's events arm does.
+void cmdEvRaw(bool hex) {
+  const bool opened = jh_store::events_open_read_raw();
+  uint8_t buf[228];
+  size_t n;
+  unsigned long total = 0;
+  uint32_t crc = 0xFFFFFFFFu;
+  if (hex) std::printf("EV_HEX ");
+  while (opened && (n = jh_store::events_read_raw_chunk(buf, sizeof(buf))) > 0) {
+    crc = jh_event::crc32_update(crc, buf, n);
+    if (hex) for (size_t i = 0; i < n; ++i) std::printf("%02x", buf[i]);
+    total += (unsigned long)n;
+  }
+  if (hex) std::printf("\n");
+  jh_store::close_read();
+  std::printf("EV_RAW opened=%d n=%lu declared=%u crc32=%08x\n", opened ? 1 : 0, total,
+              jh_store::events_raw_bytes(), crc ^ 0xFFFFFFFFu);
+}
+#endif
+
 }  // namespace
 
 int main() {
@@ -389,6 +462,40 @@ int main() {
     } else if (cmd == "FAIL_NEXT_ERASE") {
       mock_flash_test::arm_erase_failure();
       std::printf("FAIL_NEXT_ERASE armed=1\n");
+    } else if (cmd == "FAIL_ERASE_AFTER") {
+      unsigned long n = 0;
+      iss >> n;
+      mock_flash_test::arm_erase_failure_after((uint32_t)n);
+      std::printf("FAIL_ERASE_AFTER armed=%lu\n", n);
+    } else if (cmd == "TRACE_REGION_BYTES") {
+      std::printf("TRACE_REGION_BYTES n=%u\n", jh_store::trace_region_bytes());
+    } else if (cmd == "HARD_FORMAT") {
+      std::printf("HARD_FORMAT ok=%d\n", jh_store::hard_format(announce) ? 1 : 0);
+#ifndef JH_STORE_V1_FIXTURE
+    } else if (cmd == "LAYOUT") {
+      std::printf("LAYOUT v=%u\n", (unsigned)jh_store::layout_version());
+    } else if (cmd == "EV_STATE") {
+      std::printf("EV_STATE state=%s used=%u damaged=%u region=%u write_fail=%u\n",
+                  eventsStateName(jh_store::events_state()), jh_store::events_used_pages(),
+                  jh_store::events_damaged_pages(), jh_store::events_region_bytes(),
+                  jh_store::events_write_fail());
+    } else if (cmd == "EV_WRITE") {
+      cmdEvWrite(iss);
+    } else if (cmd == "EV_RAW") {
+      cmdEvRaw(false);
+    } else if (cmd == "EV_RAW_HEX") {
+      cmdEvRaw(true);
+    } else if (cmd == "EV_CLEAR") {
+      uint32_t failed = 0xFFFFFFFFu;
+      const bool ok = jh_store::events_clear(&failed);
+      std::printf("EV_CLEAR ok=%d failed_sector=%ld used=%u\n", ok ? 1 : 0,
+                  ok ? -1L : (long)failed, jh_store::events_used_pages());
+    } else if (cmd == "EV_HOLD") {
+      int h = 0;
+      iss >> h;
+      jh_store::events_wake_hold(h != 0);
+      std::printf("EV_HOLD hold=%d\n", h);
+#endif
     } else {
       std::printf("ERROR unknown_command=%s\n", cmd.c_str());
     }

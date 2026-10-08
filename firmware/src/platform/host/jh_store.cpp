@@ -44,6 +44,7 @@
 
 #include <sys/statvfs.h>
 
+#include "event_format.h"
 #include "host_paths.h"
 #include "params.gen.h"
 #include "trace_codec.h"
@@ -81,6 +82,14 @@ FILE* s_read_file = nullptr;
 std::vector<uint8_t> s_raw_image;
 size_t s_raw_pos  = 0;
 bool   s_raw_open = false;
+bool   s_ev_open  = false;   // the events export: the same single read slot
+const char* kEventsName = "events.bin";
+uint32_t s_ev_used = 0;
+uint32_t s_ev_damaged = 0;
+uint32_t s_ev_write_fail = 0;
+bool     s_ev_scanned = false;
+std::vector<uint8_t> s_ev_image;
+size_t   s_ev_pos = 0;
 
 std::string jumpsPath() { return jh_host::path(kJumpsName); }
 std::string tracePath() { return jh_host::path(kTraceName); }
@@ -177,6 +186,7 @@ bool init(void (*/*announce*/)(const char* line)) {
 
   const long jb = fileSize(jumpsPath());
   s_jumps_header = jb > 0;
+  s_ev_scanned = false;  // the event region's append point: re-derived on first use
 
   return s_fs_ok;
 }
@@ -291,6 +301,7 @@ bool trace_is_full() { return s_trace_full; }
 bool open_read(StoredFile which) {
   if (!s_fs_ok) return false;
   s_raw_open = false;  // one read slot, either mode (jh_store.h)
+  s_ev_open = false;
   const std::string p = (which == StoredFile::JUMPS) ? jumpsPath() : tracePath();
   s_read_file = std::fopen(p.c_str(), "rb");
   return s_read_file != nullptr;
@@ -307,6 +318,7 @@ void close_read() {
     s_read_file = nullptr;
   }
   s_raw_open = false;  // one read slot, either mode (jh_store.h)
+  s_ev_open = false;   // ...including the events export
 }
 
 // ---------------------------------------------- raw trace-region export
@@ -352,6 +364,7 @@ bool open_read_raw() {
   buildRawImage();
   s_raw_pos  = 0;
   s_raw_open = true;
+  s_ev_open  = false;
   return true;
 }
 
@@ -406,5 +419,127 @@ void clear() {
 }
 
 bool hard_format(void (*announce)(const char* line)) { announce("# hard format: host is a no-op"); return true; }
+
+// ------------------------------------------------------------ event region
+// The host build's event region is a file of 256-byte pages,
+// $JH_HOST_DIR/events.bin, appended one page per events_write_page() — the
+// same append/clear/export semantics as the nRF52 region, without the
+// sectors. clear()/trace_clear() leave it alone, exactly as on the device.
+//
+// JH_HOST_EVENTS_STATE=<migration_blocked|migration_failed|unsupported>
+// makes events_state() report that instead of OK, so tools/tests/
+// test_hostdev.py can see main.cpp's `ERR events disabled <reason>` path
+// without a v1 flash chip to block on.
+namespace {
+
+
+std::string eventsPath() { return jh_host::path(kEventsName); }
+
+void scanEvents() {
+  s_ev_used = 0;
+  s_ev_damaged = 0;
+  FILE* f = std::fopen(eventsPath().c_str(), "rb");
+  if (f) {
+    uint8_t page[jh_event::PAGE_BYTES];
+    uint32_t p = 0;
+    while (std::fread(page, 1, sizeof(page), f) == sizeof(page)) {
+      ++p;
+      if (jh_event::page_erased(page)) continue;
+      s_ev_used = p;
+      if (!jh_event::page_valid(page)) ++s_ev_damaged;
+    }
+    std::fclose(f);
+  }
+  s_ev_scanned = true;
+}
+
+EventsState hostEventsOverride() {
+  const char* v = std::getenv("JH_HOST_EVENTS_STATE");
+  if (!v || !v[0]) return EventsState::OK;
+  if (!std::strcmp(v, "migration_blocked")) return EventsState::MIGRATION_BLOCKED;
+  if (!std::strcmp(v, "migration_failed")) return EventsState::MIGRATION_FAILED;
+  if (!std::strcmp(v, "unsupported")) return EventsState::UNSUPPORTED;
+  return EventsState::OK;
+}
+
+}  // namespace
+
+EventsState events_state() {
+  if (!s_fs_ok) return EventsState::STORE_DOWN;
+  return hostEventsOverride();
+}
+
+uint32_t events_region_bytes() {
+  return events_state() == EventsState::OK ? jh_event::REGION_BYTES : 0;
+}
+
+uint32_t events_used_pages() {
+  if (!s_fs_ok) return 0;
+  if (!s_ev_scanned) scanEvents();
+  return s_ev_used;
+}
+
+uint32_t events_damaged_pages() {
+  if (!s_ev_scanned && s_fs_ok) scanEvents();
+  return s_ev_damaged;
+}
+
+uint32_t events_write_fail() { return s_ev_write_fail; }
+uint8_t layout_version() { return s_fs_ok ? 2 : 0; }
+void events_wake_hold(bool) {}
+
+EventsWrite events_write_page(const uint8_t* page) {
+  if (events_state() != EventsState::OK || page == nullptr) return EventsWrite::REFUSED;
+  if (events_used_pages() >= jh_event::REGION_PAGES) return EventsWrite::REFUSED;
+  FILE* f = std::fopen(eventsPath().c_str(), "r+b");
+  if (!f) f = std::fopen(eventsPath().c_str(), "w+b");
+  if (!f) { ++s_ev_used; ++s_ev_write_fail; return EventsWrite::FAILED; }
+  std::fseek(f, (long)s_ev_used * (long)jh_event::PAGE_BYTES, SEEK_SET);
+  const size_t n = std::fwrite(page, 1, jh_event::PAGE_BYTES, f);
+  std::fclose(f);
+  ++s_ev_used;
+  if (n != jh_event::PAGE_BYTES) { ++s_ev_write_fail; return EventsWrite::FAILED; }
+  return EventsWrite::OK;
+}
+
+bool events_clear(uint32_t* failed_sector) {
+  (void)failed_sector;
+  if (events_state() != EventsState::OK) return false;
+  FILE* f = std::fopen(eventsPath().c_str(), "wb");
+  if (f) std::fclose(f);
+  s_ev_used = 0;
+  s_ev_damaged = 0;
+  s_ev_scanned = true;
+  return f != nullptr;
+}
+
+uint32_t events_raw_bytes() { return events_used_pages() * jh_event::PAGE_BYTES; }
+
+bool events_open_read_raw() {
+  if (events_state() != EventsState::OK) return false;
+  if (s_read_file) { std::fclose(s_read_file); s_read_file = nullptr; }
+  s_raw_open = false;
+  s_ev_image.assign(events_raw_bytes(), 0xFF);
+  FILE* f = std::fopen(eventsPath().c_str(), "rb");
+  if (f) {
+    const size_t got = std::fread(s_ev_image.data(), 1, s_ev_image.size(), f);
+    (void)got;
+    std::fclose(f);
+  }
+  s_ev_pos = 0;
+  s_ev_open = true;
+  return true;
+}
+
+size_t events_read_raw_chunk(uint8_t* buf, size_t max_len) {
+  if (!s_ev_open || buf == nullptr) return 0;
+  if (s_ev_pos >= s_ev_image.size()) return 0;
+  assert(max_len >= 4 && "events_read_raw_chunk needs >= 4 bytes of buffer while data remains");
+  size_t n = s_ev_image.size() - s_ev_pos;
+  if (n > max_len) n = max_len & ~(size_t)3;
+  std::memcpy(buf, s_ev_image.data() + s_ev_pos, n);
+  s_ev_pos += n;
+  return n;
+}
 
 }  // namespace jh_store

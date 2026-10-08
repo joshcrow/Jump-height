@@ -36,6 +36,7 @@ uint32_t g_fault_remaining  = 0;
 bool     g_write_short_armed = false;
 uint32_t g_write_short_n     = 0;
 bool     g_erase_fail_armed  = false;
+uint32_t g_erase_fail_skip   = 0;   // erases allowed to succeed first
 
 // Writes through [addr, addr+len) to the backing file, if one is open, and
 // flushes immediately — a real power cut can land right after this, so
@@ -232,7 +233,15 @@ bool Adafruit_SPIFlashBase::eraseSector(uint32_t sectorNumber) {
   // — checked BEFORE touching any bytes, so an injected failure leaves the
   // target sector completely untouched, matching a real erase that simply
   // didn't happen (no partial-erase shape is modeled — see mock_flash.h).
-  if (g_erase_fail_armed) { g_erase_fail_armed = false; return false; }
+  // arm_erase_failure_after(n) lets the first n erases through first.
+  if (g_erase_fail_armed) {
+    if (g_erase_fail_skip > 0) {
+      --g_erase_fail_skip;
+    } else {
+      g_erase_fail_armed = false;
+      return false;
+    }
+  }
   const uint32_t addr = sectorNumber * MOCK_SFLASH_SECTOR_SIZE;
   // Stricter than real hardware (review-store.md finding #4, same rationale
   // as abortIfOutOfBounds() above): a sector number landing past the
@@ -277,6 +286,12 @@ void arm_write_short_return(uint32_t n) {
 
 void arm_erase_failure() {
   g_erase_fail_armed = true;
+  g_erase_fail_skip = 0;
+}
+
+void arm_erase_failure_after(uint32_t n) {
+  g_erase_fail_armed = true;
+  g_erase_fail_skip = n;
 }
 
 }  // namespace mock_flash_test
