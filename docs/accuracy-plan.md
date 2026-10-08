@@ -64,8 +64,15 @@ says ~0.4-0.6 g for this rider and wing), a landing spike (> ~2.5 g).
 Offline the candidate generator is loose (recall); a small feature set —
 duration, minimum load, pop, spike, gyro magnitude where present — gets
 thresholds fitted for precision against Surfr. Firmware runs the same
-features with the fitted thresholds. The small-hop floor is whatever makes
-the count agree with Surfr's convention; the alignment reveals it.
+features with the fitted thresholds. **Correction (2026-10-07):** an
+earlier version of this paragraph set the small-hop floor to "whatever
+makes the count agree with Surfr's convention". That is count-fitting: a
+threshold chosen because its count matches is fitted to the number it is
+then "validated" against. Thresholds are chosen only from per-jump
+TIMESTAMP matches (`sim/surfr_match.py`) on held-out sessions with at least
+5 matched rows — the rule written into `sim/candgen.py`. Offline candidates
+for the vest and the first board session come from `./tools/jump
+candidates` (CG-1, presets vest-R / vest-L, neither fitted).
 
 ## Height: physics-informed, fitted
 
