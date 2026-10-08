@@ -914,11 +914,14 @@ class FlightDiagnostics:
         c = self.counts()
         finding = c["above"] > 0 or c["reconcile"] < self.n
         lo, hi = FLIGHT_BAND_G
+        n_absent = sum(1 for r in self.rows if r.n_air_ok == "absent")
         line = (f"FLIGHT DIAGNOSTICS: {self.n} device events in this trace; "
                 f"{c['outside']} outside the firmware's {lo:g}–{hi:g} g in-flight "
                 f"band; {c['above']} with median in-flight load ABOVE the "
                 f"{self.gate_g:g} g free-fall gate; {c['reconcile']}/{self.n} "
-                f"n_air reconcile; {c['contact']} with a loaded contact (max inside "
+                f"n_air reconcile"
+                + (f" ({n_absent} cannot be checked)" if n_absent else "")
+                + f"; {c['contact']} with a loaded contact (max inside "
                 f"≥ {LOADED_CONTACT_G:g} g) inside the reported airtime.")
         if self.missing_cols:
             line += (f" jumps.csv lacks {', '.join(self.missing_cols)}, so those "

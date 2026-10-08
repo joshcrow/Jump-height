@@ -763,6 +763,9 @@ def test_e4_missing_flight_columns_print_absent(tmp_path):
     assert "`med_a_g`: absent (jumps.csv has no such column)" in text
     assert fd.rows[0].n_air_ok == "absent"
     assert fd.rows[0].above_gate is None
+    line = fd.session_line()
+    assert "0/1 n_air reconcile (1 cannot be checked)" in line
+    assert "checks are absent, not passed" in line
 
 
 def test_flight_line_flags_a_median_load_above_the_gate(tmp_path):
