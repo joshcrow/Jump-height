@@ -1,3 +1,11 @@
+# FROZEN FIXTURE -- tools/puckd/serial_job.py exactly as it shipped in the
+# Mac app 1.0.7 (unchanged from faa08a9 through 517dd45), the app on the
+# rider's Mac. tools/tests/test_events_pipeline.py loads it to prove that
+# 1.0.7 pulls, verifies and clears a firmware-batch-2 puck without error
+# and without touching its six-axis events (spec 2026-10-07 section 8.1
+# T-H5). DO NOT EDIT: it is evidence about a binary already deployed. The
+# only adaptation is made by the loader, which points JUMP at tools/jump.
+#
 """tools/puckd/serial_job.py -- the puck job's serial half (spec steps 1-5, 7).
 
 docs/sync-agent-plan.md:41-58 ("the job") and :60-66 (the gates) are the
@@ -26,19 +34,6 @@ contract. This module owns exactly:
                                      `stats`, parsed, never raising -- a
                                      daemon polling every 60 s must survive a
                                      bad read, not crash on one.
-    read_evstat(port_path)          firmware batch 2: one `evstat`, parsed,
-    clear_events(port_path)         never raising; `evclear` confirmed by a
-                                     fresh evstat bytes=0.
-
-SIX-AXIS EVENTS (firmware batch 2, spec 2026-10-07 section 7.1). After the
-whole existing sequence -- unchanged, byte for byte, including how the trace
-is verified -- run_job() sends `events` and `evstat`. Their outcome is
-recorded in the bundle (events.bin, evstat.txt, manifest events_* keys) and
-in JobResult.events_*, and NEVER changes the trace's `verified`: an old puck
-answers ERR unknown_command (events_format None, not a failure), any other
-ERR or a transport problem is events_format "error" or events_verified False
-with the reasons named. A page whose own CRC fails is content, not
-transport: it is counted in events_damaged_pages.
 
 Reuses tools/jump's Device / command() / parse_kv() / parse_file_sections() /
 _last_tagged() / _query_tracecheck() -- proven on hardware -- instead of
@@ -163,36 +158,6 @@ class JobResult:
     stats_after: "Optional[str]"
     puck_name: "Optional[str]"
     src: "Optional[str]"
-    # Six-axis events (firmware batch 2). Defaults describe "not pulled", so
-    # every existing constructor call keeps meaning what it meant.
-    events_format: "Optional[str]" = None      # 'jhev1' | None (old fw) | 'error'
-    events_verified: bool = False
-    events_reasons: "list[str]" = None         # type: ignore[assignment]
-    events_bytes: "Optional[int]" = None
-    boot_id: "Optional[str]" = None
-
-
-@dataclass
-class EventsPull:
-    """What `events` + `evstat` produced. format None = the puck predates
-    the command (ERR unknown_command) -- not a failure."""
-    format: "Optional[str]" = None
-    data: bytes = b""
-    declared: "Optional[int]" = None
-    region_bytes: "Optional[int]" = None
-    crc_expected: "Optional[str]" = None
-    crc_actual: "Optional[str]" = None
-    verified: bool = False
-    reasons: "list[str]" = None                # type: ignore[assignment]
-    damaged_pages: "Optional[int]" = None
-    evstat_line: "Optional[str]" = None
-    lines: "list[str]" = None                  # type: ignore[assignment]
-
-    def __post_init__(self):
-        if self.reasons is None:
-            self.reasons = []
-        if self.lines is None:
-            self.lines = []
 
 
 @dataclass(frozen=True)
@@ -532,96 +497,6 @@ def _join_body(lines: "list[str]") -> str:
     return ("\n".join(lines) + "\n") if lines else ""
 
 
-def _extract_boot_id(lines: "list[str]") -> "Optional[str]":
-    """'# boot_id=xxxxxxxx' chatter in `info` (firmware batch 2). Every event
-    page carries this id; the bundle records it next to uptime_s, which is
-    what places that boot's events on the wall clock."""
-    for l in lines:
-        if l.startswith("# boot_id="):
-            v = l[len("# boot_id="):].strip().lower()
-            if re.fullmatch(r"[0-9a-f]{8}", v):
-                return v
-    return None
-
-
-def _events_damaged_pages(data: bytes) -> "Optional[int]":
-    try:
-        import sys as _sys
-        _sys.path.insert(0, str(REPO / "sim"))
-        import event_codec  # noqa: E402
-    except ImportError:
-        return None
-    return len(event_codec.decode_region(data).damaged_pages)
-
-
-def _pull_events(dev) -> EventsPull:
-    """`events` then `evstat`, verified like traceraw (spec 7.1): bytes= on
-    both chatter lines equal the decoded length, crc32 matches, no
-    INCOMPLETE, a whole number of 256-byte pages. Never raises."""
-    ev = EventsPull()
-    jump = _jump()
-    try:
-        lines = dev.command("events", timeout=_EVENTS_TIMEOUT_S)
-    except TimeoutError as e:
-        ev.format = "error"
-        ev.reasons.append(f"the puck didn't answer 'events': {e}")
-        return ev
-    except Exception as e:  # noqa: BLE001 -- the port going away mid-events
-        ev.format = "error"   # must not cost the trace bundle already in hand
-        ev.reasons.append(f"the puck stopped answering during 'events': {e}")
-        return ev
-    ev.lines = lines
-    last = lines[-1].strip() if lines else ""
-    if last == "ERR unknown_command events":
-        ev.format = None     # firmware before batch 2: nothing to pull
-        return ev
-    if last.startswith("ERR"):
-        ev.format = "error"
-        ev.reasons.append(f"the puck refused 'events': {last}")
-    else:
-        ev.format = "jhev1"
-        files = jump.parse_file_sections(lines)
-        body = _csv_body(files.get("events.bin", []))
-        data, b64_error = _decode_raw_body(body)
-        ev.data = data
-        ev.crc_actual = f"{zlib.crc32(data) & 0xffffffff:08x}"
-        declared = []
-        for line in lines:
-            if line.startswith("# events"):
-                kv = jump.parse_kv(line)
-                if "bytes" in kv:
-                    declared.append(_int_or_none(kv["bytes"]))
-                if "region_bytes" in kv:
-                    ev.region_bytes = _int_or_none(kv["region_bytes"])
-                if "crc32" in kv:
-                    ev.crc_expected = str(kv["crc32"]).lower()
-        ev.declared = declared[0] if declared else None
-        if b64_error:
-            ev.reasons.append("events: " + b64_error)
-        if len(declared) != 2 or len(set(declared)) != 1:
-            ev.reasons.append(f"events: the two bytes= lines disagree or are missing ({declared})")
-        elif ev.declared != len(data):
-            ev.reasons.append(f"events: got {len(data):,} of {ev.declared:,} bytes")
-        if not ev.crc_expected:
-            ev.reasons.append("events: no crc32 from the puck")
-        elif ev.crc_expected != ev.crc_actual:
-            ev.reasons.append("events: crc32 mismatch")
-        inc = _first_incomplete(lines)
-        if inc:
-            ev.reasons.append("events: the puck said the transfer was incomplete: " + inc[:160])
-        if len(data) % 256:
-            ev.reasons.append(f"events: {len(data)} bytes is not a whole number of 256-byte pages")
-        ev.verified = not ev.reasons
-        ev.damaged_pages = _events_damaged_pages(data)
-    try:
-        st = dev.command("evstat", timeout=_STATS_TIMEOUT_S)
-        ev.lines = ev.lines + st
-        ev.evstat_line = next((l for l in st if l.startswith("EVSTAT ")), None)
-    except Exception:  # noqa: BLE001 -- evstat is diagnostic here
-        pass
-    return ev
-
-
 # ------------------------------------------------------------------ manifest
 
 def _build_manifest(*, puck_name, info_kv, cal_line, synced_at, stats_before_line,
@@ -684,24 +559,10 @@ def _build_manifest(*, puck_name, info_kv, cal_line, synced_at, stats_before_lin
     }
 
 
-def _add_events_manifest(manifest: dict, ev: EventsPull, boot_id: "Optional[str]") -> None:
-    """Spec 7.1's keys, APPENDED (bundle_version stays 1: cmd_ingest reads
-    every key with .get(), so an older ingest ignores them)."""
-    manifest["events_format"] = ev.format
-    manifest["events_bytes"] = len(ev.data) if ev.format == "jhev1" else None
-    manifest["events_region_bytes"] = ev.region_bytes
-    manifest["events_crc32"] = ev.crc_actual if ev.format == "jhev1" else None
-    manifest["events_verified"] = ev.verified
-    manifest["events_reasons"] = list(ev.reasons)
-    manifest["events_damaged_pages"] = ev.damaged_pages
-    manifest["events_cleared"] = False
-    manifest["boot_id"] = boot_id
-
-
 def _write_bundle(spool_dir: "Path | str", manifest: dict, jumps_lines: "list[str]",
                   trace_format: "Optional[str]", trace_bin_bytes: "Optional[bytes]",
                   trace_csv_lines: "Optional[list[str]]", device_log: "list[str]",
-                  synced_at: datetime, events: "Optional[EventsPull]" = None) -> Path:
+                  synced_at: datetime) -> Path:
     """CONTRACT.md SS2.1's files, in a real zip (Python's zipfile, unlike the
     hand-rolled writer web/sync/sync.js needs because a browser has no build
     step -- this is Python, so there is no reason to reimplement one)."""
@@ -740,10 +601,6 @@ def _write_bundle(spool_dir: "Path | str", manifest: dict, jumps_lines: "list[st
             zf.writestr("trace.csv", _join_body(trace_csv_lines or []))
         zf.writestr("notes.txt", notes)
         zf.writestr("device.log", _join_body(device_log))
-        if events is not None and events.format == "jhev1":
-            zf.writestr("events.bin", events.data)
-        if events is not None and events.evstat_line:
-            zf.writestr("evstat.txt", events.evstat_line + "\n")
     return path
 
 
@@ -755,11 +612,6 @@ _JUMPS_TIMEOUT_S = 60.0
 _TRACERAW_TIMEOUT_S = 180.0
 _TRACE_TIMEOUT_S = 180.0
 _SELFTEST_TIMEOUT_S = 15.0
-# 528,384 B of region is ~714 KB of base64; at the 62.5 KB/s measured for a
-# CSV trace pull (docs/serial-parity-2026-09-09.md:242) that is ~11 s. An
-# inactivity timeout (tools/jump Device.command), so this is headroom, not a
-# budget for the whole transfer.
-_EVENTS_TIMEOUT_S = 120.0
 # tools/jump:2194-2198: "clear erases every used sector -- ~40 ms each, so a
 # well-used region is ~20 s of work. The old 10 s timeout reported failure
 # on a clear that was merely SLOW." Reused verbatim, not re-derived.
@@ -976,13 +828,6 @@ def run_job(port_path: str, spool_dir: "Path | str", *,
         verify = verify_pull(ctx)
 
         puck_name = _extract_puck_name(device_log)
-        boot_id = _extract_boot_id(info_lines)
-
-        # Six-axis events, AFTER everything the trace verdict reads (spec 7.1).
-        # Their lines join device.log below the pull's (bodies dropped, as
-        # for every FILE frame), and nothing about them can touch `verify`.
-        events = _pull_events(dev)
-        device_log.extend(_log_lines(events.lines))
 
         manifest = _build_manifest(
             puck_name=puck_name, info_kv=info_kv, cal_line=cal_line,
@@ -998,21 +843,16 @@ def run_job(port_path: str, spool_dir: "Path | str", *,
         # it is corrected here rather than threading one more parameter
         # through every raw-path caller too.
         manifest["trace_bytes_got"] = ctx.got_csv_bytes
-        _add_events_manifest(manifest, events, boot_id)
 
         bundle_path = _write_bundle(
             spool_dir, manifest, jumps_csv_lines, trace_format, trace_bin_bytes,
-            trace_csv_lines, device_log, synced_at, events)
+            trace_csv_lines, device_log, synced_at)
 
         return JobResult(
             bundle_path=bundle_path, verified=verify.verified,
             reasons=verify.reasons, jumps=jump_rows,
             stats_before=stats_before_line, stats_after=stats_after_line,
-            puck_name=puck_name, src=info_kv.get("src"),
-            events_format=events.format, events_verified=events.verified,
-            events_reasons=list(events.reasons),
-            events_bytes=len(events.data) if events.format == "jhev1" else None,
-            boot_id=boot_id)
+            puck_name=puck_name, src=info_kv.get("src"))
     except PullFailed:
         raise
     except Exception as e:  # noqa: BLE001 -- see the docstring: an unplug
@@ -1199,106 +1039,6 @@ def read_stats(port_path: str, *,
         # TimeoutError. Measured 2026-09-13: it escaped all the way out of
         # run_forever() and killed the daemon thread.
         return {**empty, "error": f"the puck stopped answering: {e}"}
-    finally:
-        try:
-            dev.close()
-        except Exception:  # noqa: BLE001
-            pass
-
-
-# ------------------------------------------------------------ events: evstat
-
-@dataclass(frozen=True)
-class EvStat:
-    """One `evstat`. supported False = the puck predates batch 2 (no event
-    region, so nothing can be lost by flashing it). bytes None = the reading
-    did not happen or storage is down -- never a zero (CLAUDE.md rule 3)."""
-    supported: bool
-    bytes: "Optional[int]"
-    disabled: "Optional[str]"
-    line: "Optional[str]"
-    error: "Optional[str]"
-
-
-def _parse_evstat(lines: "list[str]") -> EvStat:
-    jump = _jump()
-    last = lines[-1].strip() if lines else ""
-    if last == "ERR unknown_command evstat":
-        return EvStat(False, None, None, None, None)
-    line = next((l for l in lines if l.startswith("EVSTAT ")), None)
-    if line is None:
-        return EvStat(True, None, None, None, f"no EVSTAT line ({last or 'silence'})")
-    kv = jump.parse_kv(line)
-    disabled = kv.get("disabled")
-    b = _int_or_none(kv.get("bytes"))
-    if disabled == "store_down":
-        b = None   # the store could not be read: unknown, not empty
-    return EvStat(True, b, disabled, line, None)
-
-
-def read_evstat(port_path: str, *,
-                device_factory: "Callable[[str], object] | None" = None) -> EvStat:
-    """One `evstat`, never raising. The daemon's flash gate reads it."""
-    jump = _jump()
-    device_factory = device_factory or jump.Device
-    try:
-        dev = device_factory(port_path)
-    except Exception as e:  # noqa: BLE001
-        return EvStat(True, None, None, None, f"could not open the port: {e}")
-    try:
-        dev.drain_boot()
-        try:
-            return _parse_evstat(dev.command("evstat", timeout=_STATS_TIMEOUT_S))
-        except TimeoutError as e:
-            return EvStat(True, None, None, None, f"the puck didn't answer 'evstat': {e}")
-    except Exception as e:  # noqa: BLE001
-        return EvStat(True, None, None, None, f"the puck stopped answering: {e}")
-    finally:
-        try:
-            dev.close()
-        except Exception:  # noqa: BLE001
-            pass
-
-
-@dataclass(frozen=True)
-class EventsClearResult:
-    ok: bool
-    bytes_after: "Optional[int]"
-    error: "Optional[str]"
-
-
-_EVCLEAR_TIMEOUT_S = 60.0   # up to 129 sector erases at ~40 ms each
-
-
-def clear_events(port_path: str, *,
-                 device_factory: "Callable[[str], object] | None" = None) -> EventsClearResult:
-    """`evclear`, then CONFIRM with a fresh `evstat bytes=0` -- the clear's
-    own OK is not the evidence (the same rule clear_puck() follows). Never
-    raises; anything unconfirmed is ok=False."""
-    jump = _jump()
-    device_factory = device_factory or jump.Device
-    try:
-        dev = device_factory(port_path)
-    except Exception as e:  # noqa: BLE001
-        return EventsClearResult(False, None, f"could not open the port: {e}")
-    try:
-        dev.drain_boot()
-        try:
-            lines = dev.command("evclear", timeout=_EVCLEAR_TIMEOUT_S)
-        except TimeoutError as e:
-            return EventsClearResult(False, None, f"the puck didn't answer 'evclear': {e}")
-        if lines and lines[-1].startswith("ERR"):
-            return EventsClearResult(False, None, lines[-1].strip())
-        try:
-            st = _parse_evstat(dev.command("evstat", timeout=_STATS_TIMEOUT_S))
-        except TimeoutError as e:
-            return EventsClearResult(False, None, f"the puck didn't answer 'evstat': {e}")
-        if st.bytes != 0:
-            return EventsClearResult(False, st.bytes,
-                                     st.error or f"evstat after evclear reads bytes={st.bytes}")
-        return EventsClearResult(True, 0, None)
-    except Exception as e:  # noqa: BLE001
-        return EventsClearResult(False, None, f"the puck stopped answering: {e}")
     finally:
         try:
             dev.close()

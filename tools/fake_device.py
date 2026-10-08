@@ -21,6 +21,16 @@ Scenarios:
     drop       emits N drop JUMPs with a known injected timing bias (+15 ms)
     session    pre-loaded with the demo session (4 jumps + full trace)
 
+Six-axis event capture (firmware batch 2, spec 2026-10-07 section 7.4):
+`events` / `evstat` / `evclear` and `# boot_id=` in `info`, like a batch-2
+puck. --events N preloads N synthetic events (built by sim/event_policy.py,
+the Python mirror of the firmware's capture, so they are real jhev1 pages);
+`clear` keeps them, `evclear` erases them. --no-events emulates older
+firmware (help, then ERR unknown_command), --events-error emulates an ERR,
+--events-corrupt-page K damages a page AFTER its CRC (the transport crc32
+covers the damage, so the transfer verifies and the content does not), and
+--events-incomplete declares more bytes than it sends.
+
 Keep this file's protocol output in lockstep with firmware/src/main.cpp.
 """
 
@@ -43,6 +53,8 @@ sys.path.insert(0, str(REPO / "tools"))
 
 from detector import Detector, load_params  # noqa: E402
 from generate import DEMO_JUMPS, synth_session  # noqa: E402
+import event_codec  # noqa: E402
+import event_policy  # noqa: E402
 from trace_codec import encode_region, region_to_csv  # noqa: E402
 import gen_params  # noqa: E402
 
@@ -74,6 +86,8 @@ class FakeDevice:
         self.rng = random.Random(args.seed)
         self.buf = b""
         self.cal_from_nvs = False  # mirrors the firmware's `set` persistence flag
+        self.boot_id = int(args.boot_id, 16) & 0xFFFFFFFF
+        self.events_image = build_events_image(args.events, self.boot_id) if args.events else b""
 
         # Scripted "physical" events. The CLI (in --fake mode) advances them
         # deterministically by sending `_sim next` at each point where a human
@@ -215,9 +229,40 @@ class FakeDevice:
 
     # ----------------------------------------------------------- protocol
     def send_help(self):
+        events = "" if self.args.no_events else " | events | evstat | evclear"
         self.send("# commands: help | stats | jumps | trace | traceraw | "
-                  "tracecheck | dump | clear | selftest | info")
+                  f"tracecheck | dump | clear | selftest | info{events}")
         self.send("#           set <airtime_offset_s|height_scale> <value|default>")
+
+    # ------------------------------------------------------- event capture
+    def send_events(self):
+        """main.cpp's printEventsFramed(), byte for byte in shape."""
+        image = bytearray(self.events_image)
+        k = self.args.events_corrupt_page
+        if k is not None and 0 <= k < len(image) // event_codec.PAGE_BYTES:
+            image[k * event_codec.PAGE_BYTES + 40] ^= 0x5A   # after the page CRC was made
+        declared = len(image) + (512 if self.args.events_incomplete else 0)
+        self.send(f"# events bytes={declared} region_bytes={event_codec.REGION_BYTES} "
+                  "page_bytes=256 format=jhev1")
+        self.send("FILE events.bin BEGIN")
+        b64 = base64.b64encode(bytes(image)).decode("ascii")
+        for i in range(0, len(b64), 76):
+            self.send(b64[i:i + 76])
+        self.send("FILE events.bin END")
+        if self.args.events_incomplete:
+            self.send(f"# WARNING events.bin INCOMPLETE — streamed {len(image)} of "
+                      f"{declared} bytes; re-run the download")
+        self.send(f"# events crc32={zlib.crc32(bytes(image)) & 0xffffffff:08x} bytes={declared}")
+        self.send("OK events")
+
+    def send_evstat(self):
+        used = len(self.events_image) // event_codec.PAGE_BYTES
+        self.send(f"EVSTAT bytes={len(self.events_image)} region_bytes={event_codec.REGION_BYTES} "
+                  f"pages={used} open=0 full=0 disabled=0 boot_id={self.boot_id:08x} "
+                  f"events_boot=0 crossings=0 refused_budget=0 refused_full=0 ring_overrun=0 "
+                  f"damaged_pages=0 write_fail=0 dup_polls=0 late_polls=0 max_page_write_us=0 "
+                  f"pages_over_slack=0 heap_free=-1 trig_dropped=0 links_lost=0 layout=2")
+        self.send("OK evstat")
 
     def send_traceraw(self):
         """web/sync/CONTRACT.md §1's `traceraw`: base64-framed raw trace-region bytes
@@ -359,10 +404,23 @@ class FakeDevice:
             self.send_file("trace.csv", "t,mag", self.trace_rows)
             self.send("OK dump")
         elif cmd == "clear":
+            # Like main.cpp: jumps and trace only. Events are NOT touched
+            # (spec D6) -- `evclear` is the only thing that erases them.
             self.jumps_rows = []
             self.trace_rows = []
             self.send("# cleared stored data")
             self.send("OK clear")
+        elif cmd in ("events", "evstat", "evclear") and not self.args.no_events:
+            if self.args.events_error and cmd != "evstat":
+                self.send(f"ERR {cmd} {self.args.events_error}")
+            elif cmd == "events":
+                self.send_events()
+            elif cmd == "evstat":
+                self.send_evstat()
+            else:
+                self.events_image = b""
+                self.send("# events cleared")
+                self.send("OK evclear")
         elif cmd == "selftest":
             self.send_selftest()
             self.send("OK selftest")
@@ -418,6 +476,10 @@ class FakeDevice:
                       f"motion_thresh_g={fw_cfg['motion_thresh_g']:.2f} "
                       f"idle_timeout_s={fw_cfg['idle_timeout_s']} ble=1"
                       f"{self.battery_suffix()}")
+            if self.args.puck_name:
+                self.send(f"# name={self.args.puck_name}")
+            if not self.args.no_events:
+                self.send(f"# boot_id={self.boot_id:08x}")
             self.send("PARAMS " + summary)
             self.send(f"CAL airtime_offset_s={self.params.airtime_offset_s:.4f} "
                       f"height_scale={self.params.height_scale:.3f} "
@@ -461,6 +523,36 @@ class FakeDevice:
                             break
 
 
+def build_events_image(n_events: int, boot_id: int) -> bytes:
+    """A region image holding `n_events` real jhev1 events, produced by the
+    firmware's own capture policy (sim/event_policy.py): rest, a 9 g impact,
+    rest, repeated, through the same 200 Hz pacing and page writer."""
+    out: list[bytes] = []
+
+    class Hooks(event_policy.Hooks):
+        def write_page(self, page: bytes) -> int:
+            out.append(page)
+            return 1
+
+    cap = event_policy.Capture(event_policy.load_config(), Hooks(), boot_id,
+                               1_000_000, BUILD_SRC.encode())
+    cap.set_region(0, event_codec.REGION_PAGES)
+    cap.set_enabled(True)
+    t = 1_000_000
+    n = 0
+    for k in range(n_events):
+        for i in range(200 * 9):
+            t += 5000
+            n += 1
+            mag = 9.0 if i in (1200, 1201) else 1.0 + 0.01 * ((n % 7) - 3)
+            raw = (n % 5 - 2, -(n % 3), int(round(mag / 0.000488)), n % 9, -(n % 4), 2)
+            cap.note_poll(t, raw[:3])
+            cap.on_sample(t, raw, True, mag)
+            cap.service(n % 200 == 0)
+    cap.drain()
+    return b"".join(out)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--scenario", default="ok",
@@ -501,6 +593,25 @@ def main() -> int:
     ap.add_argument("--tracecheck-silent", action="store_true",
                     help="never answer `tracecheck` at all (a walk that "
                          "never returns) — the client must time out")
+    # Six-axis event capture (spec 2026-10-07 section 7.4).
+    ap.add_argument("--events", type=int, default=0, metavar="N",
+                    help="preload N synthetic jhev1 events (default 0)")
+    ap.add_argument("--puck-name", default=None,
+                    help="emit '# name=<this>' in `info` (absent by default, like "
+                         "every fake before batch 2)")
+    ap.add_argument("--boot-id", default="fa4eb007",
+                    help="boot_id reported in `# boot_id=` and EVSTAT (hex)")
+    ap.add_argument("--no-events", action="store_true",
+                    help="emulate pre-batch-2 firmware: events/evstat/evclear "
+                         "answer help + ERR unknown_command, no # boot_id=")
+    ap.add_argument("--events-error", metavar="REASON",
+                    help="answer `events`/`evclear` with ERR <cmd> REASON, "
+                         "e.g. storage_down")
+    ap.add_argument("--events-corrupt-page", type=int, default=None, metavar="K",
+                    help="flip a byte inside page K after its CRC was computed")
+    ap.add_argument("--events-incomplete", action="store_true",
+                    help="declare 512 more bytes than are sent, with the "
+                         "INCOMPLETE warning")
     args = ap.parse_args()
     try:
         FakeDevice(args).run()
