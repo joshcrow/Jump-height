@@ -1136,8 +1136,27 @@ class TestInstall(_RideLoopTestBase):
         dest = fake_home / "Library" / "LaunchAgents" / "com.jumpheight.rideloop.plist"
         self.assertTrue(dest.is_file())
         self.assertIn(sys.executable, dest.read_text())
-        self.assertEqual([c[1] for c in calls], ["bootout", "bootstrap"])
-        self.assertTrue(all(str(dest) == c[-1] for c in calls))
+        self.assertEqual([c[1] for c in calls], ["bootout", "bootstrap", "kickstart"])
+        self.assertTrue(all(str(dest) == c[-1] for c in calls[:2]))
+        # A demand spawn: on macOS 27.0 launchd pended this job's load-time
+        # ("speculative") spawn indefinitely, while kickstart ran it at once.
+        self.assertEqual(calls[2][-1], f"gui/{os.getuid()}/com.jumpheight.rideloop")
+
+    def test_install_does_not_kickstart_after_a_failed_bootstrap(self):
+        fake_home = self.tmp / "fake_home"
+        fake_home.mkdir()
+        calls = []
+
+        def recorder(argv, **kwargs):
+            calls.append(argv)
+            import subprocess as _sp
+            rc = 1 if argv[1] == "bootstrap" else 0
+            return _sp.CompletedProcess(argv, rc, stdout="", stderr="denied")
+
+        cfg = self.make_cfg()
+        with patch.object(ride_loop.Path, "home", return_value=fake_home):
+            self.assertFalse(ride_loop.install(cfg, run_launchctl=recorder))
+        self.assertNotIn("kickstart", [c[1] for c in calls])
 
     def test_install_reports_failure_when_bootstrap_exits_nonzero(self):
         fake_home = self.tmp / "fake_home"
@@ -1281,3 +1300,57 @@ class OnePassAtATime(_RideLoopTestBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheWatcherKeepsItsOwnSchedule(unittest.TestCase):
+    """launchd stopped starting the StartInterval job on macOS 27.0 (pended
+    "interval", then "speculative", for 48 h). The watcher now runs as one
+    long-lived process with its own loop."""
+
+    def _cfg(self):
+        import tempfile as _tf
+        from pathlib import Path as _P
+        d = _P(_tf.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(d, ignore_errors=True))
+        cfg = ride_loop.default_config(d)
+        return cfg
+
+    def test_runs_the_cycles_and_sleeps_between_them(self):
+        cfg = self._cfg()
+        cycles, sleeps = [], []
+        with patch.object(ride_loop, "run_cycle", lambda c: cycles.append(1)):
+            n = ride_loop.run_every(cfg, 600, sleep=sleeps.append, max_cycles=3)
+        self.assertEqual(n, 3)
+        self.assertEqual(len(cycles), 3)
+        self.assertEqual(sleeps, [600, 600], "no sleep after the last cycle")
+
+    def test_one_bad_cycle_does_not_end_the_loop(self):
+        cfg = self._cfg()
+        seen = []
+        def flaky(c):
+            seen.append(1)
+            if len(seen) == 1:
+                raise RuntimeError("one bad cycle")
+        with patch.object(ride_loop, "run_cycle", flaky):
+            self.assertEqual(ride_loop.run_every(cfg, 1, sleep=lambda s: None, max_cycles=3), 3)
+        self.assertEqual(len(seen), 3)
+
+    def test_the_template_runs_the_loop_under_keepalive(self):
+        import plistlib
+        from pathlib import Path as _P
+        raw = (_P(__file__).resolve().parents[2] / "packaging" / "com.jumpheight.rideloop.plist").read_bytes()
+        d = plistlib.loads(raw)
+        self.assertEqual(d["ProgramArguments"][-2:], ["--every", "600"])
+        self.assertIs(d.get("KeepAlive"), True)
+        self.assertNotIn("StartInterval", d, "a looping process under StartInterval would run twice")
+        import re as _re
+        comments = _re.findall(rb"<!--(.*?)-->", raw, flags=_re.S)
+        self.assertFalse([c for c in comments if b"--" in c],
+                         "a double hyphen inside an XML comment broke this plist on 2026-09-15")
+
+    def test_every_is_wired_to_the_loop(self):
+        with patch.object(ride_loop, "run_every", return_value=0) as m, \
+                patch.object(ride_loop, "default_config", return_value=object()):
+            self.assertEqual(ride_loop.main(["--every", "600"]), 0)
+        self.assertEqual(m.call_args.args[1], 600.0)
+

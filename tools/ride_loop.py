@@ -68,6 +68,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -1144,7 +1145,57 @@ def install(cfg: Config, run_launchctl: "Callable[..., subprocess.CompletedProce
     ok = getattr(proc, "returncode", 1) == 0
     detail = "" if ok else f": {(getattr(proc, 'stderr', '') or '').strip()}"
     log(cfg, f"install: wrote {dest}; launchctl bootstrap {'ok' if ok else 'FAILED' + detail}")
+    if not ok:
+        return False
+    # Start it ON DEMAND. RunAtLoad is a "speculative" spawn, and on the
+    # owner's Mac (macOS 27.0, 2026-10-08) launchd pended exactly that for
+    # this job ("pended nondemand spawn = speculative") while kickstart ran
+    # it at once -- see run_every(). Without this, a successful install can
+    # leave nothing running and nothing saying so.
+    try:
+        kick = run_launchctl(["launchctl", "kickstart", f"gui/{uid}/{PLIST_LABEL}"],
+                             capture_output=True, text=True)
+        kicked = getattr(kick, "returncode", 1) == 0
+    except (OSError, subprocess.TimeoutExpired):
+        kicked = False
+    log(cfg, f"install: launchctl kickstart {'ok' if kicked else 'FAILED -- run it by hand'}")
     return ok
+
+
+def run_every(cfg: Config, every_s: float, *,
+              sleep: "Callable[[float], None]" = time.sleep,
+              max_cycles: "Optional[int]" = None) -> int:
+    """Run a cycle, sleep every_s, forever (or max_cycles times, for tests).
+
+    WHY ONE LONG-LIVED PROCESS instead of launchd's StartInterval: MEASURED on
+    the owner's Mac (macOS 27.0, on AC power, Low Power Mode off). After 612
+    runs the interval job stopped being started on 2026-10-05 23:07, and
+    `launchctl print` showed "pended nondemand spawn = interval" for 48 h,
+    with no leftover process in its coalition and plenty of free memory.
+    Switching its ProcessType from Background to Standard did not help: the
+    load-time spawn was pended too ("speculative"). The same state appeared
+    on com.jumpheight.puckd and on no other job. A DEMAND spawn (`launchctl
+    kickstart`) ran it at once every time. So: launchd starts this process
+    once, on demand (install() kickstarts it), and the process keeps its own
+    schedule. Why launchd began pending these two jobs is NOT established.
+
+    Never raises out of the loop: run_cycle() already never raises, and the
+    except below is for anything that slips past it, because a loop that dies
+    is the same silent stop this replaces. Returns the cycles run."""
+    n = 0
+    while max_cycles is None or n < max_cycles:
+        try:
+            run_cycle(cfg)
+        except Exception as exc:  # noqa: BLE001 -- the loop must outlive one bad cycle
+            try:
+                log(cfg, f"cycle raised (continuing): {exc!r}")
+            except Exception:  # noqa: BLE001
+                pass
+        n += 1
+        if max_cycles is not None and n >= max_cycles:
+            break
+        sleep(every_s)
+    return n
 
 
 def render_report(report: CycleReport) -> str:
@@ -1171,6 +1222,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
                     help="run a single cycle, print a short report, and exit — "
                          "identical work to a plain invocation (what launchd's "
                          "StartInterval runs), plus the report on stdout")
+    ap.add_argument("--every", type=float, metavar="SECONDS",
+                    help="run a cycle every SECONDS, forever, in this one process "
+                         "(what the LaunchAgent runs; see run_every())")
     ap.add_argument("--install", action="store_true",
                     help="write packaging/com.jumpheight.rideloop.plist to "
                          "~/Library/LaunchAgents and load it with launchctl")
@@ -1182,6 +1236,9 @@ def main(argv: "Optional[list[str]]" = None) -> int:
     cfg = default_config()
     if args.install:
         return 0 if install(cfg) else 1
+    if args.every:
+        run_every(cfg, args.every)
+        return 0
     report = run_cycle(cfg)
     if args.once:
         print(render_report(report))

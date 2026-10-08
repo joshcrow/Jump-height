@@ -17,12 +17,16 @@
   here, one on disk) that can drift apart. Never run -install from an
   automated session; the owner runs it by hand.
 
-  StartInterval, not RunAtLoad+KeepAlive (contrast com.jumpheight.puckd.plist,
-  a persistent menu-bar app): tools/ride_loop.py is a periodic BATCH job -
-  one pass, then it exits - so launchd starts it fresh every interval rather
-  than keeping one process alive forever. 600 s matches the task's own "every
-  10 min" and tools/ride_loop.py's docstring; RunAtLoad also picks up
-  anything that landed while this Mac was asleep or the agent unloaded.
+  One long-lived process, not StartInterval (changed 2026-10-08). The script
+  keeps its own ten-minute schedule (the every flag set to 600 below,
+  ride_loop.run_every()),
+  launchd only keeps it alive. MEASURED on this Mac, macOS 27.0: the old
+  StartInterval job stopped being started after 2026-10-05 23:07 and
+  launchctl print showed "pended nondemand spawn = interval" for 48 hours;
+  its load-time spawn was then pended too ("speculative"), even as a
+  Standard job. A demand spawn (launchctl kickstart) always ran it, which is
+  why install() kickstarts after bootstrap. Why launchd pends these spawns
+  is not established.
 -->
 <plist version="1.0">
 <dict>
@@ -33,6 +37,8 @@
     <array>
         <string>__PYTHON__</string>
         <string>__SCRIPT__</string>
+        <string>--every</string>
+        <string>600</string>
     </array>
 
     <key>EnvironmentVariables</key>
@@ -45,20 +51,31 @@
         <key>LANG</key><string>en_US.UTF-8</string>
     </dict>
 
-    <key>StartInterval</key>
-    <integer>600</integer>
-
     <key>RunAtLoad</key>
     <true/>
 
     <!--
-      No KeepAlive: a batch job that has just exited 0 is not a crash, and
-      KeepAlive would fight StartInterval by relaunching it immediately
-      instead of waiting out the interval.
+      KeepAlive: the process is meant to run forever, so any exit is worth a
+      restart. If launchd pends that restart the way it pended the interval,
+      install() or a manual kickstart is the way back; the daemon.log of a
+      watcher that stopped shows its last cycle line.
     -->
+    <key>KeepAlive</key>
+    <true/>
 
+    <!--
+      Standard, not Background (changed 2026-10-08). MEASURED on the owner's
+      Mac, macOS 27.0, on AC power with Low Power Mode off: after 612 runs the
+      job stopped being started on 2026-10-05 23:07, and launchctl print showed
+      "pended nondemand spawn = interval" for 48 hours, with no leftover
+      process holding its coalition. A manual kickstart ran it cleanly; the
+      next interval spawn was pended again. macOS defers Background-class
+      interval jobs at its own discretion, and for a watcher whose whole point
+      is that a ride shows up within ten minutes, that deferral was silent and
+      indefinite. The job is light: one rclone listing per run.
+    -->
     <key>ProcessType</key>
-    <string>Background</string>
+    <string>Standard</string>
 
     <key>StandardOutPath</key>
     <string>/tmp/com.jumpheight.rideloop.out.log</string>
