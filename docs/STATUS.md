@@ -186,9 +186,16 @@ night before) and needs a replug; the OG gets it at the rider's next
 plug-in once his app is past 1.0.2 (whose flash leg crashes on a decode
 bug fixed in 1.0.3).
 
-## Six-axis event capture — firmware batch 2, branch `overnight/fw-batch2`, 2026-10-08, NOT on any board
+## Six-axis event capture — firmware batch 2, merged to main 2026-10-08 (e161e06), NOT on any board
 
 Built and host-tested only; **nothing was flashed, opened or sent to a board.**
+Merged does not mean published: `web/firmware/latest.json` still names c5eea285.
+MEASURED on the merged tree with CI's own toolchain (gcc 7.2 under Rosetta,
+`pio run -d firmware -e xiaoblesense_adafruit`): flash **156,300 → 178,012 B**
+of 811,008; static RAM **25,680 → 50,100 B** of 237,568. Free RAM at run time
+with BLE connected is not measured (bench check). `tools/tests` on the merged
+tree: 1,476 passed, 1 skipped, 1 xfailed, 57 subtests. The local-gcc figures
+below are superseded by these.
 Spec: the 2026-10-07 batch-2 spec (raw accel+gyro windows around plausible
 jumps, for board-mounted rides; the detector, its parameters, the
 calibration, STATS and the watch protocol are unchanged).
