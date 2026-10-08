@@ -98,5 +98,6 @@ uint32_t boot_random32() {
 }
 
 int heap_free() { return -1; }   // no arena to report on the host
+int stack_free_min() { return -1; }   // no task stack to report on the host
 
 }  // namespace jh_power

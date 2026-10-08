@@ -85,6 +85,16 @@ struct Hooks {
 };
 
 static const uint32_t RING_N = 1280;
+// TRIG pages may hold at most this share (per mille) of the region's
+// usable pages, counted ACROSS boots (set_region()'s trig_pages comes from
+// the store's mount scan). Review 2026-10-08 S2: unbudgeted, 2 h of 3 g
+// crossings every 0.5 s wrote 1,029 TRIG pages (50 % of the region) and no
+// extra window; at the 4/s refractory ceiling the region would fill in
+// about 2 h and refuse tier A. 100 = 205 of 2,056 pages = 2,870 entries,
+// about 31 h at the vest's measured ~92 crossings/h. Past it, crossings are
+// still counted (crossings, trig_over_budget) but no longer stored.
+// Mirrored by sim/event_policy.py, which reads it from this line.
+static const uint32_t TRIG_BUDGET_PM = 100;
 static const uint8_t  RF_GYRO_BAD = 0x01;
 // Set on a sample whose predecessor (in push order) is more than pre_us
 // older, or that has no predecessor. A pre-window never reaches past it —
@@ -114,10 +124,15 @@ class Capture {
   // The region as the store sees it: pages already used (highest
   // non-erased + 1, from the mount scan) and its size. Called when capture
   // becomes enabled and after evclear/format.
-  void set_region(uint32_t used_pages, uint32_t total_pages) {
+  //
+  // trig_pages = TRIG pages already in the region (jh_store::
+  // events_trig_pages()), so the TRIG budget spans boots.
+  void set_region(uint32_t used_pages, uint32_t total_pages, uint32_t trig_pages = 0) {
     used_ = used_pages;
     total_ = total_pages;
     P_ = total_pages > RESERVE_PAGES ? total_pages - RESERVE_PAGES : 0;
+    trig_used_ = trig_pages;
+    trig_cap_ = (uint32_t)((uint64_t)P_ * TRIG_BUDGET_PM / 1000u);
   }
 
   // Disabled = storage down or the events region unavailable. Anything in
@@ -343,6 +358,8 @@ class Capture {
   uint32_t max_page_write_us() const { return max_write_us_; }
   uint32_t pages_over_slack() const { return over_slack_; }
   uint32_t trig_dropped() const { return trig_dropped_; }
+  uint32_t trig_pages() const { return trig_used_; }
+  uint32_t trig_over_budget() const { return trig_over_budget_; }
   uint32_t links_lost() const { return links_lost_; }
   uint32_t dropped_disabled() const { return dropped_disabled_; }
   uint32_t boot_id() const { return boot_id_; }
@@ -479,6 +496,7 @@ class Capture {
   }
 
   void queueTrig(const TrigEntry& te) {
+    if (trig_used_ >= trig_cap_) { ++trig_over_budget_; return; }
     if (trig_n_ >= TRIG_PER_PAGE) { ++trig_dropped_; return; }
     trig_[trig_n_++] = te;
   }
@@ -566,6 +584,7 @@ class Capture {
 
   void resetState() {
     W_ = P_ = total_ = used_ = 0;
+    trig_used_ = trig_cap_ = trig_over_budget_ = 0;
     enabled_ = held_ = hold_wanted_ = false;
     seq_next_ = 0;
     newest_t_ = 0;
@@ -597,6 +616,16 @@ class Capture {
   }
 
   // Returns -1 deferred, 0 failed (consumed), 1 written. Instruments time.
+  //
+  // What the timing CAN see (review 2026-10-08 S4): only the write_page()
+  // call. On the nRF52 that is Adafruit SPIFlash's writeBuffer(), which
+  // waits for the PREVIOUS program to finish, issues this page's program and
+  // returns without waiting for it (Adafruit_SPIFlashBase.cpp:494-509 in
+  // 5.1.1), so this page's program time lands on the NEXT flash operation
+  // and is attributed to nothing. now_us is also quantized to the 976.5625 us
+  // FreeRTOS tick. max_page_write_us / pages_over_slack are therefore NOT
+  // the page-program time; the bench gate judges the detector loop by
+  // late_polls / dup_polls inside windows (END) against outside them.
   int writePage(Win* w) {
     const int64_t a = hooks_.now_us(hooks_.ctx);
     const int r = hooks_.write_page(hooks_.ctx, page_);
@@ -615,6 +644,13 @@ class Capture {
   }
 
   bool writeTrig() {
+    // Over the TRIG budget (only reachable when set_region() raised the
+    // count under queued entries): counted, not stored.
+    if (trig_used_ >= trig_cap_) {
+      trig_over_budget_ += trig_n_;
+      trig_n_ = 0;
+      return false;
+    }
     // TRIG pages may use the reserve, but always leave 2 pages for ENDs.
     if (used_ + 1 + 2 > total_) {
       trig_dropped_ += trig_n_;
@@ -634,6 +670,7 @@ class Capture {
     seal(page_);
     const int r = writePage(nullptr);
     if (r < 0) return false;
+    ++trig_used_;
     ++trig_page_seq_;
     trig_n_ = 0;
     return true;
@@ -835,6 +872,8 @@ class Capture {
   uint32_t P_ = 0;
   uint32_t total_ = 0;
   uint32_t used_ = 0;
+  uint32_t trig_used_ = 0;     // TRIG pages in the region, across boots
+  uint32_t trig_cap_ = 0;      // P_ * TRIG_BUDGET_PM / 1000
   bool     enabled_ = false;
   bool     held_ = false;
   bool     hold_wanted_ = false;
@@ -886,6 +925,7 @@ class Capture {
   uint32_t max_write_us_ = 0;
   uint32_t over_slack_ = 0;
   uint32_t trig_dropped_ = 0;
+  uint32_t trig_over_budget_ = 0;
   uint32_t links_lost_ = 0;
   uint32_t dropped_disabled_ = 0;
 };

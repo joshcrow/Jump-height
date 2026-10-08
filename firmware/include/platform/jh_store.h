@@ -185,6 +185,10 @@ size_t read_raw_chunk(uint8_t* buf, size_t max_len);
 // ---- housekeeping ----
 // Remove both files (no-op if storage isn't mounted) and reset all counters
 // above (byte count, cap-full flag, header-written flags) unconditionally.
+// On layout v2 the superblock is never erased (review 2026-10-08 S1): a
+// reset mid-clear leaves the chip mountable and the event region intact,
+// with some jumps/trace still stored. Only a FAILED erase falls back to the
+// old outcome (a blank superblock; the next boot formats).
 void clear();
 
 // Erase the TRACE region only, preserving every stored jump. The
@@ -235,6 +239,11 @@ uint32_t events_region_bytes();
 uint32_t events_used_pages();
 // Non-erased pages that failed their CRC at the last mount scan.
 uint32_t events_damaged_pages();
+// TRIG summary pages in the region: the valid ones the mount scan found,
+// then one more per TRIG page events_write_page() consumed. The capture
+// caps these at TRIG_BUDGET_PM of the region (event_capture.h), across
+// boots, so crossings alone can never fill it.
+uint32_t events_trig_pages();
 // Writes that came back short since boot (each consumed its page).
 uint32_t events_write_fail();
 // The mounted layout: 2 (with events), 1 (legacy, events off), 0 = down.

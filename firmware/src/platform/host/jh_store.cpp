@@ -86,6 +86,7 @@ bool   s_ev_open  = false;   // the events export: the same single read slot
 const char* kEventsName = "events.bin";
 uint32_t s_ev_used = 0;
 uint32_t s_ev_damaged = 0;
+uint32_t s_ev_trig = 0;
 uint32_t s_ev_write_fail = 0;
 bool     s_ev_scanned = false;
 std::vector<uint8_t> s_ev_image;
@@ -438,6 +439,7 @@ std::string eventsPath() { return jh_host::path(kEventsName); }
 void scanEvents() {
   s_ev_used = 0;
   s_ev_damaged = 0;
+  s_ev_trig = 0;
   FILE* f = std::fopen(eventsPath().c_str(), "rb");
   if (f) {
     uint8_t page[jh_event::PAGE_BYTES];
@@ -447,6 +449,7 @@ void scanEvents() {
       if (jh_event::page_erased(page)) continue;
       s_ev_used = p;
       if (!jh_event::page_valid(page)) ++s_ev_damaged;
+      else if (jh_event::page_type(page) == jh_event::PAGE_TRIG) ++s_ev_trig;
     }
     std::fclose(f);
   }
@@ -484,6 +487,12 @@ uint32_t events_damaged_pages() {
   return s_ev_damaged;
 }
 
+uint32_t events_trig_pages() {
+  if (!s_fs_ok) return 0;
+  if (!s_ev_scanned) scanEvents();
+  return s_ev_trig;
+}
+
 uint32_t events_write_fail() { return s_ev_write_fail; }
 uint8_t layout_version() { return s_fs_ok ? 2 : 0; }
 void events_wake_hold(bool) {}
@@ -493,11 +502,13 @@ EventsWrite events_write_page(const uint8_t* page) {
   if (events_used_pages() >= jh_event::REGION_PAGES) return EventsWrite::REFUSED;
   FILE* f = std::fopen(eventsPath().c_str(), "r+b");
   if (!f) f = std::fopen(eventsPath().c_str(), "w+b");
-  if (!f) { ++s_ev_used; ++s_ev_write_fail; return EventsWrite::FAILED; }
+  const bool trig = jh_event::page_type(page) == jh_event::PAGE_TRIG;
+  if (!f) { ++s_ev_used; if (trig) ++s_ev_trig; ++s_ev_write_fail; return EventsWrite::FAILED; }
   std::fseek(f, (long)s_ev_used * (long)jh_event::PAGE_BYTES, SEEK_SET);
   const size_t n = std::fwrite(page, 1, jh_event::PAGE_BYTES, f);
   std::fclose(f);
   ++s_ev_used;
+  if (trig) ++s_ev_trig;
   if (n != jh_event::PAGE_BYTES) { ++s_ev_write_fail; return EventsWrite::FAILED; }
   return EventsWrite::OK;
 }
@@ -509,6 +520,7 @@ bool events_clear(uint32_t* failed_sector) {
   if (f) std::fclose(f);
   s_ev_used = 0;
   s_ev_damaged = 0;
+  s_ev_trig = 0;
   s_ev_scanned = true;
   return f != nullptr;
 }

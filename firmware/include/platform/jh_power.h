@@ -181,4 +181,12 @@ uint32_t boot_random32();
 // of static RAM; evstat reports it so the bench gate can.
 int heap_free();
 
+// The calling task's LOWEST free stack since it started, in bytes (the
+// FreeRTOS high-water mark), or -1 where the platform cannot say. Called
+// from a command, that task is the 4 KB Arduino loop task (cores/nRF5/
+// main.cpp LOOP_STACK_SZ = 256*4 words) that runs setup(), loop() and every
+// command handler. Review 2026-10-08 S3: never measured; evstat reports it
+// so bench gate 8.3-2 can.
+int stack_free_min();
+
 }  // namespace jh_power

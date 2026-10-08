@@ -501,4 +501,11 @@ int heap_free() {
   return dbgHeapTotal() - dbgHeapUsed();
 }
 
+int stack_free_min() {
+  // FreeRTOS (via Arduino.h -> rtos.h; INCLUDE_uxTaskGetStackHighWaterMark
+  // is 1 in the core's FreeRTOSConfig.h): the CALLING task's least free
+  // stack since it started, in StackType_t words (4 B on the Cortex-M4).
+  return (int)(uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t));
+}
+
 }  // namespace jh_power

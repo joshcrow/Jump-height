@@ -1179,6 +1179,12 @@ class TestEventCaptureOnTheRealCore(HostDevTestCase):
             self.assertEqual(st["events_boot"], "1")
             self.assertEqual(st["layout"], "2")
             self.assertGreaterEqual(int(st["crossings"]), 1)
+            # Review 2026-10-08 S2/S3: the TRIG budget and the loop-task
+            # stack high-water mark are reported (the host has no task
+            # stack, so it says -1, never a made-up number).
+            self.assertEqual(st["trig_over_budget"], "0")
+            self.assertGreaterEqual(int(st["trig_pages"]), 0)
+            self.assertEqual(st["stack_free_min"], "-1")
 
             raw = parse_events_export(self, dev.command("events", timeout=30))
             d = event_codec.decode_region(raw)

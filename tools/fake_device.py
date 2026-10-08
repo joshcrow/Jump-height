@@ -261,7 +261,8 @@ class FakeDevice:
                   f"pages={used} open=0 full=0 disabled=0 boot_id={self.boot_id:08x} "
                   f"events_boot=0 crossings=0 refused_budget=0 refused_full=0 ring_overrun=0 "
                   f"damaged_pages=0 write_fail=0 dup_polls=0 late_polls=0 max_page_write_us=0 "
-                  f"pages_over_slack=0 heap_free=-1 trig_dropped=0 links_lost=0 layout=2")
+                  f"pages_over_slack=0 heap_free=-1 trig_dropped=0 trig_pages=0 "
+                  f"trig_over_budget=0 stack_free_min=-1 links_lost=0 layout=2")
         self.send("OK evstat")
 
     def send_traceraw(self):

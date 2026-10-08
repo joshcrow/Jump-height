@@ -244,6 +244,9 @@ inline bool page_valid(const uint8_t* page) {
   return page[0] == MAGIC && get_u32(page + CRC_OFFSET) == crc32(page, CRC_OFFSET);
 }
 
+// The header's type byte (begin_page() writes it right after MAGIC).
+inline uint8_t page_type(const uint8_t* page) { return page[1]; }
+
 // ------------------------------------------------------------ payloads
 // Provenance read when a window opens (main.cpp supplies it through
 // event_capture.h's Hooks; the harness supplies fixed values).

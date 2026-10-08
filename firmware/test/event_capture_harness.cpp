@@ -7,7 +7,7 @@
 // semantics.
 //
 // Ops, one per line ('#' and blank lines ignored):
-//   R <used> <total>        set_region
+//   R <used> <total> [trig] set_region (trig = TRIG pages already stored)
 //   E <0|1>                 set_enabled
 //   S <t_us> <ax> <ay> <az> <gx> <gy> <gz> <gyro_ok> <mag> <skip>
 //                           note_poll + on_sample + service(skip)
@@ -92,12 +92,13 @@ void printStats() {
   std::printf("STAT used=%u total=%u open=%d full=%d events_boot=%u crossings=%u "
               "refused_budget=%u refused_full=%u ring_overrun=%u write_fail=%u "
               "dup_polls=%u late_polls=%u max_page_write_us=%u pages_over_slack=%u "
-              "trig_dropped=%u links_lost=%u pending=%d m_us=%llu W=%u\n",
+              "trig_dropped=%u trig_pages=%u trig_over_budget=%u links_lost=%u pending=%d "
+              "m_us=%llu W=%u\n",
               c.used_pages(), c.total_pages(), c.open() ? 1 : 0, c.full() ? 1 : 0,
               c.events_boot(), c.crossings(), c.refused_budget(), c.refused_full(),
               c.ring_overrun(), c.write_fail(), c.dup_polls(), c.late_polls(),
               c.max_page_write_us(), c.pages_over_slack(), c.trig_dropped(),
-              c.links_lost(), c.pending() ? 1 : 0, (unsigned long long)c.m_us(),
+              c.trig_pages(), c.trig_over_budget(), c.links_lost(), c.pending() ? 1 : 0, (unsigned long long)c.m_us(),
               c.window_pages());
 }
 
@@ -123,9 +124,10 @@ int main() {
     std::string op;
     iss >> op;
     if (op == "R") {
-      unsigned long used = 0, total = 0;
+      unsigned long used = 0, total = 0, trig = 0;
       iss >> used >> total;
-      g_cap.set_region((uint32_t)used, (uint32_t)total);
+      if (!(iss >> trig)) trig = 0;
+      g_cap.set_region((uint32_t)used, (uint32_t)total, (uint32_t)trig);
     } else if (op == "E") {
       int en = 1;
       iss >> en;

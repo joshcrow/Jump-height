@@ -134,6 +134,12 @@
 //                                            its target untouched and
 //                                            returns false, WITHOUT ending
 //                                            this process.
+//   CUT_AFTER_ERASES n                       arms mock_flash_test::
+//                                            arm_cut_after_erases(n) — a
+//                                            POWER CUT as the (n+1)-th
+//                                            eraseSector() begins (the
+//                                            first n complete). Ends the
+//                                            process like FAULT_AFTER.
 //
 // READ_ALL framing contract (for the Python side): the payload is exactly
 // the bytes between the END of the "===READ_ALL_BEGIN===\n" line and the
@@ -306,9 +312,10 @@ void cmdReadRawAll() {
 #ifndef JH_STORE_V1_FIXTURE
 // A valid SAMPLES page, deterministic in (seed, i) — enough for the store,
 // which only ever checks magic + CRC.
-void makeEventPage(uint8_t* page, uint32_t seed, uint32_t i) {
+void makeEventPage(uint8_t* page, uint32_t seed, uint32_t i,
+                   uint8_t type = jh_event::PAGE_SAMPLES) {
   jh_event::PageHeader h = jh_event::PageHeader();
-  h.type = jh_event::PAGE_SAMPLES;
+  h.type = type;
   h.count = jh_event::SAMPLES_PER_PAGE;
   h.boot_id = seed;
   h.event_id = 1;
@@ -335,13 +342,13 @@ const char* eventsStateName(jh_store::EventsState st) {
   return "unknown";
 }
 
-void cmdEvWrite(std::istringstream& iss) {
+void cmdEvWrite(std::istringstream& iss, uint8_t type = jh_event::PAGE_SAMPLES) {
   unsigned long n = 0, seed = 1, start = 0;
   iss >> n >> seed >> start;
   uint8_t page[jh_event::PAGE_BYTES];
   unsigned long ok = 0, failed = 0, refused = 0;
   for (unsigned long i = 0; i < n; ++i) {
-    makeEventPage(page, (uint32_t)seed, (uint32_t)(start + i));
+    makeEventPage(page, (uint32_t)seed, (uint32_t)(start + i), type);
     switch (jh_store::events_write_page(page)) {
       case jh_store::EventsWrite::OK:      ++ok; break;
       case jh_store::EventsWrite::FAILED:  ++failed; break;
@@ -462,6 +469,11 @@ int main() {
     } else if (cmd == "FAIL_NEXT_ERASE") {
       mock_flash_test::arm_erase_failure();
       std::printf("FAIL_NEXT_ERASE armed=1\n");
+    } else if (cmd == "CUT_AFTER_ERASES") {
+      unsigned long n = 0;
+      iss >> n;
+      mock_flash_test::arm_cut_after_erases((uint32_t)n);
+      std::printf("CUT_AFTER_ERASES armed=%lu\n", n);
     } else if (cmd == "FAIL_ERASE_AFTER") {
       unsigned long n = 0;
       iss >> n;
@@ -475,12 +487,14 @@ int main() {
     } else if (cmd == "LAYOUT") {
       std::printf("LAYOUT v=%u\n", (unsigned)jh_store::layout_version());
     } else if (cmd == "EV_STATE") {
-      std::printf("EV_STATE state=%s used=%u damaged=%u region=%u write_fail=%u\n",
+      std::printf("EV_STATE state=%s used=%u damaged=%u region=%u write_fail=%u trig=%u\n",
                   eventsStateName(jh_store::events_state()), jh_store::events_used_pages(),
                   jh_store::events_damaged_pages(), jh_store::events_region_bytes(),
-                  jh_store::events_write_fail());
+                  jh_store::events_write_fail(), jh_store::events_trig_pages());
     } else if (cmd == "EV_WRITE") {
       cmdEvWrite(iss);
+    } else if (cmd == "EV_WRITE_TRIG") {
+      cmdEvWrite(iss, jh_event::PAGE_TRIG);
     } else if (cmd == "EV_RAW") {
       cmdEvRaw(false);
     } else if (cmd == "EV_RAW_HEX") {

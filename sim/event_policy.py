@@ -62,6 +62,19 @@ _RANK = {DEC_OPENED_A: 10, DEC_OPENED_B: 9, DEC_EXTENDED: 8, DEC_INSIDE_WINDOW: 
 U32 = 0xFFFFFFFF
 
 
+EVENT_CAPTURE_H = REPO / "firmware" / "include" / "event_capture.h"
+
+
+def trig_budget_pm(path: Path = EVENT_CAPTURE_H) -> int:
+    m = re.search(r"TRIG_BUDGET_PM\s*=\s*(\d+)", path.read_text())
+    if not m:
+        raise AssertionError(f"{path} has no TRIG_BUDGET_PM")
+    return int(m.group(1))
+
+
+TRIG_BUDGET_PM = trig_budget_pm()
+
+
 def page_slack_us(path: Path = EVENT_CONFIG_H) -> int:
     m = re.search(r"PAGE_SLACK_US\s*=\s*(\d+)", path.read_text())
     if not m:
@@ -193,6 +206,9 @@ class Capture:
         win_samples = ((cfg.pre_us + cfg.post_us) * cfg.sample_hz) // 1_000_000
         self.W = (win_samples + SAMPLES_PER_PAGE - 1) // SAMPLES_PER_PAGE + 2
         self.P = self.total = self.used = 0
+        self.trig_used = 0
+        self.trig_cap = 0
+        self.trig_over_budget = 0
         self.enabled = False
         self.held = False
         self.hold_wanted = False
@@ -236,10 +252,12 @@ class Capture:
         self.dropped_disabled = 0
 
     # ---------------------------------------------------------------- public
-    def set_region(self, used: int, total: int) -> None:
+    def set_region(self, used: int, total: int, trig_pages: int = 0) -> None:
         self.used = used
         self.total = total
         self.P = total - RESERVE_PAGES if total > RESERVE_PAGES else 0
+        self.trig_used = trig_pages
+        self.trig_cap = self.P * TRIG_BUDGET_PM // 1000
 
     def set_enabled(self, en: bool) -> None:
         if en == self.enabled:
@@ -481,6 +499,9 @@ class Capture:
                           self.span_eid, self._projected_used() & 0xFFFF))
 
     def _queue_trig(self, te: tuple) -> None:
+        if self.trig_used >= self.trig_cap:
+            self.trig_over_budget += 1
+            return
         if len(self.trig) >= TRIG_PER_PAGE:
             self.trig_dropped += 1
             return
@@ -579,6 +600,10 @@ class Capture:
         return r
 
     def _write_trig(self) -> bool:
+        if self.trig_used >= self.trig_cap:
+            self.trig_over_budget += len(self.trig)
+            self.trig = []
+            return False
         if self.used + 1 + 2 > self.total:
             self.trig_dropped += len(self.trig)
             self.trig = []
@@ -588,6 +613,7 @@ class Capture:
         r = self._write_page(page, None)
         if r < 0:
             return False
+        self.trig_used += 1
         self.trig_page_seq += 1
         self.trig = []
         return True
@@ -797,7 +823,8 @@ def run_harness_script(script: str, cfg: Config | None = None) -> list[str]:
             f"ring_overrun={cap.ring_overrun} write_fail={cap.write_fail} "
             f"dup_polls={cap.dup_polls} late_polls={cap.late_polls} "
             f"max_page_write_us={cap.max_write_us} pages_over_slack={cap.over_slack} "
-            f"trig_dropped={cap.trig_dropped} links_lost={cap.links_lost} "
+            f"trig_dropped={cap.trig_dropped} trig_pages={cap.trig_used} "
+            f"trig_over_budget={cap.trig_over_budget} links_lost={cap.links_lost} "
             f"pending={int(cap.pending())} m_us={cap.m_us} W={cap.W}")
 
     for line in script.splitlines():
@@ -806,7 +833,7 @@ def run_harness_script(script: str, cfg: Config | None = None) -> list[str]:
         p = line.split()
         op = p[0]
         if op == "R":
-            cap.set_region(int(p[1]), int(p[2]))
+            cap.set_region(int(p[1]), int(p[2]), int(p[3]) if len(p) > 3 else 0)
         elif op == "E":
             cap.set_enabled(int(p[1]) != 0)
         elif op == "S":

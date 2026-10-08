@@ -220,6 +220,7 @@ uint32_t s_events_region_start = 0;
 uint32_t s_events_region_bytes = 0;
 uint32_t s_events_used_pages   = 0;  // highest non-erased page + 1, then appended
 uint32_t s_events_damaged      = 0;  // non-erased, CRC-bad pages found at mount
+uint32_t s_events_trig_pages   = 0;  // valid TRIG pages at mount, then one per TRIG write
 uint32_t s_events_write_fail   = 0;
 EventsState s_events_state     = EventsState::STORE_DOWN;
 // While set, flashSleep() leaves the chip awake: an open event window writes
@@ -573,7 +574,7 @@ void setGeometry(uint8_t version) {
 }
 
 // Writes the superblock for the CURRENT geometry: v1 at offset 0, v2 at
-// kSuperblockV2Offset. Callers that need a blank target (clear(), the
+// kSuperblockV2Offset. Callers that need a blank target (a v1 clear(), the
 // formats) erase sector 0 first; migrateToV2() programs into page 1, which
 // a v1 chip has never written.
 bool writeSuperblock() {
@@ -642,18 +643,22 @@ uint8_t superblockVersion() {
 void scanEventsRegion() {
   s_events_used_pages = 0;
   s_events_damaged    = 0;
+  s_events_trig_pages = 0;
   if (s_sb_version < 2 || s_events_region_bytes == 0) return;
   const uint32_t pages = s_events_region_bytes / jh_event::PAGE_BYTES;
   uint8_t page[jh_event::PAGE_BYTES];
   uint32_t damaged = 0;
+  uint32_t trig = 0;
   for (uint32_t p = 0; p < pages; ++p) {
     if ((++s_scan_feed & 63) == 0) ::jh_link::watchdog_feed();
     s_flash.readBuffer(s_events_region_start + p * jh_event::PAGE_BYTES, page, sizeof(page));
     if (jh_event::page_erased(page)) continue;
     s_events_used_pages = p + 1;
     if (!jh_event::page_valid(page)) ++damaged;
+    else if (jh_event::page_type(page) == jh_event::PAGE_TRIG) ++trig;
   }
   s_events_damaged = damaged;
+  s_events_trig_pages = trig;
 }
 
 // Erase every event sector that is not already blank — watchdog-fed,
@@ -1622,21 +1627,63 @@ void clear() {
                                   // long part, not the loop overhead
     return ok;
   };
-  bool all_erased = erase_fed(0);  // superblock
-
   const uint32_t jumps_sectors_used =
       (s_jumps_append_off + SECTOR_BYTES - 1) / SECTOR_BYTES;
-  for (uint32_t i = 0; i < jumps_sectors_used; ++i) {
-    all_erased &= erase_fed((s_jumps_region_start / SECTOR_BYTES) + i);
-  }
-
   const uint32_t trace_sectors_used =
       (s_trace_append_off + SECTOR_BYTES - 1) / SECTOR_BYTES;
-  for (uint32_t i = 0; i < trace_sectors_used; ++i) {
-    all_erased &= erase_fed((s_trace_region_start / SECTOR_BYTES) + i);
-  }
 
-  const bool wrote_sb = all_erased && writeSuperblock();
+  bool wrote_sb = false;
+  if (s_sb_version >= 2) {
+    // LAYOUT v2: sector 0 is NOT touched (review 2026-10-08, S1). The old
+    // order below erased the superblock FIRST and rewrote it only after up
+    // to ~15 s of sector erases; a reset anywhere in that window left no
+    // valid superblock, and init() then formats the whole chip -- including
+    // the event region, which an old client's `clear` (app 1.0.7, web/sync,
+    // `jump sync`) runs while events are still un-pulled. Spec D6 says that
+    // clear can never destroy events. trace_clear() above already carries
+    // the reasoning: the superblock holds only the region map, `clear`
+    // changes nothing it records, and append points are re-derived by the
+    // mount scan. So the only catastrophic step bought nothing.
+    //
+    // Without the format-on-reset backstop, the erase ORDER becomes the
+    // crash-safety story, exactly as in trace_clear(): each region is erased
+    // DESCENDING, so an interrupted pass leaves intact records below erased
+    // space and never a stale island above an erased gap (the scans stop at
+    // the first erased record and would append below such an island --
+    // AND-merge, silent corruption). A reset mid-clear therefore leaves some
+    // jumps/trace still stored; the client's post-clear check sees them and
+    // reports the clear as not done, which is the truth.
+    //
+    // STOP on the first failed erase (the F-07 rule): continuing below a
+    // failed sector would create the island. A failed erase is a chip fault,
+    // and the layout above the stop is then not provably consistent for the
+    // next mount's scans, so fall back to the pre-v2 outcome: erase sector 0
+    // and leave it blank, which the next boot announces and formats (events
+    // included). That is what every failed `clear` has always done; only
+    // the reset/brown-out case -- the likely one -- changes.
+    bool all_erased = true;
+    for (uint32_t i = jumps_sectors_used; i > 0 && all_erased; --i) {
+      all_erased = erase_fed((s_jumps_region_start / SECTOR_BYTES) + i - 1);
+    }
+    for (uint32_t i = trace_sectors_used; i > 0 && all_erased; --i) {
+      all_erased = erase_fed((s_trace_region_start / SECTOR_BYTES) + i - 1);
+    }
+    if (!all_erased) erase_fed(0);
+    wrote_sb = all_erased;
+  } else {
+    // LAYOUT v1 (a chip whose migration is blocked or failed: there is no
+    // event region to protect). Unchanged from the shipped store.
+    bool all_erased = erase_fed(0);  // superblock
+
+    for (uint32_t i = 0; i < jumps_sectors_used; ++i) {
+      all_erased &= erase_fed((s_jumps_region_start / SECTOR_BYTES) + i);
+    }
+    for (uint32_t i = 0; i < trace_sectors_used; ++i) {
+      all_erased &= erase_fed((s_trace_region_start / SECTOR_BYTES) + i);
+    }
+
+    wrote_sb = all_erased && writeSuperblock();
+  }
 
   // Reset the RAM-side view unconditionally, success or failure: on
   // success this is the ordinary post-clear state; on failure it keeps
@@ -1679,6 +1726,7 @@ uint32_t events_region_bytes() {
 }
 uint32_t events_used_pages() { return s_fs_ok ? s_events_used_pages : 0; }
 uint32_t events_damaged_pages() { return s_events_damaged; }
+uint32_t events_trig_pages() { return s_fs_ok ? s_events_trig_pages : 0; }
 uint32_t events_write_fail() { return s_events_write_fail; }
 uint8_t  layout_version() { return s_fs_ok ? s_sb_version : 0; }
 
@@ -1707,6 +1755,7 @@ EventsWrite events_write_page(const uint8_t* page) {
   // ever resumed on top of them (the jumps_append() rule). The decoder sees
   // a CRC-bad page and counts it.
   ++s_events_used_pages;
+  if (jh_event::page_type(page) == jh_event::PAGE_TRIG) ++s_events_trig_pages;
   if (written != jh_event::PAGE_BYTES) {
     ++s_events_write_fail;
     return EventsWrite::FAILED;
@@ -1725,6 +1774,7 @@ bool events_clear(uint32_t* failed_sector) {
   if (ok) {
     s_events_used_pages = 0;
     s_events_damaged = 0;
+    s_events_trig_pages = 0;
   } else {
     if (failed_sector) *failed_sector = failed;
     // Descending + stop-on-first-failure: everything above `failed` is

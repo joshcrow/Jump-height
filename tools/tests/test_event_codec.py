@@ -229,6 +229,55 @@ class TestPolicyScenarios(ParityMixin, unittest.TestCase):
                          ["REFUSED_BELOW_TIER", "REFUSED_BELOW_TIER"])
         self.assertEqual(stat_of(out)["crossings"], 2)
 
+    def test_trig_pages_stop_at_their_budget_and_impacts_still_open_windows(self):
+        """Review 2026-10-08 S2: TRIG pages had no budget, so frequent
+        sub-tier crossings (a nose-mounted puck in chop) could fill the
+        region with summaries and then refuse tier A. Now they stop at
+        TRIG_BUDGET_PM of P; every crossing is still counted."""
+        P = ec.REGION_PAGES - ec.RESERVE_PAGES
+        cap = P * ep.TRIG_BUDGET_PM // 1000
+        self.assertEqual(ep.TRIG_BUDGET_PM, 100)
+        self.assertEqual(cap, 205)
+        start = cap - 5                       # 5 pages = 70 entries of room left
+        s = Script().op(f"R 0 {ec.REGION_PAGES} {start}").rest(6)
+        for _ in range(100):                  # 3 g: below tier B, one span each
+            s.impact(3.0, 1).rest(0.3)
+        s.rest(1).impact(9.0).rest(3).op("D")
+        out = self.both(s.text())
+        st = stat_of(out)
+        self.assertEqual(st["crossings"], 101)
+        self.assertEqual(st["trig_pages"], cap, "TRIG pages must stop at the budget")
+        self.assertEqual(st["trig_over_budget"], 101 - 5 * ec.TRIG_PER_PAGE)
+        d = decode(out)
+        self.assertEqual(len(d.triggers), 5 * ec.TRIG_PER_PAGE)
+        self.assertEqual(len(d.events), 1, "a 9 g impact past the budget still opens a window")
+        self.assertTrue(d.events[0].complete, d.events[0].problems)
+
+    def test_trig_budget_spans_boots_via_set_region(self):
+        """The budget counts what the region already holds (the store's
+        mount scan), and a set_region() that raises the count under queued
+        entries drops them into trig_over_budget, never onto flash."""
+        P = ec.REGION_PAGES - ec.RESERVE_PAGES
+        cap = P * ep.TRIG_BUDGET_PM // 1000
+        s = Script().op(f"R 0 {ec.REGION_PAGES} {cap}").rest(6)
+        for _ in range(20):
+            s.impact(3.0, 1).rest(0.3)
+        s.op("D")
+        out = self.both(s.text())
+        st = stat_of(out)
+        self.assertEqual((st["crossings"], st["trig_over_budget"], st["trig_pages"]),
+                         (20, 20, cap))
+        self.assertEqual(pages_of(out), [])
+
+        s2 = Script().rest(6)
+        for _ in range(3):
+            s2.impact(3.0, 1).rest(0.3)
+        s2.op(f"R 0 {ec.REGION_PAGES} {cap}").op("D")
+        out2 = self.both(s2.text())
+        st2 = stat_of(out2)
+        self.assertEqual((st2["trig_over_budget"], st2["trig_dropped"]), (3, 0))
+        self.assertEqual(pages_of(out2), [])
+
     def test_tier_b_is_refused_by_pacing_and_logged(self):
         # At m ~ 0, allowB = 0.06 P = 123 pages: room for ONE 84-page window.
         s = (Script().rest(8).impact(4.5).rest(3).impact(4.5).rest(3).op("D"))

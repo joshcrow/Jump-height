@@ -417,7 +417,8 @@ static void syncCaptureEnabled() {
   if (en == capture.enabled()) return;
   if (en) {
     capture.set_region(jh_store::events_used_pages(),
-                       jh_store::events_region_bytes() / jh_event::PAGE_BYTES);
+                       jh_store::events_region_bytes() / jh_event::PAGE_BYTES,
+                       jh_store::events_trig_pages());
   }
   capture.set_enabled(en);
 }
@@ -427,7 +428,8 @@ static void resyncCaptureRegion() {
   syncCaptureEnabled();
   if (capture.enabled()) {
     capture.set_region(jh_store::events_used_pages(),
-                       jh_store::events_region_bytes() / jh_event::PAGE_BYTES);
+                       jh_store::events_region_bytes() / jh_event::PAGE_BYTES,
+                       jh_store::events_trig_pages());
   }
 }
 
@@ -788,14 +790,21 @@ static void printEventsFramed() {
 // here and sent as one emitBytes() inside the must-not-drop bracket (a gate
 // parses it). `bytes` is the store's own count; with disabled=store_down it
 // is NOT a reading of zero — the daemon treats store_down as unknown.
-static void printEvstat() {
+//
+// `line` is STATIC and the function noinline (review 2026-10-08 S3): as a
+// stack local, inlined into handleCommand(), it grew that frame 536 -> 992 B
+// (-fstack-usage, gcc 12.3) on the 4 KB loop-task stack, against spec §2.1's
+// "every new buffer must be a static". stack_free_min is that stack's
+// high-water mark, read here on the same task.
+static __attribute__((noinline)) void printEvstat() {
   const jh_store::EventsState st = jh_store::events_state();
-  char line[640];
+  static char line[640];   // worst case 571 chars with every field at its widest
   const int n = snprintf(line, sizeof(line),
       "EVSTAT bytes=%lu region_bytes=%lu pages=%lu open=%d full=%d disabled=%s "
       "boot_id=%08lx events_boot=%lu crossings=%lu refused_budget=%lu refused_full=%lu "
       "ring_overrun=%lu damaged_pages=%lu write_fail=%lu dup_polls=%lu late_polls=%lu "
       "max_page_write_us=%lu pages_over_slack=%lu heap_free=%d trig_dropped=%lu "
+      "trig_pages=%lu trig_over_budget=%lu stack_free_min=%d "
       "links_lost=%lu layout=%u\n",
       (unsigned long)jh_store::events_raw_bytes(),
       (unsigned long)jh_store::events_region_bytes(),
@@ -817,6 +826,9 @@ static void printEvstat() {
       (unsigned long)capture.pages_over_slack(),
       jh_power::heap_free(),
       (unsigned long)capture.trig_dropped(),
+      (unsigned long)(capture.enabled() ? capture.trig_pages() : jh_store::events_trig_pages()),
+      (unsigned long)capture.trig_over_budget(),
+      jh_power::stack_free_min(),
       (unsigned long)capture.links_lost(),
       (unsigned)jh_store::layout_version());
   if (n <= 0) return;
