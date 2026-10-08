@@ -31,8 +31,12 @@ bool takeGreetPending() { return false; }
 // No Nordic bootloader here — the ESP32 path was the (retired) esp_ota plan
 // and the host build has no radio at all. Answering false keeps main.cpp
 // platform-neutral; the command reports ERR and the device carries on.
-bool reboot_to_dfu() { return false; }
-bool reboot_to_uf2() { return false; }
+jh_boot::ArmResult arm_bootloader(uint8_t magic) {
+  jh_boot::ArmOps ops = {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
+  return jh_boot::arm(ops, magic);   // sd_enabled == nullptr -> UNSUPPORTED
+}
+void disarm_bootloader() {}
+void reset_now() {}
 void watchdog_init() {}
 void watchdog_feed() {}
 

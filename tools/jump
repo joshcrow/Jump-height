@@ -3653,6 +3653,21 @@ def _ble_stats_pinned(name: str) -> dict:
     return dict(_re.findall(r"(\w+)=([-\w.]+)", line.split("INFO ", 1)[1]))
 
 
+def help_commands(help_line: str) -> list[str]:
+    """The commands a `# commands: a | b | ...` help line advertises."""
+    return [c.strip() for c in help_line.split(":", 1)[1].split("|")]
+
+
+def help_dispatch_gap(help_line: str, main_cpp_text: str) -> list[str]:
+    """Audit F-25's cross-check, factored out so it can be tested: every
+    `cmd == "..."` arm in main.cpp that the help line does not advertise.
+    (Commands dispatched by startsWith -- `set`, `fillstore` -- are not
+    counted here; that residue is recorded in docs/STATUS.md's F-25 row.)"""
+    cmds = help_commands(help_line)
+    dispatched = sorted(set(re.findall(r'cmd == "([a-z0-9]+)"', main_cpp_text)))
+    return [c for c in dispatched if c not in cmds]
+
+
 def cmd_status(args) -> int:
     """Live capability status, MACHINE-CHECKED where possible.
 
@@ -3698,19 +3713,17 @@ def cmd_status(args) -> int:
         # the dispatch table is reported rather than silently swallowed.
         line = next((l for l in out.splitlines() if l.startswith("# commands:")), None)
         if line:
-            cmds = [c.strip() for c in line.split(":", 1)[1].split("|")]
+            cmds = help_commands(line)
             print(f"  commands advertised by help ({len(cmds)}): {' '.join(cmds)}")
             main_cpp = REPO / "firmware/src/main.cpp"
             try:
-                dispatched = sorted(set(re.findall(r'cmd == "([a-z0-9]+)"',
-                                                   main_cpp.read_text())))
+                undocumented = help_dispatch_gap(line, main_cpp.read_text())
             except OSError as e:
                 # CLAUDE.md rule 3: the cross-check not running is itself the finding.
-                dispatched = []
+                undocumented = []
                 print(f"  ⚠️  could not cross-check against the dispatch table "
                       f"({main_cpp.name}: {e}) — the list above is the help "
                       f"string only, and may be short")
-            undocumented = [c for c in dispatched if c not in cmds]
             if undocumented:
                 print(f"  ⚠️  dispatched but NOT in help ({len(undocumented)}): "
                       f"{' '.join(undocumented)}")

@@ -174,6 +174,7 @@ class Lsm6ds3Min {
     ax = x * g_per_lsb;
     ay = y * g_per_lsb;
     az = z * g_per_lsb;
+    last_a_[0] = x; last_a_[1] = y; last_a_[2] = z;  // event capture (batch 2)
     return true;
   }
 
@@ -193,8 +194,27 @@ class Lsm6ds3Min {
     gx = x * dps_per_lsb;
     gy = y * dps_per_lsb;
     gz = z * dps_per_lsb;
+    last_g_[0] = x; last_g_[1] = y; last_g_[2] = z;  // event capture (batch 2)
     return true;
   }
+
+  // The raw registers behind the last SUCCESSFUL readAccelG()/readGyroDps()
+  // — the same ints the floats above came from (jh_imu.h last_raw()).
+  void lastRaw(int16_t a[3], int16_t g[3]) const {
+    for (int i = 0; i < 3; ++i) { a[i] = last_a_[i]; g[i] = last_g_[i]; }
+  }
+
+  // OUT_TEMP_L/H (0x20/0x21), little-endian i16: degC = 25 + raw/256.
+  bool readTempRaw(int16_t& raw) {
+    uint8_t b[2];
+    if (!readRegs(0x20, b, 2)) return false;
+    raw = (int16_t)((b[1] << 8) | b[0]);
+    return true;
+  }
+
+  // CTRL1_XL..CTRL7_G (0x10..0x16) in one burst (IF_INC=1, set in begin()).
+  // Expected after begin(): 54 5C 44 02 00 00 00.
+  bool readCtrlRegs(uint8_t out[7]) { return readRegs(0x10, out, 7); }
 
   uint8_t address() const { return addr_; }
 
@@ -227,4 +247,6 @@ class Lsm6ds3Min {
 
   TwimBounded* wire_ = nullptr;
   uint8_t     addr_ = I2C_ADDR;
+  int16_t     last_a_[3] = {0, 0, 0};
+  int16_t     last_g_[3] = {0, 0, 0};
 };

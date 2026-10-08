@@ -515,4 +515,8 @@ bool read_gyro_dps(float& gx, float& gy, float& gz) {
   return s_imu.readGyroDps(gx, gy, gz);
 }
 
+void last_raw(int16_t accel[3], int16_t gyro[3]) { s_imu.lastRaw(accel, gyro); }
+bool read_temp_raw(int16_t& raw) { return s_imu.readTempRaw(raw); }
+bool read_ctrl_regs(uint8_t out[7]) { return s_imu.readCtrlRegs(out); }
+
 }  // namespace jh_imu

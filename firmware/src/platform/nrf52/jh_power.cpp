@@ -455,4 +455,50 @@ bool system_off() {
   return true;
 }
 
+uint32_t boot_random32() {
+  uint8_t b[4] = {0, 0, 0, 0};
+  // SD-aware, like init(): with the SoftDevice enabled the RNG peripheral is
+  // SD-owned and its pool is the legal source; without it the register is.
+  uint8_t sd_en = 0;
+  sd_softdevice_is_enabled(&sd_en);
+  if (sd_en) {
+    for (int tries = 0; tries < 200; ++tries) {
+      uint8_t avail = 0;
+      sd_rand_application_bytes_available_get(&avail);
+      if (avail >= 4 && sd_rand_application_vector_get(b, 4) == NRF_SUCCESS) {
+        return (uint32_t)b[0] | ((uint32_t)b[1] << 8) | ((uint32_t)b[2] << 16) |
+               ((uint32_t)b[3] << 24);
+      }
+      delay(1);  // the pool refills in microseconds; 200 ms is generous
+    }
+  } else {
+    NRF_RNG->CONFIG = 1;  // bias correction
+    NRF_RNG->TASKS_START = 1;
+    bool ok = true;
+    for (int i = 0; i < 4 && ok; ++i) {
+      NRF_RNG->EVENTS_VALRDY = 0;
+      uint32_t spin = 0;
+      while (!NRF_RNG->EVENTS_VALRDY && ++spin < 200000) {}
+      ok = NRF_RNG->EVENTS_VALRDY != 0;
+      b[i] = (uint8_t)NRF_RNG->VALUE;
+    }
+    NRF_RNG->TASKS_STOP = 1;
+    if (ok) {
+      return (uint32_t)b[0] | ((uint32_t)b[1] << 8) | ((uint32_t)b[2] << 16) |
+             ((uint32_t)b[3] << 24);
+    }
+  }
+  // Neither source answered. Not random, but still distinct per boot in
+  // practice (the tick at this point varies with what setup() did), and a
+  // boot_id only has to tell boots apart. Mixed so it is not trivially 0.
+  uint32_t x = NRF_FICR->DEVICEID[0] ^ (micros() * 2654435761u);
+  x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15;
+  return x;
+}
+
+int heap_free() {
+  // cores/nRF5/utility/debug.cpp (via Arduino.h): mallinfo()-based.
+  return dbgHeapTotal() - dbgHeapUsed();
+}
+
 }  // namespace jh_power

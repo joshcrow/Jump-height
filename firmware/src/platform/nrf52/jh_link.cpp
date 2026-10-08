@@ -655,59 +655,54 @@ void poll(void (*handle)(const String&)) {
   }
 }
 
-// Reboot into OTA DFU. The magic byte is the Adafruit bootloader's own
-// DFU_OTA_MAGIC = 0xB1, read from Bluefruit52Lib's BLEDfu.cpp rather than
-// remembered — the bootloader reads GPREGRET on boot and stays in DFU
-// instead of starting the app.
-//
-// BLEDfu's own handler jumps straight to the bootloader after preserving
-// bonding keys; a plain reset is used here because this device does not
-// bond, and a reset is the simpler, harder-to-get-wrong path.
-//
-// Why this exists ON TOP of the BLEDfu service: Web Bluetooth blocklists the
-// Nordic DFU service UUID (docs/sense.md §3.3), so the browser app can never
-// touch that characteristic. It CAN speak our own NUS line protocol — so
-// routing the trigger through a plain `dfu` command means the web console,
-// blecmd.py and a phone all reach it the same way, with no blocklist and no
-// second protocol.
-bool reboot_to_dfu() {
-  // Uses the core's own enterOTADfu() (cores/nRF5/wiring.c:89) rather than a
-  // hand-rolled GPREGRET write. First attempt used 0xB1 and REBOOTED STRAIGHT
-  // BACK INTO THE APP — proven on silicon 2026-08-11 (sent `dfu` over BLE,
-  // puck kept advertising as JumpHeight): 0xB1 is DFU_MAGIC_OTA_APPJUM, the
-  // "app JUMPED here with the SoftDevice still live" handshake BLEDfu.cpp
-  // uses with a direct bootloader_util_app_start() — through a full
-  // NVIC_SystemReset() that promise is false and the bootloader just starts
-  // the app. The RESET path wants DFU_MAGIC_OTA_RESET (0xA8), which is
-  // exactly what enterOTADfu() writes.
-  delay(50);          // let the caller's farewell bytes reach USB/BLE
-  // NOT the core's enterOTADfu(): that helper writes NRF_POWER->GPREGRET
-  // directly, and with the SoftDevice ENABLED that register is SD-owned —
-  // the raw write lands only sometimes. Measured on silicon 2026-08-11:
-  // three `dfu` commands entered the bootloader, then two in a row silently
-  // rebooted back into the app, same binary. The SD-aware calls are the
-  // reliable path; 0xA8 is DFU_MAGIC_OTA_RESET (wiring.c:28).
-  uint32_t rc1 = sd_power_gpregret_clr(0, 0xFF);
-  uint32_t rc2 = sd_power_gpregret_set(0, 0xA8);
-  uint32_t back = 0;
-  uint32_t rc3 = sd_power_gpregret_get(0, &back);
-  // DIAG (temporary): prove whether the magic actually sticks before reset.
-  char msg[64];
-  snprintf(msg, sizeof(msg), "# gpregret rc=%lu/%lu/%lu val=0x%02lx\n",
-           (unsigned long)rc1, (unsigned long)rc2, (unsigned long)rc3,
-           (unsigned long)back);
-  write(msg, strlen(msg));
-  for (int i = 0; i < 40; ++i) { pump(); delay(15); }  // flush over BLE/USB
-  NVIC_SystemReset();
-  return true;        // not reached
+// Bootloader entry (jh_link.h). History, kept because it is why this is two
+// calls now:
+//  * 2026-08-11: the first `dfu` wrote 0xB1 (DFU_MAGIC_OTA_APPJUM) and
+//    rebooted straight back into the app — that magic is BLEDfu's "app jumped
+//    here with the SoftDevice live" handshake; through NVIC_SystemReset the
+//    RESET magic 0xA8 (DFU_MAGIC_OTA_RESET, wiring.c:28) is the right one.
+//  * The core's enterOTADfu() writes NRF_POWER->GPREGRET directly; with the
+//    SoftDevice enabled that register is SD-owned and the write lands only
+//    sometimes (measured 2026-08-11: three entries, then two silent reboots
+//    into the app, same binary). Hence the sd_power_gpregret_* calls.
+//  * 2026-10-04: even the SD calls were trusted blindly — return codes
+//    discarded, no readback, reset regardless, `OK uf2` already sent — and
+//    `uf2` entered the bootloader 1 time in 3. bootloader_arm.h now decides
+//    from the return codes AND the readback, and nothing resets unless it
+//    says OK.
+namespace {
+bool armSdEnabled(void*) {
+  uint8_t en = 0;
+  sd_softdevice_is_enabled(&en);
+  return en != 0;
+}
+uint32_t armSdClr(void*, uint32_t mask) { return sd_power_gpregret_clr(0, mask); }
+uint32_t armSdSet(void*, uint32_t value) { return sd_power_gpregret_set(0, value); }
+uint32_t armSdGet(void*, uint32_t* value) { return sd_power_gpregret_get(0, value); }
+void armRegWrite(void*, uint32_t value) { NRF_POWER->GPREGRET = value; }
+uint32_t armRegRead(void*) { return NRF_POWER->GPREGRET; }
+}  // namespace
+
+jh_boot::ArmResult arm_bootloader(uint8_t magic) {
+  const jh_boot::ArmOps ops = {nullptr, armSdEnabled, armSdClr, armSdSet,
+                               armSdGet, armRegWrite, armRegRead};
+  return jh_boot::arm(ops, magic);
 }
 
-bool reboot_to_uf2() {
-  delay(50);
-  sd_power_gpregret_clr(0, 0xFF);
-  sd_power_gpregret_set(0, 0x57);   // DFU_MAGIC_UF2_RESET (wiring.c:27)
+void disarm_bootloader() {
+  if (armSdEnabled(nullptr)) sd_power_gpregret_clr(0, 0xFF);
+  else NRF_POWER->GPREGRET = 0;
+}
+
+void reset_now() {
+  // The farewell lines are queued for BLE; give pump() ~600 ms to send them
+  // (the old reboot_to_dfu()'s flush loop), feeding the 3.5 s watchdog.
+  for (int i = 0; i < 40; ++i) {
+    pump();
+    watchdog_feed();
+    delay(15);
+  }
   NVIC_SystemReset();
-  return true;  // not reached
 }
 
 }  // namespace jh_link
