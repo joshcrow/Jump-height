@@ -4356,6 +4356,23 @@ def cmd_score(args) -> int:
     return subprocess.run(cmd, cwd=str(REPO)).returncode
 
 
+# ----------------------------------------------------------------- candidates
+# CG-1 pop -> partial-unload -> landing candidates for a session, with GPS
+# speed/heading/wind context and a by-TIMESTAMP Surfr matcher; writes
+# <session>/candidates.md + candidates.csv. Offline only: it never touches
+# the production detector or its parameters. Shells to
+# sim/candidates_report.py exactly as `score` shells to sim/score.py.
+
+
+def cmd_candidates(args) -> int:
+    cmd = [sys.executable, "sim/candidates_report.py"]
+    for s in args.sessions or []:
+        cmd.append(os.path.abspath(s))
+    if args.no_write:
+        cmd.append("--no-write")
+    return subprocess.run(cmd, cwd=str(REPO)).returncode
+
+
 # -------------------------------------------------------------------- wizard
 
 STATE_PATH_NAME = "wizard_state.json"
@@ -4791,6 +4808,16 @@ def main() -> int:
     p.add_argument("--root", help="sessions root (default data/sessions)")
     p.add_argument("--no-write", action="store_true",
                    help="print the scorecard without writing <session>/score.md")
+
+    # candidates works entirely on on-disk sessions — registered directly,
+    # exactly as score is.
+    p = sub.add_parser("candidates",
+                       help="CG-1 pop/unload/landing candidates + context + Surfr "
+                            "timestamp matching; write candidates.md/.csv")
+    p.set_defaults(fn=cmd_candidates)
+    p.add_argument("sessions", nargs="+", help="session directories")
+    p.add_argument("--no-write", action="store_true",
+                   help="print candidates.md without writing anything")
 
     # ingest imports an offline bundle (web/sync/'s zip, or its unzipped dir)
     # — no live device involved, so it skips the serial --port exactly like

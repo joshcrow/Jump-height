@@ -1,0 +1,15 @@
+{
+  "_comment": "Mount registry (CLAUDE.md section 4: an identifier needs a lookup entry). A session's <session>/mount.json names one of these ids; sim/candidates_report.py prints UNKNOWN for a missing mount.json and for an id not listed here. Never inferred from the data.",
+  "vest-pocket": {
+    "site": "rider's vest pocket (torso)",
+    "note": "Every water session through 2026-09-23. Rider-confirmed for 2026-09-23 (docs/STATUS.md 'Field-measured 2026-09-23'); the loan mount from 2026-09-08 (docs/STATUS.md 'Open gates', 1a)."
+  },
+  "board-nose-hammond-v1": {
+    "board": "2025 F-One Rocket Wing-S V4",
+    "site": "flat nose deck",
+    "case": "Hammond 1551WHGY",
+    "attach": "VHB",
+    "usb": "capped CA-USBW1",
+    "note": "Planned for the first board-mounted session. No session has used it yet."
+  }
+}
