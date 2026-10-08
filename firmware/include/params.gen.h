@@ -23,6 +23,19 @@
 #define JH_I2C_SDA 21
 #define JH_I2C_SCL 22
 
+// --- capture ---
+#define JH_CAPTURE_FLOOR_G 2.5f
+#define JH_CAPTURE_REFRACTORY_S 0.25f
+#define JH_CAPTURE_TIER_A_G 8.0f
+#define JH_CAPTURE_TIER_B_G 4.0f
+#define JH_CAPTURE_PRE_S 5.0f
+#define JH_CAPTURE_POST_S 1.5f
+#define JH_CAPTURE_MAX_LEN_S 12.0f
+#define JH_CAPTURE_SESSION_TARGET_S 7200
+#define JH_CAPTURE_TIER_A_BURST 0.5f
+#define JH_CAPTURE_TIER_B_RESERVE 0.4f
+#define JH_CAPTURE_TIER_B_BURST 0.1f
+
 // --- shared ---
 #define JH_M_TO_FT 3.28084f
 #define JH_BLE_SERVICE_UUID "6e400001-b5a3-f393-e0a9-e50e24dcca9e"

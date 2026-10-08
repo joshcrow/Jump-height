@@ -134,3 +134,52 @@ class ParamsMatchConfig(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CaptureSectionIsGeneratedAndMirrored(unittest.TestCase):
+    """T-P1 (firmware batch 2, spec 2026-10-07 section 8.1): the `capture`
+    section reaches the firmware through params.gen.h (JH_CAPTURE_<KEY>) and
+    the Python reference through sim/event_policy.load_config(), and the two
+    must describe the same policy. tools/tests/test_event_codec.py's
+    byte-parity runs are the behavioural half of this check; this is the
+    field-by-field half, so a missing key fails with its name."""
+
+    def setUp(self) -> None:
+        self.cap = json.loads(CONFIG.read_text())["capture"]
+        self.header = (REPO / "firmware" / "include" / "params.gen.h").read_text()
+
+    def test_every_capture_key_is_a_define_with_the_json_value(self) -> None:
+        import re
+        for key, want in self.cap.items():
+            if key.startswith("_"):
+                continue
+            m = re.search(rf"#define JH_CAPTURE_{key.upper()} (\S+)", self.header)
+            self.assertIsNotNone(m, f"params.gen.h lacks JH_CAPTURE_{key.upper()} -- "
+                                    "run ./tools/jump gen")
+            got = float(m.group(1).rstrip("f"))
+            self.assertEqual(got, float(want), f"JH_CAPTURE_{key.upper()}")
+
+    def test_event_policy_reads_the_same_numbers(self) -> None:
+        sys.path.insert(0, str(REPO / "sim"))
+        import event_policy
+        c = event_policy.load_config(CONFIG)
+        self.assertEqual(c.floor_g, self.cap["floor_g"])
+        self.assertEqual(c.tier_a_g, self.cap["tier_a_g"])
+        self.assertEqual(c.tier_b_g, self.cap["tier_b_g"])
+        self.assertEqual(c.refractory_us, round(self.cap["refractory_s"] * 1e6))
+        self.assertEqual(c.pre_us, round(self.cap["pre_s"] * 1e6))
+        self.assertEqual(c.post_us, round(self.cap["post_s"] * 1e6))
+        self.assertEqual(c.max_len_us, round(self.cap["max_len_s"] * 1e6))
+        self.assertEqual(c.session_target_ms, self.cap["session_target_s"] * 1000)
+        self.assertEqual(c.tier_a_burst_pm, round(self.cap["tier_a_burst"] * 1000))
+        self.assertEqual(c.tier_b_reserve_pm, round(self.cap["tier_b_reserve"] * 1000))
+        self.assertEqual(c.tier_b_burst_pm, round(self.cap["tier_b_burst"] * 1000))
+
+    def test_the_detector_summary_line_does_not_carry_capture_keys(self) -> None:
+        """INFO's PARAMS line is the detector's identity and `jump selftest`
+        diffs it against the local config; capture keys must not leak in."""
+        import re
+        m = re.search(r'#define JH_PARAMS_SUMMARY "([^"]*)"', self.header)
+        self.assertIsNotNone(m)
+        for key in self.cap:
+            self.assertNotIn(f"{key}=", m.group(1))
