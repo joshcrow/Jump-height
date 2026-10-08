@@ -30,6 +30,8 @@
 
 #include <Arduino.h>
 
+#include "bootloader_arm.h"
+
 namespace jh_link {
 
 // Bring up the link and start advertising as `name`. Returns false if any
@@ -64,21 +66,25 @@ void write(const char* data, size_t len);
 // a freshly-subscribed client learns the link is alive.
 bool takeGreetPending();
 
-// Reboot into the bootloader's OTA-DFU mode. Returns FALSE if this platform
-// has no such path (the caller reports ERR and carries on); on a platform
-// that does, it never returns.
+// Bootloader entry, split in two so nothing resets on an unverified arm
+// (firmware batch 2, spec 2026-10-07 §5; bench 2026-10-04: `uf2` entered
+// the bootloader 1 time in 3 because the old reboot_to_uf2() discarded the
+// SoftDevice's return codes and reset regardless).
 //
-// The capability is expressed as a return value rather than an #ifdef,
-// mirroring how `off` gates on jh_power::vbat_mv() >= 0 — main.cpp stays
-// platform-neutral and the seam answers for itself.
-bool reboot_to_dfu();
-
-// Reboot into the bootloader's UF2 mass-storage mode (the drag-drop drive).
-// Same contract as reboot_to_dfu(). Exists because the 1200-baud serial
-// touch enters SERIAL-ONLY DFU by design (DFU_MAGIC_SERIAL_ONLY_RESET) —
-// the UF2 drive is only offered under DFU_MAGIC_UF2_RESET, and bootloader
-// self-update packages (update-*.uf2) are MSC-only.
-bool reboot_to_uf2();
+// arm_bootloader(magic) writes GPREGRET through the SD-aware path and reads
+// it back (bootloader_arm.h has the exact rule). It NEVER resets. Status
+// UNSUPPORTED on a platform with no bootloader (the host), FAILED when a
+// call errored or the readback differs. The magics: jh_boot::MAGIC_UF2
+// (0x57, the UF2 drive — the 1200-baud touch reaches serial DFU only, and
+// bootloader self-updates are MSC-only) and jh_boot::MAGIC_OTA (0xA8, OTA
+// DFU for nRF Connect).
+jh_boot::ArmResult arm_bootloader(uint8_t magic);
+// Best-effort undo after a FAILED arm, so a later unrelated reset (the
+// watchdog) cannot drop the board into a bootloader nobody asked for.
+void disarm_bootloader();
+// Flush what is queued for BLE, then reset. Call only after an OK arm.
+// Never returns on a platform that has a bootloader; returns on the host.
+void reset_now();
 
 // Watchdog seam. ARM FIRST THING IN setup() — the 2026-08-12 dark-out hunt
 // found the fatal window: jh_imu::init()/jh_store::init() used to run

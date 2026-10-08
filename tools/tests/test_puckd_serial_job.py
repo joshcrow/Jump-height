@@ -364,8 +364,13 @@ class TestRunJobAgainstFakeDevice(unittest.TestCase):
 
         with zipfile.ZipFile(result.bundle_path) as zf:
             names = set(zf.namelist())
+            # CONTRACT.md SS2.1's five files, plus -- because the fake speaks
+            # firmware batch 2, like main.cpp -- the two ADDITIVE event files
+            # (spec 2026-10-07 section 7.1). A pre-batch-2 puck's bundle is
+            # still exactly the five: test_old_firmware_bundle_is_the_1_0_7_shape.
             self.assertEqual(names, {"manifest.json", "jumps.csv", "trace.bin",
-                                     "notes.txt", "device.log"})
+                                     "notes.txt", "device.log",
+                                     "events.bin", "evstat.txt"})
             manifest = json.loads(zf.read("manifest.json"))
             jumps_csv = zf.read("jumps.csv").decode()
 
@@ -385,6 +390,21 @@ class TestRunJobAgainstFakeDevice(unittest.TestCase):
         # _ingest_session_dir_name() can datetime.fromisoformat() (CONTRACT.md SS4.3).
         from datetime import datetime as _dt
         _dt.fromisoformat(manifest["synced_at_local"])
+
+    def test_old_firmware_bundle_is_the_1_0_7_shape(self):
+        """A puck without `events` (every puck before batch 2) produces
+        exactly the 1.0.7 bundle: the same five files, verified, and an
+        events_format of null rather than a failure."""
+        result, spool = self._run("session", ["--no-events"])
+        self.assertTrue(result.verified, result.reasons)
+        self.assertIsNone(result.events_format)
+        with zipfile.ZipFile(result.bundle_path) as zf:
+            self.assertEqual(set(zf.namelist()), {"manifest.json", "jumps.csv", "trace.bin",
+                                                  "notes.txt", "device.log"})
+            manifest = json.loads(zf.read("manifest.json"))
+        self.assertIsNone(manifest["events_format"])
+        self.assertFalse(manifest["events_verified"])
+        self.assertIsNone(manifest["boot_id"])
 
     def test_bundle_passes_jump_ingest_unchanged(self):
         result, spool = self._run("session")

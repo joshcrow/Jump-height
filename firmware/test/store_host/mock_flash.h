@@ -252,4 +252,17 @@ void arm_write_short_return(uint32_t n);
 // WITHOUT exiting the process. Disarms itself after firing once.
 void arm_erase_failure();
 
+// Like arm_erase_failure(), but the first n eraseSector() calls succeed and
+// the (n+1)-th fails — so a descending multi-sector erase can be made to
+// fail in the MIDDLE, leaving erased space above an intact island (the
+// shape the event region's island-safe append point exists for).
+void arm_erase_failure_after(uint32_t n);
+
+// A POWER CUT between sector erases: the first n eraseSector() calls
+// complete (and are persisted), then the process ends via _Exit(
+// kFaultExitCode) as the (n+1)-th begins -- before it touches a byte. The
+// sector-granular sibling of arm_fault_after_bytes(); a cut landing INSIDE
+// one erase (a partially erased sector) is still not modeled.
+void arm_cut_after_erases(uint32_t n);
+
 }  // namespace mock_flash_test

@@ -18,7 +18,9 @@
 //
 // SPDX-License-Identifier: MIT
 
+#include <chrono>
 #include <cstdlib>
+#include <unistd.h>
 #include "platform/jh_power.h"
 
 namespace jh_power {
@@ -83,5 +85,19 @@ bool system_off() {
   }
   return false;
 }
+
+// JH_HOST_BOOT_ID (hex) pins it for a test; otherwise the clock and the pid
+// make two host "boots" differ, as two real boots do.
+uint32_t boot_random32() {
+  const char* v = std::getenv("JH_HOST_BOOT_ID");
+  if (v && v[0]) return (uint32_t)std::strtoul(v, nullptr, 16);
+  const uint64_t t = (uint64_t)std::chrono::steady_clock::now().time_since_epoch().count();
+  uint32_t x = (uint32_t)(t ^ (t >> 32)) ^ ((uint32_t)getpid() * 2654435761u);
+  x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15;   // mix
+  return x;
+}
+
+int heap_free() { return -1; }   // no arena to report on the host
+int stack_free_min() { return -1; }   // no task stack to report on the host
 
 }  // namespace jh_power

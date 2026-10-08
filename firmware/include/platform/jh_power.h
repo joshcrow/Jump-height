@@ -166,4 +166,27 @@ int  dcdc_enabled();      // 1 on, 0 off, -1 unknown/not applicable
 
 bool system_off();
 
+// 32 random bits for this boot's identity (event capture's boot_id, spec
+// 2026-10-07 §3.6). Random, not a counter, on purpose: a counter needs a new
+// jh_persist key, and a record-format change there would put the
+// calibration at risk. nRF52: the SoftDevice RNG when it is enabled (the RNG
+// peripheral is SD-owned then), the RNG register otherwise — the same
+// SD-aware split init() uses for RESETREAS. Host: $JH_HOST_BOOT_ID (hex) or
+// a clock-derived seed.
+uint32_t boot_random32();
+
+// Free bytes in the malloc arena (Bluefruit, TinyUSB, FreeRTOS tasks and
+// String all allocate from it), or -1 where the platform cannot say. Never
+// measured on this firmware before batch 2 (spec §2.1), which adds ~23 KB
+// of static RAM; evstat reports it so the bench gate can.
+int heap_free();
+
+// The calling task's LOWEST free stack since it started, in bytes (the
+// FreeRTOS high-water mark), or -1 where the platform cannot say. Called
+// from a command, that task is the 4 KB Arduino loop task (cores/nRF5/
+// main.cpp LOOP_STACK_SZ = 256*4 words) that runs setup(), loop() and every
+// command handler. Review 2026-10-08 S3: never measured; evstat reports it
+// so bench gate 8.3-2 can.
+int stack_free_min();
+
 }  // namespace jh_power

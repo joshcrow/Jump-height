@@ -1,3 +1,19 @@
+// FROZEN FIXTURE — firmware/src/platform/nrf52/jh_store.cpp exactly as it
+// shipped in src=c5eea285 (layout v1: superblock version 1 at offset 0,
+// trace region = chip - 69,632 = 2,027,520 bytes, no event region). This is
+// the store on every deployed puck before firmware batch 2, including the
+// OG at the rider's house.
+//
+// tools/tests/test_store_host.py compiles it into a SECOND harness binary
+// (store_host_harness.cpp with -DJH_STORE_V1_FIXTURE) and uses it to write
+// real v1 chips — jumps, trace, torn writes and all — that the current
+// jh_store.cpp must then migrate in place without changing a byte of them
+// (spec 2026-10-07 §8.1 T-S1). A hand-built v1 image would test the
+// migration against our idea of v1; this tests it against v1.
+//
+// DO NOT EDIT. If a future layout v3 ships, freeze v2 next to this the same
+// way: every layout that ever reached a puck needs a migration test.
+//
 // jh_store.cpp — nRF52 (Seeed XIAO nRF52840 Sense) implementation of the
 // jh_store seam (firmware/include/platform/jh_store.h). See docs/sense.md
 // §3.2/§3.6/§3.9 and this platform's binding handoff notes.
@@ -12,25 +28,8 @@
 // P25Q16H's 2 MiB / 2,097,152 bytes):
 //   sector 0            superblock: magic + format version + region map + crc
 //   64 KB                jumps region: fixed-size 32-byte binary records
-//   trace region         binary trace v2 blocks (trace_codec.h), append-only
-//   516 KB (layout v2)   six-axis EVENT region at the top of the chip:
-//                        256-byte pages (event_format.h), append-only
-//
-// LAYOUT VERSIONS (firmware batch 2, spec 2026-10-07 §3.7):
-//   v1  trace = chip - 69,632 = 2,027,520 B. Superblock at offset 0.
-//   v2  trace = 1,499,136 B (2.00 h of motion at 100 Hz), events = 528,384 B
-//       at 0x17F000..0x200000. Superblock at offset 256 of sector 0.
-// A v1 chip is MIGRATED IN PLACE at mount, never formatted: jumps and trace
-// survive byte-identical. The v2 superblock goes into the still-erased page
-// at offset 256 and only THEN is the v1 magic programmed to zero — two
-// program operations and no erase, so a power cut at any instant leaves a
-// readable superblock (v1 still valid, or v2 valid). The spec's sketch
-// erased sector 0 first; this avoids its ~40 ms no-superblock window (its
-// R6) altogether. Every later layout must migrate the same way (spec §6:
-// app 1.0.7 can flash a newer build while events are still on the chip).
-// ROLLBACK HAZARD: a v1 build (c5eea285 and older) sees no valid superblock
-// on a v2 chip and FORMATS THE WHOLE CHIP. Pull everything before any
-// rollback.
+//   remainder (~1.93 MB) trace region: binary trace v2 blocks (trace_codec.h),
+//                        append-only
 //
 // Binary trace v2: this file owns the ENCODE side (parsing the incoming
 // "t,mag\n" CSV text main.cpp already decimated and formatted, feeding it
@@ -91,7 +90,6 @@
 #include <Adafruit_SPIFlashBase.h>
 #include <Arduino.h>
 
-#include "event_format.h"
 #include "params.gen.h"
 #include "trace_codec.h"
 
@@ -139,7 +137,7 @@ const char* JUMPS_HEADER = "n,takeoff_s,airtime_raw_s,airtime_s,height_m,med_a_g
 
 // ------------------------------------------------------------- superblock
 #pragma pack(push, 1)
-struct Superblock {             // layout v1, at flash offset 0
+struct Superblock {
   uint32_t magic;              // 'JHS2' — see kSuperblockMagic
   uint8_t  format_version;
   uint8_t  _reserved[3];
@@ -149,27 +147,10 @@ struct Superblock {             // layout v1, at flash offset 0
   uint32_t trace_region_bytes;  // misreading it
   uint8_t  crc;                 // trace_codec::crc8 over every byte above
 };
-struct SuperblockV2 {           // layout v2, at flash offset kSuperblockV2Offset
-  uint32_t magic;
-  uint8_t  format_version;      // 2
-  uint8_t  _reserved[3];
-  uint32_t jumps_region_start;
-  uint32_t jumps_region_bytes;
-  uint32_t trace_region_start;
-  uint32_t trace_region_bytes;
-  uint32_t events_region_start;
-  uint32_t events_region_bytes;
-  uint8_t  crc;                 // trace_codec::crc8 over every byte above
-};
 #pragma pack(pop)
 
 const uint32_t kSuperblockMagic = 0x3253484AUL;  // "JHS2" little-endian
-const uint8_t  kSuperblockVersion = 1;            // what offset 0 holds
-const uint8_t  kSuperblockVersionV2 = 2;
-// Page 1 of sector 0: erased on every v1 chip (v1 wrote 25 bytes at 0), so
-// v2 can be PROGRAMMED there without erasing anything.
-const uint32_t kSuperblockV2Offset = 256;
-const uint32_t EVENTS_REGION_BYTES = jh_event::REGION_BYTES;   // 528,384
+const uint8_t  kSuperblockVersion = 1;
 
 // ------------------------------------------------------------- jump record
 #pragma pack(push, 1)
@@ -214,20 +195,6 @@ uint32_t s_jumps_region_start = 0;
 uint32_t s_trace_region_start = 0;
 uint32_t s_trace_region_bytes = 0;
 
-// Layout v2's event region (0 bytes while the chip is still v1).
-uint8_t  s_sb_version          = 0;
-uint32_t s_events_region_start = 0;
-uint32_t s_events_region_bytes = 0;
-uint32_t s_events_used_pages   = 0;  // highest non-erased page + 1, then appended
-uint32_t s_events_damaged      = 0;  // non-erased, CRC-bad pages found at mount
-uint32_t s_events_trig_pages   = 0;  // valid TRIG pages at mount, then one per TRIG write
-uint32_t s_events_write_fail   = 0;
-EventsState s_events_state     = EventsState::STORE_DOWN;
-// While set, flashSleep() leaves the chip awake: an open event window writes
-// a page every pass, and deep power-down + its 100 us release each time
-// would be wasted work (spec §3.7 "wake hold").
-bool     s_wake_hold           = false;
-
 uint32_t s_jumps_append_off = 0;  // bytes, relative to jumps region start
 uint32_t s_jumps_count      = 0;
 float    s_jumps_best_m     = 0.0f;
@@ -267,7 +234,6 @@ void flashWake() {
                                  // never put to sleep, e.g. on first boot.
 }
 void flashSleep() {
-  if (s_wake_hold) return;       // an event window is open — see s_wake_hold
   s_transport.runCommand(0xB9);  // Deep Power-Down
 }
 
@@ -553,45 +519,7 @@ void findTraceAppendPoint() {
                  (s_trace_region_bytes - off < kMaxTraceBlockBytes);
 }
 
-// The region map for a layout version, from the chip's real size. v1 is
-// kept for the one case it is still live: a chip whose trace reaches past
-// the v2 boundary stays v1 until a `clear` (migrateToV2()).
-void setGeometry(uint8_t version) {
-  s_sb_version         = version;
-  s_jumps_region_start = SUPERBLOCK_BYTES;
-  s_trace_region_start = s_jumps_region_start + JUMPS_REGION_BYTES;
-  const uint32_t rest  = (s_flash_total_bytes > s_trace_region_start)
-                             ? s_flash_total_bytes - s_trace_region_start : 0;
-  if (version >= 2 && rest > EVENTS_REGION_BYTES) {
-    s_events_region_bytes = EVENTS_REGION_BYTES;
-    s_events_region_start = s_flash_total_bytes - EVENTS_REGION_BYTES;
-    s_trace_region_bytes  = rest - EVENTS_REGION_BYTES;
-  } else {
-    s_events_region_bytes = 0;
-    s_events_region_start = 0;
-    s_trace_region_bytes  = rest;
-  }
-}
-
-// Writes the superblock for the CURRENT geometry: v1 at offset 0, v2 at
-// kSuperblockV2Offset. Callers that need a blank target (a v1 clear(), the
-// formats) erase sector 0 first; migrateToV2() programs into page 1, which
-// a v1 chip has never written.
 bool writeSuperblock() {
-  if (s_sb_version >= 2) {
-    SuperblockV2 sb;
-    memset(&sb, 0, sizeof(sb));
-    sb.magic               = kSuperblockMagic;
-    sb.format_version      = kSuperblockVersionV2;
-    sb.jumps_region_start  = s_jumps_region_start;
-    sb.jumps_region_bytes  = JUMPS_REGION_BYTES;
-    sb.trace_region_start  = s_trace_region_start;
-    sb.trace_region_bytes  = s_trace_region_bytes;
-    sb.events_region_start = s_events_region_start;
-    sb.events_region_bytes = s_events_region_bytes;
-    sb.crc = trace_codec::crc8((const uint8_t*)&sb, offsetof(SuperblockV2, crc));
-    return s_flash.writeBuffer(kSuperblockV2Offset, (const uint8_t*)&sb, sizeof(sb)) == sizeof(sb);
-  }
   Superblock sb;
   memset(&sb, 0, sizeof(sb));
   sb.magic              = kSuperblockMagic;
@@ -604,147 +532,18 @@ bool writeSuperblock() {
   return s_flash.writeBuffer(0, (const uint8_t*)&sb, sizeof(sb)) == sizeof(sb);
 }
 
-// 2 = a valid v2 superblock at kSuperblockV2Offset whose region map is the
-// one this build computes; 1 = a valid v1 superblock at offset 0; 0 =
-// neither. v2 wins when both are valid: that is the instant between
-// migrateToV2()'s two program operations.
-//
-// v1 relies on magic+version+crc alone, as it always has. v2 additionally
-// cross-checks the recorded map, because a v2 map that differs from what
-// this build would use is a FUTURE layout, and the binding rule for those
-// (spec §6) is migrate, never misread.
-uint8_t superblockVersion() {
-  SuperblockV2 v2;
-  s_flash.readBuffer(kSuperblockV2Offset, (uint8_t*)&v2, sizeof(v2));
-  if (v2.magic == kSuperblockMagic && v2.format_version == kSuperblockVersionV2 &&
-      trace_codec::crc8((const uint8_t*)&v2, offsetof(SuperblockV2, crc)) == v2.crc) {
-    const uint32_t trace_start = SUPERBLOCK_BYTES + JUMPS_REGION_BYTES;
-    const uint32_t ev_start = s_flash_total_bytes - EVENTS_REGION_BYTES;
-    if (v2.jumps_region_start == SUPERBLOCK_BYTES && v2.jumps_region_bytes == JUMPS_REGION_BYTES &&
-        v2.trace_region_start == trace_start && v2.trace_region_bytes == ev_start - trace_start &&
-        v2.events_region_start == ev_start && v2.events_region_bytes == EVENTS_REGION_BYTES)
-      return 2;
-  }
+bool superblockValid() {
   Superblock sb;
   s_flash.readBuffer(0, (uint8_t*)&sb, sizeof(sb));
-  if (sb.magic != kSuperblockMagic || sb.format_version != kSuperblockVersion) return 0;
-  if (trace_codec::crc8((const uint8_t*)&sb, offsetof(Superblock, crc)) != sb.crc) return 0;
-  return 1;
-}
-
-// ------------------------------------------------------------ event region
-// Island-safe append point: walk EVERY page and append after the HIGHEST
-// non-erased one. A walk that stopped at the first erased page would append
-// below a stale island (a failed events_clear()), and NOR programming would
-// AND-merge into it and report success — the F-07 shape, which the trace
-// solved with a persisted wedge flag. Here a full walk costs one 528,384-
-// byte read per mount instead (UNMEASURED on silicon; the harness times it),
-// and needs no new jh_persist key — the calibration's store stays untouched.
-void scanEventsRegion() {
-  s_events_used_pages = 0;
-  s_events_damaged    = 0;
-  s_events_trig_pages = 0;
-  if (s_sb_version < 2 || s_events_region_bytes == 0) return;
-  const uint32_t pages = s_events_region_bytes / jh_event::PAGE_BYTES;
-  uint8_t page[jh_event::PAGE_BYTES];
-  uint32_t damaged = 0;
-  uint32_t trig = 0;
-  for (uint32_t p = 0; p < pages; ++p) {
-    if ((++s_scan_feed & 63) == 0) ::jh_link::watchdog_feed();
-    s_flash.readBuffer(s_events_region_start + p * jh_event::PAGE_BYTES, page, sizeof(page));
-    if (jh_event::page_erased(page)) continue;
-    s_events_used_pages = p + 1;
-    if (!jh_event::page_valid(page)) ++damaged;
-    else if (jh_event::page_type(page) == jh_event::PAGE_TRIG) ++trig;
-  }
-  s_events_damaged = damaged;
-  s_events_trig_pages = trig;
-}
-
-// Erase every event sector that is not already blank — watchdog-fed,
-// descending (the trace_clear() rationale: an interrupted pass leaves erased
-// space ABOVE intact data, never an island). False on the first failure,
-// with the sector number.
-bool eraseEventSectors(uint32_t first_sector, uint32_t n_sectors, bool only_if_dirty,
-                       uint32_t* failed_sector) {
-  uint8_t buf[jh_event::PAGE_BYTES];
-  for (uint32_t i = n_sectors; i > 0; --i) {
-    const uint32_t sector = first_sector + i - 1;
-    ::jh_link::watchdog_feed();
-    if (only_if_dirty) {
-      bool dirty = false;
-      for (uint32_t off = 0; off < SECTOR_BYTES && !dirty; off += sizeof(buf)) {
-        s_flash.readBuffer(sector * SECTOR_BYTES + off, buf, sizeof(buf));
-        dirty = !isErasedBytes(buf, sizeof(buf));
-      }
-      if (!dirty) continue;
-    }
-    if (!s_flash.eraseSector(sector)) {
-      if (failed_sector) *failed_sector = sector;
-      return false;
-    }
-    ::jh_link::watchdog_feed();
-  }
+  if (sb.magic != kSuperblockMagic || sb.format_version != kSuperblockVersion) return false;
+  if (trace_codec::crc8((const uint8_t*)&sb, offsetof(Superblock, crc)) != sb.crc) return false;
+  // A stale/foreign superblock from a build with a different region split
+  // would corrupt our own scanning below if we trusted it blindly — the
+  // magic+version+crc triple above is what we rely on instead of also
+  // cross-checking the recorded region map against our compiled-in
+  // constants; a future firmware that changes the split bumps
+  // kSuperblockVersion, which naturally fails this check and re-formats.
   return true;
-}
-
-// v1 -> v2 in place (spec §3.7). Called with the chip mounted as v1 and both
-// append points already found. Leaves the store in v2 geometry on success;
-// on refusal or failure it stays v1 and says why in s_events_state.
-void migrateToV2(void (*announce)(const char* line)) {
-  const uint32_t trace_start = SUPERBLOCK_BYTES + JUMPS_REGION_BYTES;
-  if (s_flash_total_bytes <= trace_start + EVENTS_REGION_BYTES) {
-    s_events_state = EventsState::UNSUPPORTED;
-    return;
-  }
-  const uint32_t ev_start = s_flash_total_bytes - EVENTS_REGION_BYTES;
-  const uint32_t v2_trace_bytes = ev_start - trace_start;
-  if (s_trace_append_off > v2_trace_bytes) {
-    // The trace already reaches into the event area. Keep v1 — the trace
-    // is the rider's data — and leave events off until a `clear` empties
-    // the trace; the next mount after that migrates. App 1.0.7 flashes only
-    // after a confirmed clear, so this is a safety net.
-    s_events_state = EventsState::MIGRATION_BLOCKED;
-    if (announce) announce("# storage: layout v1 kept — the trace reaches into the "
-                           "event area; six-axis events are OFF until `clear`");
-    return;
-  }
-  if (announce) announce("# storage: migrating layout v1 -> v2 (adds the event region; "
-                         "jumps and trace are kept)");
-  uint32_t failed = 0;
-  if (!eraseEventSectors(ev_start / SECTOR_BYTES, EVENTS_REGION_BYTES / SECTOR_BYTES,
-                         /*only_if_dirty=*/true, &failed)) {
-    // Nothing below the trace append point was touched (every erased
-    // sector lay above it), so v1 is exactly as consistent as before.
-    s_events_state = EventsState::MIGRATION_FAILED;
-    if (announce) {
-      char line[96];
-      snprintf(line, sizeof(line), "# storage: migration FAILED erasing sector %lu — "
-               "layout v1 kept, events OFF", (unsigned long)failed);
-      announce(line);
-    }
-    return;
-  }
-  // Program v2 into the erased page 1 of sector 0 ...
-  const uint8_t prev_version = s_sb_version;
-  setGeometry(2);
-  if (!writeSuperblock()) {
-    setGeometry(prev_version);
-    s_events_state = EventsState::MIGRATION_FAILED;
-    if (announce) announce("# storage: migration FAILED writing the v2 superblock — "
-                           "layout v1 kept, events OFF");
-    return;
-  }
-  // ... and only then retire v1 by programming its magic to zero (bits can
-  // only be cleared, which is all this needs). If this write fails the v2
-  // superblock still wins (superblockVersion() checks it first).
-  const uint8_t zeros[4] = {0, 0, 0, 0};
-  s_flash.writeBuffer(0, zeros, sizeof(zeros));
-  // Same append points, smaller trace region: re-derive the trace state so
-  // trace_is_full() is judged against the region it now has.
-  findTraceAppendPoint();
-  s_events_state = EventsState::OK;
-  if (announce) announce("# storage: layout v2 ready");
 }
 
 // ------------------------------------------------------- read-back (dump)
@@ -762,11 +561,6 @@ uint32_t   s_read_src_used     = 0;  // total valid bytes in that region
 bool       s_read_raw_open     = false;
 uint32_t   s_read_raw_cursor   = 0;  // bytes, relative to the trace region start
 uint32_t   s_read_raw_used     = 0;  // == the append offset when opened
-
-// RAW event-region export (`events`) — the third mode of the same slot.
-bool       s_ev_read_open      = false;
-uint32_t   s_ev_read_cursor    = 0;  // bytes, relative to the event region start
-uint32_t   s_ev_read_used      = 0;  // used pages * 256 when opened
 
 // Worst case one trace block's decoded CSV text: 255 samples * up to ~20
 // bytes/line ("%.3f,%.3f\n" comfortably fits under 20 for our value ranges).
@@ -966,50 +760,38 @@ static bool mountLadder() {
   if (!s_fs_ok) return false;
 
   s_flash_total_bytes  = s_flash.size();  // P25Q16H: 2,097,152 (2 MiB)
-  setGeometry(2);  // the default; finishMount() switches to v1 if the chip is v1
+  s_jumps_region_start = SUPERBLOCK_BYTES;
+  s_trace_region_start = s_jumps_region_start + JUMPS_REGION_BYTES;
+  s_trace_region_bytes = (s_flash_total_bytes > s_trace_region_start)
+                             ? s_flash_total_bytes - s_trace_region_start
+                             : 0;
   return true;
 }
 
-// Shared by init() and try_mount() once a valid superblock version is known:
-// geometry, append points, and the v1 -> v2 migration.
-static void finishMount(uint8_t version, void (*announce)(const char* line)) {
-  setGeometry(version);
-  findJumpsAppendPoint();
-  findTraceAppendPoint();
-  if (version == 1) migrateToV2(announce);
-  else s_events_state = EventsState::OK;
-  scanEventsRegion();
-}
-
 bool init(void (*announce)(const char* line)) {
-  s_events_state = EventsState::STORE_DOWN;
   if (!mountLadder()) return false;
 
-  uint8_t version = superblockVersion();
-  if (version == 0) {
+  if (!superblockValid()) {
     if (announce) announce("# first boot: formatting storage — takes up to a minute, hang tight...");
     const bool erased = eraseChipFed();
-    setGeometry(2);
     const bool wrote   = erased && writeSuperblock();
-    if (announce) announce(wrote ? "# storage ready" : "# storage format failed");
+    announce(wrote ? "# storage ready" : "# storage format failed");
     if (!wrote) { s_fs_ok = false; flashSleep(); return false; }
-    version = 2;
   }
 
-  finishMount(version, announce);
+  findJumpsAppendPoint();
+  findTraceAppendPoint();
 
   flashSleep();
   return s_fs_ok;
 }
 
 bool try_mount(void (*announce)(const char* line)) {
-  s_events_state = EventsState::STORE_DOWN;
   if (!mountLadder()) {
     if (announce) announce("# mount: chip not answering");
     return false;
   }
-  const uint8_t version = superblockVersion();
-  if (version == 0) {
+  if (!superblockValid()) {
     // The one behavior separating this from init(): NEVER format. A chip
     // that passes the JEDEC probe but returns a bad superblock may be
     // returning garbage reads (wedged read mode) over INTACT data —
@@ -1020,7 +802,8 @@ bool try_mount(void (*announce)(const char* line)) {
     flashSleep();
     return false;
   }
-  finishMount(version, announce);
+  findJumpsAppendPoint();
+  findTraceAppendPoint();
   flashSleep();
   return s_fs_ok;
 }
@@ -1044,11 +827,14 @@ bool hard_format(void (*announce)(const char* line)) {
   }
   if (!s_fs_ok) {
     if (announce) announce("# hard format: chip not answering — physical power-cycle is the next step");
-    s_events_state = EventsState::STORE_DOWN;
     return false;
   }
   s_flash_total_bytes  = s_flash.size();
-  setGeometry(2);   // a format always lays down the current layout
+  s_jumps_region_start = SUPERBLOCK_BYTES;
+  s_trace_region_start = s_jumps_region_start + JUMPS_REGION_BYTES;
+  s_trace_region_bytes = (s_flash_total_bytes > s_trace_region_start)
+                             ? s_flash_total_bytes - s_trace_region_start
+                             : 0;
   if (announce) announce("# hard format: erasing chip (up to a minute)...");
   s_erase_progress = announce;
   const bool erased = eraseChipFed();
@@ -1058,9 +844,10 @@ bool hard_format(void (*announce)(const char* line)) {
   const bool wrote  = erased && writeSuperblock();
   if (!wrote) {
     if (announce) announce("# hard format: erase/superblock FAILED");
-    s_fs_ok = false; s_events_state = EventsState::STORE_DOWN; flashSleep(); return false;
+    s_fs_ok = false; flashSleep(); return false;
   }
-  finishMount(2, announce);
+  findJumpsAppendPoint();
+  findTraceAppendPoint();
   flashSleep();
   if (announce) announce("# hard format: storage ready");
   return true;
@@ -1335,7 +1122,6 @@ bool open_read(StoredFile which) {
   s_read_pending_pos = 0;
   s_read_raw_open    = false;  // one read slot, either mode — see
                                // open_read_raw(), which releases this one
-  s_ev_read_open     = false;
   s_read_src_cursor  = 0;
   s_read_src_used    = (which == StoredFile::JUMPS) ? s_jumps_append_off : s_trace_append_off;
   s_read_open        = true;
@@ -1402,7 +1188,6 @@ bool open_read_raw() {
   s_read_open        = false;
   s_read_pending_len = 0;
   s_read_pending_pos = 0;
-  s_ev_read_open     = false;
 
   s_read_raw_open   = true;
   s_read_raw_cursor = 0;
@@ -1454,7 +1239,6 @@ size_t read_raw_chunk(uint8_t* buf, size_t max_len) {
 void close_read() {
   s_read_open     = false;
   s_read_raw_open = false;
-  s_ev_read_open  = false;
   flashSleep();
 }
 
@@ -1627,63 +1411,21 @@ void clear() {
                                   // long part, not the loop overhead
     return ok;
   };
+  bool all_erased = erase_fed(0);  // superblock
+
   const uint32_t jumps_sectors_used =
       (s_jumps_append_off + SECTOR_BYTES - 1) / SECTOR_BYTES;
+  for (uint32_t i = 0; i < jumps_sectors_used; ++i) {
+    all_erased &= erase_fed((s_jumps_region_start / SECTOR_BYTES) + i);
+  }
+
   const uint32_t trace_sectors_used =
       (s_trace_append_off + SECTOR_BYTES - 1) / SECTOR_BYTES;
-
-  bool wrote_sb = false;
-  if (s_sb_version >= 2) {
-    // LAYOUT v2: sector 0 is NOT touched (review 2026-10-08, S1). The old
-    // order below erased the superblock FIRST and rewrote it only after up
-    // to ~15 s of sector erases; a reset anywhere in that window left no
-    // valid superblock, and init() then formats the whole chip -- including
-    // the event region, which an old client's `clear` (app 1.0.7, web/sync,
-    // `jump sync`) runs while events are still un-pulled. Spec D6 says that
-    // clear can never destroy events. trace_clear() above already carries
-    // the reasoning: the superblock holds only the region map, `clear`
-    // changes nothing it records, and append points are re-derived by the
-    // mount scan. So the only catastrophic step bought nothing.
-    //
-    // Without the format-on-reset backstop, the erase ORDER becomes the
-    // crash-safety story, exactly as in trace_clear(): each region is erased
-    // DESCENDING, so an interrupted pass leaves intact records below erased
-    // space and never a stale island above an erased gap (the scans stop at
-    // the first erased record and would append below such an island --
-    // AND-merge, silent corruption). A reset mid-clear therefore leaves some
-    // jumps/trace still stored; the client's post-clear check sees them and
-    // reports the clear as not done, which is the truth.
-    //
-    // STOP on the first failed erase (the F-07 rule): continuing below a
-    // failed sector would create the island. A failed erase is a chip fault,
-    // and the layout above the stop is then not provably consistent for the
-    // next mount's scans, so fall back to the pre-v2 outcome: erase sector 0
-    // and leave it blank, which the next boot announces and formats (events
-    // included). That is what every failed `clear` has always done; only
-    // the reset/brown-out case -- the likely one -- changes.
-    bool all_erased = true;
-    for (uint32_t i = jumps_sectors_used; i > 0 && all_erased; --i) {
-      all_erased = erase_fed((s_jumps_region_start / SECTOR_BYTES) + i - 1);
-    }
-    for (uint32_t i = trace_sectors_used; i > 0 && all_erased; --i) {
-      all_erased = erase_fed((s_trace_region_start / SECTOR_BYTES) + i - 1);
-    }
-    if (!all_erased) erase_fed(0);
-    wrote_sb = all_erased;
-  } else {
-    // LAYOUT v1 (a chip whose migration is blocked or failed: there is no
-    // event region to protect). Unchanged from the shipped store.
-    bool all_erased = erase_fed(0);  // superblock
-
-    for (uint32_t i = 0; i < jumps_sectors_used; ++i) {
-      all_erased &= erase_fed((s_jumps_region_start / SECTOR_BYTES) + i);
-    }
-    for (uint32_t i = 0; i < trace_sectors_used; ++i) {
-      all_erased &= erase_fed((s_trace_region_start / SECTOR_BYTES) + i);
-    }
-
-    wrote_sb = all_erased && writeSuperblock();
+  for (uint32_t i = 0; i < trace_sectors_used; ++i) {
+    all_erased &= erase_fed((s_trace_region_start / SECTOR_BYTES) + i);
   }
+
+  const bool wrote_sb = all_erased && writeSuperblock();
 
   // Reset the RAM-side view unconditionally, success or failure: on
   // success this is the ordinary post-clear state; on failure it keeps
@@ -1707,118 +1449,6 @@ void clear() {
                        // jh_store.h's void clear() contract).
 
   flashSleep();
-}
-
-// ------------------------------------------------------------- event region
-// Six-axis event capture's storage (firmware batch 2, spec §3.7). Pages are
-// written by main.cpp's capture writer one per loop pass; nothing here
-// decides what to record. `clear()` and `trace_clear()` never touch these
-// sectors (spec D6: an old client's clear must not destroy a board
-// session's events); `events_clear()` and `hard_format()` do.
-
-EventsState events_state() {
-  if (!s_fs_ok) return EventsState::STORE_DOWN;
-  return s_events_state;
-}
-
-uint32_t events_region_bytes() {
-  return (s_fs_ok && s_events_state == EventsState::OK) ? s_events_region_bytes : 0;
-}
-uint32_t events_used_pages() { return s_fs_ok ? s_events_used_pages : 0; }
-uint32_t events_damaged_pages() { return s_events_damaged; }
-uint32_t events_trig_pages() { return s_fs_ok ? s_events_trig_pages : 0; }
-uint32_t events_write_fail() { return s_events_write_fail; }
-uint8_t  layout_version() { return s_fs_ok ? s_sb_version : 0; }
-
-void events_wake_hold(bool hold) {
-  if (hold == s_wake_hold) return;
-  if (hold) {
-    s_wake_hold = true;
-    if (s_fs_ok) flashWake();
-  } else {
-    s_wake_hold = false;
-    if (s_fs_ok) flashSleep();
-  }
-}
-
-EventsWrite events_write_page(const uint8_t* page) {
-  if (!s_fs_ok || s_events_state != EventsState::OK || page == nullptr) return EventsWrite::REFUSED;
-  const uint32_t pages = s_events_region_bytes / jh_event::PAGE_BYTES;
-  if (s_events_used_pages >= pages) return EventsWrite::REFUSED;
-  // Page-aligned by construction (the region starts on a sector boundary),
-  // so the QSPI word-alignment rule (align4()'s comment) holds.
-  const uint32_t addr = s_events_region_start + s_events_used_pages * jh_event::PAGE_BYTES;
-  if (!s_wake_hold) flashWake();
-  const uint32_t written = s_flash.writeBuffer(addr, page, jh_event::PAGE_BYTES);
-  if (!s_wake_hold) flashSleep();
-  // Consumed either way: a short write leaves torn bytes, and nothing is
-  // ever resumed on top of them (the jumps_append() rule). The decoder sees
-  // a CRC-bad page and counts it.
-  ++s_events_used_pages;
-  if (jh_event::page_type(page) == jh_event::PAGE_TRIG) ++s_events_trig_pages;
-  if (written != jh_event::PAGE_BYTES) {
-    ++s_events_write_fail;
-    return EventsWrite::FAILED;
-  }
-  return EventsWrite::OK;
-}
-
-bool events_clear(uint32_t* failed_sector) {
-  if (!s_fs_ok || s_events_state != EventsState::OK) return false;
-  flashWake();
-  const uint32_t used_bytes = s_events_used_pages * jh_event::PAGE_BYTES;
-  const uint32_t sectors = (used_bytes + SECTOR_BYTES - 1) / SECTOR_BYTES;
-  uint32_t failed = 0;
-  const bool ok = eraseEventSectors(s_events_region_start / SECTOR_BYTES, sectors,
-                                    /*only_if_dirty=*/false, &failed);
-  if (ok) {
-    s_events_used_pages = 0;
-    s_events_damaged = 0;
-    s_events_trig_pages = 0;
-  } else {
-    if (failed_sector) *failed_sector = failed;
-    // Descending + stop-on-first-failure: everything above `failed` is
-    // erased, `failed` and below still hold data. Re-derive the append
-    // point from the flash itself — the island-safe scan appends ABOVE the
-    // highest non-erased page, so the next write can never AND-merge into
-    // what the failed erase left behind.
-    scanEventsRegion();
-  }
-  flashSleep();
-  return ok;
-}
-
-uint32_t events_raw_bytes() { return events_used_pages() * jh_event::PAGE_BYTES; }
-
-bool events_open_read_raw() {
-  if (!s_fs_ok || s_events_state != EventsState::OK) return false;
-  flashWake();
-  s_read_open        = false;
-  s_read_raw_open    = false;
-  s_read_pending_len = 0;
-  s_read_pending_pos = 0;
-  s_ev_read_open     = true;
-  s_ev_read_cursor   = 0;
-  s_ev_read_used     = s_events_used_pages * jh_event::PAGE_BYTES;
-  return true;
-}
-
-size_t events_read_raw_chunk(uint8_t* buf, size_t max_len) {
-  if (!s_ev_read_open || buf == nullptr) return 0;
-  if (s_ev_read_cursor >= s_ev_read_used) return 0;
-  // Same word-alignment discipline as read_raw_chunk(): the region and every
-  // page are aligned, and the cursor moves by multiples of 4 until the end.
-  uint32_t n = s_ev_read_used - s_ev_read_cursor;
-  if (n > (uint32_t)max_len) n = (uint32_t)max_len & ~3u;
-  if (n == 0) {
-#if !defined(ARDUINO)
-    assert(!"events_read_raw_chunk needs >= 4 bytes of buffer while data remains");
-#endif
-    return 0;
-  }
-  s_flash.readBuffer(s_events_region_start + s_ev_read_cursor, buf, n);
-  s_ev_read_cursor += n;
-  return n;
 }
 
 }  // namespace jh_store

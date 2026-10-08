@@ -811,9 +811,10 @@ def flash(
     except Exception as exc:
         return FlashResult(False, None, STAGE_SEND_UF2,
                             f"couldn't open {port_path} to send uf2: {exc}")
+    uf2_reply: "list[str]" = []
     try:
         try:
-            dev.command("uf2", timeout=_UF2_SEND_TIMEOUT_S)
+            uf2_reply = dev.command("uf2", timeout=_UF2_SEND_TIMEOUT_S)
         except Exception:
             # docs/serial-parity-2026-09-09.md:328-330: the CDC port
             # dropping right here IS the reboot, not an error — whether the
@@ -825,6 +826,18 @@ def flash(
             dev.close()
         except Exception:
             pass
+    # Firmware batch 2 (spec 2026-10-07 section 5) arms GPREGRET, READS IT
+    # BACK, and answers `ERR uf2_arm_failed sd= rc= val=` without resetting
+    # when the magic did not stick (bench 2026-10-04: 1 entry in 3). Log the
+    # reply either way, and stop at once on the device's own ERR instead of
+    # waiting the whole volume window for a drive that cannot appear.
+    for line in uf2_reply:
+        log(f"uf2 reply: {line}")
+    # Only the batch-2 answers (`ERR uf2_arm_failed ...`, `ERR uf2_unsupported`)
+    # stop here; anything else keeps the path every older puck has always had.
+    err = next((l.strip() for l in uf2_reply if l.startswith("ERR uf2_")), None)
+    if err is not None:
+        return FlashResult(False, None, STAGE_SEND_UF2, err)
 
     # ---- Stage 3: wait for the volume, mounting it if present-but-unmounted
     deadline = now() + volume_wait_s

@@ -185,6 +185,10 @@ size_t read_raw_chunk(uint8_t* buf, size_t max_len);
 // ---- housekeeping ----
 // Remove both files (no-op if storage isn't mounted) and reset all counters
 // above (byte count, cap-full flag, header-written flags) unconditionally.
+// On layout v2 the superblock is never erased (review 2026-10-08 S1): a
+// reset mid-clear leaves the chip mountable and the event region intact,
+// with some jumps/trace still stored. Only a FAILED erase falls back to the
+// old outcome (a blank superblock; the next boot formats).
 void clear();
 
 // Erase the TRACE region only, preserving every stored jump. The
@@ -208,5 +212,66 @@ bool trace_wedged();
 // jh_persist itself — main.cpp owns that bracket, exactly as it already does
 // for Key::StoreGuard around mount.
 void set_trace_wedged(bool wedged);
+
+// ---- six-axis event region (firmware batch 2, spec 2026-10-07 §3.7) ----
+// A region of 256-byte pages (firmware/include/event_format.h) at the top of
+// the chip, appended one page at a time by main.cpp's capture writer. The
+// store knows pages, not policy.
+//
+// clear() and trace_clear() NEVER touch it (spec D6: an old client that
+// knows nothing of events must not be able to destroy them by syncing);
+// events_clear() and hard_format() do.
+
+enum class EventsState : unsigned char {
+  OK = 0,
+  STORE_DOWN,         // storage not mounted
+  MIGRATION_BLOCKED,  // layout v1 kept: the trace reaches into the event
+                      // area; migrates at the first mount after `clear`
+  MIGRATION_FAILED,   // an erase or the v2 superblock write failed; v1 kept
+  UNSUPPORTED,        // this platform/chip has no event region
+};
+EventsState events_state();
+
+// Region capacity in bytes (528,384 on the P25Q16H), 0 unless events are OK.
+uint32_t events_region_bytes();
+// Pages used: the highest non-erased page + 1 at mount (island-safe), then
+// one more per events_write_page(), failed writes included.
+uint32_t events_used_pages();
+// Non-erased pages that failed their CRC at the last mount scan.
+uint32_t events_damaged_pages();
+// TRIG summary pages in the region: the valid ones the mount scan found,
+// then one more per TRIG page events_write_page() consumed. The capture
+// caps these at TRIG_BUDGET_PM of the region (event_capture.h), across
+// boots, so crossings alone can never fill it.
+uint32_t events_trig_pages();
+// Writes that came back short since boot (each consumed its page).
+uint32_t events_write_fail();
+// The mounted layout: 2 (with events), 1 (legacy, events off), 0 = down.
+uint8_t layout_version();
+
+enum class EventsWrite : unsigned char {
+  OK = 0,
+  FAILED,   // the write came back short; the page is consumed (never re-used)
+  REFUSED,  // nothing written: storage down, events off, or the region full
+};
+// Append one 256-byte page. One writeBuffer() call, one page program.
+EventsWrite events_write_page(const uint8_t* page);
+
+// Keep the chip out of deep power-down while a capture window is in flight
+// (true), and let it sleep (false). flashSleep() honours the hold.
+void events_wake_hold(bool hold);
+
+// Erase the used event sectors, top sector first, stopping at the first
+// failure (false, *failed_sector set). After a failure the append point is
+// re-derived from the flash, so it lands ABOVE whatever the failed erase
+// left — never on top of it.
+bool events_clear(uint32_t* failed_sector);
+
+// RAW export (`events`): the region's bytes from page 0 to the append
+// point. Third mode of the single read slot (see open_read_raw()); same
+// >= 4-byte chunk rule as read_raw_chunk(). close_read() ends it.
+uint32_t events_raw_bytes();
+bool events_open_read_raw();
+size_t events_read_raw_chunk(uint8_t* buf, size_t max_len);
 
 }  // namespace jh_store

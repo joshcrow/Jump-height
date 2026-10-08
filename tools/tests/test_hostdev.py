@@ -1103,3 +1103,227 @@ class TestTraceRawExport(HostDevTestCase):
                              "an empty export must have NO body lines at all")
         finally:
             dev.close()
+
+
+# ---------------------------------------------------------------------------
+# Six-axis event capture (firmware batch 2, spec 2026-10-07 section 8.1:
+# T-D1 integration of the real main.cpp, T-D2 detector non-perturbation,
+# and the host half of T-U1).
+
+import event_codec  # noqa: E402  (sim/ is already on sys.path above)
+
+EVENTS_CHATTER_RE = re.compile(
+    r"^# events bytes=(\d+) region_bytes=(\d+) page_bytes=256 format=jhev1$")
+EVENTS_CRC_RE = re.compile(r"^# events crc32=([0-9a-f]{8}) bytes=(\d+)$")
+
+
+def parse_events_export(tc: unittest.TestCase, lines: list[str]) -> bytes:
+    """One `events` response, strictly: header before the frame, crc after,
+    no INCOMPLETE, both bytes= equal, crc32 = zlib over the decoded body."""
+    text = [ln.rstrip("\r") for ln in lines]
+    head = [m for m in (EVENTS_CHATTER_RE.match(l) for l in text) if m]
+    crc = [m for m in (EVENTS_CRC_RE.match(l) for l in text) if m]
+    tc.assertEqual(len(head), 1, "\n".join(text[:20]))
+    tc.assertEqual(len(crc), 1, "\n".join(text[-20:]))
+    b = text.index("FILE events.bin BEGIN")
+    e = text.index("FILE events.bin END")
+    tc.assertLess(text.index(head[0].string), b)
+    tc.assertGreater(text.index(crc[0].string), e)
+    tc.assertFalse([l for l in text if "INCOMPLETE" in l])
+    raw = base64.b64decode("".join(text[b + 1:e]), validate=True)
+    tc.assertEqual(len(raw), int(head[0].group(1)))
+    tc.assertEqual(int(crc[0].group(2)), int(head[0].group(1)))
+    tc.assertEqual(f"{zlib.crc32(raw) & 0xFFFFFFFF:08x}", crc[0].group(1))
+    tc.assertEqual(len(raw) % 256, 0)
+    return raw
+
+
+class TestEventCaptureOnTheRealCore(HostDevTestCase):
+    """T-D1: events / evstat / evclear / `# boot_id=` / help, end to end
+    through the real main.cpp, decoded with sim/event_codec.py."""
+
+    def _boot(self, script_text: str, extra_env: dict | None = None) -> HostDevice:
+        script = write_script(self.tmp_path / "script.txt", script_text)
+        env = {"JH_HOST_BOOT_ID": "5eed1234"}
+        env.update(extra_env or {})
+        dev = HostDevice(self.host_binary, self.tmp_path / "hostdir", script, extra_env=env)
+        boot = dev.drain_boot()
+        self.assertEqual(boot[-1].strip(), "READY", boot)
+        return dev
+
+    def _evstat(self, dev: HostDevice) -> dict:
+        lines = dev.command("evstat")
+        st = [l for l in lines if l.startswith("EVSTAT ")]
+        self.assertEqual(len(st), 1, lines)
+        return parse_kv(st[0])
+
+    def test_an_impact_becomes_a_decodable_event_that_clear_keeps_and_evclear_erases(self):
+        # Motion first (chop holds the gate open, so the pre-trigger ring has
+        # 5 s to give), then a 9 g impact, then motion past post_s.
+        dev = self._boot("rest 1.5\nchop 7 0.3\nimpact 9.0\nchop 3 0.3\nrest 60\n")
+        try:
+            # 1.5 + 7 + 0.02 + 3 s of script; the window closes 1.5 s after
+            # the impact, its ~84 pages drain in well under a second.
+            time.sleep(12.5)
+            info = dev.command("info")
+            self.assertIn("# boot_id=5eed1234", info)
+            help_lines = dev.command("help")
+            cmds = help_lines[0].split(":", 1)[1].split("|")
+            for c in ("events", "evstat", "evclear"):
+                self.assertIn(c, [x.strip() for x in cmds])
+
+            st = self._evstat(dev)
+            self.assertEqual(st["disabled"], "0")
+            self.assertEqual(st["region_bytes"], "528384")
+            self.assertEqual(st["boot_id"], "5eed1234")
+            self.assertEqual(st["events_boot"], "1")
+            self.assertEqual(st["layout"], "2")
+            self.assertGreaterEqual(int(st["crossings"]), 1)
+            # Review 2026-10-08 S2/S3: the TRIG budget and the loop-task
+            # stack high-water mark are reported (the host has no task
+            # stack, so it says -1, never a made-up number).
+            self.assertEqual(st["trig_over_budget"], "0")
+            self.assertGreaterEqual(int(st["trig_pages"]), 0)
+            self.assertEqual(st["stack_free_min"], "-1")
+
+            raw = parse_events_export(self, dev.command("events", timeout=30))
+            d = event_codec.decode_region(raw)
+            self.assertEqual(d.errors, [])
+            self.assertEqual(d.damaged_pages, [])
+            self.assertEqual(len(d.events), 1)
+            ev = d.events[0]
+            self.assertTrue(ev.complete, ev.problems)
+            self.assertEqual(ev.boot_id, 0x5EED1234)
+            self.assertEqual(event_codec.CAUSES[ev.begin["cause"]], "TIER_A")
+            self.assertGreaterEqual(ev.begin["trigger_mag_mg"], 8000)
+            self.assertEqual(ev.begin["src"], parse_kv(
+                [l for l in info if l.startswith("INFO ")][0])["src"])
+            # The host has no registers: provenance says so, never invents.
+            self.assertEqual((ev.begin["regs_ok"], ev.begin["temp_ok"]), (0, 0))
+            self.assertEqual(ev.end["temp_ok"], 0)
+            # ~5 s of pre-trigger chop at 200 Hz, then the impact.
+            pre = ev.begin["trigger_t_us"] - ev.samples[0][1]
+            self.assertGreater(pre, 4_500_000)
+            self.assertLessEqual(pre, 5_000_000)
+            peak = max(abs(s[2][2]) for s in ev.samples)
+            self.assertGreater(peak, int(8.5 / 0.000488), "the impact's raw az")
+            self.assertTrue(any(t["decision_name"] == "OPENED_A" for t in d.triggers))
+            # Same time zero as trace.csv: t_s of the impact lands where the
+            # script put it (1.5 + 7 s after the IMU started, give or take
+            # the boot's few hundred ms before t0).
+            rows = list(event_codec.sample_rows(ev))
+            t_imp = [r["t_s"] for r in rows if abs(r["raw"][2]) > 8.5 / 0.000488][0]
+            self.assertGreater(t_imp, 6.0)
+            self.assertLess(t_imp, 9.0)
+
+            dev.command("clear")
+            st2 = self._evstat(dev)
+            self.assertEqual(st2["bytes"], str(len(raw)), "`clear` must NOT erase events (spec D6)")
+
+            dev.command("evclear")
+            st3 = self._evstat(dev)
+            self.assertEqual(st3["bytes"], "0")
+            empty = parse_events_export(self, dev.command("events"))
+            self.assertEqual(empty, b"")
+        finally:
+            dev.close()
+
+    def test_a_detector_jump_is_linked_to_its_event(self):
+        dev = self._boot("rest 1.5\nchop 6 0.3\njumpimpact 0.65 9.0\nchop 3 0.3\nrest 60\n")
+        try:
+            jl = dev.wait_for("JUMP", timeout=15.0)
+            self.assertIsNotNone(jl, "the scripted jump was not detected")
+            kv = parse_kv(jl)
+            time.sleep(3.5)
+            raw = parse_events_export(self, dev.command("events", timeout=30))
+            d = event_codec.decode_region(raw)
+            links = [l for ev in d.events for l in (ev.end or {}).get("links", [])]
+            self.assertEqual(len(links), 1, [ev.end for ev in d.events])
+            self.assertEqual(links[0]["session_n"], int(kv["n"]))
+            self.assertEqual(links[0]["stored_n"], 1)
+            self.assertAlmostEqual(links[0]["airtime_raw_s"], float(kv["airtime_raw_s"]), places=3)
+            self.assertTrue(any(t["decision_name"] == "FORCED_DETECTOR" for t in d.triggers))
+        finally:
+            dev.close()
+
+    def test_a_disabled_region_is_an_err_never_an_empty_export(self):
+        dev = self._boot("rest 30\n", {"JH_HOST_EVENTS_STATE": "migration_blocked"})
+        try:
+            self.assertEqual(dev.command("events")[-1], "ERR events disabled migration_blocked")
+            self.assertEqual(dev.command("evclear")[-1], "ERR evclear disabled migration_blocked")
+            st = self._evstat(dev)
+            self.assertEqual(st["disabled"], "migration_blocked")
+        finally:
+            dev.close()
+
+    def test_uf2_and_dfu_on_a_build_without_a_bootloader_never_say_ok(self):
+        """T-U1, host half: the arm is checked BEFORE any OK. The old code
+        sent `OK uf2` and then `ERR uf2_unsupported`."""
+        dev = self._boot("rest 30\n")
+        try:
+            for cmd, err in (("uf2", "ERR uf2_unsupported"), ("dfu", "ERR dfu_unsupported")):
+                lines = dev.command(cmd)
+                self.assertTrue(lines[-1].startswith(err), lines)
+                self.assertNotIn(f"OK {cmd}", lines)
+            # And the device is still alive and recording.
+            self.assertTrue(any(l.startswith("STATS ") for l in dev.command("stats")))
+        finally:
+            dev.close()
+
+
+class TestCaptureDoesNotPerturbTheDetector(HostDevTestCase):
+    """T-D2: the same scripted session through the product host build and a
+    build with every capture call compiled out (-DJH_CAPTURE_ENABLED=0). The
+    host IMU is wall-clock keyed, so byte identity across two runs is not
+    available; the bar is the one the existing jump tests use — the same
+    JUMP count, every airtime within 0.1 s of the script and of each other."""
+
+    _off_binary: Path | None = None
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        if TestCaptureDoesNotPerturbTheDetector._off_binary is None:
+            build_dir = Path(tempfile.mkdtemp(prefix="jh_host_capture_off_"))
+            env = dict(os.environ, PLATFORMIO_BUILD_FLAGS="-DJH_CAPTURE_ENABLED=0",
+                       PLATFORMIO_BUILD_DIR=str(build_dir))
+            r = subprocess.run(PIO + ["run", "-d", str(FIRMWARE_DIR), "-e", "host"],
+                               capture_output=True, text=True, timeout=300, env=env)
+            assert r.returncode == 0, f"capture-off host build failed:\n{r.stdout}\n{r.stderr}"
+            binp = build_dir / "host" / "program"
+            assert binp.exists(), binp
+            TestCaptureDoesNotPerturbTheDetector._off_binary = binp
+        cls.off_binary = TestCaptureDoesNotPerturbTheDetector._off_binary
+
+    def _jumps(self, binary: Path, script_text: str, n_expected: int) -> list[dict]:
+        script = write_script(self.tmp_path / f"s_{binary.parent.parent.name}.txt", script_text)
+        dev = HostDevice(binary, self.tmp_path / f"dir_{binary.parent.parent.name}", script)
+        try:
+            self.assertEqual(dev.drain_boot()[-1].strip(), "READY")
+            out = []
+            for _ in range(n_expected):
+                jl = dev.wait_for("JUMP", timeout=15.0)
+                if jl is None:
+                    break
+                out.append(parse_kv(jl))
+            if binary == self.host_binary:
+                st = [l for l in dev.command("evstat") if l.startswith("EVSTAT ")]
+                self.assertGreaterEqual(int(parse_kv(st[0])["events_boot"]), 1,
+                                        "the capture build must actually have captured")
+            return out
+        finally:
+            dev.close()
+
+    def test_the_same_jumps_with_and_without_capture(self):
+        script = ("rest 1.5\nchop 4 0.3\njumpimpact 0.70 9.0\nchop 2 0.3\n"
+                  "jump 0.50\nchop 3 0.3\nimpact 12.0\nchop 1 0.3\njump 0.90\nrest 30\n")
+        want = [0.70, 0.50, 0.90]
+        on = self._jumps(self.host_binary, script, len(want))
+        off = self._jumps(self.off_binary, script, len(want))
+        self.assertEqual(len(on), len(want), on)
+        self.assertEqual(len(off), len(want), off)
+        for a, b, w in zip(on, off, want):
+            ta, tb = float(a["airtime_raw_s"]), float(b["airtime_raw_s"])
+            self.assertLessEqual(abs(ta - w), 0.1)
+            self.assertLessEqual(abs(tb - w), 0.1)
+            self.assertLessEqual(abs(ta - tb), 0.1)

@@ -113,4 +113,19 @@ bool read_accel_g(float& ax, float& ay, float& az);
 // sim/experiments/g4_spin_detector.py.
 bool read_gyro_dps(float& gx, float& gy, float& gz);
 
+// ---- six-axis event capture (firmware batch 2, spec 2026-10-07 §3.1) ----
+// The raw i16 registers behind the LAST successful read_accel_g() and
+// read_gyro_dps(), cached beside the float conversion (which is unchanged,
+// so the detector's input is bit-identical). No bus traffic: capture stores
+// exactly the samples the detector already read. Zeros before the first
+// successful read.
+void last_raw(int16_t accel[3], int16_t gyro[3]);
+// OUT_TEMP (0x20/0x21), raw i16; degC = 25 + raw/256. False when it could not
+// be read (or the platform has no such register — the host).
+bool read_temp_raw(int16_t& raw);
+// CTRL1_XL..CTRL7_G (0x10..0x16) as the sensor holds them NOW, one burst
+// read — proof of the configuration a recording was made under, rather than
+// the configuration begin() meant to write. False when unreadable.
+bool read_ctrl_regs(uint8_t out[7]);
+
 }  // namespace jh_imu

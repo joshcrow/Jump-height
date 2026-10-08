@@ -145,7 +145,17 @@ TRACE_REGION_START = SUPERBLOCK_BYTES + JUMPS_REGION_BYTES  # 69632
 # P25Q16H, matching flash_devices.h's real macro and mock_flash.h's P25Q16H
 # shim (both (1 << 21)) — the chip jh_store.cpp always asks for by name.
 CHIP_SIZE = 1 << 21
-TRACE_REGION_BYTES = CHIP_SIZE - TRACE_REGION_START  # 2,027,520
+# Layout v2 (firmware batch 2, spec 2026-10-07 §3.3): the six-axis event
+# region takes the top 528,384 bytes (129 sectors), so the trace region is
+# 1,499,136 bytes — 2.00 h of motion at 100 Hz. Was CHIP_SIZE -
+# TRACE_REGION_START = 2,027,520 in layout v1, which is what every deployed
+# puck still has until it migrates (TestLayoutV2Migration below).
+EVENTS_REGION_BYTES = 528384
+TRACE_REGION_BYTES = CHIP_SIZE - TRACE_REGION_START - EVENTS_REGION_BYTES  # 1,499,136
+TRACE_REGION_BYTES_V1 = CHIP_SIZE - TRACE_REGION_START                       # 2,027,520
+# Where each layout's superblock lives in sector 0 (jh_store.cpp
+# kSuperblockV2Offset): v1 at 0, v2 at 256.
+SUPERBLOCK_V2_OFFSET = 256
 
 # Process exit code mock_flash.cpp uses for a simulated power cut — mirrors
 # mock_flash.h's mock_flash_test::kFaultExitCode (kept in sync by hand; a
@@ -573,9 +583,14 @@ class TestStoreHost(unittest.TestCase):
         self.assertEqual(r1.returncode, 0)
 
         # Corrupt one bit of the superblock magic, remembering the original.
+        # Layout v2 keeps its superblock at SUPERBLOCK_V2_OFFSET (page 1 of
+        # sector 0) so a v1 chip can be migrated by programming alone; a
+        # fresh chip has nothing at offset 0 at all. Same test, the active
+        # superblock's address.
         with open(backing, "r+b") as f:
+            f.seek(SUPERBLOCK_V2_OFFSET)
             original_byte = f.read(1)
-            f.seek(0)
+            f.seek(SUPERBLOCK_V2_OFFSET)
             f.write(bytes([original_byte[0] ^ 0x01]))
         snapshot = backing.read_bytes()
 
@@ -595,6 +610,7 @@ class TestStoreHost(unittest.TestCase):
 
         # Repair the superblock: the data must still be there, in full.
         with open(backing, "r+b") as f:
+            f.seek(SUPERBLOCK_V2_OFFSET)
             f.write(original_byte)
         r3 = run_harness(self.harness, [
             "TRY_MOUNT",
@@ -1951,3 +1967,440 @@ class RateGenericAcrossLogHz(unittest.TestCase):
 
     def test_round_trip_at_log_hz_100(self) -> None:
         self._round_trip_at(100)
+
+
+# ---------------------------------------------------------------------------
+# Layout v2: the six-axis event region and the in-place v1 -> v2 migration
+# (firmware batch 2, spec 2026-10-07 §3.7 and §8.1 T-S1).
+#
+# The v1 chips here are written by the REAL v1 store: jh_store_v1_c5eea285.cpp
+# is a frozen copy of the source every deployed puck runs, compiled into a
+# second harness. So "migrates byte-identical" is checked against what v1
+# actually leaves on flash, not against this suite's idea of it.
+
+import hashlib  # noqa: E402
+import zlib  # noqa: E402
+
+sys.path.insert(0, str(REPO / "sim"))
+import event_codec  # noqa: E402
+
+V1_STORE_CPP = STORE_HOST_DIR / "jh_store_v1_c5eea285.cpp"
+EVENTS_REGION_START = CHIP_SIZE - EVENTS_REGION_BYTES       # 0x17F000
+EVENT_PAGES = EVENTS_REGION_BYTES // 256                    # 2064
+V2_TRACE_END = TRACE_REGION_START + TRACE_REGION_BYTES      # == EVENTS_REGION_START
+
+
+def _build_v1_harness(tmpdir: str) -> str:
+    binp = str(Path(tmpdir) / "store_host_harness_v1")
+    r = subprocess.run(
+        [_gxx(), "-std=c++14", "-Wall", "-Wextra", "-DJH_STORE_V1_FIXTURE",
+         "-I", str(STORE_HOST_DIR / "shim"),
+         "-I", str(REPO / "firmware" / "include"),
+         str(STORE_HOST_DIR / "mock_flash.cpp"),
+         str(STORE_HOST_DIR / "store_host_harness.cpp"),
+         str(V1_STORE_CPP),
+         "-o", binp],
+        capture_output=True, text=True)
+    if r.returncode != 0:
+        raise AssertionError(f"v1 fixture harness failed to compile:\n{r.stderr}")
+    return binp
+
+
+def _sha(b: bytes) -> str:
+    return hashlib.sha256(b).hexdigest()
+
+
+class TestLayoutV2AndEvents(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._tmpdir = tempfile.mkdtemp(prefix="store_host_v2_")
+        cls.v2 = _build_harness(cls._tmpdir)
+        cls.v1 = _build_v1_harness(cls._tmpdir)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        shutil.rmtree(cls._tmpdir, ignore_errors=True)
+
+    def _backing(self, name: str) -> Path:
+        p = Path(self._tmpdir) / name
+        if p.exists():
+            p.unlink()
+        return p
+
+    # -- helpers -----------------------------------------------------------
+    def _snapshot(self, binary: str, backing: Path) -> dict:
+        """Jumps CSV, trace raw bytes and the two regions' on-flash bytes,
+        read through `binary`'s OWN store (v1 reads a v1 chip)."""
+        r = run_harness(binary, [
+            "INIT", "JUMPS_SCAN", "TRACE_RAW_BYTES",
+            "OPEN_READ JUMPS", "READ_ALL", "CLOSE_READ",
+            "OPEN_READ_RAW", "READ_RAW_ALL", "CLOSE_READ",
+        ], backing=backing)
+        self.assertEqual(r.returncode, 0, r.raw_stdout[-2000:])
+        img = backing.read_bytes()
+        n_trace = int(last(r.events, "TRACE_RAW_BYTES")["n"])
+        return {
+            "jumps_csv": _sha(r.read_alls[0].encode()),
+            "trace_raw": _sha(_raw_hex_payloads(r.raw_stdout)[0]),
+            "trace_raw_len": n_trace,
+            "jumps_region": _sha(img[SUPERBLOCK_BYTES:TRACE_REGION_START]),
+            "trace_region_used": _sha(img[TRACE_REGION_START:TRACE_REGION_START + n_trace]),
+            "count": int(last(r.events, "JUMPS_SCAN")["count"]),
+        }
+
+    def _ev_state(self, r) -> dict:
+        return last(r.events, "EV_STATE")
+
+    # -- fresh chips ---------------------------------------------------------
+    def test_a_blank_chip_formats_straight_to_v2(self) -> None:
+        backing = self._backing("fresh.bin")
+        r = run_harness(self.v2, ["INIT", "LAYOUT", "EV_STATE", "TRACE_REGION_BYTES",
+                                  "FREE_BYTES"], backing=backing)
+        self.assertEqual(last(r.events, "LAYOUT")["v"], "2")
+        ev = self._ev_state(r)
+        self.assertEqual((ev["state"], ev["used"], ev["region"]), ("ok", "0", str(EVENTS_REGION_BYTES)))
+        self.assertEqual(int(last(r.events, "TRACE_REGION_BYTES")["n"]), TRACE_REGION_BYTES)
+        self.assertEqual(int(last(r.events, "FREE_BYTES")["n"]),
+                         JUMPS_REGION_BYTES + TRACE_REGION_BYTES,
+                         "free_bytes keeps its meaning: jumps + trace, not events")
+        img = backing.read_bytes()
+        self.assertEqual(img[:SUPERBLOCK_V2_OFFSET], b"\xff" * SUPERBLOCK_V2_OFFSET,
+                         "a v2 chip has nothing at the v1 superblock's address")
+        self.assertEqual(img[SUPERBLOCK_V2_OFFSET:SUPERBLOCK_V2_OFFSET + 4], b"JHS2")
+
+    # -- migration -----------------------------------------------------------
+    def test_an_empty_v1_chip_migrates(self) -> None:
+        backing = self._backing("v1_empty.bin")
+        run_harness(self.v1, ["INIT"], backing=backing)
+        r = run_harness(self.v2, ["INIT", "LAYOUT", "EV_STATE"], backing=backing)
+        self.assertEqual(last(r.events, "INIT")["ok"], "1")
+        self.assertEqual(last(r.events, "LAYOUT")["v"], "2")
+        self.assertEqual(self._ev_state(r)["state"], "ok")
+        announces = [e["text"] for e in all_of(r.events, "ANNOUNCE")]
+        self.assertFalse(any("formatting" in a for a in announces),
+                         f"a migration must never format: {announces}")
+        self.assertTrue(any("migrating layout v1 -> v2" in a for a in announces))
+
+    def test_a_v1_chip_with_data_migrates_byte_identical(self) -> None:
+        backing = self._backing("v1_data.bin")
+        r0 = run_harness(self.v1, [
+            "INIT", "JUMPS_FILL 37", f"TRACE_FILL 3000 {LOG_HZ} 100.0 1.0",
+        ], backing=backing)
+        self.assertEqual(r0.returncode, 0)
+        before = self._snapshot(self.v1, backing)
+        self.assertGreater(before["trace_raw_len"], 500_000)
+        self.assertLess(before["trace_raw_len"], TRACE_REGION_BYTES)
+        # A stale island in the future event area (old trace a v1 trace_clear
+        # never reached): the migration must erase it, not inherit it.
+        with open(backing, "r+b") as f:
+            f.seek(EVENTS_REGION_START + 3 * 4096 + 100)
+            f.write(b"\x12\x34" * 200)
+
+        r = run_harness(self.v2, ["INIT", "LAYOUT", "EV_STATE"], backing=backing)
+        self.assertEqual(last(r.events, "LAYOUT")["v"], "2")
+        self.assertEqual(self._ev_state(r)["used"], "0", "the island must be gone")
+        print(f"\n[migration] v1 -> v2 mount with {before['trace_raw_len']:,} B of "
+              f"trace took {last(r.events, 'INIT')['elapsed_us']} us on the host mock")
+        after = self._snapshot(self.v2, backing)
+        self.assertEqual(after, before, "jumps and trace must survive byte-identical")
+        img = backing.read_bytes()
+        self.assertEqual(img[EVENTS_REGION_START:], b"\xff" * EVENTS_REGION_BYTES)
+        self.assertEqual(img[0:4], b"\0\0\0\0", "v1's magic is retired by programming it to zero")
+
+    def test_a_v1_trace_past_the_boundary_is_refused_and_kept_until_clear(self) -> None:
+        backing = self._backing("v1_big.bin")
+        seconds = (TRACE_REGION_BYTES // trace_codec.block_size(LOG_HZ)) + 200
+        run_harness(self.v1, ["INIT", "JUMPS_FILL 3",
+                              f"TRACE_FILL {seconds} {LOG_HZ} 0.0 1.0"], backing=backing)
+        before = self._snapshot(self.v1, backing)
+        self.assertGreater(before["trace_raw_len"], TRACE_REGION_BYTES)
+
+        r = run_harness(self.v2, [
+            "INIT", "LAYOUT", "EV_STATE", "TRACE_REGION_BYTES", "EV_WRITE 1 9 0",
+            f"TRACE_APPEND {_ts(99999, 1)},1.234",
+            "OPEN_READ_RAW", "CLOSE_READ",      # closes the in-progress block
+        ], backing=backing)
+        self.assertEqual(last(r.events, "LAYOUT")["v"], "1")
+        self.assertEqual(self._ev_state(r)["state"], "migration_blocked")
+        self.assertEqual(int(last(r.events, "TRACE_REGION_BYTES")["n"]), TRACE_REGION_BYTES_V1)
+        self.assertEqual(last(r.events, "EV_WRITE")["refused"], "1")
+        announces = [e["text"] for e in all_of(r.events, "ANNOUNCE")]
+        self.assertTrue(any("layout v1 kept" in a for a in announces), announces)
+        after = self._snapshot(self.v2, backing)
+        self.assertEqual(after["jumps_csv"], before["jumps_csv"])
+        self.assertEqual(after["count"], 3)
+        self.assertGreater(after["trace_raw_len"], before["trace_raw_len"],
+                           "v1 keeps recording normally while blocked")
+
+        # The safety net: the next mount after a `clear` migrates.
+        run_harness(self.v2, ["INIT", "CLEAR"], backing=backing)
+        r2 = run_harness(self.v2, ["INIT", "LAYOUT", "EV_STATE"], backing=backing)
+        self.assertEqual(last(r2.events, "LAYOUT")["v"], "2")
+        self.assertEqual(self._ev_state(r2)["state"], "ok")
+
+    def test_a_failed_migration_erase_keeps_v1_and_says_so(self) -> None:
+        backing = self._backing("v1_erasefail.bin")
+        run_harness(self.v1, ["INIT", "JUMPS_FILL 2"], backing=backing)
+        before = self._snapshot(self.v1, backing)
+        with open(backing, "r+b") as f:           # something the migration must erase
+            f.seek(EVENTS_REGION_START + 10 * 4096)
+            f.write(b"\x00" * 64)
+        r = run_harness(self.v2, ["FAIL_NEXT_ERASE", "INIT", "LAYOUT", "EV_STATE"],
+                        backing=backing)
+        self.assertEqual(last(r.events, "INIT")["ok"], "1")
+        self.assertEqual(last(r.events, "LAYOUT")["v"], "1")
+        self.assertEqual(self._ev_state(r)["state"], "migration_failed")
+        self.assertEqual(self._snapshot(self.v2, backing)["jumps_csv"], before["jumps_csv"])
+
+    # -- the event region ----------------------------------------------------
+    def test_clear_and_trace_clear_leave_events_and_format_erases_them(self) -> None:
+        backing = self._backing("ev_clear.bin")
+        r = run_harness(self.v2, [
+            "INIT", "JUMPS_APPEND 1 1.0 0.5 0.5 0.3", f"TRACE_APPEND {_ts(0, 1)},1.001",
+            "EV_WRITE 10 5 0", "EV_RAW", "CLEAR", "EV_STATE", "EV_RAW",
+            "TRACE_CLEAR", "EV_RAW", "JUMPS_SCAN", "TRACE_BYTES",
+        ], backing=backing)
+        raws = all_of(r.events, "EV_RAW")
+        self.assertEqual(len({e["crc32"] for e in raws}), 1, "clear/trace_clear changed events")
+        self.assertEqual(raws[0]["n"], str(10 * 256))
+        self.assertEqual(self._ev_state(r)["used"], "10")
+        self.assertEqual(last(r.events, "JUMPS_SCAN")["count"], "0")
+        self.assertEqual(last(r.events, "TRACE_BYTES")["n"], "0")
+        r2 = run_harness(self.v2, ["INIT", "EV_STATE", "EV_RAW", "HARD_FORMAT", "EV_STATE",
+                                   "LAYOUT"], backing=backing)
+        self.assertEqual(all_of(r2.events, "EV_STATE")[0]["used"], "10")
+        self.assertEqual(last(r2.events, "EV_RAW")["crc32"], raws[0]["crc32"],
+                         "events survive a reboot after clear")
+        self.assertEqual(last(r2.events, "EV_STATE")["used"], "0")
+        self.assertEqual(last(r2.events, "LAYOUT")["v"], "2")
+
+    def test_a_power_cut_anywhere_in_clear_never_formats_and_keeps_events(self) -> None:
+        """Review 2026-10-08 S1. clear() used to erase the superblock FIRST
+        and rewrite it after every jumps/trace sector, so a reset anywhere in
+        that window made the next boot format the chip -- the event region
+        included -- although D6 says an old client's `clear` can never
+        destroy events. Now v2 never touches sector 0 in clear(), and erases
+        each region top-down, so a cut leaves a mountable chip whose jumps
+        and trace are a clean PREFIX of what was there (no island an append
+        could AND-merge into) and whose events are byte-identical."""
+        base = self._backing("cut_base.bin")
+        r0 = run_harness(self.v2, [
+            "INIT", "JUMPS_FILL 300", f"TRACE_FILL 120 {LOG_HZ} 0.0 1.0",
+            "OPEN_READ_RAW", "CLOSE_READ", "EV_WRITE 10 5 0", "EV_RAW",
+            "JUMPS_SCAN", "TRACE_RAW_BYTES",
+        ], backing=base)
+        self.assertEqual(r0.returncode, 0, r0.raw_stdout[-2000:])
+        ev_crc = last(r0.events, "EV_RAW")["crc32"]
+        n_jumps = int(last(r0.events, "JUMPS_SCAN")["count"])
+        n_trace = int(last(r0.events, "TRACE_RAW_BYTES")["n"])
+        self.assertEqual(n_jumps, 300)
+        jump_sectors = -(-n_jumps * JUMP_RECORD_BYTES // 4096)
+        trace_sectors = -(-n_trace // 4096)
+        n_erases = jump_sectors + trace_sectors
+        self.assertGreaterEqual(trace_sectors, 3, "the scenario needs a multi-sector trace")
+        img0 = base.read_bytes()
+        jumps0 = img0[SUPERBLOCK_BYTES:SUPERBLOCK_BYTES + n_jumps * JUMP_RECORD_BYTES]
+        trace0 = img0[TRACE_REGION_START:TRACE_REGION_START + n_trace]
+
+        for cut in range(n_erases):
+            with self.subTest(cut_after_erases=cut):
+                b = self._backing(f"cut_{cut}.bin")
+                b.write_bytes(img0)
+                r1 = run_harness(self.v2, ["INIT", f"CUT_AFTER_ERASES {cut}", "CLEAR"],
+                                 backing=b)
+                self.assertEqual(r1.returncode, FAULT_EXIT_CODE,
+                                 "the cut must land inside clear() -- a clear that "
+                                 "finished would prove nothing")
+                img1 = b.read_bytes()
+                self.assertEqual(img1[:4096], img0[:4096], "sector 0 was touched")
+                self.assertEqual(img1[EVENTS_REGION_START:], img0[EVENTS_REGION_START:])
+
+                r2 = run_harness(self.v2, [
+                    "INIT", "LAYOUT", "EV_STATE", "EV_RAW", "JUMPS_SCAN", "TRACE_RAW_BYTES",
+                ], backing=b)
+                img2 = b.read_bytes()    # before anything is appended
+                r2b = run_harness(self.v2, [
+                    "INIT", "JUMPS_SCAN", "TRACE_RAW_BYTES",
+                    "JUMPS_APPEND 9999 1.000 0.300 0.280 0.550",
+                    f"TRACE_APPEND {_ts(99999, 1)},1.234",
+                    "OPEN_READ_RAW", "CLOSE_READ", "JUMPS_SCAN", "TRACE_RAW_BYTES",
+                ], backing=b)
+                self.assertEqual(r2b.returncode, 0, r2b.raw_stdout[-2000:])
+                self.assertEqual(r2.returncode, 0, r2.raw_stdout[-2000:])
+                announces = [e["text"] for e in all_of(r2.events, "ANNOUNCE")]
+                self.assertFalse(any("formatting" in a for a in announces), announces)
+                self.assertEqual(last(r2.events, "LAYOUT")["v"], "2")
+                self.assertEqual(self._ev_state(r2)["used"], "10")
+                self.assertEqual(last(r2.events, "EV_RAW")["crc32"], ev_crc,
+                                 "events changed across a cut clear")
+
+                k = int(all_of(r2.events, "JUMPS_SCAN")[0]["count"])
+                t = int(all_of(r2.events, "TRACE_RAW_BYTES")[0]["n"])
+                self.assertLessEqual(k, n_jumps)
+                # A trace block torn at the erase boundary is skipped to the
+                # next page past its largest possible size (skipPastTornWrite),
+                # so t may sit a little ABOVE n_trace -- on erased flash.
+                self.assertLessEqual(t, n_trace + 4096)
+                self.assertEqual(img2[SUPERBLOCK_BYTES:SUPERBLOCK_BYTES + k * JUMP_RECORD_BYTES],
+                                 jumps0[:k * JUMP_RECORD_BYTES], "surviving jumps are a prefix")
+                # Each region, sector by sector: intact sectors, then erased
+                # ones, never an intact sector above an erased one (the
+                # island). Above the scan's append point: erased only.
+                for name, start, end, orig, append in (
+                        ("jumps", SUPERBLOCK_BYTES, TRACE_REGION_START, jumps0,
+                         k * JUMP_RECORD_BYTES),
+                        ("trace", TRACE_REGION_START, V2_TRACE_END, trace0, t)):
+                    region = img2[start:end]
+                    self.assertEqual(region[append:], b"\xff" * (len(region) - append),
+                                     f"{name}: data above the append point (an island)")
+                    states = []
+                    for j in range(-(-len(orig) // 4096)):
+                        sec = region[j * 4096:(j + 1) * 4096]
+                        if sec == orig[j * 4096:(j + 1) * 4096] + region[len(orig):(j + 1) * 4096]:
+                            states.append("kept")
+                        elif sec == b"\xff" * 4096:
+                            states.append("erased")
+                        else:
+                            states.append("mixed")
+                    self.assertNotIn("mixed", states, name)
+                    self.assertEqual(states, sorted(states, key=lambda s: s != "kept"),
+                                     f"{name}: an intact sector above an erased one {states}")
+                # The append lands on erased flash: exactly one more record,
+                # read back valid -- an AND-merge onto an island would fail
+                # its CRC and not be counted.
+                self.assertEqual(int(all_of(r2b.events, "JUMPS_SCAN")[0]["count"]), k)
+                self.assertEqual(int(all_of(r2b.events, "JUMPS_SCAN")[1]["count"]), k + 1)
+                self.assertGreater(int(all_of(r2b.events, "TRACE_RAW_BYTES")[1]["n"]), t)
+
+                # A clean clear afterwards still empties jumps and trace only.
+                r3 = run_harness(self.v2, ["INIT", "CLEAR", "OK", "JUMPS_SCAN",
+                                           "TRACE_BYTES", "EV_RAW"], backing=b)
+                self.assertEqual(last(r3.events, "OK")["ok"], "1")
+                self.assertEqual(last(r3.events, "JUMPS_SCAN")["count"], "0")
+                self.assertEqual(last(r3.events, "TRACE_BYTES")["n"], "0")
+                self.assertEqual(last(r3.events, "EV_RAW")["crc32"], ev_crc)
+
+    def test_a_failed_erase_in_clear_falls_back_to_the_old_format_on_boot(self) -> None:
+        """The other half of S1: a sector that refuses to erase is a chip
+        fault, and the layout above where clear() stopped is not provably
+        consistent, so v2 keeps the pre-v2 outcome -- storage down now, the
+        superblock left blank, the next boot announces and formats."""
+        backing = self._backing("clear_erasefail_v2.bin")
+        r = run_harness(self.v2, [
+            "INIT", "JUMPS_FILL 300", "EV_WRITE 4 5 0",
+            "FAIL_ERASE_AFTER 1", "CLEAR", "OK",
+        ], backing=backing)
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(last(r.events, "OK")["ok"], "0")
+        self.assertEqual(backing.read_bytes()[:4096], b"\xff" * 4096)
+        r2 = run_harness(self.v2, ["INIT", "LAYOUT", "EV_STATE", "JUMPS_SCAN"], backing=backing)
+        announces = [e["text"] for e in all_of(r2.events, "ANNOUNCE")]
+        self.assertTrue(any("formatting" in a for a in announces), announces)
+        self.assertEqual(last(r2.events, "LAYOUT")["v"], "2")
+        self.assertEqual(self._ev_state(r2)["used"], "0")
+        self.assertEqual(last(r2.events, "JUMPS_SCAN")["count"], "0")
+
+    def test_trig_pages_are_counted_at_mount_on_write_and_reset_by_evclear(self) -> None:
+        """Review 2026-10-08 S2: the capture's TRIG budget spans boots, so
+        the store reports how many TRIG pages the region already holds."""
+        backing = self._backing("ev_trig.bin")
+        r = run_harness(self.v2, ["INIT", "EV_WRITE 3 5 0", "EV_WRITE_TRIG 4 5 3",
+                                  "EV_WRITE 2 5 7", "EV_STATE"], backing=backing)
+        self.assertEqual((self._ev_state(r)["used"], self._ev_state(r)["trig"]), ("9", "4"))
+        r2 = run_harness(self.v2, ["INIT", "EV_STATE", "EV_WRITE_TRIG 1 5 9", "EV_STATE",
+                                   "EV_CLEAR", "EV_STATE"], backing=backing)
+        st = all_of(r2.events, "EV_STATE")
+        self.assertEqual((st[0]["used"], st[0]["trig"]), ("9", "4"), "the mount scan")
+        self.assertEqual((st[1]["used"], st[1]["trig"]), ("10", "5"))
+        self.assertEqual((st[2]["used"], st[2]["trig"]), ("0", "0"))
+
+    def test_events_clear_erases_top_down_and_appends_above_a_failed_island(self) -> None:
+        backing = self._backing("ev_island.bin")
+        # 100 pages = 25,600 B = sectors 0..6 of the region (the 7th partial).
+        r = run_harness(self.v2, [
+            "INIT", "EV_WRITE 100 3 0",
+            "FAIL_ERASE_AFTER 3",            # sectors 6, 5, 4 erase; sector 3 fails
+            "EV_CLEAR", "EV_STATE", "EV_WRITE 1 4 0", "EV_RAW_HEX",
+        ], backing=backing)
+        clr = last(r.events, "EV_CLEAR")
+        self.assertEqual(clr["ok"], "0")
+        self.assertEqual(int(clr["failed_sector"]), EVENTS_REGION_START // 4096 + 3)
+        self.assertEqual(int(clr["used"]), 64, "append point = above the island (sector 3's top)")
+        self.assertEqual(last(r.events, "EV_WRITE")["used"], "65")
+        hexline = [l for l in r.raw_stdout.splitlines() if l.startswith("EV_HEX")][0]
+        raw = bytes.fromhex(hexline.split()[1])
+        d = event_codec.decode_region(raw)
+        self.assertEqual(d.damaged_pages, [], "nothing was AND-merged into the island")
+        self.assertEqual(d.pages_total, 65)
+        # The survivors are the ORIGINAL pages 0..63, untouched.
+        seqs = [s[0] for ev in d.events for s in ev.samples]
+        self.assertEqual(seqs[:64 * 16], list(range(64 * 16)))
+        r2 = run_harness(self.v2, ["INIT", "EV_STATE", "EV_CLEAR", "EV_STATE"], backing=backing)
+        self.assertEqual(all_of(r2.events, "EV_STATE")[0]["used"], "65")
+        self.assertEqual(last(r2.events, "EV_CLEAR")["ok"], "1")
+        self.assertEqual(last(r2.events, "EV_STATE")["used"], "0")
+        img = backing.read_bytes()
+        self.assertEqual(img[EVENTS_REGION_START:], b"\xff" * EVENTS_REGION_BYTES)
+
+    def test_a_torn_event_page_is_skipped_and_counted(self) -> None:
+        backing = self._backing("ev_torn.bin")
+        r1 = run_harness(self.v2, ["INIT", "EV_WRITE 5 8 0", "FAULT_AFTER 100",
+                                   "EV_WRITE 1 8 5"], backing=backing)
+        self.assertEqual(r1.returncode, FAULT_EXIT_CODE)
+        r2 = run_harness(self.v2, ["INIT", "EV_STATE", "EV_WRITE 1 8 6", "EV_RAW_HEX"],
+                         backing=backing)
+        st = self._ev_state(r2)
+        self.assertEqual((st["used"], st["damaged"]), ("6", "1"))
+        self.assertEqual(last(r2.events, "EV_WRITE")["used"], "7")
+        hexline = [l for l in r2.raw_stdout.splitlines() if l.startswith("EV_HEX")][0]
+        d = event_codec.decode_region(bytes.fromhex(hexline.split()[1]))
+        self.assertEqual(d.damaged_pages, [5])
+        self.assertEqual(d.pages_total, 7)
+
+    def test_a_failed_write_consumes_its_page(self) -> None:
+        backing = self._backing("ev_fail.bin")
+        r = run_harness(self.v2, ["INIT", "FAIL_NEXT_WRITE 100", "EV_WRITE 1 2 0",
+                                  "EV_WRITE 1 2 1", "EV_STATE"], backing=backing)
+        writes = all_of(r.events, "EV_WRITE")
+        self.assertEqual((writes[0]["failed"], writes[0]["used"]), ("1", "1"))
+        self.assertEqual((writes[1]["ok"], writes[1]["used"]), ("1", "2"))
+        self.assertEqual(self._ev_state(r)["write_fail"], "1")
+
+    def test_the_region_fills_and_stops(self) -> None:
+        backing = self._backing("ev_full.bin")
+        r = run_harness(self.v2, ["INIT", f"EV_WRITE {EVENT_PAGES} 1 0", "EV_WRITE 1 1 9999",
+                                  "TRACE_RAW_BYTES"], backing=backing)
+        w = all_of(r.events, "EV_WRITE")
+        self.assertEqual(w[0]["ok"], str(EVENT_PAGES))
+        self.assertEqual(w[1]["refused"], "1")
+        self.assertEqual(last(r.events, "TRACE_RAW_BYTES")["n"], "0",
+                         "a full event region never spills into the trace")
+        r2 = run_harness(self.v2, ["INIT", "EV_STATE", "EV_RAW"], backing=backing)
+        self.assertEqual(self._ev_state(r2)["used"], str(EVENT_PAGES))
+        self.assertEqual(last(r2.events, "EV_RAW")["n"], str(EVENTS_REGION_BYTES))
+        print(f"\n[events] mount with a FULL event region took "
+              f"{last(r2.events, 'INIT')['elapsed_us']} us on the host mock")
+
+    def test_the_export_is_exactly_the_region_bytes(self) -> None:
+        backing = self._backing("ev_export.bin")
+        r = run_harness(self.v2, ["INIT", "EV_WRITE 17 11 0", "EV_RAW_HEX"], backing=backing)
+        hexline = [l for l in r.raw_stdout.splitlines() if l.startswith("EV_HEX")][0]
+        raw = bytes.fromhex(hexline.split()[1])
+        img = backing.read_bytes()
+        self.assertEqual(raw, img[EVENTS_REGION_START:EVENTS_REGION_START + 17 * 256])
+        ev = last(r.events, "EV_RAW")
+        self.assertEqual(int(ev["crc32"], 16), zlib.crc32(raw) & 0xFFFFFFFF)
+        self.assertEqual(int(ev["declared"]), len(raw))
+
+    def test_the_trace_fills_its_smaller_v2_region_and_stops_at_the_boundary(self) -> None:
+        backing = self._backing("v2_trace_full.bin")
+        r = run_harness(self.v2, ["INIT", "EV_WRITE 3 1 0",
+                                  f"TRACE_FILL 99999 {LOG_HZ} 0.0 1.0", "TRACE_RAW_BYTES",
+                                  "EV_RAW"], backing=backing)
+        self.assertLessEqual(int(last(r.events, "TRACE_RAW_BYTES")["n"]), TRACE_REGION_BYTES)
+        self.assertEqual(last(r.events, "EV_RAW")["n"], str(3 * 256))
+        before = all_of(r.events, "EV_RAW")[0]["crc32"]
+        r2 = run_harness(self.v2, ["INIT", "EV_RAW"], backing=backing)
+        self.assertEqual(last(r2.events, "EV_RAW")["crc32"], before,
+                         "a full trace must not have written into the event region")

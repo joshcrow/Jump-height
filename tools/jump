@@ -2487,6 +2487,298 @@ def _verify_ingest_bundle(devlog_lines: list[str], jumps_lines: list[str],
     return ok, out
 
 
+# ------------------------------------------------------------ six-axis events
+#
+# Firmware batch 2 (spec 2026-10-07 section 7.3). A bundle (or a bench pull,
+# `jump events`) can carry events.bin: the puck's event region, 256-byte
+# jhev1 pages. These helpers verify it against what the producer recorded,
+# decode it with sim/event_codec.py, and write the per-event CSVs. Events
+# problems NEVER refuse the trace ingest -- but they are always loud: a
+# verdict in session.json and, on any failure, EVENTS-VERIFICATION-FAILED.txt.
+
+EVENT_INDEX_COLUMNS = [
+    "boot_id", "event_id", "t_start_s", "t_trigger_s", "t_end_s", "n_samples",
+    "cause", "trigger_mag_g", "peak_mag_g", "temp_begin_c", "temp_end_c",
+    "clip_ax", "clip_ay", "clip_az", "clip_gx", "clip_gy", "clip_gz",
+    "gyro_bad", "dup_polls", "late_polls", "max_dt_s", "linked_jumps",
+    "close_reason", "complete", "epoch_known", "problems",
+]
+EVENT_SAMPLE_COLUMNS = [
+    "sample_seq", "t_s", "t_utc", "dt_s",
+    "ax_mps2", "ay_mps2", "az_mps2", "gx_rads", "gy_rads", "gz_rads",
+    "ax_raw", "ay_raw", "az_raw", "gx_raw", "gy_raw", "gz_raw",
+    "gyro_ok", "dup", "clip_mask",
+]
+EVENT_TRIGGER_COLUMNS = ["boot_id", "t_s", "t_us", "peak_g", "decision", "tier_hint",
+                         "event_id", "used_pages"]
+
+
+def _fmt(v, nd=6):
+    if v is None:
+        return ""
+    if isinstance(v, bool):
+        return "1" if v else "0"
+    if isinstance(v, float):
+        return f"{v:.{nd}f}"
+    return str(v)
+
+
+def _verify_events_bytes(manifest: dict, data: "bytes | None") -> "tuple[bool | None, list[str]]":
+    """The bundle's events.bin against the manifest's events_* keys.
+    Returns (verified, lines): None when the bundle predates events."""
+    fmt = manifest.get("events_format")
+    lines: list[str] = []
+    if fmt is None and data is None:
+        if "events_format" in manifest:
+            lines.append("events: the puck predates six-axis capture (no `events` command)")
+        return None, lines
+    if fmt == "error":
+        why = "; ".join(manifest.get("events_reasons") or []) or "no reason recorded"
+        lines.append(f"❌ events: the puck answered `events` with an error -- {why}")
+        return False, lines
+    if data is None:
+        lines.append("❌ events: manifest says events_format="
+                     f"{fmt!r} but events.bin is not in the bundle")
+        return False, lines
+    ok = True
+    if fmt is None:
+        lines.append("⚠️  events: events.bin present but the manifest has no events_format")
+    want = manifest.get("events_bytes")
+    if want is not None and want != len(data):
+        lines.append(f"❌ events: events.bin is {len(data):,} bytes; the manifest says {want:,}")
+        ok = False
+    crc = manifest.get("events_crc32")
+    got = f"{zlib.crc32(data) & 0xffffffff:08x}"
+    if crc is not None and crc != got:
+        lines.append(f"❌ events: crc32 {got} does not match the manifest's {crc}")
+        ok = False
+    if len(data) % 256:
+        lines.append(f"❌ events: {len(data)} bytes is not a whole number of 256-byte pages")
+        ok = False
+    if fmt is not None and manifest.get("events_verified") is False:
+        why = "; ".join(manifest.get("events_reasons") or []) or "no reason recorded"
+        lines.append(f"❌ events: the sync itself did not verify the transfer -- {why}")
+        ok = False
+    if ok:
+        lines.append(f"✅ events: {len(data):,} bytes, crc32 {got}")
+    return ok, lines
+
+
+def _write_events_outputs(sess: Path, data: bytes, manifest: dict) -> dict:
+    """Decode an event region into sess/events/ (spec 7.3). Returns the
+    verdict dict that goes into session.json as events_verification."""
+    import event_codec as ec
+
+    out_dir = sess / "events"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (sess / "events.bin").write_bytes(data)
+    d = ec.decode_region(data)
+    bundle_boot = (manifest.get("boot_id") or "").lower() or None
+    epoch = manifest.get("trace_epoch_utc")
+    epoch_dt = None
+    if epoch:
+        try:
+            epoch_dt = datetime.fromisoformat(epoch.replace("Z", "+00:00"))
+        except ValueError:
+            epoch_dt = None
+    lines: list[str] = []
+    for e in d.errors:
+        lines.append(f"❌ events: {e}")
+    if d.damaged_pages:
+        lines.append(f"⚠️  events: {len(d.damaged_pages)} damaged page(s) (CRC) at "
+                     f"{d.damaged_pages[:10]} -- skipped, never guessed")
+
+    index_rows = []
+    meta = {"units": {
+        "t_s": "seconds since the boot's trace time zero (same zero as trace.csv)",
+        "accel": "m/s^2, sensor frame, raw x the BEGIN's accel_g_per_lsb x 9.80665; "
+                 "NOT divided by g_baseline and NOT corrected for the measured +2.9 % "
+                 "gain (docs/STATUS.md bench 2026-10-04)",
+        "gyro": "rad/s, sensor frame, raw x the BEGIN's gyro_dps_per_lsb x pi/180, "
+                "gyro bias NOT removed (the BEGIN records it)",
+        "time_quantum": "timestamps are micros64 at the FreeRTOS tick: 976.5625 us "
+                        "resolution (BEGIN time_quantum_ns); the sensor-to-poll latency "
+                        "is 0..1 ODR period and is not recorded per sample",
+    }, "events": []}
+    incomplete = 0
+    for ev in d.events:
+        key = f"{ev.boot_id:08x}-{ev.event_id}"
+        b = ev.begin or {}
+        en = ev.end or {}
+        t0 = b.get("t0_us")
+        same_boot = bundle_boot is not None and f"{ev.boot_id:08x}" == bundle_boot
+        epoch_known = bool(same_boot and epoch_dt is not None and t0 is not None)
+        rows = list(ec.sample_rows(ev))
+        with open(out_dir / f"{key}.csv", "w") as f:
+            f.write(",".join(EVENT_SAMPLE_COLUMNS) + "\n")
+            for r in rows:
+                t_utc = ""
+                if epoch_known and r["t_s"] is not None:
+                    from datetime import timedelta
+                    t_utc = (epoch_dt + timedelta(seconds=r["t_s"])).isoformat(
+                        timespec="microseconds").replace("+00:00", "Z")
+                raw = r["raw"]
+                f.write(",".join([
+                    str(r["sample_seq"]), _fmt(r["t_s"]), t_utc, _fmt(r["dt_s"]),
+                    _fmt(r["ax_mps2"]), _fmt(r["ay_mps2"]), _fmt(r["az_mps2"]),
+                    _fmt(r["gx_rads"]), _fmt(r["gy_rads"]), _fmt(r["gz_rads"]),
+                    *[str(x) for x in raw], _fmt(r["gyro_ok"]), _fmt(r["dup"]),
+                    str(r["clip_mask"])]) + "\n")
+        a_lsb = b.get("accel_g_per_lsb", ec.ACCEL_G_PER_LSB)
+        peak = max((math.sqrt(s[2][0] ** 2 + s[2][1] ** 2 + s[2][2] ** 2) * a_lsb
+                    for s in ev.samples), default=None)
+
+        def ts(t_us):
+            return (t_us - t0) * 1e-6 if (t_us is not None and t0 is not None) else None
+        links = en.get("links") or []
+        if not ev.complete:
+            incomplete += 1
+            lines.append(f"⚠️  events: {key} incomplete -- " + "; ".join(ev.problems))
+        clip = en.get("clip") or [None] * 6
+        index_rows.append([
+            f"{ev.boot_id:08x}", ev.event_id,
+            _fmt(ts(ev.samples[0][1]) if ev.samples else None),
+            _fmt(ts(b.get("trigger_t_us"))),
+            _fmt(ts(ev.samples[-1][1]) if ev.samples else None),
+            len(ev.samples),
+            ec.CAUSES.get(b.get("cause"), ""),
+            _fmt(b["trigger_mag_mg"] / 1000.0 if "trigger_mag_mg" in b else None, 3),
+            _fmt(peak, 3),
+            _fmt(ec.temp_c(b["temp_raw"]) if b.get("temp_ok") else None, 2),
+            _fmt(ec.temp_c(en["temp_raw_end"]) if en.get("temp_ok") else None, 2),
+            *[_fmt(c) for c in clip],
+            _fmt(en.get("gyro_bad")), _fmt(en.get("dup_polls")), _fmt(en.get("late_polls")),
+            _fmt(en["max_dt_us"] * 1e-6 if "max_dt_us" in en else None),
+            " ".join(f"{l['session_n']}:{l['stored_n']}:{l['takeoff_s']:.3f}" for l in links),
+            ec.CLOSE_REASONS.get(en.get("close_reason"), ""),
+            _fmt(ev.complete), _fmt(epoch_known),
+            "; ".join(ev.problems).replace(",", ";"),
+        ])
+        meta["events"].append({
+            "key": key, "begin": {k: v for k, v in b.items()},
+            "registers": ec.decode_ctrl_regs(b.get("regs") or []) if b.get("regs_ok") else None,
+            "end": en, "problems": ev.problems, "complete": ev.complete,
+            "page_flags": ev.page_flags,
+        })
+    with open(out_dir / "index.csv", "w") as f:
+        f.write(",".join(EVENT_INDEX_COLUMNS) + "\n")
+        for r in index_rows:
+            f.write(",".join(str(x) for x in r) + "\n")
+    t0_by_boot = {}
+    for ev in d.events:
+        if ev.begin and "t0_us" in ev.begin:
+            t0_by_boot.setdefault(ev.boot_id, ev.begin["t0_us"])
+    with open(out_dir / "triggers.csv", "w") as f:
+        f.write(",".join(EVENT_TRIGGER_COLUMNS) + "\n")
+        for t in d.triggers:
+            t0 = t0_by_boot.get(t["boot_id"])
+            f.write(",".join([
+                f"{t['boot_id']:08x}", _fmt((t["t_us"] - t0) * 1e-6 if t0 is not None else None),
+                str(t["t_us"]), _fmt(t["peak_mg"] / 1000.0, 3), t["decision_name"],
+                ec.TIER_HINTS.get(t["tier_hint"], str(t["tier_hint"])), str(t["event_id"]),
+                str(t["used_pages"])]) + "\n")
+    (out_dir / "meta.json").write_text(json.dumps(meta, indent=2, default=str) + "\n")
+    lines.append(f"events: {len(d.events)} event(s), {len(d.triggers)} trigger record(s), "
+                 f"{d.pages_total} page(s) decoded into {out_dir}")
+    return {"lines": lines, "events": len(d.events), "incomplete_events": incomplete,
+            "damaged_pages": len(d.damaged_pages), "decode_errors": list(d.errors),
+            "triggers": len(d.triggers)}
+
+
+def _ingest_events(sess: Path, manifest: dict, data: "bytes | None") -> "dict | None":
+    """cmd_ingest's events step: verify, decode, record. Never raises on
+    content; returns the session.json events_verification value (None for a
+    bundle that predates events)."""
+    ok, lines = _verify_events_bytes(manifest, data)
+    if ok is None and data is None:
+        return None if not lines else {"verified": None, "lines": lines}
+    verdict = {"verified": bool(ok), "lines": list(lines)}
+    if data is not None:
+        try:
+            dec = _write_events_outputs(sess, data, manifest)
+        except Exception as e:  # noqa: BLE001 -- loud, never fatal to the trace
+            dec = {"lines": [f"❌ events: decoding failed: {e!r}"], "decode_errors": [repr(e)]}
+        verdict["lines"] += dec.pop("lines")
+        verdict.update(dec)
+        if dec.get("decode_errors"):
+            verdict["verified"] = False
+    for l in verdict["lines"]:
+        print("  " + l)
+    if verdict["verified"] is False:
+        (sess / "EVENTS-VERIFICATION-FAILED.txt").write_text(
+            "The six-axis events in this session did not verify. The trace and "
+            "jumps are unaffected (see session.json `verification`).\n\n"
+            + "\n".join(verdict["lines"]) + "\n")
+    return verdict
+
+
+def cmd_events(args) -> int:
+    """Bench: pull a puck's six-axis event region over USB, verify it, and
+    decode it into a session folder with the same decoder `ingest` uses
+    (spec 2026-10-07 section 7.5). ALWAYS pinned by name (CLAUDE.md section
+    1: three boards can be attached, and unpinned tools have corrupted two
+    analyses and flashed one wrong board): the puck's own `# name=` must
+    match --name or nothing is read. Read-only: never sends evclear."""
+    if not args.name:
+        print("❌ --name JumpHeight-XXXX is required — three boards can be "
+              "attached at once (CLAUDE.md §1).")
+        return 2
+    fake_extra = None
+    if getattr(args, "fake", False):
+        fake_extra = ["--events", str(args.fake_events),
+                      "--puck-name", args.fake_puck_name or args.name]
+    dev, proc = open_device(args, fake_scenario="ok", fake_extra=fake_extra)
+    try:
+        info = dev.command("info", timeout=10)
+        name = next((l.split("=", 1)[1].strip() for l in info if l.startswith("# name=")), None)
+        if name != args.name:
+            print(f"❌ this puck says it is {name or 'nameless (no # name= line)'}, "
+                  f"not {args.name} — refusing to read it.")
+            return 1
+        from puckd import serial_job
+        boot_id = serial_job._extract_boot_id(info)
+        stats = dev.command("stats", timeout=10)
+        synced_at = datetime.now().astimezone()
+        kv = _last_tagged(stats, "STATS ")
+        uptime = None
+        try:
+            uptime = float(kv["uptime_s"]) if "uptime_s" in kv else None
+        except ValueError:
+            uptime = None
+        ev = serial_job._pull_events(dev)
+    finally:
+        _close_device(dev, proc)
+    if ev.format is None:
+        print("❌ this puck's firmware has no `events` command (pre batch 2).")
+        return 1
+    epoch = None
+    if uptime is not None:
+        epoch = datetime.fromtimestamp(synced_at.timestamp() - uptime, tz=timezone.utc) \
+            .isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    manifest = {
+        "puck_name": name, "boot_id": boot_id, "synced_at_local": synced_at.strftime("%Y-%m-%dT%H:%M:%S"),
+        "trace_epoch_utc": epoch, "uptime_s": uptime,
+        "events_format": ev.format, "events_bytes": len(ev.data) if ev.format == "jhev1" else None,
+        "events_region_bytes": ev.region_bytes,
+        "events_crc32": ev.crc_actual if ev.format == "jhev1" else None,
+        "events_verified": ev.verified, "events_reasons": list(ev.reasons),
+        "events_damaged_pages": ev.damaged_pages,
+    }
+    out_root = Path(args.out) if args.out else DATA_DIR / "sessions"
+    sess = out_root / f"{synced_at:%Y%m%d-%H%M%S}-{_puck4(name)}-events"
+    sess.mkdir(parents=True, exist_ok=True)
+    print(f"Pulled {len(ev.data):,} bytes of events from {name} (boot_id {boot_id}).")
+    verdict = _ingest_events(sess, manifest, ev.data if ev.format == "jhev1" else None)
+    if ev.evstat_line:
+        (sess / "evstat.txt").write_text(ev.evstat_line + "\n")
+    (sess / "session.json").write_text(json.dumps({
+        "unit": name, "source": "jump events", "manifest": manifest,
+        "events_verification": verdict, "trace_epoch_utc": epoch,
+    }, indent=2) + "\n")
+    print(f"\n📦 Events written to: {sess}")
+    return 0 if verdict and verdict.get("verified") else 1
+
+
 def _ingest_session_dir_name(manifest: dict) -> str:
     """web/sync/CONTRACT.md §4's `data/sessions/<YYYYMMDD-HHMMSS>-<PUCK4>/`, timestamp
     = the bundle's own `synced_at_local` — never this machine's clock (the
@@ -2570,6 +2862,8 @@ def cmd_ingest(args) -> int:
 
         trace_bin_bytes = read_bytes("trace.bin")
         trace_csv_bytes = read_bytes("trace.csv")
+        events_bytes = read_bytes("events.bin")
+        evstat_bytes = read_bytes("evstat.txt")
         # Trust the manifest's own trace_format, but a bundle that omits the
         # key (web/sync/CONTRACT.md §2 says all keys are present, but this is
         # untrusted input) is still ingestable by looking at which trace
@@ -2687,6 +2981,16 @@ def cmd_ingest(args) -> int:
             (sess / "VERIFICATION-FAILED.txt").write_text(
                 "This session was imported without passing verification: "
                 f"{reason}\n\n" + "\n".join(verdict_lines) + "\n")
+
+        # Six-axis events (firmware batch 2): after everything the trace
+        # verdict and session.json above depend on, so nothing here can
+        # change them; the events verdict is merged in as its own key.
+        events_verdict = _ingest_events(sess, manifest, events_bytes)
+        if evstat_bytes is not None:
+            (sess / "evstat.txt").write_bytes(evstat_bytes)
+        if events_verdict is not None and not _merge_session_json(
+                sess, {"events_verification": events_verdict}):
+            print("  ❌ events: could not record the events verdict in session.json")
 
         params = load_params(CONFIG_PATH)
         _analyze_and_report(sess, jumps_lines, trace_rows, params)
@@ -3653,6 +3957,21 @@ def _ble_stats_pinned(name: str) -> dict:
     return dict(_re.findall(r"(\w+)=([-\w.]+)", line.split("INFO ", 1)[1]))
 
 
+def help_commands(help_line: str) -> list[str]:
+    """The commands a `# commands: a | b | ...` help line advertises."""
+    return [c.strip() for c in help_line.split(":", 1)[1].split("|")]
+
+
+def help_dispatch_gap(help_line: str, main_cpp_text: str) -> list[str]:
+    """Audit F-25's cross-check, factored out so it can be tested: every
+    `cmd == "..."` arm in main.cpp that the help line does not advertise.
+    (Commands dispatched by startsWith -- `set`, `fillstore` -- are not
+    counted here; that residue is recorded in docs/STATUS.md's F-25 row.)"""
+    cmds = help_commands(help_line)
+    dispatched = sorted(set(re.findall(r'cmd == "([a-z0-9]+)"', main_cpp_text)))
+    return [c for c in dispatched if c not in cmds]
+
+
 def cmd_status(args) -> int:
     """Live capability status, MACHINE-CHECKED where possible.
 
@@ -3698,19 +4017,17 @@ def cmd_status(args) -> int:
         # the dispatch table is reported rather than silently swallowed.
         line = next((l for l in out.splitlines() if l.startswith("# commands:")), None)
         if line:
-            cmds = [c.strip() for c in line.split(":", 1)[1].split("|")]
+            cmds = help_commands(line)
             print(f"  commands advertised by help ({len(cmds)}): {' '.join(cmds)}")
             main_cpp = REPO / "firmware/src/main.cpp"
             try:
-                dispatched = sorted(set(re.findall(r'cmd == "([a-z0-9]+)"',
-                                                   main_cpp.read_text())))
+                undocumented = help_dispatch_gap(line, main_cpp.read_text())
             except OSError as e:
                 # CLAUDE.md rule 3: the cross-check not running is itself the finding.
-                dispatched = []
+                undocumented = []
                 print(f"  ⚠️  could not cross-check against the dispatch table "
                       f"({main_cpp.name}: {e}) — the list above is the help "
                       f"string only, and may be short")
-            undocumented = [c for c in dispatched if c not in cmds]
             if undocumented:
                 print(f"  ⚠️  dispatched but NOT in help ({len(undocumented)}): "
                       f"{' '.join(undocumented)}")
@@ -4818,6 +5135,17 @@ def main() -> int:
     p.add_argument("sessions", nargs="+", help="session directories")
     p.add_argument("--no-write", action="store_true",
                    help="print candidates.md without writing anything")
+
+    # events: bench pull of the six-axis event region (firmware batch 2).
+    p = add("events", cmd_events,
+            help="bench: pull + verify + decode a puck's six-axis events "
+                 "(requires --name; never erases)")
+    p.add_argument("--name", help="the puck's advertised name, e.g. JumpHeight-8673 (required)")
+    p.add_argument("--out", help="sessions root (default data/sessions)")
+    p.add_argument("--fake", action="store_true", help=argparse.SUPPRESS)
+    p.add_argument("--fast", action="store_true", help=argparse.SUPPRESS)
+    p.add_argument("--fake-events", type=int, default=2, help=argparse.SUPPRESS)
+    p.add_argument("--fake-puck-name", help=argparse.SUPPRESS)
 
     # ingest imports an offline bundle (web/sync/'s zip, or its unzipped dir)
     # — no live device involved, so it skips the serial --port exactly like

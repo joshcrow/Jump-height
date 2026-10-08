@@ -36,6 +36,12 @@ uint32_t g_fault_remaining  = 0;
 bool     g_write_short_armed = false;
 uint32_t g_write_short_n     = 0;
 bool     g_erase_fail_armed  = false;
+uint32_t g_erase_fail_skip   = 0;   // erases allowed to succeed first
+
+// Power cut between sector erases (arm_cut_after_erases()): fatal, like
+// g_fault_armed, but counted in eraseSector() calls rather than bytes.
+bool     g_erase_cut_armed   = false;
+uint32_t g_erase_cut_skip    = 0;
 
 // Writes through [addr, addr+len) to the backing file, if one is open, and
 // flushes immediately — a real power cut can land right after this, so
@@ -228,11 +234,30 @@ uint32_t Adafruit_SPIFlashBase::writeBuffer(uint32_t address, uint8_t const* buf
 
 bool Adafruit_SPIFlashBase::eraseSector(uint32_t sectorNumber) {
   if (!g_ram) return false;
+  // Power cut BEFORE the (n+1)-th erase starts: everything erased so far is
+  // persisted (persistRange() flushes per sector), this one never begins.
+  if (g_erase_cut_armed) {
+    if (g_erase_cut_skip > 0) {
+      --g_erase_cut_skip;
+    } else {
+      g_erase_cut_armed = false;
+      std::fflush(stdout);
+      std::_Exit(mock_flash_test::kFaultExitCode);
+    }
+  }
   // Non-fatal erase-failure injection (mock_flash_test::arm_erase_failure())
   // — checked BEFORE touching any bytes, so an injected failure leaves the
   // target sector completely untouched, matching a real erase that simply
   // didn't happen (no partial-erase shape is modeled — see mock_flash.h).
-  if (g_erase_fail_armed) { g_erase_fail_armed = false; return false; }
+  // arm_erase_failure_after(n) lets the first n erases through first.
+  if (g_erase_fail_armed) {
+    if (g_erase_fail_skip > 0) {
+      --g_erase_fail_skip;
+    } else {
+      g_erase_fail_armed = false;
+      return false;
+    }
+  }
   const uint32_t addr = sectorNumber * MOCK_SFLASH_SECTOR_SIZE;
   // Stricter than real hardware (review-store.md finding #4, same rationale
   // as abortIfOutOfBounds() above): a sector number landing past the
@@ -277,6 +302,17 @@ void arm_write_short_return(uint32_t n) {
 
 void arm_erase_failure() {
   g_erase_fail_armed = true;
+  g_erase_fail_skip = 0;
+}
+
+void arm_erase_failure_after(uint32_t n) {
+  g_erase_fail_armed = true;
+  g_erase_fail_skip = n;
+}
+
+void arm_cut_after_erases(uint32_t n) {
+  g_erase_cut_armed = true;
+  g_erase_cut_skip = n;
 }
 
 }  // namespace mock_flash_test

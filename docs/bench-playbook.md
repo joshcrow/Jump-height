@@ -322,6 +322,19 @@ flashes per replug; spend it once, deliberately.
   radio-reachable recovery named in review.
 - **Migrations never discard.** jh_persist v1→v2→v3 pattern: a shorter valid
   record is old, not corrupt.
+- **The QSPI store migrates in place, never formats on a version change**
+  (firmware batch 2, branch `overnight/fw-batch2`, NOT on any board yet).
+  Layout v2 adds a 528,384-byte six-axis event region at the top of the chip
+  and shrinks the trace to 1,499,136 bytes; a v1 chip migrates at its first
+  mount (`jh_store.cpp` `migrateToV2()`), or stays v1 with events off
+  (`evstat disabled=migration_blocked`) while its trace still reaches past
+  the boundary, until the next mount after `clear`. Every later layout must
+  migrate v2 the same way: app 1.0.7 can flash a newer build while events are
+  still on the chip.
+- **ROLLBACK FORMATS THE CHIP.** A v1 build (`c5eea285` and everything
+  before it) finds no valid superblock on a v2 chip and erases all of it —
+  jumps, trace and events. Before flashing an older build onto a board that
+  has run batch 2: `jumps`, `traceraw` AND `events` first, every time.
 
 ## 6b. Electrical safety rules (2026-08-13 — how we never cook hardware again)
 

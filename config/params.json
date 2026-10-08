@@ -21,6 +21,20 @@
     "i2c_sda": 21,
     "i2c_scl": 22
   },
+  "capture": {
+    "_comment": "Six-axis event capture (firmware batch 2, spec 2026-10-07 section 3.2). Thresholds apply to the same normalized |a| the detector sees. Generated into params.gen.h as JH_CAPTURE_<KEY>; sim/event_policy.py reads this section directly. Tier A opens a window at >= tier_a_g, tier B at >= tier_b_g, both paced against session_target_s of gate-open time; every crossing of floor_g gets a TRIG summary record. Replay evidence for these values is vest-mounted data only (spec section 3.2); retune from the first board session's triggers.csv.",
+    "floor_g": 2.5,
+    "refractory_s": 0.25,
+    "tier_a_g": 8.0,
+    "tier_b_g": 4.0,
+    "pre_s": 5.0,
+    "post_s": 1.5,
+    "max_len_s": 12.0,
+    "session_target_s": 7200,
+    "tier_a_burst": 0.5,
+    "tier_b_reserve": 0.4,
+    "tier_b_burst": 0.1
+  },
   "shared": {
     "_comment": "Constants that exist in MORE THAN ONE LANGUAGE and must not drift (audit F-18, 2026-08-22). Generated into firmware/include/params.gen.h and garmin/jumpfield/source/Params.gen.mc. Detector thresholds are deliberately NOT here: the watch's MAX_HEIGHT_M/MAX_AIRTIME_S are impossibility bounds for its corruption gate, not the detector's tuned thresholds, and generating one from the other would couple two things that are supposed to differ.",
     "m_to_ft": 3.28084,

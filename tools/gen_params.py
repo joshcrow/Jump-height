@@ -54,10 +54,18 @@ def fmt_summary(v) -> str:
 def load_config(path: Path = CONFIG_PATH) -> dict:
     with open(path) as f:
         cfg = json.load(f)
-    for section in ("detector", "firmware", "shared"):
+    for section in ("detector", "firmware", "capture", "shared"):
         if section not in cfg:
             raise SystemExit(f"{path}: missing '{section}' section")
     return cfg
+
+
+# Macro prefix per section. detector/firmware/shared keep the bare JH_<KEY>
+# form every existing #define has always had. `capture` (firmware batch 2,
+# six-axis event capture) is prefixed: its keys -- floor_g, pre_s, post_s --
+# are generic enough that a bare JH_PRE_S would read as a detector setting.
+SECTION_PREFIX = {"detector": "JH_", "firmware": "JH_", "capture": "JH_CAPTURE_",
+                  "shared": "JH_"}
 
 
 def render_header(cfg: dict) -> str:
@@ -67,12 +75,12 @@ def render_header(cfg: dict) -> str:
         "#pragma once",
         "",
     ]
-    for section in ("detector", "firmware", "shared"):
+    for section in ("detector", "firmware", "capture", "shared"):
         lines.append(f"// --- {section} ---")
         for key, val in cfg[section].items():
             if key.startswith("_"):
                 continue
-            lines.append(f"#define JH_{key.upper()} {fmt_value(val)}")
+            lines.append(f"#define {SECTION_PREFIX[section]}{key.upper()} {fmt_value(val)}")
         lines.append("")
     # Summary string of detector params: the firmware echoes this on `info`
     # so the CLI can confirm the flashed device matches the local config.

@@ -559,6 +559,12 @@ class JobCycleReport:
     # "five opens per cycle; 28 s on the fake"), and a battery percentage
     # measured 30 s ago is the same percentage.
     stats: "Optional[dict]" = None
+    # Six-axis events (firmware batch 2, spec 2026-10-07 section 7.2):
+    # True = `evclear` ran and a fresh evstat read bytes=0; False = it was
+    # attempted and not confirmed, or was skipped because the events pull did
+    # not verify (the events stay for the next sync); None = nothing to clear
+    # (an old puck, or no pull this cycle).
+    events_cleared: "Optional[bool]" = None
 
 
 def _maybe_flash(
@@ -633,6 +639,26 @@ def _maybe_flash(
     return False, None
 
 
+def _events_allow_flash(cfg: DaemonConfig, ev: "serial_job.EvStat") -> bool:
+    """The flash gate's events half (spec 7.2): never flash while the puck
+    still holds events. App 1.0.7's gate is jumps+trace only, and every
+    future firmware must migrate the event region in place -- but a flash is
+    still the one step that could strand them, so the agent refuses it
+    rather than trusting that. A puck without the command has no region; an
+    evstat that did not answer is unknown, and unknown is not zero."""
+    if not ev.supported:
+        return True
+    if ev.bytes == 0:
+        return True
+    if ev.bytes is None:
+        _log(cfg, "firmware check: NOT updating -- could not read the puck's event "
+                  f"region ({ev.error or 'disabled=' + str(ev.disabled)})")
+    else:
+        _log(cfg, f"firmware check: NOT updating -- the puck still holds {ev.bytes:,} "
+                  "bytes of six-axis events")
+    return False
+
+
 def run_job_cycle(port_path: str, cfg: DaemonConfig) -> JobCycleReport:
     """One plug-in, steps 1-9 (docs/sync-agent-plan.md:42-55).
 
@@ -680,10 +706,25 @@ def run_job_cycle(port_path: str, cfg: DaemonConfig) -> JobCycleReport:
 def _run_job_cycle(port_path: str, cfg: DaemonConfig) -> JobCycleReport:
     cfg.on_phase("reading")
     pre = serial_job.read_stats(port_path, device_factory=cfg.device_factory)
-    if pre.get("stored_jumps") == 0 and pre.get("trace_bytes") == 0:
+    empty = pre.get("stored_jumps") == 0 and pre.get("trace_bytes") == 0
+    evstat = None
+    if empty:
+        # No ride -- but a batch-2 puck can still hold six-axis events (an
+        # earlier sync whose events did not verify, or an old app's sync,
+        # which clears jumps+trace and never knew about events). Those are
+        # pulled like a ride; only a puck with nothing at all is silent.
+        evstat = serial_job.read_evstat(port_path, device_factory=cfg.device_factory)
+        if evstat.supported and evstat.bytes:
+            _log(cfg, f"the puck has no ride but holds {evstat.bytes:,} bytes of "
+                      "six-axis events: pulling them")
+            empty = False
+    if empty:
         src = serial_job.read_src(port_path, device_factory=cfg.device_factory)
         try:
-            flashed, needs_you = _maybe_flash(port_path, src, cfg)
+            if _events_allow_flash(cfg, evstat):
+                flashed, needs_you = _maybe_flash(port_path, src, cfg)
+            else:
+                flashed, needs_you = False, None
         except Exception as exc:  # noqa: BLE001 -- the flash leg is the one
             # branch of the empty-puck path that reaches the network and a
             # third module; it must not be able to end the loop. (The other
@@ -720,6 +761,7 @@ def _run_job_cycle(port_path: str, cfg: DaemonConfig) -> JobCycleReport:
     uploaded = False
     cleared = False
     flashed = False
+    events_cleared: "Optional[bool]" = None
     needs_you: "Optional[tuple[str, str]]" = None
     bundle_path: Path = Path(result.bundle_path)
     if not result.verified:
@@ -745,8 +787,10 @@ def _run_job_cycle(port_path: str, cfg: DaemonConfig) -> JobCycleReport:
                 notify.notify("synced", runner=cfg.notifier, jumps=result.jumps)
                 cfg.runtime["needs_you_active"] = False
                 _log(cfg, f"ride synced: {result.jumps} jumps: {bundle_path.name}")
-                flashed, flash_needs_you = _maybe_flash(port_path, result.src, cfg)
-                needs_you = needs_you or flash_needs_you
+                events_cleared, allow_flash = _clear_events_after_sync(port_path, cfg, result)
+                if allow_flash:
+                    flashed, flash_needs_you = _maybe_flash(port_path, result.src, cfg)
+                    needs_you = needs_you or flash_needs_you
         # else: uploaded but not verified -- see the docstring above.
     except Exception as exc:  # noqa: BLE001 -- see the docstring
         _log(cfg, f"job raised after the pull: {exc!r}")
@@ -755,7 +799,31 @@ def _run_job_cycle(port_path: str, cfg: DaemonConfig) -> JobCycleReport:
         port=port_path, pulled=True, verified=result.verified, jumps=result.jumps,
         reasons=list(result.reasons), uploaded=uploaded, cleared=cleared, flashed=flashed,
         needs_you=needs_you, bundle_path=bundle_path, src=result.src, stats=pre,
+        events_cleared=events_cleared,
     )
+
+
+def _clear_events_after_sync(port_path: str, cfg: DaemonConfig, result) -> "tuple[Optional[bool], bool]":
+    """Spec 7.2, after a CONFIRMED upload and a CONFIRMED clear: `evclear`
+    only when the events pull itself verified, confirmed by a fresh evstat
+    bytes=0 (clear_events()). Returns (events_cleared, allow_flash). Silent
+    to the rider either way -- an events problem is Josh's to read in the
+    log, never a reason to bother Nick (the trace is already safe)."""
+    fmt = getattr(result, "events_format", None)
+    if fmt is None:
+        return None, True                 # a puck without the region
+    if fmt != "jhev1" or not getattr(result, "events_verified", False):
+        _log(cfg, "events NOT cleared -- the events pull did not verify "
+                  f"({'; '.join(getattr(result, 'events_reasons', None) or []) or fmt}); "
+                  "they stay on the puck for the next sync")
+        return False, False
+    ec = serial_job.clear_events(port_path, device_factory=cfg.device_factory)
+    if not ec.ok:
+        _log(cfg, f"events: evclear did not confirm ({ec.error})")
+        return False, False
+    if getattr(result, "events_bytes", 0):
+        _log(cfg, f"events: {result.events_bytes:,} bytes synced and cleared")
+    return True, True
 
 
 # --------------------------------------------------------------- Garmin leg

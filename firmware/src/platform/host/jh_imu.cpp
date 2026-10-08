@@ -11,6 +11,11 @@
 //   jump <seconds>              free-fall for <seconds>, then a brief 4 g
 //                                landing spike
 //   chop <seconds> <amplitude>  +/-<amplitude> jitter around 1 g
+//   impact <g>                  a 0.02 s spike of <g> (event capture's
+//                                tier thresholds are 4 g and 8 g; the
+//                                `jump` landing is only 4 g)
+//   jumpimpact <seconds> <g>    free-fall for <seconds>, then a 0.02 s
+//                                landing spike of <g> instead of 4 g
 //
 // All magnitude is placed on the Z axis (ax=ay=0) — main.cpp only ever
 // consumes sqrt(ax^2+ay^2+az^2), never individual axes, so this is
@@ -48,12 +53,12 @@ namespace jh_imu {
 
 namespace {
 
-enum class SegType { REST, STILL, JUMP, CHOP };
+enum class SegType { REST, STILL, JUMP, CHOP, IMPACT };
 
 struct Segment {
   SegType type = SegType::REST;
   float duration_s = 0.0f;  // free-fall length for JUMP; steady length otherwise
-  float param_g = 1.0f;     // STILL's resting g level
+  float param_g = 1.0f;     // STILL's resting g level; JUMP/IMPACT's spike level
   float param_amp = 0.0f;   // REST/STILL's tiny noise, or CHOP's jitter amplitude
 };
 
@@ -94,6 +99,14 @@ std::vector<Segment> parseScript(const std::string& path) {
     } else if (cmd == "jump") {
       iss >> s.duration_s;
       s.type = SegType::JUMP;
+      s.param_g = kLandingG;
+    } else if (cmd == "jumpimpact") {
+      iss >> s.duration_s >> s.param_g;
+      s.type = SegType::JUMP;
+    } else if (cmd == "impact") {
+      iss >> s.param_g;
+      s.type = SegType::IMPACT;
+      s.duration_s = kLandingSpikeS;
     } else if (cmd == "chop") {
       iss >> s.duration_s >> s.param_amp;
       s.type = SegType::CHOP;
@@ -122,7 +135,9 @@ float sampleWithin(const Segment& s, double local_t) {
       return 1.0f + noise(s.param_amp);
     case SegType::JUMP:
       return local_t < (double)s.duration_s ? (0.0f + noise(kFreefallNoiseAmp))
-                                             : (kLandingG + noise(kLandingNoiseAmp));
+                                             : (s.param_g + noise(kLandingNoiseAmp));
+    case SegType::IMPACT:
+      return s.param_g + noise(kLandingNoiseAmp);
   }
   return 1.0f;
 }
@@ -131,7 +146,7 @@ float sampleWithin(const Segment& s, double local_t) {
 // after landing; everything else just keeps repeating its own steady
 // condition (with fresh noise draws, not a frozen value).
 float sampleSettled(const Segment& s) {
-  if (s.type == SegType::JUMP) return 1.0f + noise(kTinyNoiseAmp);
+  if (s.type == SegType::JUMP || s.type == SegType::IMPACT) return 1.0f + noise(kTinyNoiseAmp);
   return sampleWithin(s, 0.0);
 }
 
@@ -162,10 +177,24 @@ bool begin(uint8_t /*addr*/) { return true; }
 
 uint8_t who_am_i() { return 0x68; }
 
+// What a real sensor's registers would have held for the value returned:
+// the float divided by 0.488 mg/LSB, rounded, saturating at the i16 rail
+// (a 16 g+ script value clips exactly as the LSM6DS3TR-C does at +-16 g).
+static int16_t g_last_a[3] = {0, 0, 0};
+static int16_t rawFromG(float g) {
+  const float r = g / 0.000488f;
+  if (r >= 32767.0f) return 32767;
+  if (r <= -32768.0f) return -32768;
+  return (int16_t)(r < 0 ? r - 0.5f : r + 0.5f);
+}
+
 bool read_accel_g(float& ax, float& ay, float& az) {
   ax = 0.0f;
   ay = 0.0f;
   az = currentSample();
+  g_last_a[0] = rawFromG(ax);
+  g_last_a[1] = rawFromG(ay);
+  g_last_a[2] = rawFromG(az);
   return true;
 }
 
@@ -183,6 +212,14 @@ bool read_gyro_dps(float& gx, float& gy, float& gz) {
   gz = 0.0f;
   return true;
 }
+
+void last_raw(int16_t accel[3], int16_t gyro[3]) {
+  for (int i = 0; i < 3; ++i) { accel[i] = g_last_a[i]; gyro[i] = 0; }
+}
+// No sensor, so no registers: report "could not read", which BEGIN/END carry
+// as temp_ok=0 / regs_ok=0 — never a plausible-looking invented value.
+bool read_temp_raw(int16_t&) { return false; }
+bool read_ctrl_regs(uint8_t*) { return false; }
 
 }  // namespace jh_imu
 

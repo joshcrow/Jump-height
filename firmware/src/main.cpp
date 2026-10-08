@@ -30,6 +30,9 @@
 //   (`traceraw` is the same stored trace as `trace`, streamed as the store's
 //    own binary blocks in base64 instead of ~17-byte CSV rows — see
 //    printTraceRawFramed() for the framing contract clients parse.)
+//   events evstat evclear — six-axis event capture (firmware batch 2, spec
+//    2026-10-07): raw accel+gyro windows around plausible jumps, in their own
+//    flash region; see printEventsFramed() and the `evstat` arm.
 //
 // BLE (added in v0.3.0): the SAME protocol is mirrored over a Nordic UART
 // Service so a phone/laptop can read jumps and send commands wirelessly. Since
@@ -54,7 +57,10 @@
 #include <string.h>
 #include "params.gen.h"
 #include "base64.h"
+#include "bootloader_arm.h"
 #include "build.gen.h"
+#include "event_capture.h"
+#include "event_config.h"
 #include "gyro_bias.h"
 #include "jump_detector.h"
 #include "lever_arm.h"
@@ -128,6 +134,22 @@ static const uint32_t AUTO_CLEAR_MOTION_MS = 300UL * 1000UL;  // 5 min
 jump::Detector detector;
 jump::GyroBias gyro_bias;
 jump::LeverArm lever_arm;
+
+// ---- six-axis event capture (firmware batch 2, spec 2026-10-07) ----------
+// The capture sees each sample only AFTER the detector has consumed it, and
+// reads no detector/gyro-bias/lever-arm/trace/motion-gate state except
+// through the provenance hook below, which only reads (event_capture.h is
+// compiled standalone by tools/tests/test_event_codec.py to keep it so).
+// ~23 KB of static RAM, deliberately static: the loop task's stack is 4 KB.
+static jh_event::Capture capture;
+static uint32_t boot_id = 0;
+// Build switch for tools/tests/test_hostdev.py's detector non-perturbation
+// test (spec §8.1 T-D2): -DJH_CAPTURE_ENABLED=0 builds the same firmware with
+// every capture call in loop() skipped, so the two builds' JUMP lines can be
+// compared. Never set for a product build.
+#ifndef JH_CAPTURE_ENABLED
+#define JH_CAPTURE_ENABLED 1
+#endif
 
 // Sensor-read failure counters. Both reads on the sample hot path degrade
 // SILENTLY by design — a failed accel read skips the sample, a failed gyro
@@ -342,6 +364,82 @@ static void flushTrace() {
     emitLine("# trace log full — still counting jumps. `dump` then `clear` to reset.");
   }
   trace_buf = "";
+}
+
+// ---- event capture hooks (event_capture.h's Hooks) -------------------------
+static int capWritePage(void*, const uint8_t* page) {
+  switch (jh_store::events_write_page(page)) {
+    case jh_store::EventsWrite::OK:      return 1;
+    case jh_store::EventsWrite::FAILED:  return 0;   // consumed; counted
+    case jh_store::EventsWrite::REFUSED: break;
+  }
+  return -1;   // nothing written; the capture keeps the page pending
+}
+
+// Provenance for BEGIN, read once per window on the service() pass after it
+// opens — after the detector has consumed that pass's sample, so at most the
+// NEXT poll is delayed by these ~9 bytes of I2C. Reads only.
+static void capProvenance(void*, jh_event::Provenance* p) {
+  p->regs_ok = jh_imu::read_ctrl_regs(p->regs) ? 1 : 0;
+  if (!p->regs_ok) memset(p->regs, 0, sizeof(p->regs));
+  int16_t traw = 0;
+  p->temp_ok = jh_imu::read_temp_raw(traw) ? 1 : 0;
+  p->temp_raw = p->temp_ok ? traw : 0;
+  p->g_baseline = g_baseline;
+  p->gyro_bias[0] = gyro_bias.x();
+  p->gyro_bias[1] = gyro_bias.y();
+  p->gyro_bias[2] = gyro_bias.z();
+  p->detector_state = (uint8_t)detector.state();
+  p->spin_lever_m = detector.spin_lever_m();
+  p->airtime_offset_s = detector.params().airtime_offset_s;
+  p->height_scale = detector.params().height_scale;
+}
+static bool capReadTemp(void*, int16_t* raw) { return jh_imu::read_temp_raw(*raw); }
+static int64_t capNow(void*) { return jh_clock::micros64(); }
+static void capHold(void*, bool hold) { jh_store::events_wake_hold(hold); }
+
+static const char* eventsStateName(jh_store::EventsState st) {
+  switch (st) {
+    case jh_store::EventsState::OK:                return "0";
+    case jh_store::EventsState::STORE_DOWN:        return "store_down";
+    case jh_store::EventsState::MIGRATION_BLOCKED: return "migration_blocked";
+    case jh_store::EventsState::MIGRATION_FAILED:  return "migration_failed";
+    case jh_store::EventsState::UNSUPPORTED:       return "unsupported";
+  }
+  return "unknown";
+}
+
+// Capture runs only while the store has a usable event region. Called every
+// pass (cheap); on the false->true edge it re-reads the region's fill.
+static void syncCaptureEnabled() {
+  const bool en = JH_CAPTURE_ENABLED && fs_ok &&
+                  jh_store::events_state() == jh_store::EventsState::OK;
+  if (en == capture.enabled()) return;
+  if (en) {
+    capture.set_region(jh_store::events_used_pages(),
+                       jh_store::events_region_bytes() / jh_event::PAGE_BYTES,
+                       jh_store::events_trig_pages());
+  }
+  capture.set_enabled(en);
+}
+
+// After a format or evclear changed the region underneath an enabled capture.
+static void resyncCaptureRegion() {
+  syncCaptureEnabled();
+  if (capture.enabled()) {
+    capture.set_region(jh_store::events_used_pages(),
+                       jh_store::events_region_bytes() / jh_event::PAGE_BYTES,
+                       jh_store::events_trig_pages());
+  }
+}
+
+// Commands that read the region or power off: close the window and write
+// everything pending first (spec §3.2 rule 6). Says so if it could not.
+static bool captureDrainForCommand() {
+  if (!capture.enabled()) return true;
+  const bool ok = capture.drain();
+  if (!ok) emitLine("# WARNING events: pages still pending after the drain — the store refused them");
+  return ok;
 }
 
 
@@ -627,6 +725,118 @@ static void printTraceRawFramed() {
   s_serial_must_not_drop = false;   // back to drop-is-fine for chatter
 }
 
+// The `events` body: the event region's pages, page 0 to the append point,
+// base64-framed exactly like printTraceRawFramed() above and for the same
+// reasons (bracketed must-not-drop, watchdog feeds, micros64 keep-alive,
+// both completeness warnings AFTER the frame, bytes= on both chatter lines
+// = what the header announced):
+//   # events bytes=<N> region_bytes=<R> page_bytes=256 format=jhev1
+//   FILE events.bin BEGIN
+//   <base64, 76 characters per line>
+//   FILE events.bin END
+//   [# WARNING events.bin INCOMPLETE — ...]
+//   # events crc32=<8 lowercase hex> bytes=<N>
+// A separate function rather than a generalised printTraceRawFramed(), so
+// the traceraw wire bytes cannot move. sim/event_codec.py decodes the body.
+static void printEventsFramed() {
+  const uint32_t declared = jh_store::events_raw_bytes();
+
+  s_serial_must_not_drop = true;
+  s_serial_dropped_bytes = 0;
+  emitf("# events bytes=%lu region_bytes=%lu page_bytes=%lu format=jhev1\n",
+        (unsigned long)declared, (unsigned long)jh_store::events_region_bytes(),
+        (unsigned long)jh_event::PAGE_BYTES);
+  emitLine("FILE events.bin BEGIN");
+
+  uint8_t  raw[228];
+  char     b64[base64::encoded_len(57) + 1];
+  uint32_t crc      = 0xFFFFFFFFu;
+  uint32_t streamed = 0;
+  uint32_t chunks   = 0;
+  size_t   got;
+  if (jh_store::events_open_read_raw()) {
+    while ((got = jh_store::events_read_raw_chunk(raw, sizeof(raw))) > 0) {
+      streamed += (uint32_t)got;
+      crc = crc32Update(crc, raw, got);
+      for (size_t off = 0; off < got; off += 57) {
+        const size_t take = (got - off) < 57 ? (got - off) : 57;
+        const size_t n = base64::encode(raw + off, take, b64, sizeof(b64));
+        if (n == 0) continue;   // unreachable; bytes=/crc32 would reject it
+        b64[n] = '\n';
+        emitBytes(b64, n + 1);
+      }
+      if ((++chunks & 15) == 0) {
+        jh_link::watchdog_feed();
+        (void)jh_clock::micros64();   // wrap-tracker keep-alive (see traceraw)
+      }
+    }
+    jh_store::close_read();
+  }
+  crc ^= 0xFFFFFFFFu;
+  emitLine("FILE events.bin END");
+  if (s_serial_dropped_bytes) {
+    emitf("# WARNING events.bin INCOMPLETE — %lu bytes never reached the host; re-run the download\n",
+          (unsigned long)s_serial_dropped_bytes);
+  }
+  if (streamed != declared) {
+    emitf("# WARNING events.bin INCOMPLETE — streamed %lu of %lu bytes; re-run the download\n",
+          (unsigned long)streamed, (unsigned long)declared);
+  }
+  emitf("# events crc32=%08lx bytes=%lu\n", (unsigned long)crc, (unsigned long)declared);
+  s_serial_must_not_drop = false;
+}
+
+// One EVSTAT line. Longer than emitf()'s 256-byte buffer, so it is built
+// here and sent as one emitBytes() inside the must-not-drop bracket (a gate
+// parses it). `bytes` is the store's own count; with disabled=store_down it
+// is NOT a reading of zero — the daemon treats store_down as unknown.
+//
+// `line` is STATIC and the function noinline (review 2026-10-08 S3): as a
+// stack local, inlined into handleCommand(), it grew that frame 536 -> 992 B
+// (-fstack-usage, gcc 12.3) on the 4 KB loop-task stack, against spec §2.1's
+// "every new buffer must be a static". stack_free_min is that stack's
+// high-water mark, read here on the same task.
+static __attribute__((noinline)) void printEvstat() {
+  const jh_store::EventsState st = jh_store::events_state();
+  static char line[640];   // worst case 571 chars with every field at its widest
+  const int n = snprintf(line, sizeof(line),
+      "EVSTAT bytes=%lu region_bytes=%lu pages=%lu open=%d full=%d disabled=%s "
+      "boot_id=%08lx events_boot=%lu crossings=%lu refused_budget=%lu refused_full=%lu "
+      "ring_overrun=%lu damaged_pages=%lu write_fail=%lu dup_polls=%lu late_polls=%lu "
+      "max_page_write_us=%lu pages_over_slack=%lu heap_free=%d trig_dropped=%lu "
+      "trig_pages=%lu trig_over_budget=%lu stack_free_min=%d "
+      "links_lost=%lu layout=%u\n",
+      (unsigned long)jh_store::events_raw_bytes(),
+      (unsigned long)jh_store::events_region_bytes(),
+      (unsigned long)jh_store::events_used_pages(),
+      capture.open() ? 1 : 0,
+      (capture.enabled() && capture.full()) ? 1 : 0,
+      eventsStateName(st),
+      (unsigned long)boot_id,
+      (unsigned long)capture.events_boot(),
+      (unsigned long)capture.crossings(),
+      (unsigned long)capture.refused_budget(),
+      (unsigned long)capture.refused_full(),
+      (unsigned long)capture.ring_overrun(),
+      (unsigned long)jh_store::events_damaged_pages(),
+      (unsigned long)jh_store::events_write_fail(),
+      (unsigned long)capture.dup_polls(),
+      (unsigned long)capture.late_polls(),
+      (unsigned long)capture.max_page_write_us(),
+      (unsigned long)capture.pages_over_slack(),
+      jh_power::heap_free(),
+      (unsigned long)capture.trig_dropped(),
+      (unsigned long)(capture.enabled() ? capture.trig_pages() : jh_store::events_trig_pages()),
+      (unsigned long)capture.trig_over_budget(),
+      jh_power::stack_free_min(),
+      (unsigned long)capture.links_lost(),
+      (unsigned)jh_store::layout_version());
+  if (n <= 0) return;
+  s_serial_must_not_drop = true;
+  emitBytes(line, (size_t)n < sizeof(line) ? (size_t)n : sizeof(line) - 1);
+  s_serial_must_not_drop = false;
+}
+
 static void scanStoredJumps() {
   stored_jumps = 0;
   stored_best  = 0.0f;
@@ -809,11 +1019,12 @@ static void printHelp() {
   // was dispatched but absent from every help line, so the one instrument
   // DECISION #38 makes mandatory looked unshipped to anyone who checked the
   // documented way). Every `cmd == "..."` arm must appear here.
-  emitLine("# commands: help | stats | jumps | trace | traceraw | tracecheck | dump | clear | selftest | revive | i2cdiag | dcdc | info | off | dfu | uf2 | fakejump | mount | format | pincensus | vbatscan | gyro");
+  emitLine("# commands: help | stats | jumps | trace | traceraw | tracecheck | dump | clear | selftest | revive | i2cdiag | dcdc | info | off | dfu | uf2 | fakejump | mount | format | pincensus | vbatscan | gyro | events | evstat | evclear");
   emitLine("#           set <airtime_offset_s|height_scale|vbat_scale> <value|default>");
   emitLine("#           pincensus (bench: every GPIO vs pull-down/pull-up — DECISION #38)");
   emitLine("#           vbatscan  (bench: battery ADC vs acquisition time)");
   emitLine("#           gyro      (bench: raw + bias-corrected rate, 2 s)");
+  emitLine("#           events | evstat | evclear  (six-axis capture: export, status, erase)");
 }
 
 // Handles one command line from EITHER transport (serial pollSerial() or BLE
@@ -1243,6 +1454,11 @@ static void handleCommand(const String& cmd) {
       emitf("# dcdc=%d\n", jh_power::dcdc_enabled());
     if (jh_link::local_name()[0])
       emitf("# name=%s\n", jh_link::local_name());  // WHICH puck — quiver world
+    // WHICH BOOT (event capture, spec 2026-10-07 §3.6): every event page
+    // carries this id, and a bundle's info_lines record it beside uptime_s,
+    // which is what lets an event be placed on the wall clock. Chatter, so
+    // every existing client skips it.
+    emitf("# boot_id=%08lx\n", (unsigned long)boot_id);
     if (jh_power::breadcrumb_last() != 0)
       emitf("# crumb=%u\n", (unsigned)jh_power::breadcrumb_last());  // stage the last
                                                   // reset died in (task #18)
@@ -1279,6 +1495,7 @@ static void handleCommand(const String& cmd) {
     // OK/ERR would otherwise hang into its timeout on every clean off).
     if (jh_power::vbat_mv() >= 0) {  // supported platforms measure vbat too
       flushTrace();  // recording stops here — don't strand the open block
+      captureDrainForCommand();
       emitLine("# powering down — plug in USB or tap reset to wake");
       emitLine("OK off");
       delay(250);            // let USB CDC + BLE actually push those bytes
@@ -1288,33 +1505,89 @@ static void handleCommand(const String& cmd) {
       return;  // contract violated? still never OK-then-ERR — just stop
     }
     emitLine("ERR off_unsupported this build has no soft-off");
-  } else if (cmd == "dfu") {
-    // Reboot into the bootloader's OTA-DFU mode (jh_link seam; nRF52 only).
-    // Same farewell-first shape as `off` above, for the same reason: on a
-    // supporting platform the call never returns, and the sender deserves to
-    // know the disconnect that follows is intentional. After this, the puck
-    // advertises as "AdaDFU" for nRF Connect until a transfer completes or
-    // it is reset.
-    flushTrace();  // recording stops here — don't strand the open block
-    emitLine("# rebooting to DFU — use nRF Connect; reset/power-cycle to abort");
-    emitLine("OK dfu");
-    delay(250);              // let USB CDC + BLE actually push those bytes
-    if (!jh_link::reboot_to_dfu()) {
-      emitLine("ERR dfu_unsupported this build has no OTA bootloader");
-    }
-    return;
-  } else if (cmd == "uf2") {
-    // Reboot into the bootloader's UF2 drive (MSC). Bench use: bootloader
+  } else if (cmd == "dfu" || cmd == "uf2") {
+    // Reboot into the bootloader: `dfu` = OTA-DFU for nRF Connect (the puck
+    // then advertises as "AdaDFU"), `uf2` = the UF2 drive (MSC) — bootloader
     // self-updates ship as update-*.uf2 and are MSC-only; the 1200-baud
     // touch can't reach MSC (serial-only magic by design).
-    flushTrace();
-    emitLine("# rebooting to UF2 drive — copy update-*.uf2 there; reset to abort");
-    emitLine("OK uf2");
-    delay(250);
-    if (!jh_link::reboot_to_uf2()) {
-      emitLine("ERR uf2_unsupported this build has no UF2 bootloader");
+    //
+    // ARM, VERIFY, THEN SAY OK (spec 2026-10-07 §5). Until batch 2 this sent
+    // `OK uf2` first and reset whether or not the magic had stuck, so a
+    // failed arm rebooted quietly into the app and looked like success —
+    // bench 2026-10-04 measured 1 entry in 3. Now: a FAILED arm answers ERR
+    // with the SoftDevice's own return codes and the readback, does NOT
+    // reset, and the puck keeps recording. OK is sent only once the magic is
+    // verified in GPREGRET, so a client may treat OK as "the bootloader is
+    // armed" — though not as "the drive will appear" (the ~8 s
+    // return-to-app seen 2026-10-04 is a separate, unexplained fault).
+    const bool is_uf2 = cmd == "uf2";
+    flushTrace();               // recording stops here — don't strand the open block
+    captureDrainForCommand();   // ... nor an open event window
+    const uint8_t magic = is_uf2 ? jh_boot::MAGIC_UF2 : jh_boot::MAGIC_OTA;
+    const jh_boot::ArmResult r = jh_link::arm_bootloader(magic);
+    if (r.status == jh_boot::ArmStatus::UNSUPPORTED) {
+      emitLine(is_uf2 ? "ERR uf2_unsupported this build has no UF2 bootloader"
+                      : "ERR dfu_unsupported this build has no OTA bootloader");
+      return;
     }
+    if (r.status != jh_boot::ArmStatus::OK) {
+      jh_link::disarm_bootloader();   // never leave a half-armed magic behind
+      emitf("ERR %s_arm_failed sd=%d rc=%lu/%lu/%lu val=0x%02lx\n", is_uf2 ? "uf2" : "dfu",
+            r.sd_enabled ? 1 : 0, (unsigned long)r.rc_clr, (unsigned long)r.rc_set,
+            (unsigned long)r.rc_get, (unsigned long)r.readback);
+      return;
+    }
+    if (is_uf2) {
+      emitLine("# rebooting to UF2 drive — gpregret=0x57 verified; copy update-*.uf2 there; reset to abort");
+    } else {
+      emitLine("# rebooting to DFU — gpregret=0xa8 verified; use nRF Connect; reset/power-cycle to abort");
+    }
+    emitLine(is_uf2 ? "OK uf2" : "OK dfu");
+    delay(250);                 // let USB CDC + BLE actually push those bytes
+    jh_link::reset_now();       // does not return on a board with a bootloader
     return;
+  } else if (cmd == "events") {
+    // Six-axis event capture's export (spec 2026-10-07 §6). Closes the open
+    // window and writes everything pending first, then streams the region —
+    // see printEventsFramed(). Like `traceraw`, an unavailable store is an
+    // ERR, never an empty export: "no events" and "could not read the
+    // events" are different answers.
+    flushTrace();
+    const jh_store::EventsState st = jh_store::events_state();
+    if (!fs_ok || st == jh_store::EventsState::STORE_DOWN) {
+      emitLine("ERR events storage_down");
+    } else if (st != jh_store::EventsState::OK) {
+      emitf("ERR events disabled %s\n", eventsStateName(st));
+    } else {
+      captureDrainForCommand();
+      printEventsFramed();
+      emitLine("OK events");
+    }
+  } else if (cmd == "evstat") {
+    printEvstat();
+    emitLine("OK evstat");
+  } else if (cmd == "evclear") {
+    // Erase the event region (only this; `clear` never touches it — spec
+    // D6, so an old client's sync cannot destroy a board session's events).
+    // The Mac app runs it only after an upload is confirmed AND the events
+    // pull verified.
+    const jh_store::EventsState st = jh_store::events_state();
+    if (!fs_ok || st == jh_store::EventsState::STORE_DOWN) {
+      emitLine("ERR evclear storage_down");
+    } else if (st != jh_store::EventsState::OK) {
+      emitf("ERR evclear disabled %s\n", eventsStateName(st));
+    } else {
+      captureDrainForCommand();
+      uint32_t failed = 0;
+      const bool ok = jh_store::events_clear(&failed);
+      resyncCaptureRegion();
+      if (ok) {
+        emitLine("# events cleared");
+        emitLine("OK evclear");
+      } else {
+        emitf("ERR evclear erase_failed sector=%lu\n", (unsigned long)failed);
+      }
+    }
   } else if (cmd == "mount") {
     // Non-destructive retry of a guard-skipped or failed mount — `format`
     // is the destructive one. Same guard bracket as boot: a hang costs one
@@ -1326,6 +1599,7 @@ static void handleCommand(const String& cmd) {
     jh_persist::save(jh_persist::Key::StoreGuard, 1.0f);
     fs_ok = jh_store::try_mount(emitLine);
     jh_persist::save(jh_persist::Key::StoreGuard, 0.0f);
+    resyncCaptureRegion();
     if (fs_ok) {
       scanStoredJumps();
       emitf("# stored history: %lu jumps, best %.2f m — `dump` to export\n",
@@ -1338,8 +1612,10 @@ static void handleCommand(const String& cmd) {
     // Last-resort storage recovery — works when `clear` cannot (fs down).
     // Destroys stored jumps + trace; live detection unaffected either way.
     flushTrace();
+    captureDrainForCommand();   // the format erases them anyway; END the window first
     jh_persist::save(jh_persist::Key::StoreGuard, 1.0f);   // guard the retry too
     const bool fmt_ok = jh_store::hard_format(emitLine);
+    resyncCaptureRegion();
     jh_persist::save(jh_persist::Key::StoreGuard, 0.0f);
     if (fmt_ok) {
       fs_ok = true;
@@ -1575,6 +1851,24 @@ void setup() {
   trace_buf.reserve(2048);
   t0_us         = jh_clock::micros64();
   last_flush_ms = millis();
+
+  // Event capture starts with the same time zero as the trace. boot_id is
+  // drawn after Bluefruit is up, so the SoftDevice RNG is the source.
+  boot_id = jh_power::boot_random32();
+  {
+    jh_event::Hooks hooks;
+    hooks.ctx = nullptr;
+    hooks.write_page = capWritePage;
+    hooks.provenance = capProvenance;
+    hooks.read_temp = capReadTemp;
+    hooks.now_us = capNow;
+    hooks.wake_hold = capHold;
+    char src8[8];
+    memset(src8, 0, sizeof(src8));
+    memcpy(src8, JH_BUILD_SRC, strlen(JH_BUILD_SRC) < 8 ? strlen(JH_BUILD_SRC) : 8);
+    capture.init(jh_event::config_from_params(), hooks, boot_id, t0_us, src8);
+  }
+  syncCaptureEnabled();
 }
 
 // ---------------- Loop ----------------
@@ -1753,6 +2047,14 @@ void loop() {
     }
     return;
   }
+  // Event capture, counters only: identical consecutive raw accel triples
+  // (a re-read conversion) and polls more than 10 ms apart. No I/O.
+  int16_t raw_a[3] = {0, 0, 0}, raw_g[3] = {0, 0, 0};
+  if (JH_CAPTURE_ENABLED) {
+    jh_imu::last_raw(raw_a, raw_g);
+    capture.note_poll(now_us, raw_a);
+    syncCaptureEnabled();
+  }
   // double (B3, glue-and-forget.md §3a): this is elapsed seconds since boot,
   // an ABSOLUTE value that grows without bound for as long as the device
   // stays awake — float32 loses sub-ms resolution starting at 18.2 h of
@@ -1899,11 +2201,17 @@ void loop() {
   const bool was_active = active;
   active = motion_seen && (now_ms - last_motion_ms) < IDLE_TIMEOUT_MS;
   if (active && !was_active) emitLine("STATE recording");
+  bool flushed_trace = false;   // the flash belongs to the trace this pass
   if (!active && was_active) {
     emitLine("STATE idle");
     flushTrace();
+    flushed_trace = true;
+    if (JH_CAPTURE_ENABLED) capture.close(jh_event::CLOSE_IDLE);
   }
-  if (!active) return;
+  if (!active) {
+    if (JH_CAPTURE_ENABLED) capture.service(flushed_trace);   // an idle-closed window still drains
+    return;
+  }
 
   // --- live jump detection ---
   // Spin correction: a rotating board reads its own omega^2*r on top of the
@@ -2011,10 +2319,17 @@ void loop() {
     const float    corr_g = (w_rad * w_rad * r_m) / 9.80665f;   // omega^2*r
     float          acorr  = med_a / 1000.0f - corr_g;
     if (acorr < 0.0f) acorr = 0.0f;
-    if (logJump(ev, med_a, med_w, (uint16_t)(acorr * 1000.0f + 0.5f), s_air_n)) {
+    const bool stored_ok =
+        logJump(ev, med_a, med_w, (uint16_t)(acorr * 1000.0f + 0.5f), s_air_n);
+    if (stored_ok) {
       stored_jumps++;
       if (ev.height_m > stored_best) stored_best = ev.height_m;
     }
+    // Event capture: force a window around this jump and link it (the watch's
+    // n=, the jumps.csv row n or 0, and the detector's own numbers).
+    if (JH_CAPTURE_ENABLED)
+      capture.link_jump(session_jumps, stored_ok ? stored_jumps : 0, ev.takeoff_time_s,
+                        ev.airtime_raw_s, ev.height_m);
     emitf("# flight n=%lu med_a=%.3fg med_w=%udps med_acorr=%.3fg n_air=%u\n",
           (unsigned long)session_jumps, med_a / 1000.0, (unsigned)med_w,
           (double)acorr, (unsigned)s_air_n);
@@ -2028,6 +2343,19 @@ void loop() {
           "or caught mid-air?\n", (double)JH_LANDING_THRESHOLD_G);
   }
 
+  // --- six-axis event capture: the sample the detector just consumed ---
+  // (spec 2026-10-07 §3.8 step 4). Pushes to the RAM ring and runs the
+  // trigger policy; no I/O. The gyro half is the read above, or zeros with
+  // gyro_ok=false when it failed.
+  if (JH_CAPTURE_ENABLED) {
+    jh_imu::last_raw(raw_a, raw_g);
+    const int16_t raw6[6] = {raw_a[0], raw_a[1], raw_a[2],
+                             have_gyro ? raw_g[0] : (int16_t)0,
+                             have_gyro ? raw_g[1] : (int16_t)0,
+                             have_gyro ? raw_g[2] : (int16_t)0};
+    capture.on_sample(now_us, raw6, have_gyro, mag);
+  }
+
   // --- decimated trace logging, buffered; flushed ~once/second ---
   if (fs_ok && !jh_store::trace_is_full() && ++decimate_ctr >= LOG_DECIMATE) {
     decimate_ctr = 0;
@@ -2038,6 +2366,11 @@ void loop() {
     if (now_ms - last_flush_ms > 1000) {
       flushTrace();  // does the byte accounting + cap check
       last_flush_ms = now_ms;
+      flushed_trace = true;
     }
   }
+
+  // --- event pages: at most ONE 256-byte page per pass, never in the pass
+  // that flushed the trace (spec §2.4), always after the detector. ---
+  if (JH_CAPTURE_ENABLED) capture.service(flushed_trace);
 }
